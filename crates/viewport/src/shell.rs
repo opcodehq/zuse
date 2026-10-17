@@ -312,12 +312,17 @@ impl WorkspaceView {
                             .child(
                                 control(
                                     "agent-access",
-                                    if self.content_width < 420. {
+                                    if self.access_change_pending_for_selection() {
+                                        "Saving…"
+                                    } else if self.content_width < 420. {
                                         "Access"
                                     } else if self.sandbox
                                         == zuse_protocol::SandboxLevel::DangerFullAccess
                                     {
                                         "Full access"
+                                    } else if self.sandbox == zuse_protocol::SandboxLevel::ReadOnly
+                                    {
+                                        "Read only"
                                     } else {
                                         "Ask for approval"
                                     },

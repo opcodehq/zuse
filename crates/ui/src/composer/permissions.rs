@@ -28,7 +28,12 @@ impl Composer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.permission_saving.is_some() {
+        if self.permission_saving.is_some()
+            || self
+                .permission_unconfirmed
+                .as_ref()
+                .is_some_and(|chat| self.state.read(cx).selected_chat.as_ref() == Some(chat))
+        {
             return;
         }
         self.permission_open = false;
@@ -92,7 +97,95 @@ impl Composer {
                         });
                     }
                     Err(error) => {
-                        this.failure = Some(format!("Could not confirm the permission change: {error}. Reconnect to check the saved mode before retrying."));
+                        this.permission_unconfirmed = Some(chat_id.clone());
+                        this.failure = Some(format!("Could not confirm the permission change: {error}. Open the access menu and refresh the saved mode before sending.").into());
+                        this.failure_key = Some(chat_id);
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+    pub(super) fn permission_blocked(&self, cx: &App) -> bool {
+        self.state
+            .read(cx)
+            .selected_chat
+            .as_ref()
+            .is_some_and(|chat| {
+                self.permission_saving.as_ref() == Some(chat)
+                    || self.permission_unconfirmed.as_ref() == Some(chat)
+            })
+    }
+    fn refresh_permission(&mut self, cx: &mut Context<Self>) {
+        if self.permission_saving.is_some() {
+            return;
+        }
+        let Some(chat_id) = self.permission_unconfirmed.clone() else {
+            return;
+        };
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let previous = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .and_then(|chat| chat.config.clone());
+        self.permission_saving = Some(chat_id.clone());
+        self.permission_task = Some(cx.spawn(async move |this, cx| {
+            let read = async {
+                let mut subscription = engine
+                    .client()
+                    .subscribe_scoped(methods::WATCH_CHATS, serde_json::json!({}))
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let snapshot = subscription
+                    .recv()
+                    .await
+                    .ok_or_else(|| "The host closed the permission read.".to_owned())?;
+                let chats: Vec<zuse_protocol::Chat> =
+                    serde_json::from_value(snapshot).map_err(|error| error.to_string())?;
+                chats
+                    .into_iter()
+                    .find(|chat| chat.id == chat_id)
+                    .and_then(|chat| chat.config)
+                    .ok_or_else(|| "This chat's configuration is unavailable.".to_owned())
+            };
+            let result = match futures::future::select(
+                Box::pin(read),
+                Box::pin(cx.background_executor().timer(Duration::from_secs(10))),
+            )
+            .await
+            {
+                futures::future::Either::Left((result, _)) => result,
+                futures::future::Either::Right(_) => {
+                    Err("Timed out reading saved permissions.".to_owned())
+                }
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.permission_saving = None;
+                match result {
+                    Ok(config) if this.state.read(cx).selected_chat.as_ref() == Some(&chat_id) => {
+                        this.state.update(cx, |state, cx| {
+                            if state
+                                .selected_chat_row()
+                                .and_then(|chat| chat.config.as_ref())
+                                == previous.as_ref()
+                            {
+                                state.apply_chat_config(&chat_id, config);
+                                cx.notify();
+                            }
+                        });
+                        this.permission_unconfirmed = None;
+                        this.permission_open = false;
+                        this.failure = None;
+                        this.failure_key = None;
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        this.failure =
+                            Some(format!("Could not refresh saved permissions: {error}").into());
                         this.failure_key = Some(chat_id);
                     }
                 }
@@ -116,7 +209,13 @@ impl Composer {
                 window.focus(&self.input.focus_handle(cx), cx);
             }
             "enter" | "space" if !event.is_held => {
-                if self.permission_open {
+                if self.permission_open
+                    && self.permission_unconfirmed.as_ref().is_some_and(|chat| {
+                        self.state.read(cx).selected_chat.as_ref() == Some(chat)
+                    })
+                {
+                    self.refresh_permission(cx);
+                } else if self.permission_open {
                     self.choose_permission(LEVELS[self.permission_active], window, cx);
                 } else {
                     self.permission_open = true;
@@ -149,6 +248,10 @@ impl Composer {
     ) -> gpui::Stateful<gpui::Div> {
         let selected = self.pickers.read(cx).resolved(cx).sandbox;
         let pending = self.permission_saving.is_some();
+        let unconfirmed = self
+            .permission_unconfirmed
+            .as_ref()
+            .is_some_and(|chat| self.state.read(cx).selected_chat.as_ref() == Some(chat));
         let tint = if selected == SandboxLevel::DangerFullAccess {
             theme.warning
         } else {
@@ -187,6 +290,8 @@ impl Composer {
                     .when(expanded, |view| {
                         view.child(if pending {
                             "Saving…"
+                        } else if unconfirmed {
+                            "Check access"
                         } else {
                             label(selected)
                         })
@@ -263,6 +368,25 @@ impl Composer {
                             move |this, _, window, cx| this.choose_permission(level, window, cx),
                         ))
                     }));
+                let menu = menu.when(unconfirmed, |view| {
+                    view.child(
+                        div()
+                            .id("refresh-saved-permissions")
+                            .role(Role::Button)
+                            .aria_label("Refresh saved permission mode")
+                            .cursor_pointer()
+                            .px(px(8.))
+                            .py(px(8.))
+                            .text_size(crate::typography::ui_rems(12.))
+                            .text_color(popup_theme.accent)
+                            .child(if pending {
+                                "Reading saved permissions…"
+                            } else {
+                                "Refresh saved permission mode"
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh_permission(cx))),
+                    )
+                });
                 view.child(popover::anchored_menu_above(
                     "composer-permission-popup",
                     menu.into_any_element(),

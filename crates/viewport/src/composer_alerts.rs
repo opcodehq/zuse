@@ -318,6 +318,11 @@ impl WorkspaceView {
                         "Full access",
                         "Let the agent run without approval prompts.",
                     ),
+                    (
+                        zuse_protocol::SandboxLevel::ReadOnly,
+                        "Read only",
+                        "Inspect files without allowing changes.",
+                    ),
                 ]
                 .into_iter()
                 .enumerate()
@@ -339,19 +344,22 @@ impl WorkspaceView {
                         )
                         .child(label(detail).text_size(px(10.)))
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.sandbox = mode;
-                            this.access_picker = false;
+                            this.choose_access(mode, cx);
                             window.focus(&this.input.focus_handle(cx), cx);
                             cx.notify();
                         }))
                 }),
             )
             .child(
-                label("Applies to the next new turn.")
-                    .px_2()
-                    .py_2()
-                    .text_size(px(10.))
-                    .text_color(rgb(FAINT)),
+                label(if self.access_save.is_some() {
+                    "Saving permission mode…"
+                } else {
+                    "Saved for this chat and its next turns."
+                })
+                .px_2()
+                .py_2()
+                .text_size(px(10.))
+                .text_color(rgb(FAINT)),
             )
             .into_any_element()
     }

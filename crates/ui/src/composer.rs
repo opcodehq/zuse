@@ -5997,6 +5997,7 @@ pub struct Composer {
     permission_active: usize,
     permission_focus: FocusHandle,
     permission_saving: Option<String>,
+    permission_unconfirmed: Option<String>,
     permission_task: Option<Task<()>>,
     /// Draft text per chat key ("" = new-chat canvas), surviving navigation.
     drafts: HashMap<String, String>,
@@ -6332,6 +6333,7 @@ impl Composer {
             permission_active: 0,
             permission_focus: cx.focus_handle(),
             permission_saving: None,
+            permission_unconfirmed: None,
             permission_task: None,
             drafts: HashMap::new(),
             attachments: HashMap::new(),
@@ -8808,10 +8810,8 @@ impl Composer {
     /// is on), `Mutate createChat` with the `ChatConfig` + cwd, and the model /
     /// reasoning / options on the Run request itself (§1.7).
     fn send(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
-        if self.permission_saving.as_deref() == self.state.read(cx).selected_chat.as_deref()
-            && self.permission_saving.is_some()
-        {
-            self.failure = Some("Wait for the permission change to finish before sending.".into());
+        if self.permission_blocked(cx) {
+            self.failure = Some("Confirm the saved permission mode before sending. Open the access menu to refresh it.".into());
             self.failure_key = self.state.read(cx).selected_chat.clone();
             cx.notify();
             return;

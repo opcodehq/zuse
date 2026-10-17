@@ -1,5 +1,6 @@
 //! Browser-compatible GPUI views. Native process/filesystem access stays behind RPC.
 
+mod access;
 mod activity;
 pub mod assets;
 mod composer_alerts;
@@ -143,6 +144,8 @@ pub struct WorkspaceView {
     model_options: serde_json::Map<String, Value>,
     sandbox: zuse_protocol::SandboxLevel,
     access_picker: bool,
+    access_save: Option<access::PendingAccessSave>,
+    access_unconfirmed: Option<String>,
     add_menu: bool,
     expanded_alert: Option<String>,
     dismissed_alerts: std::collections::HashSet<String>,
@@ -381,6 +384,8 @@ impl WorkspaceView {
             model_options: Default::default(),
             sandbox: zuse_protocol::SandboxLevel::WorkspaceWrite,
             access_picker: false,
+            access_save: None,
+            access_unconfirmed: None,
             add_menu: false,
             expanded_alert: None,
             dismissed_alerts: Default::default(),
@@ -533,6 +538,9 @@ impl WorkspaceView {
             return;
         }
         if self.receive_preview(id, &frame, cx) {
+            return;
+        }
+        if self.receive_access(id, &frame, cx) {
             return;
         }
         self.receive_input(id, &frame);
@@ -691,13 +699,30 @@ impl WorkspaceView {
                             .find(|chat| chat["id"] == selected["id"])
                             .cloned()
                         {
-                            if chat["deviceId"] != selected["deviceId"]
-                                || chat["harnessSessionId"] != selected["harnessSessionId"]
+                            let recovery_changed = chat["deviceId"] != selected["deviceId"]
+                                || chat["harnessSessionId"] != selected["harnessSessionId"];
+                            if chat["config"]["sandbox"] != selected["config"]["sandbox"]
+                                || self.access_unconfirmed.as_deref() == chat["id"].as_str()
                             {
-                                self.reset_recovery(cx);
+                                self.sandbox =
+                                    serde_json::from_value(chat["config"]["sandbox"].clone())
+                                        .unwrap_or_default();
+                            }
+                            if self.access_unconfirmed.as_deref() == chat["id"].as_str() {
+                                self.access_unconfirmed = None;
                             }
                             self.selected = Some(chat);
+                            if recovery_changed {
+                                self.reset_recovery(cx);
+                            }
                         }
+                    }
+                    if self
+                        .access_unconfirmed
+                        .as_ref()
+                        .is_some_and(|id| self.chats.iter().any(|chat| chat["id"] == *id))
+                    {
+                        self.access_unconfirmed = None;
                     }
                 }
                 methods::WATCH_SESSIONS => {
@@ -941,6 +966,11 @@ impl WorkspaceView {
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings {
+            return;
+        }
+        if self.access_change_pending_for_selection() {
+            self.error = Some("Wait for the saved permission mode before sending.".into());
+            cx.notify();
             return;
         }
         if self.project_picker

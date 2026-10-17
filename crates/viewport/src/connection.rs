@@ -67,6 +67,10 @@ impl WorkspaceView {
                 self.uncertain_save = Some(save);
             }
         }
+        if let Some(save) = self.access_save.take() {
+            self.access_unconfirmed = Some(save.chat);
+            self.connection_notice = Some("The permission change may have completed. The saved mode will be checked after reconnecting.".into());
+        }
         self.creating = None;
         self.picker_catalog.interrupted();
         if !self.provider_actions.is_empty() {
