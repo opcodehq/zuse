@@ -48,10 +48,7 @@ pub enum PermissionMode {
 impl PermissionMode {
     pub const ALL: [Self; 2] = [Self::ApprovalRequired, Self::FullAccess];
     pub fn label(self) -> &'static str {
-        match self {
-            Self::ApprovalRequired => "Ask for approval",
-            Self::FullAccess => "Full access",
-        }
+        access_details(self.sandbox()).label
     }
     pub fn sandbox(self) -> crate::SandboxLevel {
         match self {
@@ -70,6 +67,37 @@ impl PermissionMode {
                 .unwrap_or_default(),
             None => self.sandbox(),
         }
+    }
+}
+
+/// Shared composer labels and Hugeicons identities for actual run postures.
+pub struct AccessDetails {
+    pub label: &'static str,
+    pub description: &'static str,
+    pub icon: &'static str,
+}
+pub const ACCESS_LEVELS: [crate::SandboxLevel; 3] = [
+    crate::SandboxLevel::WorkspaceWrite,
+    crate::SandboxLevel::DangerFullAccess,
+    crate::SandboxLevel::ReadOnly,
+];
+pub fn access_details(level: crate::SandboxLevel) -> AccessDetails {
+    match level {
+        crate::SandboxLevel::WorkspaceWrite => AccessDetails {
+            label: "Ask for approval",
+            description: "Review restricted tool requests before they run.",
+            icon: "icons/access-ask.svg",
+        },
+        crate::SandboxLevel::DangerFullAccess => AccessDetails {
+            label: "Full access",
+            description: "Allow actions without approval. Plan mode still applies.",
+            icon: "icons/access-full.svg",
+        },
+        crate::SandboxLevel::ReadOnly => AccessDetails {
+            label: "Read only",
+            description: "Inspect files without allowing changes.",
+            icon: "icons/access-read-only.svg",
+        },
     }
 }
 

@@ -286,14 +286,17 @@ impl WorkspaceView {
     pub(super) fn access_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .id("access-menu")
+            .role(Role::ListBox)
+            .aria_label("Agent access")
+            .occlude()
             .absolute()
             .bottom_full()
             .mb_2()
-            .left(px(32.))
-            .w(px((self.content_width - 72.).clamp(240., 300.)))
+            .left(px(40.))
+            .w(px((self.content_width - 80.).clamp(200., 256.)))
             .p_1()
-            .gap_1()
-            .rounded_xl()
+            .gap(px(0.))
+            .rounded(px(10.))
             .border_1()
             .border_color(rgb(0x343434))
             .bg(rgb(0x20211e))
@@ -302,57 +305,80 @@ impl WorkspaceView {
             .child(
                 label("AGENT ACCESS")
                     .text_size(px(10.))
-                    .text_color(rgb(FAINT))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(MUTED))
                     .px_2()
-                    .py_2(),
+                    .pt(px(6.))
+                    .pb(px(4.)),
             )
             .children(
-                [
-                    (
-                        zuse_protocol::SandboxLevel::WorkspaceWrite,
-                        "Ask for approval",
-                        "Review tool requests before they run.",
-                    ),
-                    (
-                        zuse_protocol::SandboxLevel::DangerFullAccess,
-                        "Full access",
-                        "Let the agent run without approval prompts.",
-                    ),
-                    (
-                        zuse_protocol::SandboxLevel::ReadOnly,
-                        "Read only",
-                        "Inspect files without allowing changes.",
-                    ),
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(i, (mode, name, detail))| {
-                    column()
-                        .id(("access-mode", i))
-                        .cursor_pointer()
-                        .p_2()
-                        .gap_1()
-                        .rounded_md()
-                        .hover(|d| d.bg(rgb(0x2b2b28)))
-                        .child(
-                            row()
-                                .gap_2()
-                                .child(div().flex_1().text_size(px(12.)).child(name))
-                                .when(self.sandbox == mode, |d| {
-                                    d.child(icon("check").size(px(14.)).text_color(rgb(0x89ca21)))
-                                }),
-                        )
-                        .child(label(detail).text_size(px(10.)))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.choose_access(mode, cx);
-                            window.focus(&this.input.focus_handle(cx), cx);
-                            cx.notify();
-                        }))
-                }),
+                zuse_protocol::presentation::ACCESS_LEVELS
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, mode)| {
+                        let details = zuse_protocol::presentation::access_details(mode);
+                        row()
+                            .id(("access-mode", i))
+                            .role(Role::ListBoxOption)
+                            .aria_label(details.label)
+                            .aria_selected(self.sandbox == mode)
+                            .cursor_pointer()
+                            .px_2()
+                            .py_2()
+                            .gap_2()
+                            .rounded(px(6.))
+                            .when(self.access_active == i, |view| view.bg(rgb(0x2b2b28)))
+                            .hover(|d| d.bg(rgb(0x2b2b28)))
+                            .child(
+                                column()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap(px(4.))
+                                    .child(
+                                        row()
+                                            .gap_2()
+                                            .child(
+                                                svg()
+                                                    .path(details.icon)
+                                                    .size(px(14.))
+                                                    .flex_none()
+                                                    .text_color(rgb(TEXT)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(rgb(TEXT))
+                                                    .text_size(px(12.))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .child(details.label),
+                                            ),
+                                    )
+                                    .child(
+                                        label(details.description)
+                                            .text_size(px(11.))
+                                            .line_height(px(16.)),
+                                    ),
+                            )
+                            .when(self.sandbox == mode, |view| {
+                                view.child(icon("check").size(px(14.)).text_color(rgb(TEXT)))
+                            })
+                            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                if this.access_active != i {
+                                    this.access_active = i;
+                                    cx.notify();
+                                }
+                            }))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.choose_access(mode, cx);
+                                window.focus(&this.input.focus_handle(cx), cx);
+                                cx.notify();
+                            }))
+                    }),
             )
             .child(
                 label(if self.access_save.is_some() {
                     "Saving permission mode…"
+                } else if self.selected.is_none() {
+                    "Used when you start this chat."
                 } else {
                     "Saved for this chat and its next turns."
                 })

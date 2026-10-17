@@ -9,6 +9,60 @@ pub(super) struct PendingAccessSave {
     pub previous: Value,
 }
 impl WorkspaceView {
+    pub(super) fn toggle_access(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.access_save.is_some() {
+            return;
+        }
+        self.access_picker = !self.access_picker;
+        self.add_menu = false;
+        self.model_picker = false;
+        self.agent_picker = false;
+        if self.access_picker {
+            self.access_active = zuse_protocol::presentation::ACCESS_LEVELS
+                .iter()
+                .position(|level| *level == self.sandbox)
+                .unwrap_or(0);
+            window.focus(&self.access_focus, cx);
+        } else {
+            window.focus(&self.input.focus_handle(cx), cx);
+        }
+        cx.notify();
+    }
+    pub(super) fn on_access_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use zuse_protocol::presentation::ACCESS_LEVELS;
+        if !self.access_picker {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space" | "down") && !event.is_held
+            {
+                self.toggle_access(window, cx);
+                cx.stop_propagation();
+            }
+            return;
+        }
+        match event.keystroke.key.as_str() {
+            "escape" => self.access_picker = false,
+            "up" => {
+                self.access_active =
+                    (self.access_active + ACCESS_LEVELS.len() - 1) % ACCESS_LEVELS.len()
+            }
+            "down" => self.access_active = (self.access_active + 1) % ACCESS_LEVELS.len(),
+            "home" => self.access_active = 0,
+            "end" => self.access_active = ACCESS_LEVELS.len() - 1,
+            "enter" | "space" if !event.is_held => {
+                self.choose_access(ACCESS_LEVELS[self.access_active], cx)
+            }
+            _ => return,
+        }
+        if !self.access_picker {
+            window.focus(&self.input.focus_handle(cx), cx);
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
     pub(super) fn choose_access(&mut self, level: SandboxLevel, cx: &mut Context<Self>) {
         self.access_picker = false;
         if self.access_save.is_some() {

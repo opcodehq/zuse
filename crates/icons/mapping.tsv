@@ -1,3 +1,6 @@
+access-ask	LockIcon
+access-full	SquareUnlock01Icon
+access-read-only	ViewIcon
 action-build	PackageIcon
 action-configure	Settings02Icon
 action-debug	Bug01Icon

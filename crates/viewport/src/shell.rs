@@ -310,40 +310,72 @@ impl WorkspaceView {
                                     })),
                             )
                             .child(
-                                control(
-                                    "agent-access",
-                                    if self.access_change_pending_for_selection() {
-                                        "Saving…"
-                                    } else if self.content_width < 420. {
-                                        "Access"
-                                    } else if self.sandbox
-                                        == zuse_protocol::SandboxLevel::DangerFullAccess
-                                    {
-                                        "Full access"
-                                    } else if self.sandbox == zuse_protocol::SandboxLevel::ReadOnly
-                                    {
-                                        "Read only"
-                                    } else {
-                                        "Ask for approval"
-                                    },
-                                )
-                                .h(px(28.))
-                                .px_2()
-                                .text_size(px(11.))
-                                .when(
-                                    self.sandbox == zuse_protocol::SandboxLevel::DangerFullAccess,
-                                    |d| d.text_color(rgb(0xe2b876)),
-                                )
-                                .child(icon("alt-arrow-down").size(px(10.)))
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        this.access_picker = !this.access_picker;
-                                        this.add_menu = false;
-                                        this.model_picker = false;
-                                        cx.notify();
-                                    },
-                                )),
+                                row()
+                                    .id("agent-access")
+                                    .track_focus(&self.access_focus)
+                                    .on_key_down(cx.listener(Self::on_access_key))
+                                    .role(Role::ComboBox)
+                                    .aria_label("Agent access")
+                                    .aria_expanded(self.access_picker)
+                                    .tab_index(0)
+                                    .h(px(28.))
+                                    .px(px(10.))
+                                    .gap(px(6.))
+                                    .rounded(px(6.))
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(
+                                        if self.sandbox
+                                            == zuse_protocol::SandboxLevel::DangerFullAccess
+                                        {
+                                            0xe2b876
+                                        } else {
+                                            MUTED
+                                        },
+                                    ))
+                                    .cursor_pointer()
+                                    .when(self.access_change_pending_for_selection(), |view| {
+                                        view.opacity(0.6)
+                                    })
+                                    .when(self.access_picker, |view| view.bg(rgb(0x202020)))
+                                    .hover(|view| view.bg(rgb(0x202020)))
+                                    .child(
+                                        svg()
+                                            .path(
+                                                zuse_protocol::presentation::access_details(
+                                                    self.sandbox,
+                                                )
+                                                .icon,
+                                            )
+                                            .size(px(14.))
+                                            .flex_none()
+                                            .text_color(rgb(
+                                                if self.sandbox
+                                                    == zuse_protocol::SandboxLevel::DangerFullAccess
+                                                {
+                                                    0xe2b876
+                                                } else {
+                                                    MUTED
+                                                },
+                                            )),
+                                    )
+                                    .when(self.content_width >= 420., |view| {
+                                        view.child(if self.access_change_pending_for_selection() {
+                                            "Saving…"
+                                        } else {
+                                            zuse_protocol::presentation::access_details(
+                                                self.sandbox,
+                                            )
+                                            .label
+                                        })
+                                    })
+                                    .child(icon("alt-arrow-down").size(px(12.)).opacity(0.6))
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_access(window, cx)
+                                    })),
                             )
                             .child(div().flex_1().min_w_0())
                             .child(

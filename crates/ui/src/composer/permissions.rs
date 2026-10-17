@@ -2,24 +2,12 @@
 use super::*;
 use crate::{icons, popover};
 
-const LEVELS: [SandboxLevel; 3] = [
-    SandboxLevel::WorkspaceWrite,
-    SandboxLevel::DangerFullAccess,
-    SandboxLevel::ReadOnly,
-];
+use zuse_protocol::presentation::{ACCESS_LEVELS as LEVELS, access_details};
 fn label(level: SandboxLevel) -> &'static str {
-    match level {
-        SandboxLevel::WorkspaceWrite => "Ask for approval",
-        SandboxLevel::DangerFullAccess => "Full access",
-        SandboxLevel::ReadOnly => "Read only",
-    }
+    access_details(level).label
 }
 fn description(level: SandboxLevel) -> &'static str {
-    match level {
-        SandboxLevel::WorkspaceWrite => "Work in the project and ask before restricted actions.",
-        SandboxLevel::DangerFullAccess => "Allow tools to run with unrestricted access.",
-        SandboxLevel::ReadOnly => "Inspect files without allowing changes.",
-    }
+    access_details(level).description
 }
 impl Composer {
     fn choose_permission(
@@ -272,18 +260,19 @@ impl Composer {
                     .aria_expanded(self.permission_open)
                     .tab_index(0)
                     .h(px(28.))
-                    .px(px(6.))
+                    .px(px(if expanded { 10. } else { 6. }))
                     .flex()
                     .items_center()
-                    .gap(px(5.))
-                    .rounded(px(7.))
-                    .text_size(crate::typography::ui_rems(11.))
+                    .gap(px(6.))
+                    .rounded(px(6.))
+                    .text_size(crate::typography::ui_rems(12.))
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(tint)
                     .cursor_pointer()
                     .when(pending, |view| view.opacity(0.5))
                     .hover(|view| view.bg(theme.element_hover))
                     .child(
-                        icons::icon(icons::KEY_MINIMALISTIC)
+                        icons::icon(access_details(selected).icon)
                             .size(px(14.))
                             .text_color(tint),
                     )
@@ -318,11 +307,12 @@ impl Composer {
                 let menu = div()
                     .id("composer-permission-menu")
                     .role(Role::ListBox)
-                    .w(px(300.))
+                    .w(px(256.))
                     .p(px(4.))
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
+                    .gap(px(0.))
+                    .child(popover::menu_heading(&popup_theme, "Agent access"))
                     .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                         this.permission_open = false;
                         cx.notify();
@@ -347,11 +337,22 @@ impl Composer {
                                 .min_w_0()
                                 .child(
                                     div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_size(crate::typography::ui_rems(12.))
+                                        .child(
+                                            icons::icon(access_details(level).icon)
+                                                .size(px(14.))
+                                                .text_color(popup_theme.text),
+                                        )
                                         .child(label(level)),
                                 )
                                 .child(
                                     div()
+                                        .mt(px(4.))
+                                        .line_height(px(16.))
                                         .text_size(crate::typography::ui_rems(11.))
                                         .text_color(popup_theme.text_muted)
                                         .child(description(level)),
