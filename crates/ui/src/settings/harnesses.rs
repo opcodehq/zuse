@@ -40,10 +40,6 @@ use crate::theme::Theme;
 #[path = "completion.rs"]
 mod completion;
 
-/// Left inset of an expanded provider's details: the header trigger's
-/// padding, brand tile and gap, so the details start on the title's edge.
-const DETAILS_INSET: f32 = 4.0 + 36.0 + 12.0;
-
 /// Update policies in menu order: the short label, and the note shown under
 /// the row title for the chosen one.
 const UPDATE_POLICIES: [(HarnessUpdatePolicy, &str, &str); 3] = [
@@ -192,12 +188,14 @@ pub struct HarnessesPage {
     accounts_page: Option<Entity<AccountsPage>>,
     update_task: Option<Task<()>>,
     update_action_task: Option<Task<()>>,
-    /// "Check now" is running: the button says so, since rows no longer
-    /// show "Checking…" while a check is in flight.
+    /// A manual provider refresh is checking available CLI updates.
     checking_updates: bool,
 }
 
 impl HarnessesPage {
+    pub fn plugins_card(&self) -> Entity<super::plugins::PluginsCard> {
+        self.plugins.clone()
+    }
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let plugins = cx.new(|cx| super::plugins::PluginsCard::new(state.clone(), cx));
         let model_accounts =
@@ -269,12 +267,12 @@ impl HarnessesPage {
         // block's fill, indented to the row's title so they read as its
         // children, with switches and actions on the row's control edge.
         let content = div()
-            .mx(px(16.0))
-            .pl(px(DETAILS_INSET))
+            .px(px(12.0))
+            .pt(px(4.0))
             .pb(px(16.0))
             .flex()
             .flex_col()
-            .gap(px(20.0))
+            .gap(px(16.0))
             .child(self.render_completion_for(harness, theme, cx))
             .children(self.render_updates_for(harness, theme, cx))
             .when_some(accounts, |details, accounts| details.child(accounts));
@@ -847,6 +845,17 @@ impl HarnessesPage {
                 };
 
                 let mut meta: Vec<gpui::AnyElement> = Vec::new();
+                if installed && self.installing != Some(harness) {
+                    meta.push(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(div().size(px(6.)).rounded_full().bg(theme.text_muted))
+                            .child(if enabled { "Installed" } else { "Disabled" })
+                            .into_any_element(),
+                    );
+                }
                 // Installing REPLACES the not-installed hint in place, so the
                 // row's text never shifts while the install runs.
 
@@ -919,9 +928,9 @@ impl HarnessesPage {
                 // mark keeps its orange, like the picker rail).
                 let tile = div()
                     .flex_none()
-                    .size(px(36.0))
-                    .rounded(px(10.0))
-                    .bg(theme.wash(0.06))
+                    .size(px(28.0))
+                    .rounded(px(7.0))
+                    .bg(theme.settings_frame_bg().opacity(0.6))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -984,6 +993,9 @@ impl HarnessesPage {
                     )
                 });
                 let header = widgets::card_row(&theme, ix == 0)
+                    .py(px(8.))
+                    .min_h(px(48.))
+                    .gap(px(12.))
                     .id(("harness-row", ix))
                     .when(!installed && self.installing != Some(harness), |el| {
                         el.opacity(0.55)
@@ -994,9 +1006,8 @@ impl HarnessesPage {
                             .group(format!("harness-details-{ix}"))
                             .flex_1()
                             .min_w(px(180.0))
-                            .min_h(px(44.0))
-                            .px(px(4.0))
-                            .rounded(px(8.0))
+                            .min_h(px(28.0))
+                            .rounded(px(7.0))
                             .flex()
                             .flex_row()
                             .items_center()
@@ -1072,28 +1083,7 @@ impl HarnessesPage {
                                         }))
                                         .child("Cancel"),
                                 )
-                            })
-                            // Always present so every row's controls hold
-                            // their place; inert while the provider is off.
-                            .child(
-                                crate::icons::icon(if expanded {
-                                    crate::icons::ALT_ARROW_DOWN
-                                } else {
-                                    crate::icons::ALT_ARROW_RIGHT
-                                })
-                                .size(px(14.0))
-                                .flex_none()
-                                .when(enabled, |caret| {
-                                    caret
-                                        .text_color(theme.text_muted)
-                                        .group_hover(format!("harness-details-{ix}"), |s| {
-                                            s.text_color(theme.text)
-                                        })
-                                })
-                                .when(!enabled, |caret| {
-                                    caret.text_color(theme.text_muted.opacity(0.35))
-                                }),
-                            ),
+                            }),
                     )
                     .child(
                         widgets::toggle_switch(
@@ -1133,6 +1123,51 @@ impl HarnessesPage {
                                     },
                                 ))
                         }),
+                    )
+                    .child(
+                        div()
+                            .id(("harness-disclosure", ix))
+                            .size(px(28.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(7.))
+                            .when(enabled, |button| {
+                                button
+                                    .role(gpui::Role::Button)
+                                    .aria_label(format!("{} preferences", descriptor.name))
+                                    .aria_expanded(expanded)
+                                    .tab_index(0)
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.toggle_agent_details(harness, cx)
+                                    }))
+                                    .on_key_down(cx.listener(
+                                        move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                            if !event.is_held
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                this.toggle_agent_details(harness, cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                            })
+                            .child(
+                                crate::icons::icon(if expanded {
+                                    crate::icons::ALT_ARROW_DOWN
+                                } else {
+                                    crate::icons::ALT_ARROW_RIGHT
+                                })
+                                .size(px(14.))
+                                .text_color(
+                                    theme.text_muted.opacity(if enabled { 1. } else { 0.35 }),
+                                ),
+                            ),
                     );
                 div()
                     .flex()
@@ -1165,10 +1200,9 @@ impl popover::ScrollRailHost for HarnessesPage {
 impl Render for HarnessesPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
-        let supports_updates = self.supports_updates(cx);
-
         let body: gpui::AnyElement = match &self.harnesses {
             Loadable::Idle | Loadable::Loading => widgets::section_card(&theme)
+                .mt_0()
                 .p(px(16.0))
                 .child(popover::skeleton_rows(
                     "harnesses-skeleton",
@@ -1200,6 +1234,7 @@ impl Render for HarnessesPage {
             Loadable::Ready(_) => {
                 let rows = self.rows(cx);
                 widgets::section_card(&theme)
+                    .mt_0()
                     .children(rows)
                     .into_any_element()
             }
@@ -1228,26 +1263,60 @@ impl Render for HarnessesPage {
         };
         let switcher = self.render_device_switcher(&theme, cx);
 
-        let can_control = self.can_control_updates(cx);
+        let checking =
+            matches!(self.harnesses, Loadable::Idle | Loadable::Loading) || self.checking_updates;
+        let status = if checking {
+            "Checking…"
+        } else if matches!(self.harnesses, Loadable::Error(_)) {
+            "Probe failed"
+        } else {
+            "Checked"
+        };
         let check = div()
-            .id("check-harness-updates")
-            .flex_none()
-            .px(px(9.0))
-            .py(px(5.0))
-            .rounded(px(6.0))
-            .text_size(crate::typography::ui_rems(11.0))
-            .text_color(theme.text_muted)
-            .cursor_pointer()
-            .hover(|style| style.bg(crate::theme::ink(0.05)))
-            .opacity(if can_control { 1.0 } else { 0.4 })
-            .when(can_control, |button| {
-                button.on_click(cx.listener(|this, _, _, cx| this.check_updates(cx)))
-            })
-            .child(if self.checking_updates {
-                "Checking…"
-            } else {
-                "Check now"
-            });
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(
+                div()
+                    .text_size(crate::typography::ui_rems(10.))
+                    .text_color(theme.text_muted)
+                    .child(status),
+            )
+            .child(
+                div()
+                    .id("refresh-provider-status")
+                    .role(gpui::Role::Button)
+                    .aria_label("Refresh provider status")
+                    .tab_index(0)
+                    .size(px(28.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(7.))
+                    .text_color(theme.text_muted)
+                    .when(checking, |button| button.opacity(0.5))
+                    .when(!checking, |button| {
+                        button
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.check_updates(cx);
+                                this.load(cx);
+                                cx.notify();
+                            }))
+                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                                if !event.is_held
+                                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                {
+                                    this.check_updates(cx);
+                                    this.load(cx);
+                                    cx.notify();
+                                    cx.stop_propagation();
+                                }
+                            }))
+                    })
+                    .child(crate::icons::icon(crate::icons::REFRESH).size(px(14.))),
+            );
 
         let scrollbar = popover::rail(self, "harnesses-page-scrollbar", &theme, cx);
 
@@ -1268,26 +1337,11 @@ impl Render for HarnessesPage {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::page_column()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .items_center()
-                                        .justify_between()
-                                        .child(widgets::page_header(&theme, "Providers", None))
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap(px(6.0))
-                                                .when(supports_updates, |el| el.child(check))
-                                                .child(switcher),
-                                        ),
-                                )
-                                .child(self.plugins.clone())
-                                .child(self.model_accounts.clone())
-                                .children(update_error)
-                                .child(body),
+                                .child(widgets::section_title(&theme, "Providers", "Verify what's installed, signed in, and which subscription each provider runs on."))
+                                .child(div().mt(px(20.)).flex().flex_col().gap(px(16.))
+                                    .child(widgets::group_with_action(&theme, "Agent providers", "Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.", Some(div().flex().items_center().gap(px(6.)).child(check).child(switcher).into_any_element()))
+                                        .children(update_error).child(body))
+                                    .child(self.model_accounts.clone())),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),

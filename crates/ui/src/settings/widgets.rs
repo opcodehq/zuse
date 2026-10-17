@@ -352,6 +352,32 @@ pub fn page_header(theme: &Theme, title: &str, count: Option<usize>) -> gpui::Di
         })
 }
 
+/// Settings SectionTitle, shared by every page that uses the app layout.
+pub fn section_title(theme: &Theme, title: &str, description: &str) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .pb(px(16.))
+        .border_b_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .text_size(crate::typography::ui_rems(20.))
+                .line_height(crate::typography::ui_rems(28.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.text)
+                .child(SharedString::from(title.to_owned())),
+        )
+        .child(
+            div()
+                .text_size(crate::typography::ui_rems(12.))
+                .line_height(crate::typography::ui_rems(20.))
+                .text_color(theme.text_muted)
+                .child(SharedString::from(description.to_owned())),
+        )
+}
+
 /// Subtitle under the headline: `mt-1 text-[13px] text-muted-foreground`.
 pub fn page_subtitle(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div {
     div()
@@ -514,6 +540,15 @@ pub fn group(
     title: impl Into<SharedString>,
     description: impl Into<SharedString>,
 ) -> gpui::Div {
+    group_with_action(theme, title, description, None)
+}
+
+pub fn group_with_action(
+    theme: &Theme,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    action: Option<AnyElement>,
+) -> gpui::Div {
     let description = description.into();
     let header = div()
         .flex()
@@ -537,7 +572,16 @@ pub fn group(
         .p(px(4.))
         .rounded(px(12.))
         .bg(theme.settings_frame_bg())
-        .child(header)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .child(header.flex_1().min_w_0())
+                .when_some(action, |row, action| {
+                    row.child(div().flex_none().pr(px(10.)).child(action))
+                }),
+        )
 }
 
 /// Settings card fill from the same theme surface used by the app cards.

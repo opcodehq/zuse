@@ -947,9 +947,9 @@ impl Render for ShortcutsPage {
                             .track_scroll(&self.scroll.scroll)
                             .child(
                                 widgets::page_column()
-                                    .child(self.original_general_header(&theme))
+                                    .child(self.general_header(&theme))
                                     .child(div().mt(px(20.)).child(self.general_account.clone()))
-                                    .child(self.original_general_preferences(&theme, cx))
+                                    .child(self.general_preferences(&theme, cx))
                                     .child(
                                         widgets::section_card(&theme)
                                             .child(send_behavior_row)

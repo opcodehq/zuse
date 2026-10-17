@@ -257,11 +257,10 @@ impl Render for ModelAccountsCard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
         let action = |id: &'static str, text: &str| {
-            widgets::ghost_action(&theme)
+            widgets::text_action(&theme, widgets::ActionTone::Outlined, text)
                 .id(id)
                 .tab_index(0)
                 .role(gpui::Role::Button)
-                .child(SharedString::from(text.to_owned()))
         };
         let busy = self.busy || self.sign_in.is_some();
         let account_available = self.snapshot["accountAvailable"] == true;
@@ -276,11 +275,7 @@ impl Render for ModelAccountsCard {
             .or_else(|| event["verificationUrl"].as_str())
             .filter(|s| s.starts_with("https://"))
             .map(str::to_owned);
-        div().flex().flex_col().gap(px(12.)).py(px(16.)).text_color(theme.text)
-            .child(div().flex().items_center().gap(px(12.))
-                .child(div().flex_1().child("Zuse model connections"))
-                .child(action("refresh-model-connections", if self.loading { "Loading…" } else { "Refresh" }).on_click(cx.listener(|this,_,_,cx|this.refresh(cx)))))
-            .child(div().text_size(px(12.)).text_color(theme.text_muted).child("Connect a model account for the Zuse agent. CLI agents keep their own logins below."))
+        let content = div().flex().flex_col().gap(px(12.)).p(px(12.)).text_size(crate::typography::ui_rems(12.)).text_color(theme.text)
             .child(div().flex().items_center().gap(px(8.))
                 .child(action("model-storage-local", if self.storage == "local" { "✓ This device" } else { "This device" }).on_click(cx.listener(|this,_,_,cx|{this.storage="local";cx.notify();})))
                 .when(account_available, |d| d.child(action("model-storage-account", if self.storage == "account" { "✓ Zuse account" } else { "Zuse account" }).on_click(cx.listener(|this,_,_,cx|{this.storage="account";cx.notify();}))))
@@ -329,6 +324,24 @@ impl Render for ModelAccountsCard {
                         d.child(div().text_size(px(12.)).text_color(theme.text_muted).child("Model access and usage limits depend on your provider plan."))
                             .child(button("acknowledge-model-plan","Got it").on_click(cx.listener(move |this,_,_,cx|this.request(methods::MODEL_ACKNOWLEDGE_PLAN,json!({"connectionId":id}),cx))))
                     })
-            }))
+            }));
+        widgets::group_with_action(
+            &theme,
+            "Model connections",
+            "Connect a model account for the Zuse agent. CLI agents keep their own logins.",
+            Some(
+                action(
+                    "refresh-model-connections",
+                    if self.loading {
+                        "Loading…"
+                    } else {
+                        "Refresh"
+                    },
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
+                .into_any_element(),
+            ),
+        )
+        .child(widgets::section_card(&theme).mt_0().child(content))
     }
 }

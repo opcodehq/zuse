@@ -541,6 +541,7 @@ pub enum SettingsSection {
     /// Which harnesses the composer offers (enable/disable toggles) —
     /// labeled "Providers".
     Harnesses,
+    Plugins,
     /// Per-provider CLI accounts (login, usage) — labeled "Accounts".
     Agents,
     Appearance,
@@ -557,9 +558,10 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 10] = [
+    pub const ALL: [SettingsSection; 11] = [
         SettingsSection::General,
         SettingsSection::Harnesses,
+        SettingsSection::Plugins,
         SettingsSection::Devices,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
@@ -601,6 +603,7 @@ impl SettingsSection {
         match self {
             SettingsSection::Devices => "devices",
             SettingsSection::Harnesses => "providers",
+            SettingsSection::Plugins => "plugins",
             SettingsSection::Agents => "agents",
             SettingsSection::Appearance => "appearance",
             SettingsSection::Files => "files",
@@ -618,6 +621,7 @@ impl SettingsSection {
         Some(match slug {
             "devices" => SettingsSection::Devices,
             "providers" | "harnesses" => SettingsSection::Harnesses,
+            "plugins" => SettingsSection::Plugins,
             "agents" => SettingsSection::Agents,
             "appearance" => SettingsSection::Appearance,
             "files" => SettingsSection::Files,
@@ -641,8 +645,9 @@ impl SettingsSection {
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
-            SettingsSection::Devices => "Devices",
+            SettingsSection::Devices => "Remote access",
             SettingsSection::Harnesses => "Providers",
+            SettingsSection::Plugins => "Plugins",
             SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
@@ -5588,6 +5593,34 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match section {
+            SettingsSection::Plugins => {
+                if self.harnesses_page.is_none() {
+                    let state = self.state.clone();
+                    self.harnesses_page = Some(cx.new(|cx| HarnessesPage::new(state, cx)));
+                }
+                let card = self
+                    .harnesses_page
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .plugins_card();
+                let theme = Theme::of(cx).for_settings_surface();
+                div()
+                    .id("plugins-settings")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .child(
+                        settings::widgets::page_column()
+                            .child(settings::widgets::section_title(
+                                &theme,
+                                "Plugins",
+                                "Connect tools and integrations across your agents.",
+                            ))
+                            .child(div().mt(px(20.)).child(card)),
+                    )
+                    .into_any_element()
+            }
+
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     let state = self.state.clone();
@@ -7956,6 +7989,7 @@ impl Shell {
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::Devices => icons::MONITOR,
             SettingsSection::Harnesses => icons::WIDGET,
+            SettingsSection::Plugins => icons::WIDGET,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
             SettingsSection::Appearance => icons::TUNING,
             SettingsSection::Files => icons::FOLDER,

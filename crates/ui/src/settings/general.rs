@@ -2,35 +2,15 @@
 use super::*;
 use crate::appearance::{self, AppearanceMode};
 impl ShortcutsPage {
-    pub(super) fn original_general_header(&self, theme: &Theme) -> gpui::Div {
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .pb(px(16.))
-            .border_b_1()
-            .border_color(theme.border)
-            .child(
-                div()
-                    .text_size(crate::typography::ui_rems(20.))
-                    .line_height(crate::typography::ui_rems(28.))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child("General"),
-            )
-            .child(
-                div()
-                    .text_size(crate::typography::ui_rems(12.))
-                    .line_height(crate::typography::ui_rems(20.))
-                    .text_color(theme.text_muted)
-                    .child("Workspace defaults and your personal app preferences."),
-            )
+    pub(super) fn general_header(&self, theme: &Theme) -> gpui::Div {
+        widgets::section_title(
+            theme,
+            "General",
+            "Workspace defaults and your personal app preferences.",
+        )
     }
-    pub(super) fn original_general_preferences(
-        &self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
+
+    pub(super) fn general_preferences(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let mode = appearance::mode(cx);
         let preferences = crate::settings::current(cx);
         let modes = div()
