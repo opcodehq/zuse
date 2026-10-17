@@ -1,0 +1,21 @@
+[package]
+name = "zuse-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "zuse-server"
+path = "src/main.rs"
+
+[dependencies]
+zuse-engine.workspace = true
+zuse-serve.workspace = true
+zuse-protocol.workspace = true
+zuse-rpc.workspace = true
+zuse-mcp.workspace = true
+tokio.workspace = true
+clap = { workspace = true, features = ["env"] }
+anyhow.workspace = true
+tracing-subscriber.workspace = true

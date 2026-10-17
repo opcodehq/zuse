@@ -1,0 +1,186 @@
+[workspace]
+resolver = "2"
+exclude = ["vendor/zkit"]
+members = [
+    "crates/voice",
+    "crates/voice-media",
+    "crates/voice-session",
+    "crates/orb",
+    "crates/veil",
+    "crates/theme",
+    "crates/audio",
+    "crates/protocol",
+    "crates/preview",
+    "crates/doc",
+    "crates/sync",
+    "crates/providers",
+    "crates/engine",
+    "crates/rpc",
+    "crates/update",
+    "crates/ui",
+    "crates/syntax",
+    "crates/markdown",
+    "crates/client",
+    "crates/mcp",
+    "crates/text",
+    "crates/visual",
+    "crates/visual-gpu",
+    "apps/desktop",
+    "apps/cli",
+    "apps/web",
+    "crates/viewport",
+    "crates/model",
+    "crates/serve",
+    "crates/plugins",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[workspace.dependencies]
+zuse-voice-session = { path = "crates/voice-session" }
+zuse-orb = { path = "crates/orb" }
+zuse-veil = { path = "crates/veil" }
+zuse-voice-media = { path = "crates/voice-media" }
+zuse-audio = { path = "crates/audio" }
+zuse-protocol = { path = "crates/protocol" }
+zuse-preview = { path = "crates/preview" }
+zuse-doc = { path = "crates/doc" }
+zuse-sync = { path = "crates/sync" }
+zuse-providers = { path = "crates/providers" }
+zuse-engine = { path = "crates/engine" }
+zuse-rpc = { path = "crates/rpc" }
+zuse-update = { path = "crates/update" }
+zuse-ui = { path = "crates/ui" }
+zuse-syntax = { path = "crates/syntax" }
+zuse-markdown = { path = "crates/markdown" }
+zuse-client = { path = "crates/client" }
+zuse-theme = { path = "crates/theme" }
+zuse-mcp = { path = "crates/mcp" }
+zuse-text = { path = "crates/text" }
+zuse-visual = { path = "crates/visual" }
+zuse-visual-gpu = { path = "crates/visual-gpu" }
+zuse-serve = { path = "crates/serve" }
+zuse-viewport = { path = "crates/viewport" }
+zuse-model = { path = "crates/model" }
+zuse-plugins = { path = "crates/plugins" }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
+subtle = "2"
+
+# CRDT
+loro = "1.13"
+# Wire protocol for the SessionRoom DO rooms — official Rust twin of the npm
+# `loro-protocol` package the TS edge speaks (same monorepo, byte-identical
+# frames, cross-checked by its js_snapshots tests).
+loro-protocol = "0.3"
+
+# Pinned native and browser rendering platform; provenance is in THIRD_PARTY_NOTICES.md.
+gpui = { git = "https://github.com/opcodehq/zkit", rev = "6823c76e4272db9324473d45357f56548ef544ed" }
+gpui_platform = { git = "https://github.com/opcodehq/zkit", rev = "6823c76e4272db9324473d45357f56548ef544ed", features = [
+    "wayland",
+    "x11",
+    "font-kit",
+    "runtime_shaders",
+] }
+gpui_tokio = { git = "https://github.com/opcodehq/zkit", rev = "6823c76e4272db9324473d45357f56548ef544ed" }
+gpui-base = { git = "https://github.com/opcodehq/zkit", rev = "6823c76e4272db9324473d45357f56548ef544ed" }
+
+# diffs
+similar = "2"
+
+# async / net
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+libc = "0.2"
+gethostname = "1"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+json5 = "0.4"
+# antigravity writes `settings.json` but reads it back with `hjson.load`, so a
+# user's comments and unquoted keys have to survive our read of the same file.
+deser-hjson = "2.2"
+plist = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# misc
+# Global allocator on macOS only: libmalloc retains the churn high-water mark
+# as permanent RSS - measured as the top residency cause in
+# docs/memory-plan.md. Pinned to mimalloc v2: the crate's default (v3.3.2)
+# has the same watermark pathology itself - transient streaming/render churn
+# became permanent RSS (~6x glibc growth, daemon at 908MB for 7.3MB of docs,
+# no idle recovery). Linux stays on glibc, which measured flat on the same
+# workloads.
+mimalloc = { version = "0.1", features = ["v2"] }
+anyhow = "1"
+tempfile = "3"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+zip = { version = "7.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+notify = "7"
+portable-pty = "0.8"
+alacritty_terminal = "0.26"
+pulldown-cmark = "0.12"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+fontdb = "0.23"
+ttf-parser = "0.25.1"
+# Packaged GUI apps do not inherit shell proxy variables; honor the macOS and
+# Windows system proxy for provider usage probes and other HTTP clients.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "system-proxy"] }
+ignore = "0.4"
+# Workspace file/content search index (@ mentions, file tree, cmd+K).
+# Pinned exactly: crates.io also carries `0.11.1-nightly.*` prereleases.
+fff-search = "=0.11.0"
+
+[profile.release]
+# Distribution profile (scripts/package-linux.sh): thin LTO buys most of fat
+# LTO's size/speed win at a fraction of the link time; strip debug symbols.
+lto = "thin"
+strip = "symbols"
+
+[profile.dev]
+# gpui is slow unoptimized; match zed's approach for deps
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# Scenes rasterize in software every frame the camera moves.
+[profile.dev.package.zuse-visual]
+opt-level = 3
+
+[profile.dev.package.zuse-visual-gpu]
+opt-level = 3
+
+# Mobile core (scripts/ios/build-core.sh). Always optimized — layout and sync
+# run on the phone's hot paths, so even Debug app builds link an -O core.
+[profile.mobile]
+inherits = "release"
+lto = false
+strip = false
+debug = "line-tables-only"
+incremental = true
+codegen-units = 16
+
+# TestFlight/App Store archives.
+[profile.mobile-dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

@@ -35,3 +35,7 @@ Native reference modules are the implementation starting point, not evidence of 
 Write meaningful behavior tests alongside implementation. Run focused checks at integration milestones, then the complete integrated setup near completion. Do not repeatedly run broad suites without a relevant change or failure.
 
 Acceptance includes provider protocol failures/recovery; queue races and crash recovery; child-agent mailboxes and tool authorization; concurrent plugin calls and OAuth renewal/revocation; native and browser end-to-end workflows; direct and relayed reconnect; and both-platform installation. Screenshots establish visual evidence, not engine correctness. Record missing credentials or hardware explicitly. Memory reports separate UI, engine, bridges, browser helpers and agent children.
+
+## Toolkit reuse clarification
+
+Retain the complete imported Zkit platform and mature component base directly. Prefer thin adaptations and focused improvements over replacement implementations. Preserve all required upstream licenses, copyright notices and provenance. No separate parallel component framework is needed.

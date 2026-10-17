@@ -1,0 +1,39 @@
+[package]
+name = "zuse-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The engine-free thin client ("viewer device"): workspace registry, chat2
+# session docs, the durable command ledger and host RPC over the device-room
+# relay, plus a fully offline Demo mode. Pure Rust — the UniFFI facade lives
+# in crates/mobile (`client_ffi`), so this crate stays usable from any
+# frontend (iOS, Android, tests, CLIs).
+
+[dependencies]
+zuse-voice-session.workspace = true
+zuse-protocol.workspace = true
+zuse-doc.workspace = true
+zuse-sync.workspace = true
+zuse-rpc.workspace = true
+loro.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+reqwest.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+zuse-visual.workspace = true
+zuse-sync = { workspace = true, features = ["mock-server"] }
+tokio-tungstenite.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
