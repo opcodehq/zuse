@@ -204,28 +204,14 @@ impl WorkspaceView {
         self.terminal_write = Some((request, command));
     }
 
-    pub(super) fn queue_action(
-        &mut self,
-        method: &str,
-        item: &Value,
-        position: Option<usize>,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(chat) = &self.selected {
-            let mut params = json!({"chatId":chat["id"],"id":item["id"]});
-            if let Some(position) = position {
-                params["toIndex"] = json!(position);
-            }
-            self.call(method, params);
-        }
-        cx.notify();
-    }
-
     pub(super) fn interrupt(&mut self, cx: &mut Context<Self>) {
         if let Some(chat) = &self.selected {
             self.call(
                 methods::QUEUE_COMMAND,
-                json!({"chatId":chat["id"],"command":{"kind":"interrupt"}}),
+                zuse_protocol::presentation::chat_request(
+                    chat,
+                    json!({"command":{"kind":"interrupt"}}),
+                ),
             );
         }
         cx.notify();

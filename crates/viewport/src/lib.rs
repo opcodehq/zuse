@@ -15,6 +15,7 @@ pub mod palette;
 mod previews;
 mod provider_settings;
 mod questions;
+mod queue;
 mod recovery;
 pub mod settings_style;
 mod settings_view;
@@ -113,6 +114,8 @@ pub struct WorkspaceView {
     creating: Option<(u64, Value, Value)>,
     queue: Vec<Value>,
     queue_watch: Option<u64>,
+    queue_actions: HashMap<u64, queue::PendingQueueAction>,
+    queue_unconfirmed: std::collections::HashSet<String>,
     sessions: Vec<Value>,
     notification_baselines: HashMap<String, zuse_protocol::notifications::SessionNotificationState>,
     completion_preset_menu: bool,
@@ -349,6 +352,8 @@ impl WorkspaceView {
             creating: None,
             queue: vec![],
             queue_watch: None,
+            queue_actions: HashMap::new(),
+            queue_unconfirmed: Default::default(),
             sessions: vec![],
             notification_baselines: HashMap::new(),
             completion_preset_menu: false,
@@ -538,6 +543,9 @@ impl WorkspaceView {
         if self.receive_preview(id, &frame, cx) {
             return;
         }
+        if self.receive_queue_action(id, &frame, cx) {
+            return;
+        }
         if self.receive_access(id, &frame, cx) {
             return;
         }
@@ -614,7 +622,7 @@ impl WorkspaceView {
             draft.key = chat["id"].as_str().unwrap_or_default().into();
             let send = self.call(
                 methods::QUEUE_COMMAND,
-                json!({"chatId":chat["id"],"command":command}),
+                zuse_protocol::presentation::chat_request(&chat, json!({"command":command})),
             );
             self.send_draft.insert(send, draft);
             cx.notify();
@@ -739,7 +747,21 @@ impl WorkspaceView {
 
                 methods::LIST_AGENT_ACCOUNTS => self.accounts = value.clone(),
                 methods::WATCH_QUEUE if self.queue_watch == Some(id) => {
-                    self.queue = value["items"].as_array().cloned().unwrap_or_default()
+                    if let Some(items) = value["items"].as_array() {
+                        self.queue = items.clone();
+                        if let Some(chat) =
+                            self.selected.as_ref().and_then(|chat| chat["id"].as_str())
+                        {
+                            self.queue_unconfirmed.remove(chat);
+                        }
+                    } else {
+                        if let Some(chat) =
+                            self.selected.as_ref().and_then(|chat| chat["id"].as_str())
+                        {
+                            self.queue_unconfirmed.insert(chat.to_owned());
+                        }
+                        self.error = Some("The host returned an invalid queue snapshot. Reopen the chat to refresh it.".into());
+                    }
                 }
                 methods::LIST_WORKSPACE_DIRECTORY if self.directory_request == Some(id) => {
                     self.directory_request = None;
@@ -884,9 +906,15 @@ impl WorkspaceView {
             self.cancel(id);
         }
         self.clear_workspace();
-        let queue_watch = self.call(methods::WATCH_QUEUE, json!({"chatId":chat["id"]}));
+        let queue_watch = self.call(
+            methods::WATCH_QUEUE,
+            zuse_protocol::presentation::chat_request(&chat, json!({})),
+        );
         self.queue_watch = Some(queue_watch);
-        let id = self.call(methods::WATCH_DOC_MESSAGES, json!({"chatId":chat["id"]}));
+        let id = self.call(
+            methods::WATCH_DOC_MESSAGES,
+            zuse_protocol::presentation::chat_request(&chat, json!({})),
+        );
         self.transcript_watch = Some(id);
         self.messages.clear();
         self.transcript_scroll.scroll_to_bottom();
@@ -1043,7 +1071,7 @@ impl WorkspaceView {
         self.drafts.remove(&draft.key);
         if self.is_working() {
             let chat = self.selected.as_ref().unwrap();
-            let id = self.call(methods::QUEUE_MESSAGE, json!({"chatId":chat["id"], "text":text, "holdForTurnEnd":true, "attachments":self.attachment_paths()}));
+            let id = self.call(methods::QUEUE_MESSAGE, zuse_protocol::presentation::chat_request(chat, json!({"text":text, "holdForTurnEnd":true, "attachments":self.attachment_paths()})));
             self.send_draft.insert(id, draft);
             self.input
                 .update(cx, |input, cx| input.set_value(String::new(), cx));
@@ -1063,7 +1091,7 @@ impl WorkspaceView {
         let send = if let Some(chat) = &self.selected {
             self.call(
                 methods::QUEUE_COMMAND,
-                json!({"chatId":chat["id"],"command":command}),
+                zuse_protocol::presentation::chat_request(&chat, json!({"command":command})),
             )
         } else {
             // IDs are client-owned, allowing the durable send to refer to the same chat.

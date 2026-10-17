@@ -77,6 +77,9 @@ impl WorkspaceView {
             self.provider_error=Some("Connection interrupted. Refresh provider status and check linked accounts before trying the action again.".into());
             self.provider_actions.clear();
         }
+        for (_, action) in self.queue_actions.drain() {
+            self.queue_unconfirmed.insert(action.chat);
+        }
         self.pending.clear();
         self.transcript_watch = None;
         self.queue_watch = None;
@@ -148,11 +151,11 @@ impl WorkspaceView {
         if let Some(chat) = self.selected.clone() {
             self.transcript_watch = Some(self.call(
                 methods::WATCH_DOC_MESSAGES,
-                json!({"chatId":chat["id"],"targetDeviceId":chat["deviceId"]}),
+                zuse_protocol::presentation::chat_request(&chat, json!({})),
             ));
             self.queue_watch = Some(self.call(
                 methods::WATCH_QUEUE,
-                json!({"chatId":chat["id"],"targetDeviceId":chat["deviceId"]}),
+                zuse_protocol::presentation::chat_request(&chat, json!({})),
             ));
             self.load_directory(&self.directory.clone());
             if self.file_reconnect_needed {
