@@ -23,6 +23,7 @@ pub mod composer;
 pub mod devices;
 pub mod files;
 pub mod harnesses;
+pub mod model_accounts;
 pub mod notifications;
 pub mod plugins;
 pub mod shortcuts;

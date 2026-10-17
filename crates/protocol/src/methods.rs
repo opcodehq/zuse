@@ -231,3 +231,5 @@ pub const MODEL_PREFERRED: &str = "ModelConnectionPreferred";
 pub const MODEL_DISCONNECT: &str = "ModelConnectionDisconnect";
 pub const MODEL_ACKNOWLEDGE_PLAN: &str = "ModelConnectionAcknowledgePlan";
 pub const MODEL_CANCEL_LOGIN: &str = "ModelConnectionCancelLogin";
+
+pub const MODEL_COMPLETE_LOGIN: &str = "ModelConnectionCompleteLogin";

@@ -4,7 +4,7 @@ mod oauth;
 pub mod vault;
 pub use oauth::ModelAccounts;
 use serde::{Deserialize, Serialize};
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum Error {
     #[error("Model account storage is unavailable.")]
     Storage,
@@ -95,6 +95,7 @@ pub struct Registration {
     pub id: String,
     pub client_id: String,
     pub subject: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     pub name: String,
     pub created_at: u64,
@@ -104,12 +105,18 @@ pub struct Registration {
     #[serde(default)]
     pub authorization_generation: u64,
     pub scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub access_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub earliest_refresh_at: Option<u64>,
 }
+
 impl Registration {
     pub fn authorized(&self, provider: Provider) -> bool {
         self.access_token.as_ref().is_some_and(|s| !s.is_empty())

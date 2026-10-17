@@ -24,7 +24,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev
       - run: cargo fmt --all --check
       - run: cargo check -p zuse-cli
-      - run: cargo test -p zuse-harness
+      - run: cargo test -p zuse-harness -p zuse-model-accounts
       - run: cargo test -p zuse-model -p zuse-serve
       - run: cargo test -p zuse-rpc --lib
       - run: cargo test -p zuse-engine --lib account::tests

@@ -165,6 +165,8 @@ fn harness_update_label(status: &HarnessUpdateStatus, theme: &Theme) -> (SharedS
 }
 
 pub struct HarnessesPage {
+    plugins: Entity<super::plugins::PluginsCard>,
+    model_accounts: Entity<super::model_accounts::ModelAccountsCard>,
     state: Entity<AppState>,
     scroll: widgets::PageScroll,
     harnesses: Loadable<Vec<HarnessDescriptor>>,
@@ -196,7 +198,12 @@ pub struct HarnessesPage {
 
 impl HarnessesPage {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let plugins = cx.new(|cx| super::plugins::PluginsCard::new(state.clone(), cx));
+        let model_accounts =
+            cx.new(|cx| super::model_accounts::ModelAccountsCard::new(state.clone(), cx));
         let mut page = Self {
+            plugins,
+            model_accounts,
             state,
             scroll: widgets::PageScroll::default(),
             harnesses: Loadable::Idle,
@@ -1276,6 +1283,8 @@ impl Render for HarnessesPage {
                                                 .child(switcher),
                                         ),
                                 )
+                                .child(self.plugins.clone())
+                                .child(self.model_accounts.clone())
                                 .children(update_error)
                                 .child(body),
                         ),

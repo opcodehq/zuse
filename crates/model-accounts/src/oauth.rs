@@ -10,11 +10,11 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::{FutureExt, StreamExt, future::BoxFuture};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, jwk::JwkSet};
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     time::{Duration, Instant},
 };
 use subtle::ConstantTimeEq;
@@ -31,6 +31,7 @@ struct Active {
     generation: String,
     cancel: CancellationToken,
     events: watch::Sender<Option<SignInEvent>>,
+    callback: Option<Weak<Callback>>,
 }
 struct Inner {
     vault: Vault,
@@ -82,9 +83,6 @@ fn random() -> Result<String, Error> {
 }
 fn index(p: Provider) -> usize {
     usize::from(p == Provider::Supergrok)
-}
-fn endpoint(provider: Provider, path: &str) -> String {
-    format!("{}{path}", provider.issuer())
 }
 fn early(value: Option<&Value>) -> Result<Option<u64>, Error> {
     let Some(value) = value else {
@@ -229,6 +227,7 @@ impl ModelAccounts {
                     generation: generation.clone(),
                     cancel: cancel.clone(),
                     events: events.clone(),
+                    callback: None,
                 },
             ) {
                 old.cancel.cancel();
@@ -244,7 +243,7 @@ impl ModelAccounts {
         let account_cancel = self.0.vault.cancellation();
         let started = tokio::select! {biased;_=cancel.cancelled()=>Err(Error::Cancelled),_=account_cancel.cancelled()=>Err(Error::Changed),result=async {
             match provider {
-                Provider::Chatgpt=>self.chatgpt(id.clone(),existing,pending,cancel.clone()).await,
+                Provider::Chatgpt=>self.chatgpt(id.clone(),existing,pending,cancel.clone(),&generation).await,
                 Provider::Supergrok=>self.supergrok(id.clone(),existing,cancel.clone()).await,
             }
         }=>result};
@@ -286,12 +285,29 @@ impl ModelAccounts {
             active.remove(key);
         }
     }
+    pub async fn complete_login(
+        &self,
+        provider: Provider,
+        id: &str,
+        url: &str,
+    ) -> Result<(), Error> {
+        if self.0.stop.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let flow = lock(&self.0.active)
+            .get(&(provider, id.into()))
+            .and_then(|entry| entry.callback.as_ref())
+            .and_then(Weak::upgrade)
+            .ok_or(Error::Unknown)?;
+        complete_callback(&flow, url).await
+    }
     async fn chatgpt(
         &self,
         id: String,
         existing: Option<Registration>,
         pending: Option<PendingRegistration>,
         cancel: CancellationToken,
+        generation: &str,
     ) -> Result<(SignInEvent, BoxFuture<'static, Result<Connection, Error>>), Error> {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
@@ -346,7 +362,7 @@ impl ModelAccounts {
         let (done, rx) = oneshot::channel();
         let callback_state = Arc::new(Callback {
             manager: self.clone(),
-            id,
+            id: id.clone(),
             existing,
             pending,
             saved_client,
@@ -358,6 +374,11 @@ impl ModelAccounts {
             cancel: cancel.clone(),
             done: Mutex::new(Some(done)),
         });
+        if let Some(active) = lock(&self.0.active).get_mut(&(Provider::Chatgpt, id)) {
+            if active.generation == generation {
+                active.callback = Some(Arc::downgrade(&callback_state));
+            }
+        }
         let router = Router::new()
             .route("/auth/callback", get(callback))
             .with_state(callback_state);
@@ -566,6 +587,25 @@ impl ModelAccounts {
             .1
             .find(kid)
             .ok_or(Error::Verification)?;
+        if jwk
+            .common
+            .public_key_use
+            .as_ref()
+            .is_some_and(|usage| *usage != jsonwebtoken::jwk::PublicKeyUse::Signature)
+            || jwk
+                .common
+                .key_operations
+                .as_ref()
+                .is_some_and(|operations| {
+                    !operations.contains(&jsonwebtoken::jwk::KeyOperations::Verify)
+                })
+            || jwk
+                .common
+                .key_algorithm
+                .is_some_and(|algorithm| algorithm != header.alg.into())
+        {
+            return Err(Error::Verification);
+        }
         let key = DecodingKey::from_jwk(jwk).map_err(|_| Error::Verification)?;
         let mut validation = Validation::new(header.alg);
         validation.set_audience(&[client]);
@@ -883,6 +923,34 @@ async fn callback(
     let Ok(url) = reqwest::Url::parse(&format!("http://{expected}{uri}")) else {
         return page(StatusCode::BAD_REQUEST, false);
     };
+    let success = complete_callback(&flow, url.as_str()).await.is_ok();
+    page(
+        if success {
+            StatusCode::OK
+        } else {
+            StatusCode::BAD_REQUEST
+        },
+        success,
+    )
+}
+// Both loopback delivery and the authenticated app's paste fallback validate
+// the exact redirect address and consume the same one-time callback state.
+// The pasted URL is parsed locally; it is never fetched.
+async fn complete_callback(flow: &Callback, address: &str) -> Result<(), Error> {
+    if address.len() > 16384 || flow.cancel.is_cancelled() {
+        return Err(Error::Verification);
+    }
+    let url = reqwest::Url::parse(address).map_err(|_| Error::Verification)?;
+    if url.scheme() != "http"
+        || url.host_str() != Some("127.0.0.1")
+        || url.port() != Some(flow.port)
+        || url.path() != "/auth/callback"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(Error::Verification);
+    }
     let pairs = url.query_pairs().collect::<Vec<_>>();
     let values = |name: &str| {
         pairs
@@ -899,11 +967,11 @@ async fn callback(
             .unwrap_u8()
             != 1
     {
-        return page(StatusCode::BAD_REQUEST, false);
+        return Err(Error::Verification);
     }
     let sender = lock(&flow.done).take();
     let Some(sender) = sender else {
-        return page(StatusCode::BAD_REQUEST, false);
+        return Err(Error::Verification);
     };
     let result = tokio::select! {biased;_=flow.cancel.cancelled()=>Err(Error::Cancelled),result=async {
         if !values("error").is_empty(){return Err(Error::Denied);}let codes=values("code");let clients=values("client_id");
@@ -920,17 +988,11 @@ async fn callback(
         let tokens=flow.manager.tokens(Provider::Chatgpt,body,false)?;if tokens.scope.is_none(){return Err(Error::Verification);}
         flow.manager.install(Provider::Chatgpt,&flow.id,client,flow.existing.as_ref(),tokens,Some(&flow.nonce),&flow.cancel).await
     }=>result};
-    let success = result.is_ok();
+    let outcome = result.as_ref().map(|_| ()).map_err(Clone::clone);
     let _ = sender.send(result);
-    page(
-        if success {
-            StatusCode::OK
-        } else {
-            StatusCode::BAD_REQUEST
-        },
-        success,
-    )
+    outcome
 }
+
 fn page(status: StatusCode, success: bool) -> Response {
     (
         status,
@@ -968,4 +1030,528 @@ async fn read_json(response: reqwest::Response) -> Result<Value, Error> {
         body.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&body).map_err(|_| Error::Verification)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Json, routing::post};
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // This signing key is a public, test-only fixture. It is never used outside tests.
+    const SIGNING_KEY: &str = include_str!("../testdata/signing-key.pem");
+    const JWKS: &str = include_str!("../testdata/jwks.json");
+    fn sign(claims: &Value) -> String {
+        let mut header = jsonwebtoken::Header::new(Algorithm::ES256);
+        header.kid = Some("fixture-key".into());
+        let encoded: String = SIGNING_KEY
+            .lines()
+            .filter(|line| !line.starts_with("-----"))
+            .collect();
+        let der = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        jsonwebtoken::encode(
+            &header,
+            claims,
+            &jsonwebtoken::EncodingKey::from_ec_der(&der),
+        )
+        .unwrap()
+    }
+
+    struct Fixture {
+        root: tempfile::TempDir,
+        manager: ModelAccounts,
+        refreshes: Arc<AtomicUsize>,
+        keys: Arc<AtomicUsize>,
+        exchange: Arc<Mutex<Option<(String, String, String)>>>,
+        server: tokio::task::JoinHandle<()>,
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.server.abort();
+            self.manager.retire();
+        }
+    }
+    impl Fixture {
+        async fn new() -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let issuer = format!("http://{}", listener.local_addr().unwrap());
+            let exchange = Arc::new(Mutex::new(None::<(String, String, String)>));
+            let exchange_data = exchange.clone();
+            let exchange_issuer = issuer.clone();
+            let refreshes = Arc::new(AtomicUsize::new(0));
+            let keys = Arc::new(AtomicUsize::new(0));
+            let discovery_issuer = issuer.clone();
+            let refresh_count = refreshes.clone();
+            let key_count = keys.clone();
+            let router=Router::new()
+                .route("/.well-known/openid-configuration",get(move ||{let issuer=discovery_issuer.clone();async move {Json(json!({"issuer":issuer,"jwks_uri":format!("{issuer}/keys"),"revocation_endpoint":format!("{issuer}/revoke")}))}}))
+                .route("/keys",get(move ||{let count=key_count.clone();async move {count.fetch_add(1,Ordering::SeqCst);Json(serde_json::from_str::<Value>(JWKS).unwrap())}}))
+                .route("/api/accounts/oauth/token",post(move |axum::Form(form):axum::Form<HashMap<String,String>>|{
+                    let count=refresh_count.clone();let expected=exchange_data.clone();let issuer=exchange_issuer.clone();
+                    async move {
+                        assert_eq!(form["client_id"],"fixture-client");
+                        assert_eq!(form["resource"],"https://api.openai.com/v1");
+                        if form["grant_type"]=="authorization_code" {
+                            let (nonce,challenge,redirect)=lock(&expected).clone().unwrap();
+                            assert_eq!(form["code"],"fixture-code");
+                            assert_eq!(form["redirect_uri"],redirect);
+                            assert_eq!(URL_SAFE_NO_PAD.encode(Sha256::digest(form["code_verifier"].as_bytes())),challenge);
+                            let claims=json!({"sub":"fixture-subject","aud":"fixture-client","iss":issuer,"exp":now_ms()/1000+600,"iat":now_ms()/1000,"nonce":nonce,"email":"person@example.test"});
+                            return Json(json!({"id_token":sign(&claims),"access_token":"initial-access-token","refresh_token":"initial-refresh-token","token_type":"Bearer","expires_in":3600,"scope":Provider::Chatgpt.scope()}));
+                        }
+                        assert_eq!(form["grant_type"],"refresh_token");
+                        assert_eq!(form["refresh_token"],"fixture-refresh-token");
+                        count.fetch_add(1,Ordering::SeqCst);
+                        Json(json!({"access_token":"rotated-access-token","refresh_token":"rotated-refresh-token","token_type":"Bearer","expires_in":3600}))
+                    }
+                }))
+                .route("/revoke",post(||async {StatusCode::SERVICE_UNAVAILABLE}));
+            let server = tokio::spawn(async move {
+                axum::serve(listener, router).await.unwrap();
+            });
+            let mut manager = ModelAccounts::new(Vault::local(root.path()).unwrap()).unwrap();
+            Arc::get_mut(&mut manager.0).unwrap().issuers = [issuer.clone(), issuer];
+            Self {
+                root,
+                manager,
+                refreshes,
+                keys,
+                exchange,
+                server,
+            }
+        }
+        async fn verify(&self, token: &str) -> Result<Value, Error> {
+            self.manager
+                .verify(
+                    Provider::Chatgpt,
+                    token,
+                    "fixture-client",
+                    Some("fixture-nonce"),
+                )
+                .await
+        }
+        fn claims(&self) -> Value {
+            json!({"sub":"fixture-subject","aud":"fixture-client","iss":self.manager.issuer(Provider::Chatgpt),"exp":now_ms()/1000+600,"iat":now_ms()/1000,"nonce":"fixture-nonce","email":"person@example.test","email_verified":true})
+        }
+        fn token(&self, claims: &Value) -> String {
+            sign(claims)
+        }
+        fn record(&self, id: &str) -> Registration {
+            Registration {
+                id: id.into(),
+                client_id: "fixture-client".into(),
+                subject: "fixture-subject".into(),
+                email: None,
+                name: "Personal".into(),
+                created_at: 1,
+                preferred: false,
+                plan_notice_seen: false,
+                authorization_generation: 1,
+                scope: Provider::Chatgpt.scope().into(),
+                id_token: Some(self.token(&self.claims())),
+                access_token: Some("fixture-access-token".into()),
+                refresh_token: Some("fixture-refresh-token".into()),
+                expires_at: Some(now_ms() - 1),
+                earliest_refresh_at: None,
+            }
+        }
+        async fn save(&self, record: &Registration) {
+            let lease = self
+                .manager
+                .vault()
+                .acquire(Provider::Chatgpt)
+                .await
+                .unwrap();
+            lease.save(record).await.unwrap();
+            lease.finish().await;
+        }
+    }
+    #[tokio::test]
+    async fn signed_identity_checks_issuer_audience_expiry_nonce_and_issued_at() {
+        let fixture = Fixture::new().await;
+        let claims = fixture.claims();
+        let token = fixture.token(&claims);
+        assert!(fixture.verify(&token).await.is_ok());
+        assert!(
+            fixture
+                .manager
+                .verify(
+                    Provider::Chatgpt,
+                    &token,
+                    "wrong-client",
+                    Some("fixture-nonce")
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            fixture
+                .manager
+                .verify(
+                    Provider::Chatgpt,
+                    &token,
+                    "fixture-client",
+                    Some("wrong-nonce")
+                )
+                .await
+                .is_err()
+        );
+        for (field, value) in [
+            ("iss", json!("https://wrong.example.test")),
+            ("exp", json!(now_ms() / 1000 - 300)),
+            ("iat", json!(now_ms() / 1000 + 300)),
+            ("sub", json!("")),
+            ("nonce", Value::Null),
+            ("aud", Value::Null),
+        ] {
+            let mut invalid = claims.clone();
+            invalid[field] = value;
+            let invalid_token = fixture.token(&invalid);
+            assert!(
+                fixture.verify(&invalid_token).await.is_err(),
+                "accepted invalid {field}"
+            );
+        }
+        assert_eq!(fixture.keys.load(Ordering::SeqCst), 1);
+        let mut header = jsonwebtoken::Header::new(Algorithm::HS256);
+        header.kid = Some("fixture-key".into());
+        let forged = jsonwebtoken::encode(
+            &header,
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(b"fixture-secret"),
+        )
+        .unwrap();
+        assert!(fixture.verify(&forged).await.is_err());
+        for (field, value) in [
+            ("use", json!("enc")),
+            ("key_ops", json!(["sign"])),
+            ("alg", json!("RS256")),
+        ] {
+            let mut keys: Value = serde_json::from_str(JWKS).unwrap();
+            keys["keys"][0][field] = value;
+            *fixture.manager.0.keys[0].lock().await = Some((
+                Instant::now(),
+                Arc::new(serde_json::from_value(keys).unwrap()),
+            ));
+            assert!(
+                fixture.verify(&token).await.is_err(),
+                "accepted JWK with invalid {field}"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn concurrent_agents_share_one_rotating_refresh_and_metadata_has_no_credentials() {
+        let fixture = Fixture::new().await;
+        fixture.save(&fixture.record("account-a")).await;
+        let mut tasks = vec![];
+        for _ in 0..12 {
+            let manager = fixture.manager.clone();
+            tasks.push(tokio::spawn(async move {
+                manager
+                    .credential(Provider::Chatgpt, "account-a")
+                    .await
+                    .unwrap()
+                    .access_token
+            }));
+        }
+        for task in tasks {
+            assert_eq!(task.await.unwrap(), "rotated-access-token");
+        }
+        assert_eq!(fixture.refreshes.load(Ordering::SeqCst), 1);
+        let lease = fixture
+            .manager
+            .vault()
+            .acquire(Provider::Chatgpt)
+            .await
+            .unwrap();
+        assert_eq!(
+            lease
+                .registration("account-a")
+                .await
+                .unwrap()
+                .unwrap()
+                .refresh_token
+                .as_deref(),
+            Some("rotated-refresh-token")
+        );
+        lease.finish().await;
+        let metadata = serde_json::to_string(&fixture.manager.list().await.unwrap()).unwrap();
+        for secret in [
+            "fixture-access-token",
+            "rotated-access-token",
+            "rotated-refresh-token",
+            "accessToken",
+            "refreshToken",
+            "idToken",
+        ] {
+            assert!(!metadata.contains(secret));
+        }
+        fixture
+            .manager
+            .rename(Provider::Chatgpt, "account-a", " Work ")
+            .await
+            .unwrap();
+        fixture
+            .manager
+            .acknowledge_plan(Provider::Chatgpt, "account-a")
+            .await
+            .unwrap();
+        fixture.save(&fixture.record("account-b")).await;
+        fixture
+            .manager
+            .preferred(Provider::Chatgpt, "account-a")
+            .await
+            .unwrap();
+        fixture
+            .manager
+            .preferred(Provider::Chatgpt, "account-b")
+            .await
+            .unwrap();
+        let connections = fixture.manager.list().await.unwrap();
+        assert_eq!(connections.iter().filter(|r| r.preferred).count(), 1);
+        assert!(
+            connections
+                .iter()
+                .any(|r| r.id == "account-b" && r.preferred)
+        );
+        assert!(
+            connections
+                .iter()
+                .any(|r| r.id == "account-a" && r.name == "Work" && r.plan_notice_seen)
+        );
+        assert!(matches!(
+            fixture
+                .manager
+                .rename(Provider::Chatgpt, "account-a", "  ")
+                .await,
+            Err(Error::InvalidName)
+        ));
+        assert!(fixture.root.path().join("model-accounts").exists());
+    }
+    #[tokio::test]
+    async fn disconnect_fences_late_authorization_even_when_provider_revocation_fails() {
+        let fixture = Fixture::new().await;
+        let previous = fixture.record("account-a");
+        fixture.save(&previous).await;
+        assert!(
+            !fixture
+                .manager
+                .disconnect(Provider::Chatgpt, "account-a")
+                .await
+                .unwrap()
+        );
+        assert!(matches!(
+            fixture
+                .manager
+                .credential(Provider::Chatgpt, "account-a")
+                .await,
+            Err(Error::Reauthorization)
+        ));
+        let tokens=fixture.manager.tokens(Provider::Chatgpt,json!({"id_token":fixture.token(&fixture.claims()),"access_token":"late-access-token","refresh_token":"late-refresh-token","token_type":"Bearer","expires_in":3600,"scope":Provider::Chatgpt.scope()}),false).unwrap();
+        assert!(matches!(
+            fixture
+                .manager
+                .install(
+                    Provider::Chatgpt,
+                    "account-a",
+                    "fixture-client",
+                    Some(&previous),
+                    tokens,
+                    Some("fixture-nonce"),
+                    &CancellationToken::new()
+                )
+                .await,
+            Err(Error::Cancelled)
+        ));
+        let lease = fixture
+            .manager
+            .vault()
+            .acquire(Provider::Chatgpt)
+            .await
+            .unwrap();
+        let stored = lease.registration("account-a").await.unwrap().unwrap();
+        assert!(
+            stored.access_token.is_none()
+                && stored.refresh_token.is_none()
+                && stored.id_token.is_none()
+        );
+        assert_eq!(stored.authorization_generation, 2);
+        lease.finish().await;
+    }
+    #[tokio::test]
+    async fn loopback_and_paste_callbacks_share_single_use_state_and_reject_other_destinations() {
+        let fixture = Fixture::new().await;
+        let mut login = fixture
+            .manager
+            .connect(Provider::Chatgpt, None)
+            .await
+            .unwrap();
+        let SignInEvent::Url { url } = login.event else {
+            panic!("expected URL")
+        };
+        let url = reqwest::Url::parse(&url).unwrap();
+        let fields: HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(fields["code_challenge_method"], "S256");
+        assert_eq!(fields["client_id"], "dynamic_agent_client");
+        assert_eq!(
+            fields["ext_agent_host_id"],
+            fixture.manager.vault().host_id()
+        );
+        assert!(fields["state"].len() >= 40 && fields["nonce"].len() >= 40);
+        let redirect = &fields["redirect_uri"];
+        let state = &fields["state"];
+        for invalid in [
+            format!("{redirect}?state=wrong&error=access_denied"),
+            format!("{redirect}?state={state}&state={state}&error=access_denied"),
+            format!("{redirect}?state={state}&error=access_denied#fragment"),
+            format!("https://example.test/auth/callback?state={state}&error=access_denied"),
+            format!(
+                "{}?state={state}&error=access_denied",
+                redirect.replace("/auth/callback", "/other")
+            ),
+        ] {
+            assert!(
+                fixture
+                    .manager
+                    .complete_login(Provider::Chatgpt, &login.id, &invalid)
+                    .await
+                    .is_err()
+            );
+        }
+        let address = format!("{redirect}?state={state}&error=access_denied");
+        // Invalid Host must not consume the valid callback state.
+        let http = reqwest::Client::new();
+        let response = http
+            .get(&address)
+            .header("Host", "example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(matches!(
+            fixture
+                .manager
+                .complete_login(Provider::Chatgpt, &login.id, &address)
+                .await,
+            Err(Error::Denied)
+        ));
+        assert!(
+            fixture
+                .manager
+                .complete_login(Provider::Chatgpt, &login.id, &address)
+                .await
+                .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if matches!(
+                    *login.events.borrow_and_update(),
+                    Some(SignInEvent::Error { .. })
+                ) {
+                    break;
+                }
+                login.events.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(fixture.refreshes.load(Ordering::SeqCst), 0);
+    }
+    #[tokio::test]
+    async fn pasted_callback_exchanges_pkce_and_installs_a_verified_registration() {
+        let fixture = Fixture::new().await;
+        let mut login = fixture
+            .manager
+            .connect(Provider::Chatgpt, None)
+            .await
+            .unwrap();
+        let SignInEvent::Url { url } = login.event else {
+            panic!("expected URL")
+        };
+        let url = reqwest::Url::parse(&url).unwrap();
+        let fields: HashMap<_, _> = url.query_pairs().into_owned().collect();
+        *lock(&fixture.exchange) = Some((
+            fields["nonce"].clone(),
+            fields["code_challenge"].clone(),
+            fields["redirect_uri"].clone(),
+        ));
+        let address = format!(
+            "{}?state={}&code=fixture-code&client_id=fixture-client",
+            fields["redirect_uri"], fields["state"]
+        );
+        fixture
+            .manager
+            .complete_login(Provider::Chatgpt, &login.id, &address)
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if matches!(
+                    *login.events.borrow_and_update(),
+                    Some(SignInEvent::Connected { .. })
+                ) {
+                    break;
+                }
+                login.events.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        let connections = fixture.manager.list().await.unwrap();
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].id, login.id);
+        assert!(connections[0].authorized);
+        assert_eq!(connections[0].email.as_deref(), Some("person@example.test"));
+        assert_eq!(
+            fixture
+                .manager
+                .credential(Provider::Chatgpt, &login.id)
+                .await
+                .unwrap()
+                .access_token,
+            "initial-access-token"
+        );
+        let lease = fixture
+            .manager
+            .vault()
+            .acquire(Provider::Chatgpt)
+            .await
+            .unwrap();
+        assert!(lease.pending(&login.id).await.unwrap().is_none());
+        lease.finish().await;
+        assert!(
+            fixture
+                .manager
+                .complete_login(Provider::Chatgpt, &login.id, &address)
+                .await
+                .is_err()
+        );
+    }
+    #[tokio::test]
+    async fn expired_tokens_wait_for_the_provider_refresh_window() {
+        let fixture = Fixture::new().await;
+        let mut record = fixture.record("account-a");
+        record.earliest_refresh_at = Some(now_ms() + 60000);
+        fixture.save(&record).await;
+        assert!(matches!(
+            fixture
+                .manager
+                .credential(Provider::Chatgpt, "account-a")
+                .await,
+            Err(Error::RefreshNotAvailable)
+        ));
+        assert_eq!(fixture.refreshes.load(Ordering::SeqCst), 0);
+        fixture.manager.retire();
+        assert!(matches!(
+            fixture
+                .manager
+                .credential(Provider::Chatgpt, "account-a")
+                .await,
+            Err(Error::Cancelled)
+        ));
+    }
 }

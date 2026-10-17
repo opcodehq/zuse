@@ -1944,6 +1944,23 @@ impl RpcService for EngineRpc {
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 Ok(RpcReply::Stream(stream))
             }
+            methods::MODEL_COMPLETE_LOGIN => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    connection_id: String,
+                    callback_url: String,
+                }
+                let p: P = parse_params(params)?;
+                let service = self.model_connections.as_ref().ok_or_else(|| {
+                    RpcError::Failed("Model account service is unavailable.".into())
+                })?;
+                service
+                    .complete_login(&p.connection_id, &p.callback_url)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok":true}))
+            }
             methods::MODEL_RENAME
             | methods::MODEL_PREFERRED
             | methods::MODEL_DISCONNECT

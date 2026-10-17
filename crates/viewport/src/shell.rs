@@ -11,19 +11,19 @@ const TEXT: u32 = 0xebebeb;
 const MUTED: u32 = 0xa3a3a3;
 const FAINT: u32 = 0x686868;
 
-fn row() -> Div {
+pub(super) fn row() -> Div {
     div().flex().items_center()
 }
-fn column() -> Div {
+pub(super) fn column() -> Div {
     div().flex().flex_col()
 }
-fn label(text: impl Into<SharedString>) -> Div {
+pub(super) fn label(text: impl Into<SharedString>) -> Div {
     div()
         .text_size(px(12.))
         .text_color(rgb(MUTED))
         .child(text.into())
 }
-fn control(id: impl Into<ElementId>, name: impl Into<SharedString>) -> Stateful<Div> {
+pub(super) fn control(id: impl Into<ElementId>, name: impl Into<SharedString>) -> Stateful<Div> {
     let name = name.into();
     row()
         .id(id)
@@ -793,6 +793,7 @@ impl WorkspaceView {
                     ),
             )
             .child(self.cloud_settings(cx))
+            .child(self.model_accounts_settings(cx))
             .child(label("Agents"))
             .children(self.providers.iter().enumerate().map(|(i, p)| {
                 let installed = p["installed"] == true;

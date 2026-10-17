@@ -41,7 +41,6 @@ struct Local {
     db: Mutex<Connection>,
     cipher: Aes256Gcm,
     gate: [Arc<AsyncMutex<()>>; 2],
-    host_id: String,
 }
 #[derive(Clone)]
 pub struct Vault {
@@ -99,7 +98,6 @@ impl Vault {
                 db: Mutex::new(db),
                 cipher,
                 gate: [Arc::new(AsyncMutex::new(())), Arc::new(AsyncMutex::new(()))],
-                host_id: host_id.clone(),
             })),
             host_id,
         })
@@ -320,9 +318,14 @@ impl Lease {
             .await
     }
     pub async fn finish(mut self) {
-        self.released = true;
         if matches!(self.backend, Backend::Account(_)) {
-            let _ = self.command("release", json!({})).await;
+            // Keep Drop armed until the request completes: cancellation can happen
+            // after the server receives the request but before its response arrives.
+            if self.command("release", json!({})).await.is_ok() {
+                self.released = true;
+            }
+        } else {
+            self.released = true;
         }
     }
 }
@@ -413,4 +416,263 @@ fn key_file(directory: &Path) -> Result<Zeroizing<[u8; 32]>, Error> {
     let bytes = Zeroizing::new(std::fs::read(&path).map_err(|_| Error::Storage)?);
     let key: [u8; 32] = bytes.as_slice().try_into().map_err(|_| Error::Storage)?;
     Ok(Zeroizing::new(key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+
+    fn record(id: &str) -> Registration {
+        Registration {
+            id: id.into(),
+            client_id: "test-client".into(),
+            subject: "test-subject".into(),
+            email: Some("person@example.test".into()),
+            name: "Personal".into(),
+            created_at: 1,
+            preferred: false,
+            plan_notice_seen: false,
+            authorization_generation: 1,
+            scope: Provider::Chatgpt.scope().into(),
+            id_token: Some("fixture-id-token".into()),
+            access_token: Some("fixture-access-token".into()),
+            refresh_token: Some("fixture-refresh-token".into()),
+            expires_at: Some(crate::now_ms() + 3600000),
+            earliest_refresh_at: None,
+        }
+    }
+    #[tokio::test]
+    async fn persistent_records_are_encrypted_and_bound_to_their_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let vault = Vault::local(directory.path()).unwrap();
+        let host = vault.host_id().to_owned();
+        let lease = vault.acquire(Provider::Chatgpt).await.unwrap();
+        lease.save(&record("a")).await.unwrap();
+        lease.save(&record("b")).await.unwrap();
+        assert_eq!(
+            lease
+                .registration("a")
+                .await
+                .unwrap()
+                .unwrap()
+                .refresh_token
+                .as_deref(),
+            Some("fixture-refresh-token")
+        );
+        lease.finish().await;
+        drop(vault);
+        let vault = Vault::local(directory.path()).unwrap();
+        assert_eq!(vault.host_id(), host);
+        let db =
+            Connection::open(directory.path().join("model-accounts/connections.sqlite")).unwrap();
+        let a: Vec<u8> = db
+            .query_row(
+                "SELECT envelope FROM records WHERE record_id='a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let b: Vec<u8> = db
+            .query_row(
+                "SELECT envelope FROM records WHERE record_id='b'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_ne!(a, b);
+        for plaintext in [
+            b"fixture-refresh-token".as_slice(),
+            b"fixture-access-token",
+            b"person@example.test",
+        ] {
+            assert!(!a.windows(plaintext.len()).any(|bytes| bytes == plaintext));
+        }
+        db.execute("UPDATE records SET envelope=?1 WHERE record_id='a'", [&b])
+            .unwrap();
+        let lease = vault.acquire(Provider::Chatgpt).await.unwrap();
+        assert!(matches!(lease.registration("a").await, Err(Error::Storage)));
+        lease.finish().await;
+        db.execute("UPDATE records SET envelope=?1 WHERE record_id='a'", [&a])
+            .unwrap();
+        db.execute(
+            "UPDATE records SET provider='supergrok' WHERE record_id='a'",
+            [],
+        )
+        .unwrap();
+        let lease = vault.acquire(Provider::Supergrok).await.unwrap();
+        assert!(matches!(lease.registration("a").await, Err(Error::Storage)));
+        lease.finish().await;
+        db.execute(
+            "UPDATE records SET provider='chatgpt',kind='pending' WHERE record_id='a'",
+            [],
+        )
+        .unwrap();
+        let lease = vault.acquire(Provider::Chatgpt).await.unwrap();
+        assert!(matches!(lease.pending("a").await, Err(Error::Storage)));
+        lease.finish().await;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = directory.path().join("model-accounts");
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            for file in ["key", "connections.sqlite"] {
+                assert_eq!(
+                    std::fs::metadata(path.join(file))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
+            }
+        }
+    }
+    #[tokio::test]
+    async fn a_damaged_key_is_never_replaced_and_provider_locks_are_independent() {
+        let directory = tempfile::tempdir().unwrap();
+        let vault = Vault::local(directory.path()).unwrap();
+        let lease = vault.acquire(Provider::Chatgpt).await.unwrap();
+        let other = vault.acquire(Provider::Supergrok).await.unwrap();
+        let waiting = {
+            let vault = vault.clone();
+            tokio::spawn(async move { vault.acquire(Provider::Chatgpt).await })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        lease.finish().await;
+        waiting.await.unwrap().unwrap().finish().await;
+        other.finish().await;
+        drop(vault);
+        let key = directory.path().join("model-accounts/key");
+        std::fs::write(&key, b"damaged").unwrap();
+        assert!(matches!(
+            Vault::local(directory.path()),
+            Err(Error::Storage)
+        ));
+        assert_eq!(std::fs::read(key).unwrap(), b"damaged");
+    }
+    #[test]
+    fn shared_registrations_keep_the_existing_optional_field_contract() {
+        // Shared records are also consumed by existing agents, whose schema
+        // accepts absent optional properties rather than JSON nulls.
+        let mut value = record("a");
+        value.email = None;
+        value.id_token = None;
+        value.access_token = None;
+        value.refresh_token = None;
+        value.expires_at = None;
+        value.earliest_refresh_at = None;
+        let encoded = serde_json::to_value(&value).unwrap();
+        for field in [
+            "email",
+            "idToken",
+            "accessToken",
+            "refreshToken",
+            "expiresAt",
+            "earliestRefreshAt",
+        ] {
+            assert!(encoded.get(field).is_none());
+        }
+        let mut legacy = encoded;
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("authorizationGeneration");
+        legacy.as_object_mut().unwrap().remove("planNoticeSeen");
+        let decoded: Registration = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.authorization_generation, 0);
+        assert!(!decoded.plan_notice_seen);
+        assert!(decoded.access_token.is_none());
+    }
+    struct Remote {
+        hang_acquire: bool,
+        hang_first_release: bool,
+        calls: Mutex<Vec<Value>>,
+        releases: AtomicUsize,
+        started: Notify,
+        released: Notify,
+        cancel: CancellationToken,
+    }
+    impl Remote {
+        fn new(hang_acquire: bool, hang_first_release: bool) -> Arc<Self> {
+            Arc::new(Self {
+                hang_acquire,
+                hang_first_release,
+                calls: Mutex::new(vec![]),
+                releases: AtomicUsize::new(0),
+                started: Notify::new(),
+                released: Notify::new(),
+                cancel: CancellationToken::new(),
+            })
+        }
+        async fn wait(&self, notify: &Notify) {
+            tokio::time::timeout(Duration::from_secs(3), notify.notified())
+                .await
+                .unwrap();
+        }
+    }
+    #[async_trait]
+    impl AccountTransport for Remote {
+        fn subject(&self) -> &str {
+            "fixture-subject"
+        }
+        fn cancellation(&self) -> CancellationToken {
+            self.cancel.clone()
+        }
+        async fn request(&self, command: Value) -> Result<Value, Error> {
+            lock(&self.calls).push(command.clone());
+            match command["action"].as_str() {
+                Some("acquire") => {
+                    if self.hang_acquire {
+                        self.started.notify_one();
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(Value::Bool(true))
+                }
+                Some("release") => {
+                    let previous = self.releases.fetch_add(1, Ordering::SeqCst);
+                    if self.hang_first_release && previous == 0 {
+                        self.started.notify_one();
+                        std::future::pending::<()>().await;
+                    }
+                    self.released.notify_one();
+                    Ok(Value::Null)
+                }
+                _ => Err(Error::Storage),
+            }
+        }
+    }
+    #[tokio::test]
+    async fn cancelled_acquisition_releases_the_same_remote_token() {
+        let remote = Remote::new(true, false);
+        let vault = Vault::account(remote.clone(), "fixture-host".into());
+        let task = tokio::spawn(async move { vault.acquire(Provider::Chatgpt).await });
+        remote.wait(&remote.started).await;
+        task.abort();
+        let _ = task.await;
+        remote.wait(&remote.released).await;
+        let calls = lock(&remote.calls);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["token"], calls[1]["token"]);
+        assert_eq!(calls[1]["action"], "release");
+    }
+    #[tokio::test]
+    async fn interrupted_release_still_runs_drop_cleanup() {
+        let remote = Remote::new(false, true);
+        let vault = Vault::account(remote.clone(), "fixture-host".into());
+        let lease = vault.acquire(Provider::Chatgpt).await.unwrap();
+        let task = tokio::spawn(lease.finish());
+        remote.wait(&remote.started).await;
+        task.abort();
+        let _ = task.await;
+        remote.wait(&remote.released).await;
+        assert_eq!(remote.releases.load(Ordering::SeqCst), 2);
+        let calls = lock(&remote.calls);
+        assert_eq!(calls[0]["token"], calls[2]["token"]);
+    }
 }

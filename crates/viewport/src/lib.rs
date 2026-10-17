@@ -2,6 +2,7 @@
 
 pub mod assets;
 pub mod input;
+mod model_accounts;
 mod shell;
 mod workspace;
 
@@ -70,6 +71,16 @@ pub struct WorkspaceView {
     plugins: Value,
     plugin_attempt: Value,
     plugin_request: Option<u64>,
+    model_connections: Value,
+    model_login: Value,
+    model_storage: &'static str,
+    model_fetch: Option<u64>,
+    model_sign_in: Option<u64>,
+    model_action: Option<u64>,
+    model_editing: Option<String>,
+    model_name: Entity<input::TextInput>,
+    model_callback: Entity<input::TextInput>,
+    model_error: Option<String>,
     models: Vec<Value>,
     model: Option<String>,
     model_picker: bool,
@@ -112,6 +123,9 @@ impl WorkspaceView {
         .detach();
         let file_editor = cx.new(|cx| input::TextInput::code(window, cx));
         cx.observe(&file_editor, |_, _, cx| cx.notify()).detach();
+        let model_name = cx.new(|cx| input::TextInput::new("Connection name", window, cx));
+        let model_callback =
+            cx.new(|cx| input::TextInput::new("Paste the localhost callback URL", window, cx));
         let mut events = transport.events;
         let reader = cx.spawn(async move |this, cx| {
             while let Some(frame) = events.next().await {
@@ -165,6 +179,16 @@ impl WorkspaceView {
             plugins: Value::Null,
             plugin_attempt: Value::Null,
             plugin_request: None,
+            model_connections: Value::Null,
+            model_login: Value::Null,
+            model_storage: "local",
+            model_fetch: None,
+            model_sign_in: None,
+            model_action: None,
+            model_editing: None,
+            model_name,
+            model_callback,
+            model_error: None,
             models: vec![],
             model: None,
             model_picker: false,
@@ -186,6 +210,7 @@ impl WorkspaceView {
         view.call(methods::WATCH_CHATS, json!({}));
         view.call(methods::WATCH_SESSIONS, json!({}));
         view.call(methods::LIST_REPOS, json!({}));
+        view.refresh_model_connections();
         view
     }
 
@@ -244,6 +269,12 @@ impl WorkspaceView {
             return;
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
+        if method.is_empty() {
+            return;
+        }
+        if self.receive_model_accounts(id, &frame, cx) {
+            return;
+        }
         if let Some(error) = frame.get("err").and_then(Value::as_str) {
             self.error = Some(error.into());
             if self.plugin_request == Some(id) {
@@ -296,6 +327,10 @@ impl WorkspaceView {
                     let changed = self.cloud_account["user"]["id"] != value["user"]["id"];
                     self.cloud_account = value.clone();
                     if changed {
+                        self.reset_model_connections();
+                        self.model_callback
+                            .update(cx, |input, cx| input.set_value(String::new(), cx));
+                        self.refresh_model_connections();
                         self.plugins = Value::Null;
                         self.plugin_attempt = Value::Null;
                         self.plugin_request = None;

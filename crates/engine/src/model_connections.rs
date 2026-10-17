@@ -221,6 +221,10 @@ impl ModelConnections {
         );
         Ok(stream.boxed())
     }
+    pub async fn complete_login(&self, id: &str, url: &str) -> Result<(), Error> {
+        let (m, raw, _) = self.owner(id).await?;
+        m.complete_login(provider(&raw), &raw, url).await
+    }
     pub async fn rename(&self, id: &str, name: &str) -> Result<(), Error> {
         let (m, raw, _) = self.owner(id).await?;
         m.rename(provider(&raw), &raw, name).await
