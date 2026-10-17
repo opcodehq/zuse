@@ -18,29 +18,32 @@ struct ResultPage {
     total: usize,
     lines: Arc<Vec<ResultLine>>,
     path: Option<String>,
+    scroll: UniformListScrollHandle,
 }
-struct ResultLine {
-    text: String,
-    kind: i8,
+pub(super) struct ResultLine {
+    pub(super) text: String,
+    pub(super) kind: i8,
+}
+pub(super) fn diff_lines(old: &str, new: &str) -> Vec<ResultLine> {
+    similar::TextDiff::configure()
+        .timeout(std::time::Duration::from_millis(100))
+        .diff_lines(old, new)
+        .iter_all_changes()
+        .map(|change| ResultLine {
+            text: change.value().trim_end_matches(['\r', '\n']).to_owned(),
+            kind: match change.tag() {
+                similar::ChangeTag::Delete => -1,
+                similar::ChangeTag::Insert => 1,
+                _ => 0,
+            },
+        })
+        .collect()
 }
 fn result_lines(text: &str, diff: bool) -> (Vec<ResultLine>, Option<String>) {
     if diff {
         if let Ok(diff) = serde_json::from_str::<zuse_protocol::ToolDiff>(text) {
             let old = diff.old_text.as_deref().unwrap_or_default();
-            let patch = similar::TextDiff::configure()
-                .timeout(std::time::Duration::from_millis(100))
-                .diff_lines(old, &diff.new_text);
-            let lines = patch
-                .iter_all_changes()
-                .map(|change| ResultLine {
-                    text: change.value().trim_end_matches(['\r', '\n']).to_owned(),
-                    kind: match change.tag() {
-                        similar::ChangeTag::Delete => -1,
-                        similar::ChangeTag::Insert => 1,
-                        _ => 0,
-                    },
-                })
-                .collect();
+            let lines = diff_lines(old, &diff.new_text);
             return (lines, Some(diff.path));
         }
     }
@@ -148,6 +151,7 @@ impl WorkspaceView {
                 total,
                 lines: Arc::new(lines),
                 path,
+                scroll: UniformListScrollHandle::new(),
             })
         })();
         match result {
@@ -299,6 +303,7 @@ impl WorkspaceView {
                                             .collect::<Vec<_>>()
                                     },
                                 )
+                                .track_scroll(&page.scroll)
                                 .h(px(visible_height))
                                 .w_full()
                                 .with_horizontal_sizing_behavior(

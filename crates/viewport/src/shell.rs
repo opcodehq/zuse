@@ -401,7 +401,8 @@ impl WorkspaceView {
             .to_owned();
         let model = self.model.clone().unwrap_or_else(|| "Default model".into());
         let working = self.is_working();
-        let compact = !self.messages.is_empty()
+        let compact = self.content_width >= 560.
+            && !self.messages.is_empty()
             && self.attachments.is_empty()
             && self.uploading == 0
             && self.input.read(cx).value(cx).len() < 90
@@ -425,8 +426,7 @@ impl WorkspaceView {
                         .bg(rgb(0x251715))
                         .text_size(px(12.))
                         .text_color(rgb(0xe6a094))
-                        .child(error)
-                        .child(div().flex_1())
+                        .child(div().flex_1().min_w_0().child(error))
                         .child(
                             icon_button("dismiss-error", "close", "Dismiss error").on_click(
                                 cx.listener(|this, _, _, cx| {
@@ -1131,7 +1131,7 @@ impl WorkspaceView {
     fn workspace_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .w(px(if self.open_file.is_some() {
-                480.
+                400.
             } else if self.right_tab == "terminal" {
                 360.
             } else {
@@ -1210,7 +1210,7 @@ impl WorkspaceView {
                             ),
                     )
                     .into_any_element(),
-                "changes" => self.changes_view(),
+                "changes" => self.workspace_changes_view(cx),
                 _ => self.files_view(cx),
             })
             .into_any_element()
@@ -1230,20 +1230,65 @@ impl WorkspaceView {
                         .border_color(rgb(BORDER))
                         .child(
                             icon_button("close-file", "arrow-left", "Back to files").on_click(
-                                cx.listener(|this, _, _, cx| {
+                                cx.listener(|this, _, window, cx| {
                                     this.close_file(cx);
+                                    if this.open_file.is_none() {
+                                        window.focus(&this.input.read(cx).focus_handle(cx), cx);
+                                    }
                                 }),
                             ),
                         )
-                        .child(label(file["path"].as_str().unwrap_or("File").to_owned())),
+                        .child(
+                            label(file["path"].as_str().unwrap_or("File").to_owned())
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis(),
+                        )
+                        .when(self.file_request.is_some(), |d| {
+                            d.child(label("Loading…").text_size(px(10.)))
+                        }),
                 )
-                .child(
+                .when_some(file["readOnlyReason"].as_str(), |d, reason| {
+                    d.child(
+                        label(read_only_message(reason))
+                            .px_3()
+                            .py_2()
+                            .text_size(px(11.)),
+                    )
+                })
+                .when(file["truncated"] == true, |d| {
+                    d.child(
+                        label("Partial file preview · Editing is disabled")
+                            .px_3()
+                            .py_2(),
+                    )
+                })
+                .child(if file["text"].is_string() {
                     div()
                         .flex_1()
                         .min_h_0()
                         .font_family("Geist Mono")
-                        .child(self.file_editor.clone()),
-                )
+                        .child(self.file_editor.clone())
+                        .into_any_element()
+                } else {
+                    column()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .p_4()
+                        .gap_3()
+                        .child(icon("file-code").size(px(28.)))
+                        .child(label(if file["encoding"] == "binary" {
+                            "Binary file"
+                        } else {
+                            "Text preview unavailable"
+                        }))
+                        .child(
+                            label(format!("{} bytes", file["size"].as_u64().unwrap_or(0)))
+                                .text_size(px(11.)),
+                        )
+                        .into_any_element()
+                })
                 .child(
                     row()
                         .h(px(36.))
@@ -1251,7 +1296,9 @@ impl WorkspaceView {
                         .gap_2()
                         .border_t_1()
                         .border_color(rgb(BORDER))
-                        .child(label(if self.file_dirty(cx) {
+                        .child(label(if self.save_request.is_some() {
+                            "Saving…"
+                        } else if self.file_dirty(cx) {
                             "Unsaved changes"
                         } else {
                             "Saved"
@@ -1275,6 +1322,10 @@ impl WorkspaceView {
                                         },
                                     )
                                     .bg(rgb(RAISED))
+                                    .when(
+                                        !self.file_dirty(cx) || self.save_request.is_some(),
+                                        |d| d.opacity(0.4),
+                                    )
                                     .on_click(cx.listener(|this, _, _, cx| this.save_file(cx))),
                                 )
                             },
@@ -1334,103 +1385,108 @@ impl WorkspaceView {
             )
             .child(
                 column()
-                    .id("files-tree")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .p_2()
-                    .gap_1()
-                    .when(self.entries.is_empty(), |d| {
-                        d.child(
-                            column()
-                                .p_4()
-                                .gap_2()
-                                .child(label(if self.selected.is_some() {
+                    .when(self.directory_request.is_some(), |d| {
+                        d.child(label("Loading files…").px_3().py_2())
+                    })
+                    .when(
+                        self.entries.is_empty() && self.directory_request.is_none(),
+                        |d| {
+                            d.child(
+                                label(if self.selected.is_some() {
                                     "No files in this folder"
                                 } else {
                                     "Open a session to browse its files"
-                                })),
-                        )
-                    })
-                    .children(self.entries.iter().enumerate().map(|(i, entry)| {
-                        let entry = entry.clone();
-                        row()
-                            .id(("file-entry", i))
-                            .h(px(28.))
-                            .px_2()
-                            .gap_2()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(rgb(RAISED)))
-                            .child(
-                                icon(if entry["kind"] == "directory" {
-                                    "folder"
-                                } else {
-                                    "file-code"
                                 })
-                                .size(px(14.))
-                                .text_color(rgb(FAINT)),
+                                .p_4(),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(MUTED))
-                                    .text_ellipsis()
-                                    .child(entry["name"].as_str().unwrap_or_default().to_owned()),
-                            )
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| {
-                                    this.open_entry(entry.clone(), cx)
-                                }),
-                            )
-                    })),
-            )
-            .into_any_element()
-    }
-
-    fn changes_view(&self) -> AnyElement {
-        let files = self.changes["files"].as_array();
-        column()
-            .id("changes-view")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p_3()
-            .gap_2()
-            .child(label("Working tree changes"))
-            .when(files.is_none_or(Vec::is_empty), |d| {
-                d.child(label("No changes to show").py_4())
-            })
-            .children(files.into_iter().flatten().map(|f| {
-                column()
-                    .py_2()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .child(
-                        row()
-                            .gap_2()
-                            .child(icon("file-code").size(px(13.)))
-                            .child(label(
-                                f["path"].as_str().unwrap_or("Changed file").to_owned(),
-                            )),
+                        },
                     )
-                    .when_some(f["diff"].as_str().map(str::to_owned), |d, text| {
-                        d.child(
-                            div()
-                                .font_family("Geist Mono")
-                                .text_size(px(10.))
-                                .text_color(rgb(MUTED))
-                                .child(text),
+                    .child(
+                        uniform_list(
+                            "files-tree",
+                            self.entries.len(),
+                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                range
+                                    .filter_map(|index| {
+                                        this.entries.get(index).cloned().map(|entry| {
+                                            row()
+                                                .id(("file-entry", index))
+                                                .h(px(28.))
+                                                .px_2()
+                                                .gap_2()
+                                                .rounded_md()
+                                                .cursor_pointer()
+                                                .hover(|d| d.bg(rgb(RAISED)))
+                                                .child(
+                                                    icon(if entry["kind"] == "directory" {
+                                                        "folder"
+                                                    } else {
+                                                        "file-code"
+                                                    })
+                                                    .size(px(14.))
+                                                    .text_color(rgb(FAINT)),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(px(12.))
+                                                        .text_color(rgb(MUTED))
+                                                        .text_ellipsis()
+                                                        .child(
+                                                            entry["name"]
+                                                                .as_str()
+                                                                .unwrap_or_default()
+                                                                .to_owned(),
+                                                        ),
+                                                )
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.open_entry(entry.clone(), cx)
+                                                }))
+                                        })
+                                    })
+                                    .collect::<Vec<_>>()
+                            }),
                         )
-                    })
-            }))
+                        .track_scroll(&self.files_scroll)
+                        .flex_1()
+                        .min_h_0()
+                        .px_2()
+                        .py_2(),
+                    )
+                    .when(self.directory_cursor.is_some(), |d| {
+                        d.child(
+                            control(
+                                "load-more-files",
+                                if self.directory_request.is_some() {
+                                    "Loading…"
+                                } else {
+                                    "Load more files"
+                                },
+                            )
+                            .m_2()
+                            .on_click(cx.listener(|this, _, _, cx| this.load_more_directory(cx))),
+                        )
+                    }),
+            )
             .into_any_element()
     }
 }
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel_width = if !self.right_open || self.settings || self.project_picker {
+            0.
+        } else if self.open_file.is_some() {
+            400.
+        } else if self.right_tab == "terminal" {
+            360.
+        } else {
+            320.
+        };
+        self.content_width = f32::from(window.viewport_size().width)
+            - if self.sidebar_open { 264. } else { 0. }
+            - panel_width;
         div()
             .key_context("Workspace")
             .on_action(cx.listener(Self::submit))
@@ -1585,5 +1641,18 @@ fn markdown_block(block: &Block) -> AnyElement {
             }))
             .into_any_element(),
         Block::Rule => div().h(px(1.)).bg(rgb(BORDER)).my_2().into_any_element(),
+    }
+}
+
+fn read_only_message(reason: &str) -> &'static str {
+    match reason {
+        "binary" => "Read only · Binary file",
+        "unsupportedEncoding" => "Read only · Unsupported text encoding",
+        "mixedLineEndings" => "Read only · Mixed line endings",
+        "symlink" => "Read only · Symbolic link",
+        "tooLarge" => "Read only · File exceeds the editing limit",
+        "permissionDenied" => "Read only · Permission denied",
+        "outsideWorkspace" => "Read only · File is outside this workspace",
+        _ => "Read only",
     }
 }

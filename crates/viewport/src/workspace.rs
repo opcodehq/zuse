@@ -2,6 +2,12 @@
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
+pub(super) struct PendingFileSave {
+    pub id: u64,
+    pub file: Value,
+    pub text: String,
+}
+
 impl WorkspaceView {
     pub(super) fn cancel(&mut self, id: u64) {
         let _ = self.requests.unbounded_send(json!({"id":id,"cancel":true}));
@@ -27,8 +33,13 @@ impl WorkspaceView {
         self.queue.clear();
         self.entries.clear();
         self.directory.clear();
+        self.directory_cursor = None;
+        self.files_scroll = UniformListScrollHandle::new();
+        self.file_read_baseline = None;
         self.open_file = None;
         self.changes = Value::Null;
+        self.changes_error = None;
+        self.reset_review();
         self.terminal_text.clear();
         self.terminal = vt100::Parser::new(28, 80, 2000);
     }
@@ -69,23 +80,39 @@ impl WorkspaceView {
             self.cancel(id);
         }
         let chat = self.selected.as_ref().unwrap();
+        self.directory_append = false;
+        if directory != self.directory {
+            self.files_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        }
         let id = self.call(
             methods::LIST_WORKSPACE_DIRECTORY,
-            json!({"chatId":chat["id"],"directory":directory}),
+            json!({"chatId":chat["id"],"directory":directory,"targetDeviceId":chat["deviceId"]}),
         );
         self.directory_request = Some(id);
     }
 
+    pub(super) fn load_more_directory(&mut self, cx: &mut Context<Self>) {
+        if self.directory_request.is_some() {
+            return;
+        }
+        let (Some(chat), Some(cursor)) = (self.selected.as_ref(), self.directory_cursor.as_ref())
+        else {
+            return;
+        };
+        let id=self.call(methods::LIST_WORKSPACE_DIRECTORY,json!({"chatId":chat["id"],"directory":self.directory,"cursor":cursor,"targetDeviceId":chat["deviceId"]}));
+        self.directory_append = true;
+        self.directory_request = Some(id);
+        cx.notify();
+    }
     pub(super) fn open_entry(&mut self, entry: Value, cx: &mut Context<Self>) {
         let path = entry["path"].as_str().unwrap_or_default();
         if entry["kind"] == "directory" {
             self.load_directory(path);
-        } else if let Some(chat) = &self.selected {
-            let id = self.call(
-                methods::READ_WORKSPACE_FILE,
-                json!({"chatId":chat["id"],"path":path}),
-            );
-            self.file_request = Some(id);
+        } else {
+            if self.file_navigation_blocked(cx) {
+                return;
+            }
+            self.read_file(path, false, cx);
         }
         cx.notify();
     }
@@ -99,10 +126,7 @@ impl WorkspaceView {
                 let dir = self.directory.clone();
                 self.load_directory(&dir);
             }
-            "changes" if !self.cwd().is_empty() => {
-                let id = self.call(methods::GET_CHECKOUT_DIFF, json!({"cwd":self.cwd(),"mode":"workingTree","chatId":self.selected.as_ref().map(|c|&c["id"])}));
-                self.changes_request = Some(id);
-            }
+            "changes" if !self.cwd().is_empty() => self.refresh_changes(cx),
             "terminal" if self.terminal_id.is_none() => {
                 self.call(methods::OPEN_TERMINAL, json!({"chatId":self.selected.as_ref().map(|c|c["id"].as_str().unwrap_or_default()).unwrap_or("browser-canvas"),"cwd":self.cwd(),"cols":80,"rows":28}));
             }
@@ -207,6 +231,41 @@ impl WorkspaceView {
 }
 
 impl WorkspaceView {
+    pub(super) fn file_navigation_blocked(&mut self, cx: &mut Context<Self>) -> bool {
+        let message = if self.save_request.is_some() {
+            Some("Wait for the current save before opening or closing a file.")
+        } else if self.file_dirty(cx) {
+            Some("Save or discard your file edits before continuing.")
+        } else {
+            None
+        };
+        if let Some(message) = message {
+            self.error = Some(message.into());
+            cx.notify();
+            true
+        } else {
+            false
+        }
+    }
+    pub(super) fn read_file(&mut self, path: &str, discard: bool, cx: &mut Context<Self>) {
+        if self.save_request.is_some() || (!discard && self.file_navigation_blocked(cx)) {
+            return;
+        }
+        let Some(chat) = self.selected.clone() else {
+            return;
+        };
+        if let Some(id) = self.file_request.take() {
+            self.cancel(id);
+        }
+        self.file_read_baseline = Some(self.file_editor.read(cx).value(cx));
+        let id = self.call(
+            methods::READ_WORKSPACE_FILE,
+            json!({"chatId":chat["id"],"path":path,"targetDeviceId":chat["deviceId"]}),
+        );
+        self.file_request = Some(id);
+        self.error = None;
+        cx.notify();
+    }
     pub(super) fn file_dirty(&self, cx: &App) -> bool {
         self.open_file
             .as_ref()
@@ -215,6 +274,9 @@ impl WorkspaceView {
     }
 
     pub(super) fn save_file(&mut self, cx: &mut Context<Self>) {
+        if !self.file_dirty(cx) {
+            return;
+        }
         let (Some(file), Some(chat)) = (&self.open_file, &self.selected) else {
             return;
         };
@@ -225,34 +287,41 @@ impl WorkspaceView {
             return;
         }
         let text = self.file_editor.read(cx).value(cx);
+        let snapshot = file.clone();
         let id=self.call(methods::WRITE_WORKSPACE_FILE,json!({
-            "chatId":chat["id"],"path":file["path"],"text":text,
+            "chatId":chat["id"],"targetDeviceId":chat["deviceId"],"path":file["path"],"text":text,
             "expectedCheckoutId":file["checkoutId"],"expectedContentHash":file["contentHash"],
             "encoding":file["encoding"],"lineEnding":file["lineEnding"].as_str().unwrap_or("lf"),
         }));
-        self.save_request = Some((id, text));
+        self.save_request = Some(PendingFileSave {
+            id,
+            file: snapshot,
+            text,
+        });
         cx.notify();
     }
 
     pub(super) fn close_file(&mut self, cx: &mut Context<Self>) {
-        if self.file_dirty(cx) {
-            self.error = Some("Save or discard your file edits before closing the editor.".into());
-        } else {
-            self.open_file = None;
+        if self.file_navigation_blocked(cx) {
+            return;
         }
+        if let Some(id) = self.file_request.take() {
+            self.cancel(id);
+        }
+        self.file_read_baseline = None;
+        self.open_file = None;
         cx.notify();
     }
 
     pub(super) fn discard_file_edits(&mut self, cx: &mut Context<Self>) {
-        if let (Some(file), Some(chat)) = (&self.open_file, &self.selected) {
-            let id = self.call(
-                methods::READ_WORKSPACE_FILE,
-                json!({"chatId":chat["id"],"path":file["path"]}),
-            );
-            self.file_request = Some(id);
-            self.error = None;
+        let path = self
+            .open_file
+            .as_ref()
+            .and_then(|file| file["path"].as_str())
+            .map(str::to_owned);
+        if let Some(path) = path {
+            self.read_file(&path, true, cx);
         }
-        cx.notify();
     }
 }
 

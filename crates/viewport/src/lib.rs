@@ -10,6 +10,7 @@ mod recovery;
 mod shell;
 mod tool_results;
 mod workspace;
+mod workspace_review;
 
 use futures::{
     StreamExt,
@@ -76,6 +77,7 @@ pub struct WorkspaceView {
     project_input: Entity<input::TextInput>,
     sidebar_open: bool,
     right_open: bool,
+    content_width: f32,
     right_tab: String,
     recovery: Option<zuse_protocol::recovery::RecoverySnapshot>,
     recovery_request: Option<u64>,
@@ -89,7 +91,11 @@ pub struct WorkspaceView {
     file_request: Option<u64>,
     open_file: Option<Value>,
     file_editor: Entity<input::TextInput>,
-    save_request: Option<(u64, String)>,
+    save_request: Option<workspace::PendingFileSave>,
+    file_read_baseline: Option<String>,
+    directory_cursor: Option<String>,
+    files_scroll: UniformListScrollHandle,
+    directory_append: bool,
     accounts: Value,
     cloud_account: Value,
     browser_local: bool,
@@ -115,6 +121,8 @@ pub struct WorkspaceView {
     terminal: vt100::Parser,
     terminal_input: Entity<input::TextInput>,
     changes: Value,
+    changes_error: Option<String>,
+    review: workspace_review::WorkspaceReview,
     changes_request: Option<u64>,
     attachments: Vec<Value>,
     uploading: usize,
@@ -209,6 +217,7 @@ impl WorkspaceView {
             project_input,
             sidebar_open: true,
             right_open: false,
+            content_width: 768.,
             right_tab: "files".into(),
             recovery: None,
             recovery_request: None,
@@ -223,6 +232,10 @@ impl WorkspaceView {
             open_file: None,
             file_editor,
             save_request: None,
+            file_read_baseline: None,
+            directory_cursor: None,
+            files_scroll: UniformListScrollHandle::new(),
+            directory_append: false,
             accounts: Value::Null,
             cloud_account: Value::Null,
             browser_local: false,
@@ -248,6 +261,8 @@ impl WorkspaceView {
             terminal: vt100::Parser::new(28, 80, 2000),
             terminal_input,
             changes: Value::Null,
+            changes_error: None,
+            review: Default::default(),
             changes_request: None,
             attachments: vec![],
             uploading: 0,
@@ -324,6 +339,9 @@ impl WorkspaceView {
         if method.is_empty() {
             return;
         }
+        if self.receive_review(id, &frame, cx) {
+            return;
+        }
         if self.receive_tool_result(id, &frame, cx) {
             return;
         }
@@ -346,10 +364,17 @@ impl WorkspaceView {
                 self.restore_failed_draft(draft, cx);
             }
             self.pending.remove(&id);
+            if self.file_request == Some(id) {
+                self.file_request = None;
+                self.file_read_baseline = None;
+            }
+            if self.directory_request == Some(id) {
+                self.directory_request = None;
+            }
             if self
                 .save_request
                 .as_ref()
-                .is_some_and(|(request, _)| *request == id)
+                .is_some_and(|request| request.id == id)
             {
                 self.save_request = None;
             }
@@ -464,10 +489,36 @@ impl WorkspaceView {
                     self.queue = value["items"].as_array().cloned().unwrap_or_default()
                 }
                 methods::LIST_WORKSPACE_DIRECTORY if self.directory_request == Some(id) => {
-                    self.directory = value["directory"].as_str().unwrap_or_default().into();
-                    self.entries = value["entries"].as_array().cloned().unwrap_or_default();
+                    self.directory_request = None;
+                    let directory = value["directory"].as_str().unwrap_or_default();
+                    if self.directory_append && directory != self.directory {
+                        self.error = Some(
+                            "The folder changed while loading more files. Refresh it to continue."
+                                .into(),
+                        );
+                    } else {
+                        if !self.directory_append {
+                            self.entries.clear();
+                        }
+                        for entry in value["entries"].as_array().into_iter().flatten() {
+                            if !self.entries.iter().any(|old| old["path"] == entry["path"]) {
+                                self.entries.push(entry.clone());
+                            }
+                        }
+                        self.directory = directory.into();
+                        self.directory_cursor = value["nextCursor"].as_str().map(str::to_owned);
+                    }
+                    self.directory_append = false;
                 }
                 methods::READ_WORKSPACE_FILE if self.file_request == Some(id) => {
+                    self.file_request = None;
+                    let baseline = self.file_read_baseline.take();
+                    if baseline.as_deref() != Some(self.file_editor.read(cx).value(cx).as_str()) {
+                        self.error=Some("Your editor changed while the file was loading. Your edits are still here; open the file again when ready.".into());
+                        self.pending.remove(&id);
+                        cx.notify();
+                        return;
+                    }
                     let text = value["text"].as_str().unwrap_or_default().to_owned();
                     self.file_editor.update(cx, |input, cx| {
                         input.set_readonly(
@@ -482,13 +533,19 @@ impl WorkspaceView {
                     if self
                         .save_request
                         .as_ref()
-                        .is_some_and(|(request, _)| *request == id) =>
+                        .is_some_and(|request| request.id == id) =>
                 {
-                    let (_, text) = self.save_request.take().unwrap();
+                    let saved = self.save_request.take().unwrap();
                     if value["status"] == "written" {
                         if let Some(file) = &mut self.open_file {
-                            file["contentHash"] = value["file"]["contentHash"].clone();
-                            file["text"] = json!(text);
+                            if file["path"] == saved.file["path"]
+                                && file["checkoutId"] == saved.file["checkoutId"]
+                                && file["contentHash"] == saved.file["contentHash"]
+                            {
+                                file["contentHash"] = value["file"]["contentHash"].clone();
+                                file["text"] = json!(saved.text);
+                                file["size"] = value["file"]["size"].clone();
+                            }
                         }
                     } else {
                         self.error=Some("This file changed on disk. Reload it before saving; your edits are still in the editor.".into());
@@ -546,9 +603,7 @@ impl WorkspaceView {
     }
 
     fn select(&mut self, chat: Value, cx: &mut Context<Self>) {
-        if self.file_dirty(cx) {
-            self.error = Some("Save or discard file edits before switching sessions.".into());
-            cx.notify();
+        if self.file_navigation_blocked(cx) {
             return;
         }
         self.stash_draft(cx);
@@ -587,9 +642,7 @@ impl WorkspaceView {
     }
 
     fn new_chat(&mut self, cx: &mut Context<Self>) {
-        if self.file_dirty(cx) {
-            self.error = Some("Save or discard file edits before starting another session.".into());
-            cx.notify();
+        if self.file_navigation_blocked(cx) {
             return;
         }
         self.stash_draft(cx);

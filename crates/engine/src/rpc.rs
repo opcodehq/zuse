@@ -2958,7 +2958,9 @@ impl RpcService for EngineRpc {
                         chat_id: Option<String>,
                         commit_sha: Option<String>,
                     }
-                    let p: P = parse_params(params)?;
+                    let mut p: P = parse_params(params)?;
+                    p.cwd = crate::repos::resolve_chat_cwd(&p.cwd, &self.repos.scratch_root())
+                        .map_err(RpcError::Failed)?;
                     let identity = self
                         .repos
                         .checkout_identity(std::path::Path::new(&p.cwd))
@@ -3102,7 +3104,10 @@ impl RpcService for EngineRpc {
                 // behind an allocation so every unrelated RPC does not carry that
                 // state in `EngineRpc::handle`'s stack frame.
                 Box::pin(async move {
-                    let p: zuse_protocol::GetCheckoutFileDiffTextRequest = parse_params(params)?;
+                    let mut p: zuse_protocol::GetCheckoutFileDiffTextRequest =
+                        parse_params(params)?;
+                    p.cwd = crate::repos::resolve_chat_cwd(&p.cwd, &self.repos.scratch_root())
+                        .map_err(RpcError::Failed)?;
                     let identity =
                         Box::pin(self.repos.checkout_identity(std::path::Path::new(&p.cwd)))
                             .await

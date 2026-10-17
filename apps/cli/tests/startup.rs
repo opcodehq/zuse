@@ -244,3 +244,87 @@ printf '%s\n' '{"type":"result","subtype":"success","session_id":"startup-fixtur
     );
     reopened.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scratch_checkout_review_and_editing_reject_stale_disk_state() {
+    let root = tempfile::tempdir().unwrap();
+    let profile = root.path().join("review-profile");
+    let bin = root.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let mut server = Server::start(&profile, &bin, &root.path().join("capture")).await;
+    let cwd = profile.join("scratch").join("review-fixture");
+    std::fs::create_dir_all(&cwd).unwrap();
+    async fn git(cwd: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    git(&cwd, &["init", "-q"]).await;
+    std::fs::write(cwd.join("review.txt"), "original line\n").unwrap();
+    git(&cwd, &["add", "review.txt"]).await;
+    git(
+        &cwd,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    )
+    .await;
+    std::fs::write(cwd.join("review.txt"), "changed line\n").unwrap();
+    let client = server.client().await;
+    let info = client.call(methods::ENGINE_INFO, json!({})).await.unwrap();
+    let portable = "~/.zuse/scratch/review-fixture";
+    client.call(methods::MUTATE,json!({"op":"createChat","chatId":"review-chat","deviceId":info["deviceId"],"cwd":portable,"config":{"harness":"claude-code","model":null,"reasoning":null,"sandbox":"workspace-write"}})).await.unwrap();
+    let diff = client
+        .call(
+            methods::GET_CHECKOUT_DIFF,
+            json!({"cwd":portable,"chatId":"review-chat","mode":"workingTree"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(diff["files"][0]["path"], "review.txt");
+    let request = json!({"cwd":portable,"checkoutId":diff["checkoutId"],"chatId":"review-chat","path":"review.txt","mode":"workingTree","diffChecksum":diff["checksum"]});
+    let file_diff = client
+        .call(methods::GET_CHECKOUT_FILE_DIFF_TEXT, request.clone())
+        .await
+        .unwrap();
+    assert_eq!(file_diff["stale"], false);
+    assert_eq!(file_diff["oldText"], "original line\n");
+    assert_eq!(file_diff["newText"], "changed line\n");
+    let read = client
+        .call(
+            methods::READ_WORKSPACE_FILE,
+            json!({"chatId":"review-chat","path":"review.txt"}),
+        )
+        .await
+        .unwrap();
+    std::fs::write(cwd.join("review.txt"), "external edit\n").unwrap();
+    let stale = client
+        .call(methods::GET_CHECKOUT_FILE_DIFF_TEXT, request)
+        .await
+        .unwrap();
+    assert_eq!(stale["stale"], true);
+    let conflict=client.call(methods::WRITE_WORKSPACE_FILE,json!({"chatId":"review-chat","path":"review.txt","expectedCheckoutId":read["checkoutId"],"expectedContentHash":read["contentHash"],"text":"unsaved editor text\n","encoding":"utf8","lineEnding":"lf"})).await.unwrap();
+    assert_eq!(conflict["status"], "conflict");
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("review.txt")).unwrap(),
+        "external edit\n"
+    );
+    server.stop().await;
+}
