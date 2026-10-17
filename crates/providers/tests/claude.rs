@@ -1524,4 +1524,10 @@ fn changing_access_posture_requires_a_new_runtime() {
     after.sandbox = SandboxLevel::ReadOnly;
     assert!(!harness().same_runtime(&before, &after));
     assert!(!harness().reconfigures_in_place(&before, &after));
+    // These use the same default CLI flags, but distinct permission postures.
+    before.auto_approve = false;
+    after = before.clone();
+    after.sandbox = SandboxLevel::WorkspaceWrite;
+    assert!(!harness().same_runtime(&before, &after));
+    assert!(!harness().reconfigures_in_place(&before, &after));
 }

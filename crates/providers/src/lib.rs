@@ -326,7 +326,9 @@ pub trait Harness: Send + Sync {
         false
     }
     fn same_runtime(&self, live: &RunRequest, next: &RunRequest) -> bool {
-        live.model == next.model
+        live.sandbox == next.sandbox
+            && live.auto_approve == next.auto_approve
+            && live.model == next.model
             && live.reasoning == next.reasoning
             && same_model_options(&live.model_options, &next.model_options)
             && live.cwd == next.cwd

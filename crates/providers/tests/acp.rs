@@ -44,7 +44,7 @@ fn request(prompt: &str) -> RunRequest {
         reasoning: None,
         model_options: serde_json::Map::new(),
         cwd: "/tmp".into(),
-        sandbox: SandboxLevel::WorkspaceWrite,
+        sandbox: SandboxLevel::DangerFullAccess,
         auto_approve: true,
         attachments: Vec::new(),
         worktree: None,
@@ -406,10 +406,10 @@ async fn resumed_first_class_model_is_switched_before_prompt() {
 }
 
 #[tokio::test]
-async fn permission_requests_auto_accept_the_preferred_allow_option() {
+async fn full_access_permissions_allow_once_without_creating_a_persistent_rule() {
     let (controls, _steer, _token) = controls();
     let events = run_to_end(&harness(), request("scenario:permission"), controls).await;
-    // The fixture answers refusal unless the harness selected "always".
+    // The fixture refuses unless the harness selects the one-time allow.
     assert!(events.contains(&AgentEvent::TextDelta {
         text: "approved".into()
     }));
@@ -2566,4 +2566,149 @@ async fn kiro_cli_selects_launch_model_and_effort_and_completes_a_turn() {
         }
     )));
     assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
+}
+
+#[tokio::test]
+async fn access_modes_and_permissions_preserve_posture_and_session_ownership() {
+    use std::sync::atomic::Ordering;
+    for (profile, sandbox, auto_approve, answer, count) in [
+        (
+            "readonly",
+            SandboxLevel::ReadOnly,
+            true,
+            Some("Allow once"),
+            0,
+        ),
+        (
+            "workspace",
+            SandboxLevel::WorkspaceWrite,
+            true,
+            Some("Allow once"),
+            1,
+        ),
+        (
+            "workspace deny",
+            SandboxLevel::WorkspaceWrite,
+            false,
+            Some("Reject"),
+            1,
+        ),
+        (
+            "full",
+            SandboxLevel::DangerFullAccess,
+            true,
+            Some("Reject"),
+            0,
+        ),
+        (
+            "full-ask deny",
+            SandboxLevel::DangerFullAccess,
+            false,
+            Some("Reject"),
+            1,
+        ),
+        (
+            "workspace dropped",
+            SandboxLevel::WorkspaceWrite,
+            false,
+            None,
+            1,
+        ),
+        (
+            "workspace foreign",
+            SandboxLevel::WorkspaceWrite,
+            false,
+            Some("Allow once"),
+            0,
+        ),
+        (
+            "workspace missing-owner",
+            SandboxLevel::WorkspaceWrite,
+            false,
+            Some("Allow once"),
+            0,
+        ),
+        (
+            "full reject-only",
+            SandboxLevel::DangerFullAccess,
+            true,
+            Some("Reject"),
+            0,
+        ),
+    ] {
+        let peer = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp-access.py");
+        let agent = AcpHarness::grok().with_executable(peer);
+        let (mut ctl, _steer, _token) = controls();
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = asked.clone();
+        ctl.request_input = Box::new(move |questions| {
+            seen.fetch_add(questions.len(), Ordering::SeqCst);
+            let (tx, rx) = oneshot::channel();
+            if let Some(answer) = answer {
+                let _ = tx.send(
+                    questions
+                        .iter()
+                        .map(|q| UserInputAnswer {
+                            question_id: q.id.clone(),
+                            labels: vec![answer.into()],
+                        })
+                        .collect(),
+                );
+            }
+            rx
+        });
+        let mut req = request(&format!("access-policy {profile}"));
+        req.sandbox = sandbox;
+        req.auto_approve = auto_approve;
+        let events = run_to_end(&agent, req, ctl).await;
+        assert_eq!(
+            dones(&events),
+            vec![(DoneStatus::Completed, None)],
+            "{profile}: {events:?}"
+        );
+        assert_eq!(asked.load(Ordering::SeqCst), count, "{profile}");
+    }
+}
+
+#[test]
+fn access_posture_changes_do_not_reuse_or_reconfigure_an_acp_runtime() {
+    let before = request("before");
+    for (sandbox, auto_approve) in [
+        (SandboxLevel::ReadOnly, true),
+        (SandboxLevel::WorkspaceWrite, true),
+        (SandboxLevel::DangerFullAccess, false),
+    ] {
+        let mut after = before.clone();
+        after.sandbox = sandbox;
+        after.auto_approve = auto_approve;
+        assert!(!harness().same_runtime(&before, &after));
+        assert!(!harness().reconfigures_in_place(&before, &after));
+    }
+}
+
+#[tokio::test]
+async fn access_mode_rejection_stops_before_sending_the_prompt() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let peer = directory.path().join("reject-mode.py");
+    let source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acp-access.py"),
+    )
+    .unwrap();
+    std::fs::write(&peer, source.replace("mode = frame[\"params\"][\"modeId\"]", "emit({\"id\":frame[\"id\"],\"error\":{\"code\":-32602,\"message\":\"mode change refused\"}})\n        break")).unwrap();
+    std::fs::set_permissions(&peer, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (mut ctl, _steer, _token) = controls();
+    ctl.request_input = Box::new(|_| panic!("A rejected mode must not start tool execution"));
+    let mut req = request("access-policy readonly");
+    req.sandbox = SandboxLevel::ReadOnly;
+    let events = run_to_end(&AcpHarness::grok().with_executable(peer), req, ctl).await;
+    assert!(
+        dones(&events)
+            .iter()
+            .any(|(status, error)| *status == DoneStatus::Errored
+                && error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("mode change refused"))),
+        "{events:?}"
+    );
 }

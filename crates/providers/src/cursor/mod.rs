@@ -293,6 +293,8 @@ impl Harness for CursorHarness {
     /// the same agent; no model is Cursor's `auto`.
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd
+            && live.sandbox == next.sandbox
+            && live.auto_approve == next.auto_approve
     }
 
     /// Keep a successful catalog during transient outages. A cold failure

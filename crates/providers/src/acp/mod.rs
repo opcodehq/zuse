@@ -17,9 +17,8 @@
 //! - `session/prompt` owns the turn: its response's `stopReason` ends the
 //!   turn (`cancelled` → Interrupted, `refusal` → Errored, else Completed).
 //! - `session/update` notifications normalize per [`normalize::map_update`].
-//! - Permission requests auto-accept with the agent's preferred allow option
-//!   (zuse sessions run unattended); question-shaped requests block on the
-//!   engine's input bridge.
+//! - Permissions follow the selected access posture. Restricted actions and
+//!   content questions use the engine's input bridge; read-only denies escalation.
 //! - Steering: agents advertising `_session/steering` get mid-turn injection;
 //!   others queue steers and deliver them as the next `session/prompt` at the
 //!   turn boundary. The session stays parked between turns while the
@@ -51,7 +50,7 @@ use tokio::sync::mpsc;
 
 use zuse_protocol::{
     AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice, ReasoningLevel,
-    RunRequest, SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
+    RunRequest, SandboxLevel, SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
 };
 
 use crate::jsonrpc::{Incoming, RpcClient};
@@ -2206,6 +2205,8 @@ impl Harness for AcpHarness {
             return false;
         }
         live.cwd == next.cwd
+            && live.sandbox == next.sandbox
+            && live.auto_approve == next.auto_approve
             && (next.model.is_some() || live.model.is_none())
             && (next.reasoning.is_some() || live.reasoning.is_none())
             && live
@@ -2819,6 +2820,119 @@ fn is_model_config_option(session_response: &Value, config_id: &str) -> bool {
         })
 }
 
+fn read_only_mode(value: &str) -> bool {
+    matches!(value, "plan" | "read-only" | "readonly" | "read_only")
+}
+fn bypass_mode(value: &str) -> bool {
+    matches!(
+        value,
+        "bypassPermissions"
+            | "bypass_permissions"
+            | "bypass"
+            | "yolo"
+            | "agent-full-access"
+            | "danger-full-access"
+            | "full-access"
+    )
+}
+fn read_only_request(request: &RunRequest) -> bool {
+    request.sandbox == SandboxLevel::ReadOnly
+        || request
+            .model_options
+            .get("mode")
+            .and_then(Value::as_str)
+            .is_some_and(read_only_mode)
+}
+fn access_mode_selection(
+    available: &[&str],
+    current: Option<&str>,
+    request: &RunRequest,
+) -> Result<Option<String>, HarnessError> {
+    let explicit = request.model_options.get("mode").and_then(Value::as_str);
+    let readonly = read_only_request(request);
+    let candidates: &[&str] = if readonly {
+        &["plan", "read-only", "readonly", "read_only"]
+    } else if request.auto_approves_tools() {
+        &[
+            "bypassPermissions",
+            "bypass_permissions",
+            "bypass",
+            "yolo",
+            "agent-full-access",
+            "danger-full-access",
+            "full-access",
+        ]
+    } else {
+        &[
+            "default",
+            "ask",
+            "approval-required",
+            "manual",
+            "normal",
+            "agent",
+        ]
+    };
+    let selected = explicit
+        .filter(|value| {
+            available.contains(value)
+                && if readonly {
+                    read_only_mode(value)
+                } else {
+                    !bypass_mode(value) || request.auto_approves_tools()
+                }
+        })
+        .or_else(|| {
+            candidates
+                .iter()
+                .copied()
+                .find(|value| available.contains(value))
+        });
+    if readonly && selected.is_none() {
+        return Err(HarnessError::Protocol("This agent does not advertise a read-only mode. Choose a supported access mode before running.".into()));
+    }
+    if !request.auto_approves_tools() && selected.is_none() && current.is_some_and(bypass_mode) {
+        return Err(HarnessError::Protocol(
+            "The agent is in bypass mode and does not advertise a restricted alternative.".into(),
+        ));
+    }
+    Ok(selected
+        .filter(|selected| Some(*selected) != current)
+        .map(str::to_owned))
+}
+fn access_config_set(
+    response: &Value,
+    request: &RunRequest,
+) -> Result<Option<(String, Value)>, HarnessError> {
+    let option = response["configOptions"].as_array().and_then(|options| {
+        options
+            .iter()
+            .find(|option| option["category"] == "mode" && option["type"] == "select")
+    });
+    let Some(option) = option else {
+        return Ok(None);
+    };
+    let available: Vec<_> = option["options"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|option| option["value"].as_str())
+        .collect();
+    let selected = access_mode_selection(&available, option["currentValue"].as_str(), request)?;
+    Ok(selected.map(|value| {
+        (
+            option["id"].as_str().unwrap_or("mode").to_owned(),
+            json!({"value":value}),
+        )
+    }))
+}
+fn is_access_config(response: &Value, id: &str) -> bool {
+    response["configOptions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|option| option["id"] == id && option["category"] == "mode")
+}
+
 /// The `session/set_config_option` calls a session response's `configOptions`
 /// warrant for this run:
 /// - the requested model (category `model`; a `contextWindow: "1m"` model
@@ -2868,32 +2982,11 @@ fn config_option_sets(
             ("select", Some("model")) => model
                 .and_then(|m| pick_model_value(m, &available, context_1m))
                 .map(Value::String),
-            // Unattended parity with the retired custom adapters (claude
-            // bypassPermissions / codex approvalPolicy never): pick the
-            // no-prompts mode when the agent offers one. claude-agent-acp
-            // calls it `bypassPermissions`, codex-acp `agent-full-access`
-            // (approvalPolicy "never" + danger-full-access sandbox), Devin
-            // `bypass`. Cursor instead exposes agent/plan/ask — those arrive
-            // as a Traits "Mode" option and win when the run selected one.
             ("select", Some("mode")) => model_options
                 .get("mode")
                 .and_then(Value::as_str)
-                .filter(|c| available.contains(c))
-                .map(|c| Value::String(c.to_owned()))
-                .or_else(|| {
-                    [
-                        "bypassPermissions",
-                        "bypass_permissions",
-                        "bypass",
-                        "yolo",
-                        "agent-full-access",
-                        "danger-full-access",
-                        "full-access",
-                    ]
-                    .into_iter()
-                    .find(|v| available.contains(v))
-                    .map(|v| Value::String(v.to_owned()))
-                }),
+                .filter(|choice| available.contains(choice))
+                .map(|choice| Value::String(choice.to_owned())),
             ("select", Some("thought_level")) => efforts
                 .iter()
                 .find(|c| available.contains(*c))
@@ -3060,32 +3153,17 @@ fn prompt_turn(
     client.request_now("session/prompt", params)
 }
 
-/// Answer a server→client request. Permission requests are auto-accepted with
-/// the agent's preferred allow option — parity with the claude harness's
-/// bypassPermissions and the codex harness's approvalPolicy "never" (zuse
-/// sessions run unattended). Everything else (fs, terminal, elicitation) was
-/// declined at initialize, so a stray request gets method-not-found rather
-/// than wedging the agent.
+/// Setup and discovery never approve a tool permission. Live permission
+/// requests are handled with the run's access posture below.
 fn handle_server_request(
     client: &RpcClient,
     id: Value,
     method: &str,
-    params: &Value,
+    _params: &Value,
 ) -> Vec<AgentEvent> {
     match method {
         "session/request_permission" => {
-            let options: Vec<Value> = params
-                .get("options")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            match preferred_allow_option(&options) {
-                Some(option_id) => client.respond(
-                    &id,
-                    json!({ "outcome": { "outcome": "selected", "optionId": option_id } }),
-                ),
-                None => client.respond(&id, json!({ "outcome": { "outcome": "cancelled" } })),
-            }
+            client.respond(&id, json!({ "outcome": { "outcome": "cancelled" } }));
             Vec::new()
         }
         _ => {
@@ -3106,7 +3184,7 @@ type RequestInputFn = Box<
 /// its options lacks an allow/reject kind — that's how the agent relays
 /// user-facing choices (Claude's AskUserQuestion arrives this way through
 /// the adapter). Every option carrying an allow/reject kind means a real
-/// tool permission, which auto-accepts (unattended parity); kinds may
+/// tool permission; kinds may
 /// legitimately repeat — codex sends two `allow_always` options ("Allow for
 /// Session" and a prefix-rule amendment) on every exec approval.
 fn is_user_question(options: &[Value]) -> bool {
@@ -3118,11 +3196,9 @@ fn is_user_question(options: &[Value]) -> bool {
     })
 }
 
-/// The live-run request handler: tool permissions auto-accept like
-/// [`handle_server_request`], but question-shaped requests block on the
-/// engine's input bridge (in a subtask so the message loop keeps flowing)
-/// and answer with the option whose name matches the chosen label. A dropped
-/// resolver degrades to `cancelled` — never a silent allow.
+/// Only explicitly unrestricted runs automatically select an allow option.
+/// Restricted tool permissions and content questions use the input bridge;
+/// read-only tool requests and dropped resolvers are cancelled.
 fn handle_server_request_live(
     client: &RpcClient,
     id: Value,
@@ -3130,11 +3206,10 @@ fn handle_server_request_live(
     params: &Value,
     request_input: &std::sync::Arc<RequestInputFn>,
     session_id: &str,
+    request: &RunRequest,
 ) -> Vec<AgentEvent> {
-    if params
-        .get("sessionId")
-        .and_then(Value::as_str)
-        .is_some_and(|id| id != session_id)
+    if method == "session/request_permission"
+        && params.get("sessionId").and_then(Value::as_str) != Some(session_id)
     {
         client.respond(&id, json!({"outcome": {"outcome": "cancelled"}}));
         return Vec::new();
@@ -3147,8 +3222,24 @@ fn handle_server_request_live(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if !is_user_question(&options) {
-        return handle_server_request(client, id, method, params);
+    if options.is_empty() {
+        client.respond(&id, json!({"outcome":{"outcome":"cancelled"}}));
+        return Vec::new();
+    }
+    let content_question = is_user_question(&options);
+    if !content_question && (read_only_request(request) || request.auto_approves_tools()) {
+        let picked = (!read_only_request(request))
+            .then(|| preferred_allow_option(&options))
+            .flatten();
+        if let Some(option_id) = picked {
+            client.respond(
+                &id,
+                json!({"outcome":{"outcome":"selected","optionId":option_id}}),
+            );
+        } else {
+            client.respond(&id, json!({"outcome":{"outcome":"cancelled"}}));
+        }
+        return Vec::new();
     }
     let names: Vec<String> = options
         .iter()
@@ -3161,7 +3252,12 @@ fn handle_server_request_live(
         .collect();
     let question = UserInputQuestion {
         id: new_message_id(),
-        header: "Agent question".into(),
+        header: if content_question {
+            "Agent question"
+        } else {
+            "Approve action"
+        }
+        .into(),
         question: params
             .get("toolCall")
             .and_then(|t| t.get("title"))
@@ -3184,9 +3280,11 @@ fn handle_server_request_live(
             .find(|a| a.question_id == question.id)
             .and_then(|a| a.labels.first())
             .and_then(|label| {
-                options
-                    .iter()
-                    .find(|o| o.get("name").and_then(Value::as_str) == Some(label.as_str()))
+                let mut matches = options.iter().filter(|option| {
+                    option.get("name").and_then(Value::as_str) == Some(label.as_str())
+                });
+                let selected = matches.next()?;
+                matches.next().is_none().then_some(selected)
             })
             .and_then(|o| o.get("optionId").and_then(Value::as_str));
         match picked {
@@ -3669,6 +3767,33 @@ async fn select_session_config(
             models["currentModelId"] = Value::String(model);
         }
     }
+    let has_mode_config = session_response["configOptions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|option| option["category"] == "mode" && option["type"] == "select");
+    if !has_mode_config {
+        let available: Vec<_> = session_response["modes"]["availableModes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|mode| mode["id"].as_str())
+            .collect();
+        if let Some(mode) = access_mode_selection(
+            &available,
+            session_response["modes"]["currentModeId"].as_str(),
+            &request,
+        )? {
+            request_draining(
+                client,
+                incoming,
+                "session/set_mode",
+                json!({"sessionId":session_id,"modeId":mode}),
+            )
+            .await?;
+            session_response["modes"]["currentModeId"] = json!(mode);
+        }
+    }
     // Apply the run's model + effort + model options through the
     // session's advertised config options. Best-effort for effort and
     // traits: a rejected auxiliary set is logged and the agent default
@@ -3681,6 +3806,10 @@ async fn select_session_config(
         &efforts,
         &request.model_options,
     );
+    sets.retain(|(id, _)| !is_access_config(&options_snapshot, id));
+    if let Some(mode) = access_config_set(&options_snapshot, &request)? {
+        sets.push(mode);
+    }
     // Devin's effort and speed choices depend on the selected model:
     // switch the model first, then choose them from what it offers.
     let deferred = rules.harness == HarnessId::Devin
@@ -3724,6 +3853,11 @@ async fn select_session_config(
                     }
                 }
                 Err(e) => {
+                    if is_access_config(&options_snapshot, &config_id) {
+                        return Err(HarnessError::Protocol(format!(
+                            "Agent rejected the requested permission mode: {e}"
+                        )));
+                    }
                     if matches!(rules.harness, HarnessId::Antigravity | HarnessId::Devin)
                         && requested_model.is_some()
                         && is_model_config_option(&options_snapshot, &config_id)
@@ -3750,7 +3884,13 @@ async fn select_session_config(
             &efforts,
             &request.model_options,
         );
-        sets.retain(|(id, _)| !is_model_config_option(&options_snapshot, id));
+        sets.retain(|(id, _)| {
+            !is_model_config_option(&options_snapshot, id)
+                && !is_access_config(&options_snapshot, id)
+        });
+        if let Some(mode) = access_config_set(&options_snapshot, &request)? {
+            sets.push(mode);
+        }
     }
     Ok(options_snapshot)
 }
@@ -4240,6 +4380,7 @@ async fn run_session(session: Session) {
                                 &params,
                                 &request_input,
                                 &session_id,
+                                &request,
                             ) {
                                 if !send(&event_tx, ev).await {
                                     consumer_gone = true;
@@ -4466,6 +4607,7 @@ async fn run_session(session: Session) {
                         &params,
                         &request_input,
                         &session_id,
+                        &request,
                     ) {
                         if !send(&event_tx, ev).await {
                             break 'main;
@@ -4575,7 +4717,8 @@ async fn run_session(session: Session) {
                                         &method,
                                         &params,
                                         &request_input,
-                                &session_id,
+                                        &session_id,
+                                        &request,
                                     ) {
                                         if !send(&event_tx, ev).await {
                                             consumer_gone = true;
@@ -6071,7 +6214,38 @@ mod tests {
     }
 
     #[test]
-    fn mode_config_option_prefers_a_no_prompt_mode_per_adapter_naming() {
+    fn access_mode_selection_respects_sandbox_before_trait_options() {
+        let response = json!({"configOptions":[{"id":"mode","category":"mode","type":"select","currentValue":"bypass","options":[{"value":"ask"},{"value":"plan"},{"value":"bypass"}]}]});
+        for (sandbox, auto, chosen) in [
+            (SandboxLevel::ReadOnly, true, "plan"),
+            (SandboxLevel::WorkspaceWrite, true, "ask"),
+            (SandboxLevel::DangerFullAccess, false, "ask"),
+        ] {
+            let request: RunRequest = serde_json::from_value(json!({"prompt":"","cwd":"/tmp","sandbox":sandbox,"autoApprove":auto,"modelOptions":{"mode":"bypass"}})).unwrap();
+            assert_eq!(
+                access_config_set(&response, &request).unwrap(),
+                Some(("mode".into(), json!({"value":chosen})))
+            );
+        }
+        let mut request: RunRequest = serde_json::from_value(
+            json!({"prompt":"","cwd":"/tmp","sandbox":"danger-full-access","autoApprove":true}),
+        )
+        .unwrap();
+        assert_eq!(access_config_set(&response, &request).unwrap(), None);
+        request.model_options.insert("mode".into(), json!("plan"));
+        assert!(read_only_request(&request));
+        assert_eq!(
+            access_config_set(&response, &request).unwrap(),
+            Some(("mode".into(), json!({"value":"plan"})))
+        );
+        assert!(access_mode_selection(&[], None, &request).is_err());
+        request.model_options.clear();
+        request.auto_approve = false;
+        assert!(access_mode_selection(&["bypass"], Some("bypass"), &request).is_err());
+    }
+
+    #[test]
+    fn mode_config_option_never_defaults_to_bypass() {
         let codex = json!({
             "sessionId": "s-1",
             "configOptions": [{
@@ -6087,10 +6261,7 @@ mod tests {
             }],
         });
         let no_opts = serde_json::Map::new();
-        assert_eq!(
-            config_option_sets(&codex, None, &[], &no_opts),
-            vec![("mode".to_owned(), json!({ "value": "agent-full-access" }))]
-        );
+        assert!(config_option_sets(&codex, None, &[], &no_opts).is_empty());
     }
 
     fn antigravity_signed_in_catalog() -> Value {

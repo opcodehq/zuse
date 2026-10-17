@@ -278,6 +278,8 @@ impl Harness for PiHarness {
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
         let model = |r: &RunRequest| r.model.as_deref().filter(|m| *m != "default").is_some();
         live.cwd == next.cwd
+            && live.sandbox == next.sandbox
+            && live.auto_approve == next.auto_approve
             && (model(next) || !model(live))
             && (thinking_selected(next) || !thinking_selected(live))
     }

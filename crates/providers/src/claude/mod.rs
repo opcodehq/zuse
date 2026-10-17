@@ -462,7 +462,10 @@ impl Harness for ClaudeHarness {
     }
     /// Same launch arguments and cwd, including the read-only permission mode.
     fn same_runtime(&self, live: &RunRequest, next: &RunRequest) -> bool {
-        live.cwd == next.cwd && Self::launch_args(live) == Self::launch_args(next)
+        live.cwd == next.cwd
+            && live.sandbox == next.sandbox
+            && live.auto_approve == next.auto_approve
+            && Self::launch_args(live) == Self::launch_args(next)
     }
     /// Model, context window, effort, fast mode, thinking and ultracode all
     /// change on the live process (`set_model`, `apply_flag_settings`). Only

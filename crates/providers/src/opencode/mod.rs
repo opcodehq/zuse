@@ -388,6 +388,8 @@ impl Harness for OpencodeHarness {
     /// server. Clearing one back to the default cannot be expressed that way.
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd
+            && live.sandbox == next.sandbox
+            && live.auto_approve == next.auto_approve
             && (next.model.is_some() || live.model.is_none())
             && (next.reasoning.is_some() || live.reasoning.is_none())
     }
