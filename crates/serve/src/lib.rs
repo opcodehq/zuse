@@ -71,6 +71,12 @@ impl BrowserServer {
         })
     }
 
+    /// Share the runtime owner's cancellation authority with upgraded sessions.
+    pub fn with_shutdown_token(mut self, token: tokio_util::sync::CancellationToken) -> Self {
+        self.shutdown = token;
+        self
+    }
+
     pub fn with_pairings(
         mut self,
         authority: zuse_remote::authority::Authority,

@@ -124,6 +124,12 @@ async fn run() -> anyhow::Result<()> {
             if tls.is_some() { "https" } else { "http" }
         )
     });
+    runtime
+        .core()
+        .browser_access
+        .control()
+        .register_external(address, origin.clone())
+        .await;
     println!("Agent tools listen on 127.0.0.1:{ipc_port}");
     println!("Open {origin}/#token={token}");
     let result = match tls {

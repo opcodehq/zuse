@@ -242,7 +242,8 @@ pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";
 /// Unknown methods and all actions keep their original delivery uncertainty.
 pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
     match method {
-        LIST_PAIRINGS
+        BROWSER_ACCESS_STATUS
+        | LIST_PAIRINGS
         | CLOUD_ACCOUNT_STATUS
         | LOCAL_DEVICE
         | LIST_HARNESSES
@@ -279,6 +280,8 @@ mod retry_tests {
         for method in [
             CREATE_PAIRING,
             REVOKE_PAIRING,
+            START_BROWSER_ACCESS,
+            STOP_BROWSER_ACCESS,
             QUEUE_COMMAND,
             WRITE_WORKSPACE_FILE,
             SWITCH_REF,
@@ -289,6 +292,10 @@ mod retry_tests {
             assert!(!retryable_read(method, &serde_json::json!({})));
         }
         assert!(retryable_read(LIST_PAIRINGS, &serde_json::Value::Null));
+        assert!(retryable_read(
+            BROWSER_ACCESS_STATUS,
+            &serde_json::Value::Null
+        ));
         assert!(retryable_read(LIST_FOLDERS, &serde_json::Value::Null));
         assert!(retryable_read(
             PLUGINS,
@@ -305,3 +312,8 @@ mod retry_tests {
 pub const LIST_PAIRINGS: &str = "ListPairings";
 pub const CREATE_PAIRING: &str = "CreatePairing";
 pub const REVOKE_PAIRING: &str = "RevokePairing";
+
+/// Engine-owned browser listener controls. Status never includes an access token.
+pub const BROWSER_ACCESS_STATUS: &str = "BrowserAccessStatus";
+pub const START_BROWSER_ACCESS: &str = "StartBrowserAccess";
+pub const STOP_BROWSER_ACCESS: &str = "StopBrowserAccess";

@@ -1,6 +1,7 @@
 //! Pairing capabilities stay in this transient view, outside UI preferences.
 use super::*;
-use crate::shell::{column, control, label, row};
+use crate::settings_style as s;
+use crate::shell::{column, row};
 
 impl WorkspaceView {
     pub(super) fn refresh_pairings(&mut self) {
@@ -56,36 +57,39 @@ impl WorkspaceView {
             .pairing_fragment
             .as_ref()
             .map(|fragment| format!("{}/{}", self.pairing_origin, fragment));
-        column().gap_3()
-            .child(row().child(label("Paired devices")).child(div().flex_1())
-                .child(control("refresh-pairings","Refresh").on_click(cx.listener(|this,_,_,cx|{this.refresh_pairings();cx.notify();}))))
-            .child(label("Pair a trusted device to access this engine’s agents, files, terminals and settings."))
-            .child(row().gap_3().child(self.pairing_name.clone()).child(control("create-pairing",if self.pairing_action.is_some(){"Working…"}else{"Create invitation"})
-                .on_click(cx.listener(|this,_,_,cx|{
-                    let name=this.pairing_name.read(cx).value(cx);
-                    if name.trim().is_empty() {this.error=Some("Enter a name for the device you want to pair.".into());}
-                    else {this.pairing_action(methods::CREATE_PAIRING,json!({"label":name}));}
-                    cx.notify();
-                }))))
-            .when_some(link,|view,link|{
-                let copy=link.clone();
-                view.child(column().p_3().gap_2().rounded_lg().border_1().border_color(rgb(0x536647))
-                    .child(label("Private invitation · Share only with someone you trust. Unused invitations expire in 10 minutes."))
-                    .child(row().gap_3()
-                        .child(control("copy-pairing-link","Copy invitation").on_click(move|_,_,cx|cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))))
-                        .child(control("open-pairing-link","Open invitation").on_click(move|_,_,cx|cx.open_url(&link)))
-                        .child(control("hide-pairing-link","Hide").on_click(cx.listener(|this,_,_,cx|{this.pairing_fragment=None;cx.notify();})))))
-            })
-            .children(self.pairings.as_array().into_iter().flatten().enumerate().map(|(index,peer)|{
-                let id=peer["id"].as_str().unwrap_or_default().to_owned();
-                row().gap_3().child(column().flex_1().gap_1()
-                    .child(label(peer["label"].as_str().unwrap_or("Paired device").to_owned()))
-                    .child(label(if peer["pairedAt"].is_number(){"Paired"}else if peer["expiresAt"].as_u64().is_some_and(|expiry|expiry<=chrono::Utc::now().timestamp().max(0) as u64){"Invitation expired"}else{"Invitation pending"})))
-                    .child(control(("revoke-pairing",index),"Revoke").on_click(cx.listener(move|this,_,_,cx|{this.pairing_action(methods::REVOKE_PAIRING,json!({"pairId":id}));cx.notify();})))
-            }))
-            .when(self.paired,|view|view.child(column().gap_2()
-                .child(label("This tab uses saved paired access. Forgetting it reloads this tab; save local drafts first."))
-                .child(control("forget-browser-pairing","Forget this browser’s pairing").on_click(cx.listener(|this,_,_,_|{let _=this.requests.unbounded_send(json!({"ui":"forgetPairing"}));})))))
+        column().gap_5()
+            .child(s::frame()
+                .child(s::header("Connect a device","Invite a trusted device to use this engine’s agents, files, terminals and settings.")
+                    .child(s::button("refresh-pairings","Refresh").on_click(cx.listener(|this,_,_,cx|{this.refresh_pairings();cx.notify();}))))
+                .child(s::card()
+                    .child(s::setting_row(true).child(s::field().child(self.pairing_name.clone()))
+                        .child(s::button("create-pairing",if self.pairing_action.is_some(){"Working…"}else{"Create invitation"})
+                            .on_click(cx.listener(|this,_,_,cx|{
+                                let name=this.pairing_name.read(cx).value(cx);
+                                if name.trim().is_empty(){this.error=Some("Enter a name for the device you want to pair.".into());}
+                                else{this.pairing_action(methods::CREATE_PAIRING,json!({"label":name}));}
+                                cx.notify();
+                            }))))
+                    .when_some(link,|card,link|{
+                        let copy=link.clone();
+                        card.child(s::setting_row(false).flex_col().items_start()
+                            .child(s::details("Private invitation","Share only with someone you trust. Unused invitations expire in 10 minutes."))
+                            .child(row().gap_2()
+                                .child(s::button("copy-pairing-link","Copy invitation").on_click(move|_,_,cx|cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))))
+                                .child(s::button("open-pairing-link","Open invitation").on_click(move|_,_,cx|cx.open_url(&link)))
+                                .child(s::button("hide-pairing-link","Hide").on_click(cx.listener(|this,_,_,cx|{this.pairing_fragment=None;cx.notify();})))))
+                    })))
+            .child(s::frame().child(s::header("Connected devices","Revoke access when a device is lost or no longer needs this workspace."))
+                .child(s::card()
+                    .when(self.pairings.as_array().is_none_or(|peers|peers.is_empty()),|card|card.child(s::setting_row(true).child(s::details("No paired devices","Create an invitation to connect your first device."))))
+                    .children(self.pairings.as_array().into_iter().flatten().enumerate().map(|(index,peer)|{
+                        let id=peer["id"].as_str().unwrap_or_default().to_owned();
+                        s::setting_row(index==0).child(s::details(peer["label"].as_str().unwrap_or("Paired device").to_owned(),if peer["pairedAt"].is_number(){"Paired"}else if peer["expiresAt"].as_u64().is_some_and(|expiry|expiry<=chrono::Utc::now().timestamp().max(0) as u64){"Invitation expired"}else{"Invitation pending"}))
+                            .child(s::button(("revoke-pairing",index),"Revoke").on_click(cx.listener(move|this,_,_,cx|{this.pairing_action(methods::REVOKE_PAIRING,json!({"pairId":id}));cx.notify();})))
+                    }))))
+            .when(self.paired,|view|view.child(s::frame().child(s::header("This browser","Manage the access saved in this tab."))
+                .child(s::card().child(s::setting_row(true).child(s::details("Forget paired access","This reloads the tab. Save local drafts first."))
+                    .child(s::button("forget-browser-pairing","Forget pairing").on_click(cx.listener(|this,_,_,_|{let _=this.requests.unbounded_send(json!({"ui":"forgetPairing"}));})))))))
             .into_any_element()
     }
 }

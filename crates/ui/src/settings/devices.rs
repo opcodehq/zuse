@@ -64,6 +64,7 @@ struct RenameDialog {
 pub struct DevicesPage {
     state: Entity<AppState>,
     scroll: widgets::PageScroll,
+    pairing: Entity<crate::settings::pairing::PairingCard>,
     rename: Option<RenameDialog>,
     /// Device id whose id-chip shows "Copied" right now.
     copied: Option<String>,
@@ -76,7 +77,9 @@ pub struct DevicesPage {
 impl DevicesPage {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let observe = cx.observe(&state, |_, _, cx| cx.notify());
+        let pairing = cx.new(|cx| crate::settings::pairing::PairingCard::new(state.clone(), cx));
         Self {
+            pairing,
             state,
             scroll: widgets::PageScroll::default(),
             rename: None,
@@ -424,6 +427,7 @@ impl Render for DevicesPage {
                                     &theme,
                                     devices_subtitle(workspace_scope),
                                 ))
+                                .child(self.pairing.clone())
                                 .child(card),
                         ),
                 )

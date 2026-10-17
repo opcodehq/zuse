@@ -13780,6 +13780,7 @@ dependencies = [
  "zuse-providers",
  "zuse-remote",
  "zuse-rpc",
+ "zuse-serve",
  "zuse-sync",
  "zuse-update",
  "zuse-visual",

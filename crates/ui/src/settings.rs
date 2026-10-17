@@ -25,6 +25,7 @@ pub mod files;
 pub mod harnesses;
 pub mod model_accounts;
 pub mod notifications;
+pub mod pairing;
 pub mod plugins;
 pub mod shortcuts;
 pub mod thread_naming;

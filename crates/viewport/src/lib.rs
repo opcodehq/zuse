@@ -12,6 +12,8 @@ mod pairing;
 mod previews;
 mod questions;
 mod recovery;
+pub mod settings_style;
+mod settings_view;
 mod shell;
 pub mod styling;
 mod tool_results;
@@ -87,6 +89,7 @@ pub struct WorkspaceView {
     error: Option<String>,
     show_archive: bool,
     settings: bool,
+    settings_section: settings_view::Section,
     paired: bool,
     pairing_origin: String,
     pairings: Value,
@@ -310,6 +313,7 @@ impl WorkspaceView {
             error: None,
             show_archive: false,
             settings: false,
+            settings_section: settings_view::Section::General,
             paired: false,
             pairing_origin: String::new(),
             pairings: Value::Null,
@@ -893,6 +897,9 @@ impl WorkspaceView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings {
+            return;
+        }
         if self.project_picker
             && self
                 .project_input

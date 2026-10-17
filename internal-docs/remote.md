@@ -1,6 +1,6 @@
 # Paired remote access
 
-The shared encrypted channel is implemented in `zuse-remote` for native and WASM. The engine owns persistent pairing grants, and the browser server exposes a binary paired RPC endpoint. Native and browser connection adapters plus browser pairing controls are implemented. The outbound broker and native pairing settings controls remain pending. Existing device-room relay traffic retains its previous transport.
+The shared encrypted channel is implemented in `zuse-remote` for native and WASM. The engine owns persistent pairing grants, and the browser server exposes a binary paired RPC endpoint. Native and browser connection adapters plus pairing settings controls are implemented. Native controls still require desktop runtime acceptance; the outbound broker remains pending. Existing device-room relay traffic retains its previous transport.
 
 ## Channel contract
 
@@ -24,17 +24,17 @@ Up to 32 devices may be saved. Invitations expire after ten minutes. The host ma
 
 ## Connecting applications
 
-Open Settings → Paired devices in the browser workspace, enter a device label and create an invitation. Copy its private link to the intended device. Opening it imports the capability, immediately removes the URL fragment and retains access in session storage for that tab. Reloading the tab makes a fresh Noise session. An invalid or revoked pairing never falls back to cookie-authenticated RPC. “Forget this browser’s pairing” removes the saved capability and reloads; save local drafts first.
+Open Settings → Devices in the browser workspace, enter a device label and create an invitation. Copy its private link to the intended device. Opening it imports the capability, immediately removes the URL fragment and retains access in session storage for that tab. Reloading the tab makes a fresh Noise session. An invalid or revoked pairing never falls back to cookie-authenticated RPC. “Forget this browser’s pairing” removes the saved capability and reloads; save local drafts first.
 
 Paired browser attachments use separate authenticated RPC connections, staging 45,000-byte chunks with sequence numbers and committing only after every acknowledgement. They never use the plaintext HTTP attachment route. Disconnects stop that upload instead of replaying requests. Workspace read subscriptions reopen after reconnect; actions retain their existing delivery uncertainty.
 
-The desktop command accepts `zuse --paired-link-file /private/path/engine-link.txt`. The file contains only the copied private invitation URL. Imports are bounded and made private (0600 on Unix). An explicit paired destination skips local-daemon probing and embedded-engine creation, authenticates the remote host and reads its engine identity. Extra media connections use the same paired target. Reconnection never switches to a local engine or the legacy relay. Native pairing creation/selection controls and physical desktop runtime acceptance remain pending.
+The desktop command accepts `zuse --paired-link-file /private/path/engine-link.txt`. The file contains only the copied private invitation URL. Imports are bounded and made private (0600 on Unix). An explicit paired destination skips local-daemon probing and embedded-engine creation, authenticates the remote host and reads its engine identity. Extra media connections use the same paired target. Reconnection never switches to a local engine or the legacy relay. Native Settings → Devices can create/copy/revoke invitations and open a pasted pairing link in a separate workspace window. Physical desktop runtime acceptance remains pending.
 
 Paired origins require HTTPS; HTTP is accepted only on localhost for development. The native adapter uses the normal trusted-root TLS checks. Keep exported files private. The pairing secret is omitted from socket URLs, target Debug output and connection errors.
 
 ## Integration still required
 
-- Native pairing/settings controls, saved target selection and user-facing connection management across desktop windows.
+- Persisted target selection and physical acceptance of connection management across desktop windows.
 - Outbound host connectivity through an opaque broker, bounded handshake/session queues, reconnect and end-to-end liveness. Paired mode must reject legacy plaintext RPC instead of falling back after an authentication failure.
 - Host identity pinning and complete connection-target selection. Pairing secrets stay outside relay URLs, logs and ordinary settings metadata.
 - Physical Mac/Linux and browser acceptance, revoked and expired keys, broker outages, profile/account changes and deployment packaging. A trusted application bundle remains necessary for browser-held capabilities.
@@ -48,3 +48,11 @@ Local logs: `.context/paired-channel-final-tests.log`, `.context/paired-channel-
 The host integration passes five authority scenarios, five actual binary WebSocket scenarios and an engine RPC restart/profile-isolation scenario. The existing nine HTTP/TLS/upload tests pass alongside them. Subscription cancellation and revocation drop canonical streams; successful encrypted traffic confirms pending grants. Failure fixtures cover damaged storage, failed confirmation persistence, expired invitations, wrong keys, plaintext requests and foreign host routing. Native authority code is excluded from the passing WASM compile check. Evidence: `.context/pairing-transport-final-tests.log`, `.context/pairing-engine-tests.log` and `.context/pairing-authority-wasm-check.log`.
 
 Application adapter validation passes 29 remote/serve scenarios, including destination validation and a native paired client exercising canonical calls, streams and revocation. The browser runtime imports/copies invitations through the actual UI, removes fragments, retains tab access, transfers exact text/image bytes without HTTP uploads, preserves drafts after a forced disconnect, receives a completed live Claude response, and rejects work after revocation despite an authenticated owner cookie. Existing-tab invitation navigation and explicit forget/reload are exercised separately. Evidence is recorded in `.context/paired-browser-*-acceptance.json`. The browser fixture records only ciphertext metadata; no paired RPC frame was plaintext. Native desktop compilation is a CI gate and physical runtime acceptance remains pending.
+
+## Settings-owned browser access
+
+Native Settings → Devices exposes browser access status, start/stop, listen address, public HTTPS URL and certificate/key paths. The embedded engine owns this listener; RPC service clones cannot extend its ownership. Shutdown cancels listener admission before awaited cleanup and closes upgraded connections. Stopping browser access preserves saved device grants. A foreground server reports its existing listener instead of allowing a duplicate start; its process owns shutdown.
+
+`BrowserAccessStatus`, `StartBrowserAccess` and `StopBrowserAccess` reject foreign targets. Status exposes no access token. The optional start parameters are `listen`, `publicOrigin`, `tlsCert`, `tlsKey` and `assets`. Non-loopback access requires an explicit HTTPS public origin; direct HTTPS also requires a certificate and matching key. Browser assets are discovered from `ZUSE_WEB_ASSETS`, an executable sibling `web`, macOS bundle `Resources/web`, or development `dist/web`. Starting access is currently explicit per engine session; auto-start preferences and complete bundle assets packaging remain pending.
+
+Three real-engine/control scenarios exercise start/stop/restart with a native paired RPC subscription, persisted grants, shutdown/drop ownership, duplicate admission and invalid/foreign settings. Evidence: `.context/native-pairing-browser-access-tests.log` and `.context/settings-engine-final-tests.log`.

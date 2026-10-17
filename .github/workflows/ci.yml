@@ -32,6 +32,7 @@ jobs:
       - run: cargo test -p zuse-cli --test startup
       - run: cargo test -p zuse-remote
       - run: cargo test -p zuse-engine --test pairing
+      - run: cargo test -p zuse-engine --test browser_access
       - run: cargo test -p zuse-client --test live
       - run: cargo test -p zuse-protocol --lib methods::retry_tests
       - run: cargo test -p zuse-protocol --lib browser_link

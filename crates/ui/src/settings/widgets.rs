@@ -303,13 +303,13 @@ pub fn rail<V: 'static>(
 /// Shared typography for a settings component's title and description. The
 /// Shortcuts page established this compact rhythm; list-style settings reuse
 /// it instead of drifting by page.
-pub const ROW_TITLE_SIZE: f32 = 13.0;
-pub const ROW_DESCRIPTION_SIZE: f32 = 12.0;
+pub const ROW_TITLE_SIZE: f32 = zuse_viewport::settings_style::TITLE_SIZE;
+pub const ROW_DESCRIPTION_SIZE: f32 = zuse_viewport::settings_style::DESCRIPTION_SIZE;
 
-/// The page column's outer max width and side padding: a centered ~680px
+/// The page column's outer max width and side padding: a centered 768px
 /// content measure with generous air on either side.
-const PAGE_MAX_WIDTH: f32 = 760.0;
-const PAGE_PAD_X: f32 = 40.0;
+const PAGE_MAX_WIDTH: f32 = 816.0;
+const PAGE_PAD_X: f32 = 24.0;
 
 /// Centered page column under the titlebar strip.
 pub fn page_column() -> gpui::Div {
@@ -457,7 +457,7 @@ pub fn option_card(
 /// Section labels and page titles sit a little inside the blocks' edge.
 const SECTION_LABEL_INSET: f32 = 8.0;
 /// Air between one section and the next.
-const SECTION_GAP: f32 = 32.0;
+const SECTION_GAP: f32 = 20.0;
 
 /// The small plain label above a block ("Startup", "Fonts"): sentence case,
 /// muted, never an uppercase eyebrow.
@@ -485,7 +485,7 @@ pub fn details_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div
         .child(label.into())
 }
 
-/// A labeled section: the label, then its block tucked close underneath.
+/// A framed section with a compact header and its bordered settings card.
 /// Pass a [`section_card`] (or any block) as `block`.
 pub fn section(
     theme: &Theme,
@@ -494,16 +494,24 @@ pub fn section(
 ) -> gpui::Div {
     div()
         .mt(px(SECTION_GAP))
+        .p(px(4.0))
+        .rounded(px(zuse_viewport::settings_style::FRAME_RADIUS))
+        .bg(theme.wash(0.045))
         .flex()
         .flex_col()
-        .gap(px(8.0))
-        .child(section_label(theme, label))
+        .child(
+            section_label(theme, label)
+                .px(px(10.0))
+                .py(px(8.0))
+                .text_size(crate::typography::ui_rems(12.0))
+                .text_color(theme.text),
+        )
         .child(block)
 }
 
-/// The block's fill: a faint solid tint of the theme's ink, no outline.
+/// Settings card fill from the same theme surface used by the app cards.
 pub fn block_fill(theme: &Theme) -> gpui::Hsla {
-    theme.wash(0.045)
+    theme.surface_card
 }
 
 /// The hairline between rows inside a block.
@@ -511,13 +519,15 @@ pub fn row_divider(theme: &Theme) -> gpui::Hsla {
     theme.border.opacity(0.6)
 }
 
-/// A filled, rounded block of related settings rows. Standalone blocks keep
+/// A bordered, rounded card of related settings rows. Standalone blocks keep
 /// a section's worth of air above them; inside [`section`] the wrapper owns
 /// the spacing and zeroes this margin.
 pub fn section_card(theme: &Theme) -> gpui::Div {
     div()
         .mt(px(24.0))
-        .rounded(px(12.0))
+        .rounded(px(zuse_viewport::settings_style::CARD_RADIUS))
+        .border_1()
+        .border_color(row_divider(theme))
         .bg(block_fill(theme))
         .overflow_hidden()
         .flex()
@@ -525,13 +535,12 @@ pub fn section_card(theme: &Theme) -> gpui::Div {
 }
 
 /// One row in a [`section_card`]: title and muted description on the left,
-/// the control on the right, split from the previous row by a hairline
-/// inset to the text edge.
+/// the control on the right, split from the previous row by a hairline.
 pub fn card_row(theme: &Theme, first: bool) -> gpui::Div {
     div()
-        .mx(px(16.0))
-        .py(px(12.0))
-        .min_h(px(60.0))
+        .px(px(zuse_viewport::settings_style::ROW_PAD_X))
+        .py(px(zuse_viewport::settings_style::ROW_PAD_Y))
+        .min_h(px(52.0))
         .when(!first, |el| {
             el.border_t_1().border_color(row_divider(theme))
         })
@@ -539,7 +548,7 @@ pub fn card_row(theme: &Theme, first: bool) -> gpui::Div {
         .flex_row()
         .flex_wrap()
         .items_center()
-        .gap(px(16.0))
+        .gap(px(zuse_viewport::settings_style::ROW_GAP))
 }
 
 /// Bare leading glyph for rows whose icon carries identity (a device's
@@ -565,7 +574,7 @@ pub fn row_title(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {
     div()
         .min_w_0()
         .text_size(crate::typography::ui_rems(ROW_TITLE_SIZE))
-        .line_height(crate::typography::ui_rems(17.0))
+        .line_height(crate::typography::ui_rems(16.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.text)
         .child(title.into())
@@ -1532,11 +1541,11 @@ pub fn action_button(theme: &Theme, tone: ActionTone) -> gpui::Div {
         .flex_row()
         .items_center()
         .gap(px(6.0))
-        .rounded(px(8.0))
-        .min_h(px(32.0))
+        .rounded(px(6.0))
+        .min_h(px(zuse_viewport::settings_style::CONTROL_HEIGHT))
         .px(px(10.0))
-        .py(px(5.0))
-        .text_size(crate::typography::ui_rems(12.5))
+        .py(px(4.0))
+        .text_size(crate::typography::ui_rems(11.0))
         .cursor_pointer();
     match tone {
         ActionTone::Quiet => button

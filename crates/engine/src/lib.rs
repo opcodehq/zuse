@@ -18,6 +18,7 @@ use zuse_sync::DocsStore;
 pub mod account;
 pub mod agent_accounts;
 pub mod auth;
+pub mod browser_access;
 mod change_request_store;
 pub mod change_requests;
 pub mod chat2_host;
@@ -143,6 +144,7 @@ pub struct EngineConfig {
 /// and the in-process (headed) mode.
 pub struct EngineCore {
     pub pairings: zuse_remote::authority::Authority,
+    pub browser_access: browser_access::Owner,
     pub account: account::Account,
     pub model_connections: model_connections::ModelConnections,
     pub harness_models: harness_models::HarnessModels,
@@ -364,7 +366,10 @@ impl EngineCore {
         ));
         let plugins = plugins::Plugins::open(data_dir, account.clone(), workspace.clone())
             .map_err(|e| EngineError::Other(e.to_string()))?;
+        let browser_access =
+            browser_access::Owner::new(profile.store_root(), device_id.clone(), pairings.clone());
         Ok(Self {
+            browser_access,
             pairings,
             harness_models,
             model_connections,
@@ -518,6 +523,7 @@ impl EngineCore {
             self.workspace_scope,
         )
         .with_pairings(self.pairings.clone())
+        .with_browser_access(self.browser_access.control())
         .with_model_connections(self.model_connections.clone())
         .with_account(self.account.clone(), self.plugins.clone())
         .with_auth(self.auth())
@@ -551,11 +557,13 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) {
+        self.browser_access.begin_close();
         self.pairings.close();
         // Freeze admission before any awaited cleanup: an Idle transition must
         // not release another queued command while credentials are draining.
         self.doc_host.pause_all_queues();
         self.account.retire();
+        self.browser_access.close().await;
         self.sessions.shutdown().await;
         self.harness_models.shutdown().await;
         self.model_connections.retire().await;

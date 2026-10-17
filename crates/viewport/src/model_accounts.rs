@@ -1,6 +1,7 @@
 //! Browser model-account controls use the same metadata-only engine API.
 use super::*;
-use crate::shell::{column, control, label, row};
+use crate::settings_style::{self as s, button as control};
+use crate::shell::{column, label, row};
 
 impl WorkspaceView {
     pub(super) fn refresh_model_connections(&mut self) {
@@ -132,6 +133,31 @@ impl WorkspaceView {
         true
     }
     pub(super) fn model_accounts_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        s::frame()
+            .child(
+                s::header(
+                    "Model connections",
+                    "Connect a model account for the Zuse agent. CLI agents keep their own logins.",
+                )
+                .child(
+                    control(
+                        "refresh-model-accounts",
+                        if self.model_fetch.is_some() {
+                            "Loading…"
+                        } else {
+                            "Refresh"
+                        },
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.refresh_model_connections();
+                        cx.notify();
+                    })),
+                ),
+            )
+            .child(s::card().child(self.model_accounts_contents(cx)))
+            .into_any_element()
+    }
+    fn model_accounts_contents(&self, cx: &mut Context<Self>) -> AnyElement {
         let busy = self.model_action.is_some() || self.model_sign_in.is_some();
         let account = self.model_connections["accountAvailable"] == true;
         let local = self.model_connections["localAvailable"] == true;
@@ -141,13 +167,10 @@ impl WorkspaceView {
             .or_else(|| event["verificationUrl"].as_str())
             .filter(|s| s.starts_with("https://"))
             .map(str::to_owned);
-        column().gap_3().py_4()
-            .child(row().gap_3().child(div().flex_1().child("Zuse model connections"))
-                .child(control("refresh-model-accounts",if self.model_fetch.is_some() {"Loading…"} else {"Refresh"}).on_click(cx.listener(|this,_,_,cx|{this.refresh_model_connections();cx.notify();}))))
-            .child(label("Connect a model account for the Zuse agent. CLI agents keep their own logins."))
-            .child(row().gap_2()
-                .child(control("model-store-local",if self.model_storage=="local" {"✓ This device"} else {"This device"}).on_click(cx.listener(|this,_,_,cx|{this.model_storage="local";cx.notify();})))
-                .when(account,|d|d.child(control("model-store-account",if self.model_storage=="account" {"✓ Zuse account"} else {"Zuse account"}).on_click(cx.listener(|this,_,_,cx|{this.model_storage="account";cx.notify();}))))
+        column().gap_3().p_3()
+            .child(row().flex_wrap().gap_2()
+                .child(control("model-store-local","This device").when(self.model_storage=="local",|button|button.child(crate::assets::icon("check").size(px(12.)))).on_click(cx.listener(|this,_,_,cx|{this.model_storage="local";cx.notify();})))
+                .when(account,|d|d.child(control("model-store-account","Zuse account").when(self.model_storage=="account",|button|button.child(crate::assets::icon("check").size(px(12.)))).on_click(cx.listener(|this,_,_,cx|{this.model_storage="account";cx.notify();}))))
                 .when(!busy && ((self.model_storage=="local" && local)||(self.model_storage=="account" && account)),|d|d
                     .child(control("connect-chatgpt-model","Connect ChatGPT").on_click(cx.listener(|this,_,_,cx|{this.connect_model("chatgpt".into(),None);cx.notify();})))
                     .child(control("connect-supergrok-model","Connect SuperGrok").on_click(cx.listener(|this,_,_,cx|{this.connect_model("supergrok".into(),None);cx.notify();})))))

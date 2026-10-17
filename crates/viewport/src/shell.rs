@@ -636,14 +636,24 @@ impl WorkspaceView {
             .into_any_element()
     }
 
-    fn cloud_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn cloud_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        crate::settings_style::frame()
+            .child(crate::settings_style::header(
+                "Zuse account & plugins",
+                "Connect your account and manage the tools shared across your agents.",
+            ))
+            .child(crate::settings_style::card().child(self.cloud_settings_contents(cx)))
+            .into_any_element()
+    }
+    fn cloud_settings_contents(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::settings_style::button as control;
         let signed_in = self.cloud_account["user"].is_object();
         let tenant = self.plugins["tenantId"]
             .as_str()
             .unwrap_or_default()
             .to_owned();
         let busy = self.plugin_request.is_some();
-        column().gap_3().child(label("Zuse account & plugins"))
+        column().gap_3().p_3()
             .child(row().gap_3()
                 .child(column().flex_1().gap_1()
                     .child(div().text_size(px(13.)).child(self.cloud_account["user"]["email"].as_str().unwrap_or("Connect your Zuse account").to_owned()))
@@ -677,150 +687,6 @@ impl WorkspaceView {
                 let attempt=self.plugin_attempt["id"].clone();let tenant=tenant.clone();
                 d.child(row().gap_3().child(label(self.plugin_attempt["state"].as_str().unwrap_or("Connecting").to_owned())).child(control("poll-plugin","Check connection").on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"poll","tenantId":tenant,"attemptId":attempt}));cx.notify();}))))
             })
-            .into_any_element()
-    }
-
-    fn settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        column()
-            .id("settings-body")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p_6()
-            .gap_5()
-            .child(
-                row()
-                    .child(
-                        div()
-                            .text_size(px(20.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Settings"),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        icon_button("close-settings", "close", "Close settings").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.settings = false;
-                                cx.notify();
-                            }),
-                        ),
-                    ),
-            )
-            .child(self.pairing_settings(cx))
-            .child(self.cloud_settings(cx))
-            .child(self.model_accounts_settings(cx))
-            .child(label("Agents"))
-            .children(self.providers.iter().enumerate().map(|(i, p)| {
-                let installed = p["installed"] == true;
-                row()
-                    .id(("agent", i))
-                    .cursor_pointer()
-                    .p_3()
-                    .gap_3()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .hover(|s| s.bg(rgb(RAISED)))
-                    .child(
-                        icon(provider_icon(p["id"].as_str().unwrap_or_default()))
-                            .text_color(rgb(MUTED)),
-                    )
-                    .child(
-                        column()
-                            .flex_1()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_size(px(13.))
-                                    .child(p["name"].as_str().unwrap_or("Agent").to_owned()),
-                            )
-                            .child(label(if installed {
-                                if self.paired {
-                                    "Installed on your paired engine"
-                                } else {
-                                    "Installed on this machine"
-                                }
-                            } else {
-                                "CLI installation required"
-                            })),
-                    )
-                    .when(i == self.provider_index, |d| {
-                        d.child(icon("check").text_color(rgb(TEXT)))
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| this.choose_provider(i, cx)))
-            }))
-            .child(
-                row()
-                    .mt_4()
-                    .child(label("Accounts & usage"))
-                    .child(div().flex_1())
-                    .child(
-                        icon_button("refresh-usage", "refresh", "Refresh usage").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":true}));
-                                cx.notify();
-                            }),
-                        ),
-                    ),
-            )
-            .children(
-                self.accounts["accounts"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|a| {
-                        column()
-                            .p_3()
-                            .gap_3()
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .child(
-                                row()
-                                    .gap_2()
-                                    .child(icon(provider_icon(
-                                        a["harness"].as_str().unwrap_or_default(),
-                                    )))
-                                    .child(label(
-                                        a["email"]
-                                            .as_str()
-                                            .or_else(|| a["displayName"].as_str())
-                                            .unwrap_or("CLI account")
-                                            .to_owned(),
-                                    ))
-                                    .child(div().flex_1())
-                                    .child(label(
-                                        a["planLabel"].as_str().unwrap_or_default().to_owned(),
-                                    )),
-                            )
-                            .children(a["usageWindows"].as_array().into_iter().flatten().map(|w| {
-                                let fraction =
-                                    w["usedFraction"].as_f64().unwrap_or(0.).clamp(0., 1.) as f32;
-                                column()
-                                    .gap_1()
-                                    .child(
-                                        row()
-                                            .child(label(
-                                                w["label"].as_str().unwrap_or("Usage").to_owned(),
-                                            ))
-                                            .child(div().flex_1())
-                                            .child(label(format!("{:.0}%", fraction * 100.))),
-                                    )
-                                    .child(
-                                        div().h(px(3.)).rounded_full().bg(rgb(BORDER)).child(
-                                            div()
-                                                .h_full()
-                                                .w(relative(fraction))
-                                                .rounded_full()
-                                                .bg(rgb(0xb7a28c)),
-                                        ),
-                                    )
-                            }))
-                            .when_some(a["usageError"].as_str().map(str::to_owned), |d, e| {
-                                d.child(label(e))
-                            })
-                    }),
-            )
             .into_any_element()
     }
 
@@ -1253,7 +1119,11 @@ impl Render for WorkspaceView {
         };
         self.content_height = f32::from(window.viewport_size().height);
         self.content_width = f32::from(window.viewport_size().width)
-            - if self.sidebar_open { 296. } else { 0. }
+            - if self.sidebar_open && !self.settings {
+                296.
+            } else {
+                0.
+            }
             - panel_width;
         div()
             .track_focus(&self.workspace_focus)
@@ -1279,6 +1149,12 @@ impl Render for WorkspaceView {
                 cx.listener(|this, _: &NewSession, window, cx| this.start_new_session(window, cx)),
             )
             .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
+                if this.settings {
+                    this.settings = false;
+                    window.focus(&this.input.focus_handle(cx), cx);
+                    cx.notify();
+                    return;
+                }
                 this.preview_open = None;
                 this.model_picker = false;
                 this.agent_picker = false;
@@ -1296,17 +1172,19 @@ impl Render for WorkspaceView {
             .text_color(rgb(TEXT))
             .font_family("Geist")
             .text_size(px(13.))
-            .when(self.sidebar_open, |d| d.child(self.sidebar(cx)))
+            .when(self.sidebar_open && !self.settings, |d| {
+                d.child(self.sidebar(cx))
+            })
             .child(
                 column()
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .child(self.header(cx))
-                    .child(if self.project_picker {
-                        self.project_picker_view(cx)
-                    } else if self.settings {
+                    .when(!self.settings, |view| view.child(self.header(cx)))
+                    .child(if self.settings {
                         self.settings_view(cx)
+                    } else if self.project_picker {
+                        self.project_picker_view(cx)
                     } else {
                         column()
                             .flex_1()
@@ -1320,7 +1198,7 @@ impl Render for WorkspaceView {
                 self.right_open && !self.settings && !self.project_picker,
                 |d| d.child(self.workspace_panel(cx)),
             )
-            .when(self.preview_open.is_some(), |d| {
+            .when(self.preview_open.is_some() && !self.settings, |d| {
                 d.child(self.preview_overlay(window, cx))
             })
     }

@@ -282,6 +282,23 @@ pub fn run_app(config: UiConfig) {
     });
 }
 
+/// A paired workspace gets its own state and connection; the current engine
+/// and its agent jobs remain owned by the original workspace.
+pub(crate) fn open_paired_window(target: zuse_remote::PairedTarget, cx: &mut App) {
+    let Some(reopen) = cx.try_global::<ReopenState>() else {
+        return;
+    };
+    let mut boot = reopen.boot.clone();
+    boot.paired_target = Some(target);
+    let state = cx.new(|cx| {
+        let mut state = state::AppState::new();
+        state.watch_clock_transitions(cx);
+        state
+    });
+    open_main_window(state, boot, cx);
+    cx.activate(true);
+}
+
 /// Bring Zuse forward, reopening the main window first if ⌘W closed it.
 pub(crate) fn activate_main_window(cx: &mut App) {
     cx.activate(true);

@@ -688,6 +688,7 @@ enum MutateParams {
 #[derive(Clone)]
 pub struct EngineRpc {
     pairings: Option<zuse_remote::authority::Authority>,
+    browser_access: Option<crate::browser_access::BrowserAccess>,
     model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
     plugins: Option<crate::plugins::Plugins>,
@@ -740,6 +741,7 @@ impl EngineRpc {
         let github = GitHubCli::new().with_store(repos.data_dir());
         Self {
             pairings: None,
+            browser_access: None,
             model_connections: None,
             account: None,
             plugins: None,
@@ -796,6 +798,10 @@ impl EngineRpc {
         self
     }
 
+    pub fn with_browser_access(mut self, access: crate::browser_access::BrowserAccess) -> Self {
+        self.browser_access = Some(access);
+        self
+    }
     pub fn with_pairings(mut self, pairings: zuse_remote::authority::Authority) -> Self {
         self.pairings = Some(pairings);
         self
@@ -1893,6 +1899,42 @@ impl RpcService for AuthRpc {
 #[async_trait]
 impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if matches!(
+            method,
+            methods::BROWSER_ACCESS_STATUS
+                | methods::START_BROWSER_ACCESS
+                | methods::STOP_BROWSER_ACCESS
+        ) {
+            if params
+                .get("targetDeviceId")
+                .filter(|target| !target.is_null())
+                .is_some_and(|target| target.as_str() != Some(self.doc_host.device_id()))
+            {
+                return Err(RpcError::BadParams(
+                    "Browser access belongs to the connected profile".into(),
+                ));
+            }
+            let access = self
+                .browser_access
+                .as_ref()
+                .ok_or_else(|| RpcError::Failed("Browser access is unavailable".into()))?;
+            return match method {
+                methods::BROWSER_ACCESS_STATUS => RpcReply::value(&access.status().await),
+                methods::STOP_BROWSER_ACCESS => RpcReply::value(&access.stop().await),
+                _ => {
+                    let mut params = params;
+                    if let Some(object) = params.as_object_mut() {
+                        object.remove("targetDeviceId");
+                    }
+                    let options = parse_params(params)?;
+                    let status = access
+                        .start(options, std::sync::Arc::new(self.clone()))
+                        .await
+                        .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    RpcReply::value(&status)
+                }
+            };
+        }
         if matches!(
             method,
             methods::LIST_PAIRINGS | methods::CREATE_PAIRING | methods::REVOKE_PAIRING
