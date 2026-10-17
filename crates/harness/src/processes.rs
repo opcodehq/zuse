@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -135,6 +135,8 @@ struct Entry {
     persistence: AsyncMutex<()>,
     delivery: AsyncMutex<()>,
     storage_error: AtomicBool,
+    // 0: tool owns cancellation; 1: handed to session; 2: cancellation won.
+    ownership: AtomicU8,
 }
 struct Inner {
     options: Arc<ProcessOptions>,
@@ -371,6 +373,7 @@ impl Processes {
                 persistence: AsyncMutex::new(()),
                 delivery: AsyncMutex::new(()),
                 storage_error: AtomicBool::new(false),
+                ownership: AtomicU8::new(0),
             });
             persist(&entry, &options.directory).await?;
             entries.insert(id.to_owned(), entry);
@@ -504,6 +507,7 @@ impl Processes {
             persistence: AsyncMutex::new(()),
             delivery: AsyncMutex::new(()),
             storage_error: AtomicBool::new(false),
+            ownership: AtomicU8::new(0),
         });
         persist(&entry, &self.0.options.directory).await?;
         if self.0.closed.load(Ordering::Acquire) || context.cancel.is_cancelled() {
@@ -686,6 +690,22 @@ impl Processes {
         };
         tokio::select! {biased;_=cancel.cancelled()=>Err(Error::Interrupted),_=entry.stop.cancelled()=>Err(failed("Process stdin is closed")),result=send=>result}
     }
+    /// Transfer a successfully returned command from its tool invocation to the
+    /// session. This trusted host operation is never exposed as a model tool.
+    /// Explicit process/agent interruption and manager shutdown retain ownership.
+    pub fn handoff(&self, id: &str, agent: &str, cancel: &CancellationToken) -> Result<(), Error> {
+        let entry = self.own(id, agent)?;
+        if self.0.closed.load(Ordering::Acquire) || cancel.is_cancelled() {
+            return Err(Error::Interrupted);
+        }
+        match entry
+            .ownership
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) | Err(1) => Ok(()),
+            Err(_) => Err(Error::Interrupted),
+        }
+    }
     pub async fn stop(&self, id: &str, agent: &str) -> Result<(), Error> {
         let entry = self.own(id, agent)?;
         mark_stop(&entry, ProcessStatus::Cancelled);
@@ -759,7 +779,13 @@ async fn run_process(
         let frame = tokio::select! {
             biased;
             _=shutdown.cancelled()=>{mark_stop(entry,ProcessStatus::Cancelled);break;},
-            _=cancel.cancelled()=>{mark_stop(entry,ProcessStatus::Cancelled);break;},
+            _=cancel.cancelled(), if entry.ownership.load(Ordering::Acquire) != 1 => {
+                if entry.ownership.compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                    mark_stop(entry,ProcessStatus::Cancelled);
+                    break;
+                }
+                continue;
+            },
             _=entry.stop.cancelled()=>break,
             _=heartbeat.tick()=>{write_control(&entry.input,json!({"kind":"lease"})).await?;continue;},
             frame=frames.next()=>frame,

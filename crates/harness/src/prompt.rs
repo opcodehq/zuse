@@ -42,19 +42,20 @@ pub struct Limits {
     pub usable: u64,
     pub compact_at: u64,
 }
-pub fn limits(window: u64, cap: Option<u64>, percent: u8) -> Limits {
+pub fn limits(window: u64, cap: Option<u64>, percent: f64) -> Limits {
     let window = if window == 0 { 32000 } else { window };
-    let percent = if percent == 0 || percent > 100 {
-        95
+    let percent = if !percent.is_finite() || percent <= 0. || percent > 100. {
+        95.
     } else {
         percent
     };
+    let threshold = window / 10 * 9 + window % 10 * 9 / 10;
     Limits {
         window,
-        usable: window.saturating_mul(percent as u64) / 100,
+        usable: ((window as f64 * (percent / 100.)).floor() as u64).min(window),
         compact_at: cap
             .filter(|v| *v > 0)
-            .map_or(window * 9 / 10, |v| v.min(window * 9 / 10)),
+            .map_or(threshold, |v| v.min(threshold)),
     }
 }
 pub fn estimate(messages: &[Message]) -> u64 {

@@ -22,7 +22,7 @@ pub struct Options {
     pub subagents: bool,
     pub window_tokens: u64,
     pub compact_tokens: Option<u64>,
-    pub effective_window_percent: u8,
+    pub effective_window_percent: f64,
     pub automatic_notifications: bool,
 }
 impl Options {
@@ -34,7 +34,7 @@ impl Options {
             subagents: true,
             window_tokens: 32000,
             compact_tokens: None,
-            effective_window_percent: 95,
+            effective_window_percent: 95.,
             automatic_notifications: true,
         }
     }
@@ -46,7 +46,7 @@ struct Runner {
 struct Inner {
     host: Arc<dyn Host>,
     state: AsyncMutex<Checkpoint>,
-    options: Options,
+    options: Mutex<Options>,
     tools: Tools,
     runners: Mutex<HashMap<String, Runner>>,
     mode: Mutex<PermissionMode>,
@@ -135,6 +135,7 @@ impl Engine {
                 reasoning: options.reasoning.clone(),
                 requests: 0,
                 notifications: Default::default(),
+                consumed_notifications: Default::default(),
                 tools: Default::default(),
                 reviews: Default::default(),
                 agents: vec![Agent {
@@ -180,7 +181,7 @@ impl Engine {
         Ok(Self(Arc::new(Inner {
             host,
             state: AsyncMutex::new(state),
-            options,
+            options: Mutex::new(options),
             tools,
             runners: Mutex::new(HashMap::new()),
             mode: Mutex::new(PermissionMode::Default),
@@ -191,6 +192,32 @@ impl Engine {
     }
     pub async fn snapshot(&self) -> Checkpoint {
         self.0.state.lock().await.clone()
+    }
+    fn options(&self) -> Options {
+        lock(&self.0.options).clone()
+    }
+    /// Adopt model/context settings at subsequent model boundaries without
+    /// retiring the session's commands or child runners. Tool topology remains
+    /// fixed for the lifetime of this runtime.
+    pub async fn reconfigure(&self, options: Options) -> Result<(), Error> {
+        let mut state = self.0.state.lock().await;
+        if self.0.closed.load(Ordering::Acquire) {
+            return Err(Error::Interrupted);
+        }
+        if options.subagents != self.options().subagents {
+            return Err(Error::paused(
+                "Changing collaboration tools requires a fresh runtime.",
+            ));
+        }
+        let previous = (state.model.clone(), state.reasoning.clone());
+        state.model = options.model.clone();
+        state.reasoning = options.reasoning.clone();
+        if let Err(error) = self.persist(&state).await {
+            (state.model, state.reasoning) = previous;
+            return Err(error);
+        }
+        *lock(&self.0.options) = options;
+        Ok(())
     }
     pub fn set_permission_mode(&self, mode: PermissionMode) {
         *lock(&self.0.mode) = mode;
@@ -214,9 +241,6 @@ impl Engine {
             return Err(Error::paused("Harness is already running"));
         }
         let _active = ActiveTurn(self.clone());
-        if !lock(&self.0.runners).is_empty() {
-            return Err(Error::paused("Harness still has background work"));
-        }
         self.0.stopping.store(false, Ordering::Release);
         let (root, children) = {
             let mut state = self.0.state.lock().await;
@@ -260,7 +284,14 @@ impl Engine {
             let mut state = self.0.state.lock().await;
             state.agent(agent_id)?;
             if state.notifications.contains(&delivery_id) {
-                return self.persist(&state).await;
+                self.persist(&state).await?;
+                if let Some(owner) = state.consumed_notifications.get(&delivery_id) {
+                    self.0.host.notify(Event::MailConsumed {
+                        agent_id: owner.clone(),
+                        delivery_id,
+                    });
+                }
+                return Ok(());
             }
             state.notifications.insert(delivery_id.clone());
             state.agent_mut(agent_id)?.mailbox.push(Mail {
@@ -291,7 +322,7 @@ impl Engine {
             &root,
             format!("Background process event for agent {agent_id}:\n{text}"),
             vec![],
-            self.0.options.automatic_notifications,
+            self.options().automatic_notifications,
         )
         .await
     }
@@ -363,7 +394,7 @@ impl Engine {
                 }
                 lock(&engine.0.runners).remove(&agent_id);
                 tx.send_replace(true);
-                if engine.0.options.automatic_notifications
+                if engine.options().automatic_notifications
                     && !engine.0.stopping.load(Ordering::Acquire)
                     && !engine.0.closed.load(Ordering::Acquire)
                 {
@@ -499,11 +530,24 @@ impl Engine {
             }
             {
                 let mut state = self.0.state.lock().await;
-                let agent = state.agent_mut(agent_id)?;
-                for message in std::mem::take(&mut agent.mailbox) {
-                    agent.history.push(message.message());
+                let mail = std::mem::take(&mut state.agent_mut(agent_id)?.mailbox);
+                let mut consumed = Vec::new();
+                for message in mail {
+                    if state.notifications.contains(&message.id) {
+                        state
+                            .consumed_notifications
+                            .insert(message.id.clone(), agent_id.into());
+                        consumed.push(message.id.clone());
+                    }
+                    state.agent_mut(agent_id)?.history.push(message.message());
                 }
                 self.persist(&state).await?;
+                for delivery_id in consumed {
+                    self.0.host.notify(Event::MailConsumed {
+                        agent_id: agent_id.into(),
+                        delivery_id,
+                    });
+                }
             }
             self.compact(agent_id, cancel).await?;
             let messages = {
@@ -511,10 +555,11 @@ impl Engine {
                 let agent = state.agent(agent_id)?;
                 prompt::render(&agent.history, agent.checkpoint.as_ref())
             };
+            let options = self.options();
             let limits = prompt::limits(
-                self.0.options.window_tokens,
-                self.0.options.compact_tokens,
-                self.0.options.effective_window_percent,
+                options.window_tokens,
+                options.compact_tokens,
+                options.effective_window_percent,
             );
             self.0.host.notify(Event::Context {
                 agent_id: agent_id.into(),
@@ -657,11 +702,12 @@ impl Engine {
         text: Arc<dyn Fn(String) + Send + Sync>,
     ) -> Result<ModelOutput, Error> {
         let root_id = self.0.state.lock().await.root_id.clone();
+        let options = self.options();
         let input = ModelInput {
             root_id,
             agent_id: agent_id.into(),
-            model: self.0.options.model.clone(),
-            reasoning: self.0.options.reasoning.clone(),
+            model: options.model,
+            reasoning: options.reasoning,
             messages,
             tools,
             cancel: cancel.clone(),
@@ -851,6 +897,21 @@ impl Engine {
         let list=state.agents.iter().filter(|a|parent.is_none_or(|p|state.descendant(&a.id,p))).map(|a|json!({"id":a.id,"parentId":a.parent_id,"name":a.name,"status":a.status,"summary":a.summary})).collect::<Vec<_>>();
         json!(list).to_string()
     }
+    /// End root generation while retaining independent child runners and
+    /// successfully returned background commands. Explicit continuation resumes
+    /// root processing; process/agent stop and close still terminate owned work.
+    pub async fn stop_turn(&self) -> Result<(), Error> {
+        self.0.stopping.store(true, Ordering::Release);
+        let root = self.0.state.lock().await.root_id.clone();
+        let done = lock(&self.0.runners).get(&root).map(|runner| {
+            runner.cancel.cancel();
+            runner.done.clone()
+        });
+        if let Some(done) = done {
+            completion(done, &CancellationToken::new()).await?;
+        }
+        Ok(())
+    }
     pub async fn interrupt(&self, target: Option<&str>) -> Result<(), Error> {
         let (target, ids) = {
             let state = self.0.state.lock().await;
@@ -956,10 +1017,11 @@ impl Engine {
     async fn compact(&self, agent_id: &str, cancel: &CancellationToken) -> Result<(), Error> {
         let agent = self.0.state.lock().await.agent(agent_id)?.clone();
         let before = prompt::estimate(&prompt::render(&agent.history, agent.checkpoint.as_ref()));
+        let options = self.options();
         let limits = prompt::limits(
-            self.0.options.window_tokens,
-            self.0.options.compact_tokens,
-            self.0.options.effective_window_percent,
+            options.window_tokens,
+            options.compact_tokens,
+            options.effective_window_percent,
         );
         if before < limits.compact_at {
             return Ok(());
@@ -1041,7 +1103,7 @@ impl Engine {
 impl RequestBudget for Engine {
     async fn reserve(&self) -> Result<(), Error> {
         let mut state = self.0.state.lock().await;
-        if state.requests >= self.0.options.max_requests {
+        if state.requests >= self.options().max_requests {
             return Err(Error::paused(
                 "The shared model request budget was reached. Continue to grant another turn.",
             ));

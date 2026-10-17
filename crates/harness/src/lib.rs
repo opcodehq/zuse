@@ -90,6 +90,12 @@ pub struct ModelOutput {
     rename_all_fields = "camelCase"
 )]
 pub enum Event {
+    /// Mail is part of durable history at a model boundary. Replayed delivery
+    /// IDs may repeat this acknowledgement without replaying their content.
+    MailConsumed {
+        agent_id: String,
+        delivery_id: String,
+    },
     Text {
         agent_id: String,
         item_id: String,

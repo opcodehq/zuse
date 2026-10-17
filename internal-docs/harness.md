@@ -137,3 +137,32 @@ entitlement/provider checks, account fallback, reconnect recovery, discovery
 cancellation, identity retirement during an active model stream, and lazy-store retirement. Inventory uses a local HTTP fixture and
 model execution uses a wire fixture. The selectable application provider, session
 protocol adapter, live provider authorization and full chat workflows remain pending.
+
+
+## Turn boundaries and steering receipts
+
+The kernel separates `stop_turn` from `interrupt`: stopping root generation
+keeps independent child runners and commands whose tools have already returned.
+Explicit agent/process interruption and runtime close still stop those commands.
+A command transfers cancellation ownership only after native `exec_command`
+has assembled its successful result. Abandoned tools keep their cancellation
+ownership; they cannot leave an unreturned background command running.
+
+A new explicit root turn can run alongside retained children. `reconfigure`
+adopts model, reasoning, budget and context settings at subsequent model
+boundaries, persists model identity before adoption, and preserves the runtime.
+Collaboration-tool topology still requires a fresh runtime. Context percentages
+retain fractional provider values rather than truncating them to integers.
+
+`MailConsumed` acknowledges a delivery only after its content joins durable
+history. A checkpoint keeps consumed delivery IDs independently of compaction;
+a repeated enqueue re-emits its acknowledgement without adding its content
+again. A failed save emits no acknowledgement, and recovery retains the pending
+mail. Initial prompts and internal child messages do not become steering ACKs.
+The application adapter must correlate these IDs with session steering commands.
+
+The full harness suite passes 35 tests. New coverage exercises command handoff,
+turn cancellation, explicit cleanup, retained-child continuation, in-place model
+changes, fractional context limits, duplicate/recovered acknowledgements, and
+failed-save recovery. These are kernel/tool fixtures; selectable application
+provider/session integration and live chat acceptance remain pending.

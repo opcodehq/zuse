@@ -42,6 +42,7 @@ struct Fixture {
     store: Mutex<Option<Checkpoint>>,
     responses: Mutex<VecDeque<ModelOutput>>,
     events: Mutex<Vec<Event>>,
+    models: Mutex<Vec<(String, Option<String>)>>,
     executions: AtomicUsize,
     mode: AtomicUsize,
     barrier: Barrier,
@@ -54,6 +55,7 @@ impl Fixture {
             store: Mutex::new(None),
             responses: Mutex::new(responses.into()),
             events: Mutex::new(vec![]),
+            models: Mutex::new(vec![]),
             executions: AtomicUsize::new(0),
             mode: AtomicUsize::new(0),
             barrier: Barrier::new(2),
@@ -78,7 +80,10 @@ impl Host for Fixture {
         Ok(lock(&self.store).clone())
     }
     async fn save(&self, state: &Checkpoint) -> Result<(), Error> {
-        if self.mode.load(Ordering::Relaxed) == 7 && !state.reviews.is_empty() {
+        if self.mode.load(Ordering::Relaxed) == 7 && !state.reviews.is_empty()
+            || self.mode.load(Ordering::Relaxed) == 9 && !state.consumed_notifications.is_empty()
+            || self.mode.load(Ordering::Relaxed) == 10 && state.model == "unsaved-model"
+        {
             return Err(Error::Storage);
         }
         state.validate()?;
@@ -89,6 +94,7 @@ impl Host for Fixture {
         Ok("Preserve user requirements.".into())
     }
     async fn model(&self, input: ModelInput) -> Result<ModelOutput, Error> {
+        lock(&self.models).push((input.model.clone(), input.reasoning.clone()));
         if self.mode.load(Ordering::Relaxed) == 4 && input.tools.is_empty() {
             return Ok(output(
                 "Preserve the original request and unfinished work.",
@@ -98,6 +104,11 @@ impl Host for Fixture {
         if self.mode.load(Ordering::Relaxed) == 2 && input.agent_id != "root" {
             self.barrier.wait().await;
             return Ok(output(&format!("{} finished", input.agent_id), vec![]));
+        }
+        if self.mode.load(Ordering::Relaxed) == 8 && input.agent_id != "root" {
+            self.blocked.notify_one();
+            self.release.notified().await;
+            return Ok(output("child survived", vec![]));
         }
         if self.mode.load(Ordering::Relaxed) == 3 {
             self.blocked.notify_one();
@@ -293,6 +304,7 @@ async fn steering_is_durable_and_delivery_ids_are_deduplicated() {
     )
     .await
     .unwrap();
+    assert!(!lock(&f.events).iter().any(|event| matches!(event, Event::MailConsumed { delivery_id, .. } if delivery_id == "delivery-1")));
     f.mode.store(0, Ordering::Relaxed);
     f.release.notify_one();
     work.await.unwrap().unwrap();
@@ -308,6 +320,36 @@ async fn steering_is_durable_and_delivery_ids_are_deduplicated() {
         1
     );
     assert_eq!(state.agent("root").unwrap().summary, "steered");
+    assert_eq!(
+        state
+            .consumed_notifications
+            .get("delivery-1")
+            .map(String::as_str),
+        Some("root")
+    );
+    assert_eq!(lock(&f.events).iter().filter(|event| matches!(event, Event::MailConsumed { delivery_id, .. } if delivery_id == "delivery-1")).count(), 1);
+    // Losing the session acknowledgement across restart must not replay mail.
+    let recovered = engine(f.clone()).await;
+    recovered
+        .enqueue(
+            "delivery-1".into(),
+            "root",
+            "must not replay".into(),
+            vec![],
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(
+        recovered
+            .snapshot()
+            .await
+            .agent("root")
+            .unwrap()
+            .mailbox
+            .is_empty()
+    );
+    assert_eq!(lock(&f.events).iter().filter(|event| matches!(event, Event::MailConsumed { delivery_id, .. } if delivery_id == "delivery-1")).count(), 2);
 }
 
 #[tokio::test]
@@ -424,4 +466,151 @@ async fn recovery_approval_that_cannot_be_saved_does_not_allow_replay() {
         recovered.snapshot().await.tools["root:uncertain"].status,
         ReceiptStatus::Started
     ));
+}
+
+#[tokio::test]
+async fn stopping_a_turn_retains_child_work_and_allows_root_continuation() {
+    let f = Fixture::new(vec![
+        output(
+            "delegate",
+            vec![call(
+                "spawn",
+                "spawn_agent",
+                json!({"name":"worker","message":"continue independently","inherit":false}),
+            )],
+        ),
+        output("waiting", vec![]),
+        output("continued", vec![]),
+        output("synthesized", vec![]),
+    ]);
+    f.mode.store(8, Ordering::Relaxed);
+    let e = engine(f.clone()).await;
+    let first = {
+        let e = e.clone();
+        tokio::spawn(async move { e.send("start".into(), vec![]).await })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(3), f.blocked.notified())
+        .await
+        .unwrap();
+    e.stop_turn().await.unwrap();
+    first.await.unwrap().unwrap();
+    let state = e.snapshot().await;
+    assert_eq!(state.agent("root").unwrap().status, Status::Interrupted);
+    assert!(
+        state
+            .agents
+            .iter()
+            .any(|a| a.parent_id.is_some() && a.status == Status::Running)
+    );
+    assert_eq!(e.background_count(), 1);
+    let mut options = Options::new("next-model");
+    options.reasoning = Some("high".into());
+    options.window_tokens = 10000;
+    options.effective_window_percent = 95.5;
+    e.reconfigure(options.clone()).await.unwrap();
+    options.subagents = false;
+    assert!(e.reconfigure(options).await.is_err());
+    let next = {
+        let e = e.clone();
+        tokio::spawn(async move { e.send("new instruction".into(), vec![]).await })
+    };
+    // Wait for the root to accept the next turn while its child is still blocked.
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if e.snapshot()
+                .await
+                .agent("root")
+                .unwrap()
+                .history
+                .iter()
+                .any(|m| m.content == "new instruction")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!next.is_finished());
+    f.release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(3), next)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let state = e.snapshot().await;
+    assert_eq!(state.agent("root").unwrap().status, Status::Completed);
+    assert!(
+        state
+            .agents
+            .iter()
+            .any(|a| a.parent_id.is_some() && a.summary == "child survived")
+    );
+    assert_eq!(state.model, "next-model");
+    assert!(lock(&f.models).iter().any(|(model, reasoning)| model == "next-model" && reasoning.as_deref() == Some("high")));
+    assert!(lock(&f.events).iter().any(|event| matches!(event, Event::Context { agent_id, window_tokens: 9550, .. } if agent_id == "root")));
+    e.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn failed_mail_commit_never_acknowledges_steering_and_recovery_delivers_it_once() {
+    let f = Fixture::new(vec![output("initial", vec![]), output("recovered", vec![])]);
+    f.mode.store(3, Ordering::Relaxed);
+    let e = engine(f.clone()).await;
+    let work = {
+        let e = e.clone();
+        tokio::spawn(async move { e.send("start".into(), vec![]).await })
+    };
+    f.blocked.notified().await;
+    e.enqueue(
+        "durable-steer".into(),
+        "root",
+        "keep this constraint".into(),
+        vec![],
+        false,
+    )
+    .await
+    .unwrap();
+    f.mode.store(9, Ordering::Relaxed);
+    f.release.notify_one();
+    work.await.unwrap().unwrap();
+    assert!(
+        !lock(&f.events)
+            .iter()
+            .any(|event| matches!(event, Event::MailConsumed { .. }))
+    );
+    assert_eq!(
+        lock(&f.store)
+            .as_ref()
+            .unwrap()
+            .agent("root")
+            .unwrap()
+            .mailbox
+            .len(),
+        1
+    );
+    e.close().await.unwrap();
+    f.mode.store(0, Ordering::Relaxed);
+    let recovered = engine(f.clone()).await;
+    recovered.send(String::new(), vec![]).await.unwrap();
+    let state = recovered.snapshot().await;
+    assert_eq!(
+        state
+            .agent("root")
+            .unwrap()
+            .history
+            .iter()
+            .filter(|m| m.content == "keep this constraint")
+            .count(),
+        1
+    );
+    assert_eq!(lock(&f.events).iter().filter(|event| matches!(event, Event::MailConsumed { delivery_id, .. } if delivery_id == "durable-steer")).count(), 1);
+    f.mode.store(10, Ordering::Relaxed);
+    assert!(matches!(
+        recovered.reconfigure(Options::new("unsaved-model")).await,
+        Err(Error::Storage)
+    ));
+    assert_eq!(recovered.snapshot().await.model, "model");
+    recovered.close().await.unwrap();
 }

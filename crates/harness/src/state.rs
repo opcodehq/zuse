@@ -202,6 +202,8 @@ pub struct Checkpoint {
     pub requests: u64,
     #[serde(default)]
     pub notifications: BTreeSet<String>,
+    #[serde(default)]
+    pub consumed_notifications: BTreeMap<String, String>,
     pub tools: BTreeMap<String, Receipt>,
     #[serde(default)]
     pub reviews: Vec<RecoveryReview>,
@@ -209,6 +211,11 @@ pub struct Checkpoint {
 impl Checkpoint {
     pub fn validate(&self) -> Result<(), Error> {
         if self.version != 1 || self.root_id.is_empty() || self.agents.len() > 4096 {
+            return Err(Error::InvalidCheckpoint);
+        }
+        if self.consumed_notifications.iter().any(|(id, agent)| {
+            !self.notifications.contains(id) || !self.agents.iter().any(|a| &a.id == agent)
+        }) {
             return Err(Error::InvalidCheckpoint);
         }
         let by_id: BTreeMap<_, _> = self.agents.iter().map(|a| (a.id.as_str(), a)).collect();

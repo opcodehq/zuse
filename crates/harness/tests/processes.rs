@@ -516,3 +516,93 @@ async fn exited_commands_keep_complete_output_frames_when_the_reader_is_slow() {
     assert_eq!(received, 131072);
     process.wait().await.unwrap();
 }
+
+#[tokio::test]
+async fn only_returned_commands_outlive_turn_cancellation_and_explicit_stop_still_owns_them() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = Processes::open(options(root.path(), Arc::new(Notices::default())))
+        .await
+        .unwrap();
+    let owner = context("child-a");
+    let waiting = manager
+        .start(
+            command("read line; printf '%s' \"$line\"", root.path().into()),
+            &owner,
+        )
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .handoff(&waiting.id, "child-b", &owner.cancel)
+            .is_err()
+    );
+    manager
+        .handoff(&waiting.id, "child-a", &owner.cancel)
+        .unwrap();
+    owner.cancel.cancel();
+    manager
+        .write(
+            &waiting.id,
+            "child-a",
+            "survived\n",
+            true,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        completed(&manager, &waiting.id).await.status,
+        ProcessStatus::Exited
+    );
+    assert_eq!(
+        manager
+            .output(&waiting.id, "root", 0, 100)
+            .await
+            .unwrap()
+            .text,
+        "survived"
+    );
+
+    let abandoned = context("child-a");
+    let pending = manager
+        .start(command("sleep 30", root.path().into()), &abandoned)
+        .await
+        .unwrap();
+    abandoned.cancel.cancel();
+    assert!(
+        manager
+            .handoff(&pending.id, "child-a", &abandoned.cancel)
+            .is_err()
+    );
+    assert_eq!(
+        completed(&manager, &pending.id).await.status,
+        ProcessStatus::Cancelled
+    );
+
+    let owner = context("child-a");
+    let owned = manager
+        .start(command("sleep 30", root.path().into()), &owner)
+        .await
+        .unwrap();
+    manager
+        .handoff(&owned.id, "child-a", &owner.cancel)
+        .unwrap();
+    owner.cancel.cancel();
+    manager.interrupt_agents(&["child-a".into()]).await;
+    assert_eq!(
+        completed(&manager, &owned.id).await.status,
+        ProcessStatus::Cancelled
+    );
+
+    let owner = context("root");
+    let owned = manager
+        .start(command("sleep 30", root.path().into()), &owner)
+        .await
+        .unwrap();
+    manager.handoff(&owned.id, "root", &owner.cancel).unwrap();
+    manager.close().await;
+    assert_eq!(
+        completed(&manager, &owned.id).await.status,
+        ProcessStatus::Cancelled
+    );
+}

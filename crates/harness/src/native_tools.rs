@@ -166,8 +166,8 @@ impl NativeTools {
         let mut context = context;
         context.cancel = operation;
         let result = tokio::select! {biased;_=self.shutdown.cancelled()=>Err(Error::Interrupted),_=parent_cancel.cancelled()=>Err(Error::Interrupted),result=self.execute_validated(name,input,context,lease)=>result};
-        // Successful exec_command may intentionally leave an owned background
-        // process. Its token still inherits interruption from the agent runner.
+        // Successful commands have already transferred background ownership to
+        // the session. Abandoned tools still cancel their in-flight command.
         if result.is_ok() {
             guard.armed = false;
         }
@@ -336,8 +336,12 @@ impl NativeTools {
                         &context.cancel,
                     )
                     .await?;
-                self.process_output(&process.id, &context.agent_id, 0, 16000)
-                    .await
+                let output = self
+                    .process_output(&process.id, &context.agent_id, 0, 16000)
+                    .await?;
+                self.processes
+                    .handoff(&process.id, &context.agent_id, &context.cancel)?;
+                Ok(output)
             }
             "grep" | "glob" => {
                 let pattern = text(&input, "pattern");

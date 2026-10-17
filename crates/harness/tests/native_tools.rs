@@ -371,16 +371,20 @@ async fn large_reads_preserve_edit_metadata_and_binary_and_image_reads_stay_boun
 async fn tool_dispatch_keeps_background_commands_alive_and_routes_search_and_questions() {
     let callback = Arc::new(Callbacks::default());
     let fixture = Fixture::new(Some(callback.clone())).await;
+    let turn = context("root");
     let execution = value(
         fixture
-            .call(
+            .tools
+            .execute(
                 "exec_command",
                 json!({"command":"read line; printf '%s' \"$line\"","yield_time_ms":0}),
+                turn.clone(),
             )
             .await
             .unwrap(),
     );
     let id = execution["process"]["id"].as_str().unwrap();
+    turn.cancel.cancel();
     fixture
         .call(
             "write_stdin",
