@@ -187,28 +187,35 @@ impl WorkspaceView {
             )
             .aria_label(SharedString::from(format!("Choose {}", model.label)))
             .relative()
-            .min_h(px(36.))
+            .min_h(px(32.))
             .flex_shrink_0()
             .px_2()
-            .py_2()
-            .gap_2()
-            .rounded_md()
+            .py(px(6.))
+            .gap(px(6.))
+            .rounded(px(7.))
             .cursor_pointer()
             .when(
                 self.picker_active
                     .as_ref()
                     .is_some_and(|m| m.provider == provider && m.model == model.id),
-                |d| d.bg(rgb(0x30312b)),
+                |d| d.bg(crate::settings_style::frame_bg().opacity(0.6)),
             )
-            .when(active, |d| d.bg(rgb(0x2c351d)))
-            .hover(|d| d.bg(rgb(if active { 0x333e22 } else { 0x2a2a2a })))
+            .when(active, |d| d.bg(rgb(ACCENT).opacity(0.12)))
+            .hover(|d| {
+                d.bg(if active {
+                    rgb(ACCENT).opacity(0.12).into()
+                } else {
+                    crate::settings_style::frame_bg().opacity(0.6)
+                })
+            })
             .when(active, |d| {
                 d.child(
                     div()
                         .absolute()
                         .left_0()
-                        .top(px(9.))
-                        .bottom(px(9.))
+                        .top_1_2()
+                        .mt(px(-8.))
+                        .h(px(16.))
                         .w(px(2.))
                         .rounded_full()
                         .bg(rgb(ACCENT)),
@@ -216,22 +223,23 @@ impl WorkspaceView {
             })
             .child(
                 icon(provider_icon(provider))
-                    .size(px(15.))
+                    .size(px(16.))
                     .text_color(rgb(MUTED)),
             )
             .child(
                 column()
                     .flex_1()
                     .min_w_0()
-                    .gap_1()
+                    .gap(px(2.))
                     .child(
                         div()
                             .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
                             .text_color(rgb(TEXT))
                             .child(model.label.clone()),
                     )
                     .when_some(model.description.clone(), |d, description| {
-                        d.child(label(description).text_size(px(10.)).text_color(rgb(FAINT)))
+                        d.child(label(description).text_size(px(11.)).text_color(rgb(MUTED)))
                     }),
             )
             .child(
@@ -240,7 +248,7 @@ impl WorkspaceView {
                     "star",
                     "Use this model by default",
                 )
-                .size(px(24.))
+                .size(px(20.))
                 .text_color(rgb(if default { ACCENT } else { FAINT }))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -251,7 +259,7 @@ impl WorkspaceView {
                 })),
             )
             .when(active, |d| {
-                d.child(icon("check").size(px(12.)).text_color(rgb(ACCENT)))
+                d.child(icon("check").size(px(14.)).text_color(rgb(ACCENT)))
             })
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.choose_model(provider_id.clone(), Some(model_id.clone()), cx);
@@ -278,7 +286,7 @@ impl WorkspaceView {
             .values()
             .map(|c| c.models.len())
             .sum::<usize>();
-        let width = (self.content_width - 48.).clamp(272., 400.);
+        let width = (self.content_width - 48.).clamp(272., 380.);
         let height = if self.content_height > 0. {
             (self.content_height - 220.).clamp(230., 480.)
         } else {
@@ -294,10 +302,13 @@ impl WorkspaceView {
             .h(px(height))
             .items_stretch()
             .overflow_hidden()
-            .rounded_xl()
+            .rounded(px(16.))
             .border_1()
-            .border_color(rgb(0x383a34))
-            .bg(rgb(0x20211e))
+            .border_color(crate::settings_style::card_border())
+            .bg(crate::palette::tone(
+                hsla(132. / 360., 0.05, 0.105, 1.),
+                hsla(0., 0., 1., 1.),
+            ))
             .shadow_lg()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .capture_key_down(cx.listener(Self::on_picker_key))
@@ -307,11 +318,11 @@ impl WorkspaceView {
                     .w(px(44.))
                     .flex_shrink_0()
                     .overflow_y_scroll()
-                    .p_1()
+                    .p(px(6.))
                     .gap_1()
                     .border_r_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(0x24251f))
+                    .border_color(rgb(BORDER).opacity(0.5))
+                    .bg(crate::settings_style::frame_bg().opacity(0.2))
                     .child(
                         control("models-all", "All")
                             .h(px(32.))
@@ -320,7 +331,7 @@ impl WorkspaceView {
                             .px_1()
                             .text_size(px(10.))
                             .when(self.picker_scope.is_none(), |d| {
-                                d.bg(rgb(0x343d22)).text_color(rgb(TEXT))
+                                d.bg(rgb(ACCENT).opacity(0.12)).text_color(rgb(TEXT))
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.picker_scope = None;
@@ -353,7 +364,7 @@ impl WorkspaceView {
                                 .size(px(32.))
                                 .flex_shrink_0()
                                 .when(self.picker_scope.as_deref() == Some(&provider), |d| {
-                                    d.bg(rgb(0x343d22)).text_color(rgb(TEXT))
+                                    d.bg(rgb(ACCENT).opacity(0.12)).text_color(rgb(TEXT))
                                 })
                                 .when(live, |d| {
                                     d.child(
@@ -383,7 +394,7 @@ impl WorkspaceView {
                     .child(
                         row()
                             .flex_shrink_0()
-                            .p_2()
+                            .p(px(10.))
                             .gap_1()
                             .border_b_1()
                             .border_color(rgb(BORDER))
@@ -392,12 +403,12 @@ impl WorkspaceView {
                                     .flex_1()
                                     .min_w_0()
                                     .h(px(32.))
-                                    .px_2()
+                                    .px(px(10.))
                                     .gap_2()
-                                    .rounded_md()
+                                    .rounded(px(7.))
                                     .border_1()
-                                    .border_color(rgb(0x3b3d34))
-                                    .bg(rgb(0x10110e))
+                                    .border_color(rgb(BORDER))
+                                    .bg(rgb(crate::shell::BG))
                                     .child(icon("magnifer").size(px(14.)).text_color(rgb(FAINT)))
                                     .child(
                                         div().flex_1().min_w_0().child(self.model_search.clone()),
@@ -424,8 +435,9 @@ impl WorkspaceView {
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
-                            .p_2()
-                            .gap_1()
+                            .px(px(10.))
+                            .pb(px(10.))
+                            .gap(px(2.))
                             .child(
                                 label(format!("{} MODELS", total))
                                     .px_2()
