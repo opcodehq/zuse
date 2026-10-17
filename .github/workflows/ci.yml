@@ -12,6 +12,11 @@ concurrency:
 jobs:
   engine:
     runs-on: ubuntu-24.04
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,6 +31,7 @@ jobs:
       - run: cargo check -p zuse-cli
       - run: cargo test -p zuse-cli --test startup
       - run: cargo test -p zuse-protocol --lib input_answers
+      - run: cargo test -p zuse-protocol --lib message_attachments
       - run: cargo test -p zuse-harness -p zuse-model-accounts
       - run: cargo test -p zuse-model -p zuse-serve
       - run: cargo test -p zuse-rpc --lib

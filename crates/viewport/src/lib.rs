@@ -1,8 +1,10 @@
 //! Browser-compatible GPUI views. Native process/filesystem access stays behind RPC.
 
+mod activity;
 pub mod assets;
 pub mod input;
 mod model_accounts;
+mod previews;
 mod questions;
 mod recovery;
 mod shell;
@@ -18,7 +20,7 @@ use std::collections::HashMap;
 use zuse_model::{SessionMessageEntry, TranscriptUpdate, apply_transcript_frame};
 use zuse_protocol::methods;
 
-actions!(zuse_client, [Submit, SaveFile]);
+actions!(zuse_client, [Submit, SaveFile, ClosePreview]);
 
 pub struct Transport {
     pub requests: UnboundedSender<Value>,
@@ -42,6 +44,10 @@ pub struct WorkspaceView {
     selected: Option<Value>,
     messages: Vec<SessionMessageEntry>,
     transcript_watch: Option<u64>,
+    previews: HashMap<String, previews::Preview>,
+    preview_pending: HashMap<u64, String>,
+    preview_generation: u64,
+    preview_open: Option<String>,
     transcript_scroll: ScrollHandle,
     input_answers: HashMap<String, zuse_protocol::input_answers::InputAnswers>,
     input_pending: HashMap<u64, String>,
@@ -169,6 +175,10 @@ impl WorkspaceView {
             selected: None,
             messages: vec![],
             transcript_watch: None,
+            previews: HashMap::new(),
+            preview_pending: HashMap::new(),
+            preview_generation: 0,
+            preview_open: None,
             transcript_scroll: ScrollHandle::new(),
             input_answers: HashMap::new(),
             input_pending: HashMap::new(),
@@ -292,6 +302,7 @@ impl WorkspaceView {
                 self.error = Some(error.to_owned());
             } else {
                 self.attachments.push(frame["attachment"].clone());
+                self.sync_previews(true, cx);
             }
             cx.notify();
             return;
@@ -306,6 +317,9 @@ impl WorkspaceView {
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if method.is_empty() {
+            return;
+        }
+        if self.receive_preview(id, &frame, cx) {
             return;
         }
         self.receive_input(id, &frame);
@@ -504,6 +518,7 @@ impl WorkspaceView {
                             if follow {
                                 self.transcript_scroll.scroll_to_bottom();
                             }
+                            self.sync_previews(true, cx);
                         }
                         Err(error) => {
                             self.error = Some(format!("Invalid transcript update: {error}"))
@@ -545,6 +560,7 @@ impl WorkspaceView {
         self.transcript_scroll.scroll_to_bottom();
         self.reset_recovery(cx);
         self.reset_inputs(cx);
+        self.reset_previews(cx);
         self.selected = Some(chat);
         self.restore_draft(cx);
         if let Some(chat) = &self.selected {
@@ -577,8 +593,10 @@ impl WorkspaceView {
         self.clear_workspace();
         self.reset_recovery(cx);
         self.reset_inputs(cx);
+        self.reset_previews(cx);
         self.selected = None;
         self.messages.clear();
+        self.transcript_scroll.set_offset(point(px(0.), px(0.)));
         self.settings = false;
         self.restore_draft(cx);
         cx.notify();
@@ -608,7 +626,7 @@ impl WorkspaceView {
             return;
         }
         let text = self.input.read(cx).value(cx);
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
         let Some(device) = self.device_id.clone() else {
@@ -645,7 +663,13 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
-        let command = json!({"kind":"run","messageId":uuid::Uuid::new_v4().to_string(),"request":{"prompt":text,"harness":provider["id"],"model":self.model,"reasoning":null,"cwd":self.cwd(),"sandbox":"workspace-write","resume":null,"attachments":self.attachment_paths()}});
+        let paths: Vec<String> = self
+            .attachment_paths()
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let prompt = zuse_protocol::message_attachments::with_attachments(&text, &paths);
+        let command = json!({"kind":"run","messageId":uuid::Uuid::new_v4().to_string(),"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":null,"cwd":self.cwd(),"sandbox":"workspace-write","resume":null,"attachments":self.attachment_paths()}});
         let send = if let Some(chat) = &self.selected {
             self.call(
                 methods::QUEUE_COMMAND,
@@ -671,6 +695,7 @@ impl WorkspaceView {
 pub fn initialize(cx: &mut App) {
     input::bind_keys(cx);
     cx.bind_keys([
+        KeyBinding::new("escape", ClosePreview, Some("Workspace")),
         KeyBinding::new("cmd-s", SaveFile, Some("Workspace")),
         KeyBinding::new("ctrl-s", SaveFile, Some("Workspace")),
     ]);

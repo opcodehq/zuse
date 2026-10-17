@@ -465,41 +465,58 @@ impl WorkspaceView {
                                 .flex_wrap()
                                 .gap_2()
                                 .children(self.attachments.iter().enumerate().map(|(i, a)| {
-                                    row()
-                                        .id(("attachment", i))
-                                        .px_2()
-                                        .py_1()
-                                        .gap_2()
-                                        .rounded_md()
-                                        .bg(rgb(RAISED))
-                                        .child(
-                                            icon(
-                                                if a["mime"]
-                                                    .as_str()
-                                                    .is_some_and(|s| s.starts_with("image/"))
-                                                {
-                                                    "file-code"
-                                                } else {
-                                                    "paperclip"
-                                                },
-                                            )
-                                            .size(px(12.)),
-                                        )
-                                        .child(label(
-                                            a["name"].as_str().unwrap_or("Attachment").to_owned(),
-                                        ))
-                                        .child(
-                                            icon_button(
-                                                ("remove-attachment", i),
-                                                "close",
-                                                "Remove attachment",
-                                            )
-                                            .on_click(
-                                                cx.listener(move |this, _, _, cx| {
-                                                    this.attachments.remove(i);
-                                                    cx.notify();
-                                                }),
+                                    column()
+                                        .gap_1()
+                                        .when(
+                                            a["path"].as_str().is_some_and(
+                                                zuse_protocol::attachment_mentions::is_image_path,
                                             ),
+                                            |d| {
+                                                d.child(self.image_preview(
+                                                    a["path"].as_str().unwrap_or_default(),
+                                                    "",
+                                                    128.,
+                                                    cx,
+                                                ))
+                                            },
+                                        )
+                                        .child(
+                                            row()
+                                                .id(("attachment", i))
+                                                .px_2()
+                                                .py_1()
+                                                .gap_2()
+                                                .rounded_md()
+                                                .bg(rgb(RAISED))
+                                                .child(
+                                                    icon(
+                                                        if a["mime"].as_str().is_some_and(|s| {
+                                                            s.starts_with("image/")
+                                                        }) {
+                                                            "file-code"
+                                                        } else {
+                                                            "paperclip"
+                                                        },
+                                                    )
+                                                    .size(px(12.)),
+                                                )
+                                                .child(label(
+                                                    a["name"]
+                                                        .as_str()
+                                                        .unwrap_or("Attachment")
+                                                        .to_owned(),
+                                                ))
+                                                .child(
+                                                    icon_button(
+                                                        ("remove-attachment", i),
+                                                        "close",
+                                                        "Remove attachment",
+                                                    )
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.attachments.remove(i);
+                                                        cx.notify();
+                                                    })),
+                                                ),
                                         )
                                 }))
                                 .when(self.uploading > 0, |d| {
@@ -728,7 +745,9 @@ impl WorkspaceView {
     }
 
     fn transcript(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.transcript_scroll.max_offset().y + self.transcript_scroll.offset().y <= px(24.) {
+        if !self.messages.is_empty()
+            && self.transcript_scroll.max_offset().y + self.transcript_scroll.offset().y <= px(24.)
+        {
             self.transcript_scroll.scroll_to_bottom();
         }
         column()
@@ -782,19 +801,21 @@ impl WorkspaceView {
                                     "text" => {
                                         let text = part["text"].as_str().unwrap_or_default();
                                         Some(if user {
-                                            row()
-                                                .justify_end()
-                                                .child(
-                                                    div()
-                                                        .max_w(relative(0.85))
-                                                        .px_4()
-                                                        .py_3()
-                                                        .rounded_xl()
-                                                        .bg(rgb(0x242424))
-                                                        .text_size(px(14.))
-                                                        .line_height(px(21.))
-                                                        .child(text.to_owned()),
-                                                )
+                                            let parsed = zuse_protocol::message_attachments::parse(text);
+                                            column().items_end().gap_3()
+                                                .when(!parsed.text.is_empty(), |d|d.child(
+                                                    div().max_w(relative(0.85)).px_4().py_3().rounded_xl()
+                                                        .bg(rgb(0x242424)).text_size(px(14.)).line_height(px(21.))
+                                                        .child(parsed.text)))
+                                                .children(parsed.attachments.iter().map(|attachment| {
+                                                    if zuse_protocol::attachment_mentions::is_image_path(&attachment.path) {
+                                                        self.image_preview(&attachment.path,&attachment.name,384.,cx)
+                                                    } else {
+                                                        row().gap_2().px_3().py_2().rounded_lg().bg(rgb(RAISED))
+                                                            .child(icon("paperclip").size(px(14.)))
+                                                            .child(label(attachment.name.clone())).into_any_element()
+                                                    }
+                                                }))
                                                 .into_any_element()
                                         } else {
                                             column()
@@ -850,68 +871,10 @@ impl WorkspaceView {
                                             )))
                                             .into_any_element(),
                                     ),
-                                    "tool" | "reasoning" => {
-                                        let key = format!(
-                                            "{kind}:{}",
-                                            part["id"].as_str().unwrap_or_default()
-                                        );
-                                        let expanded = self.expanded_parts.contains(&key);
-                                        let title = if kind == "tool" {
-                                            tool_label(part)
-                                        } else {
-                                            "Thought process".into()
-                                        };
-                                        let mut item =
-                                            column().border_l_1().border_color(rgb(BORDER)).pl_3().gap_2().child(
-                                                control(
-                                                    SharedString::from(format!("expand-{key}")),
-                                                    SharedString::from(title),
-                                                )
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    if !this.expanded_parts.remove(&key) {
-                                                        this.expanded_parts.insert(key.clone());
-                                                    }
-                                                    cx.notify();
-                                                })),
-                                            );
-                                        if expanded {
-                                            let text = if kind == "reasoning" {
-                                                part["text"].as_str().unwrap_or_default().to_owned()
-                                            } else {
-                                                format!(
-                                                    "{}\n\n{}",
-                                                    serde_json::to_string_pretty(&part["call"])
-                                                        .unwrap_or_default(),
-                                                    part["output"]
-                                                        .as_str()
-                                                        .unwrap_or(if part["resolved"] == true { "Tool completed." } else { "Waiting for tool output…" })
-                                                )
-                                            };
-                                            item = item.child(
-                                                column()
-                                                    .px_3()
-                                                    .py_2()
-                                                    .rounded_md()
-                                                    .bg(rgb(0x101010))
-                                                    .text_size(px(12.))
-                                                    .line_height(px(20.))
-                                                    .child(SharedString::from(text)),
-                                            );
-                                        }
-                                        Some(item.into_any_element())
-                                    }
-                                    "image" => Some(
-                                        row()
-                                            .gap_2()
-                                            .child(icon("paperclip"))
-                                            .child(label(
-                                                part["name"]
-                                                    .as_str()
-                                                    .unwrap_or("Image attachment")
-                                                    .to_owned(),
-                                            ))
-                                            .into_any_element(),
-                                    ),
+                                    "tool" | "reasoning" => Some(self.activity_part(&entry.id,part,cx)),
+                                    "image" => Some(self.image_preview(
+                                        part["path"].as_str().unwrap_or_default(),
+                                        part["name"].as_str().unwrap_or("Image attachment"),384.,cx)),
                                     _ => None,
                                 }
                             }),
@@ -1467,12 +1430,17 @@ impl WorkspaceView {
 }
 
 impl Render for WorkspaceView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .key_context("Workspace")
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(|this, _: &ClosePreview, _, cx| {
+                this.preview_open = None;
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| this.save_file(cx)))
             .size_full()
+            .relative()
             .flex()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
@@ -1502,32 +1470,10 @@ impl Render for WorkspaceView {
                 self.right_open && !self.settings && !self.project_picker,
                 |d| d.child(self.workspace_panel(cx)),
             )
+            .when(self.preview_open.is_some(), |d| {
+                d.child(self.preview_overlay(window, cx))
+            })
     }
-}
-
-fn tool_label(part: &Value) -> String {
-    let call = &part["call"];
-    let mcp_name = (call["kind"] == "mcp").then(|| {
-        format!(
-            "{} · {}",
-            call["server"].as_str().unwrap_or("MCP"),
-            call["tool"].as_str().unwrap_or("tool")
-        )
-    });
-    let name = mcp_name
-        .as_deref()
-        .or_else(|| call["title"].as_str())
-        .or_else(|| call["name"].as_str())
-        .or_else(|| call["kind"].as_str())
-        .unwrap_or("Tool call");
-    let status = if part["isError"] == true {
-        "Failed"
-    } else if part["resolved"] == true {
-        "Completed"
-    } else {
-        "Running"
-    };
-    format!("{name} · {status}")
 }
 
 fn inline(runs: &[InlineRun]) -> AnyElement {

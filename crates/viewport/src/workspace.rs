@@ -296,6 +296,7 @@ impl WorkspaceView {
         self.attachments = draft.attachments;
         self.input
             .update(cx, |input, cx| input.set_value(draft.text, cx));
+        self.sync_previews(true, cx);
     }
 
     pub(super) fn restore_failed_draft(&mut self, draft: Draft, cx: &mut Context<Self>) {

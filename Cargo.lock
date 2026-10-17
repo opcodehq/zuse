@@ -14157,6 +14157,7 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-base",
+ "image",
  "serde_json",
  "unicode-segmentation",
  "uuid",
