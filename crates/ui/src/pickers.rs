@@ -5694,7 +5694,8 @@ impl Pickers {
                             );
                         }),
                     )
-                    .child(row),
+                    .child(row)
+                    .into_any_element(),
             );
         }
         // The compact panel's own inset already closes the card below the
