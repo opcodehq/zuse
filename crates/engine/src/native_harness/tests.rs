@@ -1124,3 +1124,287 @@ async fn replay_receipt_retires_the_host_ledger_without_changing_its_idle_route(
     assert_eq!(lock(&fixture.seen).last().unwrap().model, "chatgpt/fixture");
     core.shutdown().await;
 }
+
+#[tokio::test]
+async fn initial_delivery_replay_finds_its_journal_without_a_saved_cursor_or_attachment() {
+    use zuse_harness::native::RootStore;
+    let root = tempfile::tempdir().unwrap();
+    let fixture = ModelFixture::new(vec![]);
+    let harness = harness(root.path(), fixture.clone());
+    let identity = RunIdentity {
+        chat_id: "chat-a".into(),
+        message_id: "first".into(),
+    };
+    let original = request(root.path());
+    let (controls, _, _) = run_controls();
+    let mut stream = harness
+        .run_delivery(original.clone(), controls, identity.clone())
+        .await
+        .unwrap();
+    let first = turn(&mut stream).await;
+    let session = first
+        .iter()
+        .find_map(|e| match e {
+            AgentEvent::SessionStarted { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        })
+        .unwrap();
+    drop(stream);
+    retired(&fixture).await;
+    let before = {
+        let store = RootStore::acquire(&harness.profile, &session).unwrap();
+        let state = store.load().unwrap().unwrap();
+        assert!(state.consumed_notifications.contains_key("first"));
+        std::fs::read(store.directory().join("checkpoint.json")).unwrap()
+    };
+    let (controls, _, _) = run_controls();
+    let replay = harness
+        .run_delivery(
+            RunRequest {
+                prompt: "Must not execute again".into(),
+                model: Some("unavailable-retry-model".into()),
+                attachments: vec![root.path().join("removed.png").to_string_lossy().into()],
+                ..original.clone()
+            },
+            controls,
+            identity.clone(),
+        )
+        .await
+        .unwrap();
+    assert!(RootStore::acquire(&harness.profile, &session).is_err());
+    let replay = replay
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(replay.iter().any(
+        |e| matches!(e, AgentEvent::DeliveryAcknowledged { message_id } if message_id == "first")
+    ));
+    assert!(replay.iter().any(|e| matches!(e, AgentEvent::SessionStarted { session_id, model, .. } if session_id == &session && model == "chatgpt/fixture")));
+    assert!(matches!(
+        replay.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Interrupted,
+            ..
+        })
+    ));
+    assert_eq!(lock(&fixture.seen).len(), 1);
+    {
+        let store = RootStore::acquire(&harness.profile, &session).unwrap();
+        assert_eq!(
+            std::fs::read(store.directory().join("checkpoint.json")).unwrap(),
+            before
+        );
+    }
+    // The same message ID in another chat has an independent namespace.
+    let (controls, _, _) = run_controls();
+    let mut other = harness
+        .run_delivery(
+            original.clone(),
+            controls,
+            RunIdentity {
+                chat_id: "chat-b".into(),
+                ..identity
+            },
+        )
+        .await
+        .unwrap();
+    let events = turn(&mut other).await;
+    assert!(events.iter().any(
+        |e| matches!(e, AgentEvent::SessionStarted { session_id, .. } if session_id != &session)
+    ));
+    drop(other);
+    retired(&fixture).await;
+    // Continuing the original journal requires a new, explicit message.
+    let (controls, _, _) = run_controls();
+    let mut next = harness
+        .run_delivery(
+            RunRequest {
+                resume: Some(session),
+                prompt: "Continue deliberately".into(),
+                ..original
+            },
+            controls,
+            RunIdentity {
+                chat_id: "chat-a".into(),
+                message_id: "next".into(),
+            },
+        )
+        .await
+        .unwrap();
+    turn(&mut next).await;
+    assert_eq!(lock(&fixture.seen).len(), 3);
+    drop(next);
+    retired(&fixture).await;
+}
+
+#[tokio::test]
+async fn stopped_initial_delivery_stays_cancelled_and_pending_uploads_recover_from_the_journal() {
+    use zuse_harness::{Image, Mail, native::RootStore};
+    let root = tempfile::tempdir().unwrap();
+    let fixture = ModelFixture::new(vec![]);
+    let harness = harness(root.path(), fixture.clone());
+    let original = request(root.path());
+    for pending in [false, true] {
+        let id = if pending { "pending" } else { "stopped" };
+        let identity = RunIdentity {
+            chat_id: "chat".into(),
+            message_id: id.into(),
+        };
+        let (controls, _, _) = run_controls();
+        controls.turn.stop_turn();
+        let mut stream = harness
+            .run_delivery(original.clone(), controls, identity.clone())
+            .await
+            .unwrap();
+        let events = turn(&mut stream).await;
+        let session = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::SessionStarted { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        drop(stream);
+        retired(&fixture).await;
+        {
+            let store = RootStore::acquire(&harness.profile, &session).unwrap();
+            let mut state = store.load().unwrap().unwrap();
+            assert!(state.cancelled_notifications.contains(id));
+            if pending {
+                // Crash fixture: mail was admitted durably, but its first model
+                // request never started. Its uploaded image is owned inline.
+                state.cancelled_notifications.remove(id);
+                state.agent_mut(&session).unwrap().mailbox.push(Mail {
+                    id: id.into(),
+                    text: "Original pending prompt".into(),
+                    images: vec![Image {
+                        media_type: "image/png".into(),
+                        data: "stored-image-payload".into(),
+                    }],
+                });
+                store.save(&state).unwrap();
+            }
+        }
+        let (controls, _, _) = run_controls();
+        let mut replay = harness
+            .run_delivery(
+                RunRequest {
+                    prompt: "Changed retry".into(),
+                    model: Some("unavailable-retry-model".into()),
+                    attachments: vec![root.path().join("removed.png").to_string_lossy().into()],
+                    ..original.clone()
+                },
+                controls,
+                identity,
+            )
+            .await
+            .unwrap();
+        let events = turn(&mut replay).await;
+        if pending {
+            assert!(matches!(
+                events.last(),
+                Some(AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                })
+            ));
+            let seen = lock(&fixture.seen);
+            let input = seen.last().unwrap();
+            assert_eq!(input.model, "chatgpt/fixture");
+            let messages = serde_json::to_string(&input.messages).unwrap();
+            assert!(messages.contains("Original pending prompt"));
+            assert!(messages.contains("stored-image-payload"));
+            assert!(!messages.contains("Changed retry"));
+        } else {
+            assert!(matches!(
+                events.last(),
+                Some(AgentEvent::Done {
+                    status: DoneStatus::Interrupted,
+                    error: None,
+                    ..
+                })
+            ));
+            assert!(lock(&fixture.seen).is_empty());
+        }
+        drop(replay);
+        if pending {
+            retired(&fixture).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn crashed_initial_model_request_continues_its_saved_history_without_duplicate_input() {
+    use sha2::{Digest, Sha256};
+    use zuse_harness::native::RootStore;
+    let root = tempfile::tempdir().unwrap();
+    let fixture = ModelFixture::new(vec![]);
+    fixture.block_root.store(true, Ordering::Release);
+    let harness = harness(root.path(), fixture.clone());
+    let identity = RunIdentity {
+        chat_id: "chat".into(),
+        message_id: "first".into(),
+    };
+    let original = request(root.path());
+    let (controls, _, _) = run_controls();
+    let stream = harness
+        .run_delivery(original.clone(), controls, identity.clone())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), fixture.blocked.notified())
+        .await
+        .unwrap();
+    let session = lock(&fixture.seen)[0].root.clone();
+    let path = harness
+        .profile
+        .join("harness")
+        .join(format!("{:x}", Sha256::digest(session.as_bytes())))
+        .join("checkpoint.json");
+    // Preserve the exact on-disk state at process death during the model call.
+    let crashed: zuse_harness::Checkpoint =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(
+        crashed.agent(&session).unwrap().status,
+        zuse_harness::Status::Running
+    );
+    assert!(crashed.consumed_notifications.contains_key("first"));
+    drop(stream);
+    retired(&fixture).await;
+    {
+        let store = RootStore::acquire(&harness.profile, &session).unwrap();
+        store.save(&crashed).unwrap();
+    }
+    fixture.block_root.store(false, Ordering::Release);
+    let (controls, _, _) = run_controls();
+    let mut resumed = harness
+        .run_delivery(
+            RunRequest {
+                prompt: "Must not be added again".into(),
+                attachments: vec![root.path().join("removed.png").to_string_lossy().into()],
+                ..original
+            },
+            controls,
+            identity,
+        )
+        .await
+        .unwrap();
+    let events = turn(&mut resumed).await;
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    ));
+    {
+        let seen = lock(&fixture.seen);
+        assert_eq!(seen.len(), 2);
+        let messages = serde_json::to_string(&seen.last().unwrap().messages).unwrap();
+        assert_eq!(messages.matches("Implement this").count(), 1);
+        assert!(!messages.contains("Must not be added again"));
+    }
+    drop(resumed);
+    retired(&fixture).await;
+}

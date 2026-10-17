@@ -84,6 +84,7 @@ impl Host for Fixture {
             || self.mode.load(Ordering::Relaxed) == 9 && !state.consumed_notifications.is_empty()
             || self.mode.load(Ordering::Relaxed) == 10 && state.model == "unsaved-model"
             || self.mode.load(Ordering::Relaxed) == 11 && !state.cancelled_notifications.is_empty()
+            || self.mode.load(Ordering::Relaxed) == 12 && state.notifications.contains("first")
         {
             return Err(Error::Storage);
         }
@@ -692,4 +693,160 @@ async fn cancelled_mail_is_durable_and_failed_cancellation_restores_its_original
             .is_empty()
     );
     recovered.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn identified_initial_send_keeps_pending_content_and_never_repeats_consumed_work() {
+    let f = Fixture::new(vec![output("finished", vec![])]);
+    let e = engine(f.clone()).await;
+    e.enqueue(
+        "initial".into(),
+        "root",
+        "Original pending prompt".into(),
+        vec![],
+        false,
+    )
+    .await
+    .unwrap();
+    let recovered = engine(f.clone()).await;
+    assert_eq!(
+        recovered
+            .send_delivery_with_cancel(
+                "initial".into(),
+                "Changed retry".into(),
+                vec![],
+                &tokio_util::sync::CancellationToken::new()
+            )
+            .await
+            .unwrap(),
+        SendOutcome::Started
+    );
+    let models = lock(&f.models).len();
+    let state = recovered.snapshot().await;
+    assert_eq!(
+        state
+            .agent("root")
+            .unwrap()
+            .history
+            .iter()
+            .filter(|m| m.content == "Original pending prompt")
+            .count(),
+        1
+    );
+    assert!(
+        !state
+            .agent("root")
+            .unwrap()
+            .history
+            .iter()
+            .any(|m| m.content == "Changed retry")
+    );
+    assert_eq!(
+        state
+            .consumed_notifications
+            .get("initial")
+            .map(String::as_str),
+        Some("root")
+    );
+    for current in [recovered.clone(), engine(f.clone()).await] {
+        assert_eq!(
+            current
+                .send_delivery_with_cancel(
+                    "initial".into(),
+                    "Must not execute".into(),
+                    vec![],
+                    &tokio_util::sync::CancellationToken::new()
+                )
+                .await
+                .unwrap(),
+            SendOutcome::AlreadyConsumed
+        );
+        assert_eq!(lock(&f.models).len(), models);
+        assert!(
+            current
+                .snapshot()
+                .await
+                .agent("root")
+                .unwrap()
+                .mailbox
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn initial_delivery_waits_for_durable_admission_and_cancellation_prevents_generation() {
+    let f = Fixture::new(vec![output("finished", vec![])]);
+    let e = engine(f.clone()).await;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+    assert!(matches!(
+        e.send_delivery_with_cancel(
+            "cancelled-before-admission".into(),
+            "Not accepted".into(),
+            vec![],
+            &cancel
+        )
+        .await,
+        Err(Error::Interrupted)
+    ));
+    assert!(lock(&f.models).is_empty());
+    assert!(
+        !e.snapshot()
+            .await
+            .notifications
+            .contains("cancelled-before-admission")
+    );
+    f.mode.store(12, Ordering::Relaxed);
+    assert!(matches!(
+        e.send_delivery_with_cancel(
+            "first".into(),
+            "Original accepted text".into(),
+            vec![],
+            &tokio_util::sync::CancellationToken::new()
+        )
+        .await,
+        Err(Error::Storage)
+    ));
+    assert!(lock(&f.models).is_empty());
+    assert!(
+        !lock(&f.store)
+            .as_ref()
+            .unwrap()
+            .notifications
+            .contains("first")
+    );
+    f.mode.store(0, Ordering::Relaxed);
+    e.send_delivery_with_cancel(
+        "first".into(),
+        "Changed retry".into(),
+        vec![],
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let state = e.snapshot().await;
+    assert_eq!(
+        state
+            .agent("root")
+            .unwrap()
+            .history
+            .iter()
+            .filter(|m| m.content == "Original accepted text")
+            .count(),
+        1
+    );
+    assert_eq!(lock(&f.models).len(), 1);
+    e.cancel_deliveries(&["withdrawn".into()]).await.unwrap();
+    assert!(matches!(
+        e.send_delivery_with_cancel(
+            "withdrawn".into(),
+            "Stopped text".into(),
+            vec![],
+            &tokio_util::sync::CancellationToken::new()
+        )
+        .await,
+        Err(Error::Interrupted)
+    ));
+    assert_eq!(lock(&f.models).len(), 1);
 }

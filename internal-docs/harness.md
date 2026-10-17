@@ -295,4 +295,13 @@ The application adapter checks the durable consumed-delivery receipt before load
 
 Native warm deliveries carry their complete run selection. The host adopts that selection when consumption is confirmed, rather than when the mailbox accepts it. This keeps duplicate or still-pending messages from speculatively changing the live route. Working status is published before the native mailbox receives the delivery, so an immediate receipt can safely leave an idle session settled.
 
-This covers consumed steering in live and reopened runtimes. Initial prompt admission IDs, provider-switch recovery gates and full crash/replay acceptance remain separate work.
+This covers consumed steering in live and reopened runtimes. Initial delivery admission is described below. Provider-switch recovery gates and full crash/replay acceptance remain separate work.
+
+
+## Initial delivery admission
+
+The session host supplies a `RunIdentity` containing the durable chat and message IDs. The owned native adapter derives its initial UUIDv8 session namespace from the device, chat and message identity, so a retry can locate its journal even if the process died before publishing a resume cursor. Other providers retain their existing run behavior through the default delivery method.
+
+The adapter acquires the OS journal lease before inspecting receipts and keeps that same lease through native tool construction and runtime cleanup. Completed or deliberately stopped deliveries settle without resolving removed attachments, applying retry settings or starting a new turn. A saved running model request can continue from its existing history without appending its user text again. Pending mail keeps its saved text, inline images, model and reasoning; its source upload need not remain on disk. Cancellation before initial admission is recorded durably when the runtime handles Stop, and stream cleanup cancels late admission before closing the engine.
+
+The kernel's identified-send API persists new mail before starting runners and distinguishes already-consumed messages. Failed admission saves start no model work. This does not retroactively establish receipts for historical initial messages, and complete recovery at final-response/child-wait boundaries, pre-runtime cancellation, context-receipt timing and provider-switch recovery gates still require work. The native recovery scenarios use actual journal snapshots and controlled model fixtures; they do not establish live model-account or OS process-kill acceptance.

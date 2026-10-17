@@ -40,6 +40,13 @@ pub enum HarnessError {
     Io(#[from] std::io::Error),
 }
 
+/// Host identity retained across retries of the same durable user message.
+#[derive(Clone, Debug)]
+pub struct RunIdentity {
+    pub chat_id: String,
+    pub message_id: String,
+}
+
 /// A steer prompt pushed into a live run; delivered at the harness's steering boundary.
 pub struct SteerMessage {
     pub prompt: String,
@@ -378,6 +385,17 @@ pub trait Harness: Send + Sync {
         _controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         Err(HarnessError::Protocol("idle runtime unsupported".into()))
+    }
+
+    /// Deliver a durable host message. Providers with owned journals can use
+    /// its identity for admission deduplication; other drivers retain run behavior.
+    async fn run_delivery(
+        &self,
+        request: RunRequest,
+        controls: RunControls,
+        _identity: RunIdentity,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        self.run(request, controls).await
     }
 
     /// Run one (persistent) session; the stream ends with `AgentEvent::Done`.

@@ -54,6 +54,11 @@ struct Inner {
     active: AtomicBool,
     closed: AtomicBool,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendOutcome {
+    Started,
+    AlreadyConsumed,
+}
 #[derive(Clone)]
 pub struct Engine(Arc<Inner>);
 #[derive(Clone)]
@@ -279,6 +284,29 @@ impl Engine {
         images: Vec<Image>,
         admission: &CancellationToken,
     ) -> Result<(), Error> {
+        self.send_admitted(None, text, images, admission)
+            .await
+            .map(|_| ())
+    }
+    /// Admit a host delivery exactly once. A pending delivery keeps its saved
+    /// content; a consumed delivery returns without starting any runners.
+    pub async fn send_delivery_with_cancel(
+        &self,
+        delivery_id: String,
+        text: String,
+        images: Vec<Image>,
+        admission: &CancellationToken,
+    ) -> Result<SendOutcome, Error> {
+        self.send_admitted(Some(delivery_id), text, images, admission)
+            .await
+    }
+    async fn send_admitted(
+        &self,
+        delivery_id: Option<String>,
+        text: String,
+        images: Vec<Image>,
+        admission: &CancellationToken,
+    ) -> Result<SendOutcome, Error> {
         check(admission)?;
         if self.0.closed.load(Ordering::Acquire) {
             return Err(Error::paused("Harness is closed"));
@@ -295,15 +323,28 @@ impl Engine {
         let (root, children) = {
             let mut state = self.0.state.lock().await;
             check(admission)?;
+            if let Some(delivery) = &delivery_id {
+                if state.cancelled_notifications.contains(delivery) {
+                    return Err(Error::Interrupted);
+                }
+                if state.consumed_notifications.contains_key(delivery) {
+                    self.persist(&state).await?;
+                    return Ok(SendOutcome::AlreadyConsumed);
+                }
+            }
             self.0.stopping.store(false, Ordering::Release);
             state.requests = 0;
             let root = state.root_id.clone();
-            if !text.trim().is_empty() || !images.is_empty() {
-                state.agent_mut(&root)?.mailbox.push(Mail {
-                    id: id(),
-                    text,
-                    images,
-                });
+            if delivery_id.is_some() || !text.trim().is_empty() || !images.is_empty() {
+                let mail_id = delivery_id.clone().unwrap_or_else(id);
+                let insert = delivery_id.is_none() || state.notifications.insert(mail_id.clone());
+                if insert {
+                    state.agent_mut(&root)?.mailbox.push(Mail {
+                        id: mail_id,
+                        text,
+                        images,
+                    });
+                }
             }
             let children = state
                 .agents
@@ -318,7 +359,8 @@ impl Engine {
             tokio::select! {biased;_=admission.cancelled()=>return Err(Error::Interrupted),result=self.launch(child)=>{result?;}}
         }
         let done = tokio::select! {biased;_=admission.cancelled()=>return Err(Error::Interrupted),result=self.launch(root)=>result?};
-        completion(done, &CancellationToken::new()).await
+        completion(done, &CancellationToken::new()).await?;
+        Ok(SendOutcome::Started)
     }
     /// Durable delivery is idempotent across process outbox and steering replays.
     pub async fn enqueue(

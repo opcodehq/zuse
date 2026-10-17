@@ -155,6 +155,20 @@ impl Engine {
     {
         let root_id = root_id.into();
         let store = RootStore::acquire(profile, &root_id)?;
+        Self::open_native_owned(store, options, create).await
+    }
+    /// Continue from a journal inspected under its OS ownership lease. Ownership
+    /// stays held through tool construction and runtime cleanup.
+    pub async fn open_native_owned<F, Fut>(
+        store: RootStore,
+        options: Options,
+        create: F,
+    ) -> Result<Self, Error>
+    where
+        F: FnOnce(PathBuf) -> Fut,
+        Fut: std::future::Future<Output = Result<Arc<dyn Host>, Error>>,
+    {
+        let root_id = store.root_id.clone();
         let host = create(store.directory().to_path_buf()).await?;
         Self::open_with_store(root_id, options, host, store).await
     }

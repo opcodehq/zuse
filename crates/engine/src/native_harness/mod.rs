@@ -9,7 +9,7 @@ use std::{path::PathBuf, sync::Arc};
 use tokio_util::sync::CancellationToken;
 use zuse_harness::{Error, ModelInput, ModelOutput, Options};
 use zuse_protocol::{AgentEvent, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode};
-use zuse_providers::{Harness, HarnessError, ModelCatalog, RunControls};
+use zuse_providers::{Harness, HarnessError, ModelCatalog, RunControls, RunIdentity};
 
 #[async_trait]
 trait Models: Send + Sync {
@@ -162,7 +162,15 @@ impl Harness for NativeHarness {
         request: RunRequest,
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
-        runtime::start(self.clone(), request, controls).await
+        runtime::start(self.clone(), request, controls, None).await
+    }
+    async fn run_delivery(
+        &self,
+        request: RunRequest,
+        controls: RunControls,
+        identity: RunIdentity,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        runtime::start(self.clone(), request, controls, Some(identity)).await
     }
 }
 

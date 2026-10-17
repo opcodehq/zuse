@@ -11,7 +11,7 @@ pub mod prompt;
 pub mod state;
 pub mod store;
 use async_trait::async_trait;
-pub use engine::{AgentRoute, Engine, Options, WeakEngine};
+pub use engine::{AgentRoute, Engine, Options, SendOutcome, WeakEngine};
 use serde::{Deserialize, Serialize};
 pub use state::*;
 use std::{collections::BTreeMap, sync::Arc};

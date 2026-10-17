@@ -5,21 +5,27 @@ use super::{
     host::{self, Application, Notices},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use futures::{FutureExt, stream::BoxStream};
+use futures::{FutureExt, StreamExt, stream::BoxStream};
+use sha2::{Digest, Sha256};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
 use tokio::{io::AsyncReadExt, sync::mpsc, task::JoinHandle};
 use zuse_harness::{
-    Engine, Error, Event, Host, Image,
+    Engine, Error, Event, Host, Image, SendOutcome,
+    native::RootStore,
     native_tools::{NativeOptions, NativeTools},
     processes::{ProcessOptions, ProcessStatus},
 };
 use zuse_protocol::{AgentEvent, DoneStatus, HarnessId, RunRequest};
-use zuse_providers::{HarnessError, RunControls};
+use zuse_providers::{HarnessError, RunControls, RunIdentity};
 
-fn session_id(request: &RunRequest) -> Result<String, HarnessError> {
+fn session_id(
+    request: &RunRequest,
+    device: &str,
+    identity: Option<&RunIdentity>,
+) -> Result<String, HarnessError> {
     match &request.resume {
         Some(id)
             if id
@@ -31,8 +37,52 @@ fn session_id(request: &RunRequest) -> Result<String, HarnessError> {
         Some(_) => Err(failure(
             "This resume cursor belongs to another provider. Start a Zuse conversation with its transcript context.",
         )),
-        None => Ok(format!("zuse:{}", uuid::Uuid::new_v4())),
+        None => {
+            let id = match identity {
+                None => uuid::Uuid::new_v4(),
+                Some(identity) => {
+                    let key = serde_json::to_vec(&(
+                        "zuse.initial-session.v1",
+                        device,
+                        &identity.chat_id,
+                        &identity.message_id,
+                    ))
+                    .map_err(failure)?;
+                    let hash = Sha256::digest(key);
+                    let mut bytes = [0u8; 16];
+                    bytes.copy_from_slice(&hash[..16]);
+                    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+                    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+                    uuid::Uuid::from_bytes(bytes)
+                }
+            };
+            Ok(format!("zuse:{id}"))
+        }
     }
+}
+async fn checkout_manifest(directory: &Path, cwd: &Path, recovered: bool) -> Result<(), Error> {
+    let manifest = directory.join("checkout.json");
+    match tokio::fs::read(&manifest).await {
+        Ok(bytes) => {
+            let saved: PathBuf =
+                serde_json::from_slice(&bytes).map_err(|_| Error::InvalidCheckpoint)?;
+            if saved != cwd {
+                return Err(Error::paused(
+                    "The saved Zuse conversation belongs to another checkout.",
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !recovered => {
+            tokio::fs::write(
+                &manifest,
+                serde_json::to_vec(cwd).map_err(|_| Error::Storage)?,
+            )
+            .await
+            .map_err(|_| Error::Storage)?;
+        }
+        Err(_) => return Err(Error::InvalidCheckpoint),
+    }
+    Ok(())
 }
 async fn images(paths: &[String]) -> Result<Vec<Image>, HarnessError> {
     if paths.len() > 20 {
@@ -81,15 +131,31 @@ fn send(
     images: Vec<Image>,
     tx: mpsc::Sender<Event>,
     admission: tokio_util::sync::CancellationToken,
+    delivery_id: Option<String>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let root = engine.snapshot().await.root_id;
-        let result =
-            std::panic::AssertUnwindSafe(engine.send_with_cancel(prompt, images, &admission))
-                .catch_unwind()
-                .await;
+        let result = std::panic::AssertUnwindSafe(async {
+            match delivery_id {
+                Some(id) => {
+                    engine
+                        .send_delivery_with_cancel(id, prompt, images, &admission)
+                        .await
+                }
+                None => engine
+                    .send_with_cancel(prompt, images, &admission)
+                    .await
+                    .map(|()| SendOutcome::Started),
+            }
+        })
+        .catch_unwind()
+        .await;
         let error = match result {
-            Ok(Ok(())) => return,
+            Ok(Ok(SendOutcome::Started)) => return,
+            Ok(Ok(SendOutcome::AlreadyConsumed)) => {
+                "This message was already accepted. Review the conversation before continuing."
+                    .into()
+            }
             Ok(Err(error)) => error.to_string(),
             Err(_) => "Native session failed. Inspect the durable journal before retrying.".into(),
         };
@@ -105,8 +171,9 @@ pub(super) async fn start(
     harness: NativeHarness,
     mut request: RunRequest,
     mut controls: RunControls,
+    identity: Option<RunIdentity>,
 ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
-    let session = session_id(&request)?;
+    let session = session_id(&request, &harness.device_id, identity.as_ref())?;
     let root = session.clone();
     let cwd = tokio::fs::canonicalize(&request.cwd).await?;
     if !tokio::fs::metadata(&cwd).await?.is_dir() {
@@ -114,9 +181,90 @@ pub(super) async fn start(
     }
     request.cwd = cwd.to_string_lossy().into_owned();
     let stop = controls.interrupt.child_token();
+    let store = RootStore::acquire(&harness.profile, &root).map_err(failure)?;
+    let saved = store.load().map_err(failure)?;
+    if request.resume.is_some() && saved.is_none() {
+        return Err(failure(
+            "The saved Zuse conversation journal is missing. Restore it before resuming.",
+        ));
+    }
+    checkout_manifest(
+        store.directory(),
+        &cwd,
+        saved.is_some() || request.resume.is_some(),
+    )
+    .await
+    .map_err(failure)?;
+    // An interrupted model request can continue from its durable history.
+    // A completed response or a deliberate Stop must never become a new turn.
+    let resuming_request = identity.as_ref().is_some_and(|identity| {
+        saved.as_ref().is_some_and(|state| {
+            state
+                .consumed_notifications
+                .contains_key(&identity.message_id)
+                && state.agent(&root).is_ok_and(|agent| {
+                    agent.status == zuse_harness::Status::Running
+                        && agent.history.last().is_some_and(|message| {
+                            message.role != zuse_harness::Role::Assistant
+                                || message.has_tool_calls()
+                        })
+                })
+        })
+    });
+    if let Some(identity) = &identity
+        && let Some(saved) = &saved
+        && ((saved
+            .consumed_notifications
+            .contains_key(&identity.message_id)
+            && !resuming_request)
+            || saved.cancelled_notifications.contains(&identity.message_id))
+    {
+        let consumed = saved
+            .consumed_notifications
+            .contains_key(&identity.message_id);
+        let lease = controls.execution_lease.take();
+        let mut events = vec![AgentEvent::SessionStarted {
+            harness: HarnessId::Zuse,
+            model: saved.model.clone(),
+            tools: vec![],
+            cwd: request.cwd.clone(),
+            session_id: session.clone(),
+            assistant_message_id: uuid::Uuid::new_v4().to_string(),
+        }];
+        if consumed {
+            events.push(AgentEvent::DeliveryAcknowledged {
+                message_id: identity.message_id.clone(),
+            });
+        }
+        events.push(AgentEvent::Done {
+            status: DoneStatus::Interrupted, result: None,
+            error: consumed.then(|| "This message was already accepted before restart. Review the conversation and send a new message to continue.".into()),
+            session_id: Some(session),
+        });
+        return Ok(Box::pin(futures::stream::iter(events).map(move |event| {
+            let _held = (&store, &lease);
+            Ok(event)
+        })));
+    }
+    let pending = identity.as_ref().is_some_and(|identity| {
+        saved
+            .as_ref()
+            .is_some_and(|state| state.notifications.contains(&identity.message_id))
+    });
+    if pending && let Some(saved) = &saved {
+        request.model = Some(saved.model.clone());
+        request.reasoning = saved.reasoning.as_ref().and_then(|value| {
+            serde_json::from_value(serde_json::Value::String(value.clone())).ok()
+        });
+    }
+    drop(saved);
     let options = harness.options(&request, &stop).await?;
     let selected_model = options.model.clone();
-    let initial_images = images(&request.attachments).await?;
+    let initial_images = if pending {
+        vec![]
+    } else {
+        images(&request.attachments).await?
+    };
     let tools = host::tools(&request, &harness.device_id)?;
     let callbacks = host::callbacks(&mut controls);
     let mode = Arc::new(Mutex::new(host::mode(&request)));
@@ -139,78 +287,45 @@ pub(super) async fn start(
     let notice_host = notices.clone();
     let profile = harness.profile.clone();
     let command_host = harness.command_host.clone();
-    let resume = request.resume.is_some();
     let root_id = root.clone();
     let mode_source = mode.clone();
-    let engine = Engine::open_native_with(
-        &harness.profile,
-        root.clone(),
-        options,
-        move |directory| async move {
-            if resume && !directory.join("checkpoint.json").is_file() {
-                return Err(Error::paused(
-                    "The saved Zuse conversation journal is missing. Restore it before resuming.",
-                ));
+    let engine = Engine::open_native_owned(store, options, move |directory| async move {
+        let mut processes = ProcessOptions::new(root_id, directory.join("artifacts"), notice_host)?;
+        processes.command_host = command_host;
+        let mut env_command = tokio::process::Command::new("node");
+        let env_command = tokio::task::spawn_blocking(move || {
+            zuse_providers::compose_login_shell_path(&mut env_command);
+            env_command
+        })
+        .await
+        .map_err(|_| Error::Storage)?;
+        let mut environment = std::env::vars().collect::<std::collections::BTreeMap<_, _>>();
+        for (key, value) in env_command.as_std().get_envs() {
+            if let Some(value) = value {
+                environment.insert(
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                );
             }
-            let manifest = directory.join("checkout.json");
-            match tokio::fs::read(&manifest).await {
-                Ok(bytes) => {
-                    let saved: PathBuf =
-                        serde_json::from_slice(&bytes).map_err(|_| Error::InvalidCheckpoint)?;
-                    if saved != cwd {
-                        return Err(Error::paused(
-                            "The saved Zuse conversation belongs to another checkout.",
-                        ));
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound && !resume => {
-                    tokio::fs::write(
-                        &manifest,
-                        serde_json::to_vec(&cwd).map_err(|_| Error::Storage)?,
-                    )
-                    .await
-                    .map_err(|_| Error::Storage)?;
-                }
-                Err(_) => return Err(Error::InvalidCheckpoint),
-            }
-            let mut processes =
-                ProcessOptions::new(root_id, directory.join("artifacts"), notice_host)?;
-            processes.command_host = command_host;
-            let mut env_command = tokio::process::Command::new("node");
-            let env_command = tokio::task::spawn_blocking(move || {
-                zuse_providers::compose_login_shell_path(&mut env_command);
-                env_command
+        }
+        processes.env = Some(environment);
+        let native = Arc::new(
+            NativeTools::open(NativeOptions {
+                cwd: host_app.cwd.clone(),
+                lock_directory: profile.join("harness/file-locks"),
+                processes,
+                runtime_mode: Arc::new(move || *host::lock(&mode_source)),
+                callbacks: Some(callbacks),
+                ripgrep: std::env::var_os("ZUSE_RG_EXECUTABLE")
+                    .unwrap_or_else(|| "rg".into())
+                    .into(),
             })
-            .await
-            .map_err(|_| Error::Storage)?;
-            let mut environment = std::env::vars().collect::<std::collections::BTreeMap<_, _>>();
-            for (key, value) in env_command.as_std().get_envs() {
-                if let Some(value) = value {
-                    environment.insert(
-                        key.to_string_lossy().into_owned(),
-                        value.to_string_lossy().into_owned(),
-                    );
-                }
-            }
-            processes.env = Some(environment);
-            let native = Arc::new(
-                NativeTools::open(NativeOptions {
-                    cwd: host_app.cwd.clone(),
-                    lock_directory: profile.join("harness/file-locks"),
-                    processes,
-                    runtime_mode: Arc::new(move || *host::lock(&mode_source)),
-                    callbacks: Some(callbacks),
-                    ripgrep: std::env::var_os("ZUSE_RG_EXECUTABLE")
-                        .unwrap_or_else(|| "rg".into())
-                        .into(),
-                })
-                .await?,
-            );
-            let composed = native.clone().attach(host_app as Arc<dyn Host>)?;
-            let _ = native_slot.set(native);
-            Ok(composed)
-        },
-    )
+            .await?,
+        );
+        let composed = native.clone().attach(host_app as Arc<dyn Host>)?;
+        let _ = native_slot.set(native);
+        Ok(composed)
+    })
     .await
     .map_err(failure)?;
     let _ = notices.0.set(engine.downgrade());
@@ -237,17 +352,38 @@ pub(super) async fn start(
         let mut admitted = false;
         let mut stopped = false;
         let mut admission = tokio_util::sync::CancellationToken::new();
+        let initial_delivery = (!resuming_request)
+            .then(|| {
+                identity
+                    .as_ref()
+                    .map(|identity| identity.message_id.clone())
+            })
+            .flatten();
+        if let Some(id) = &initial_delivery {
+            controls.turn.register_steer(id);
+        }
         if controls.turn.stop_requested().now_or_never().is_some() {
             stopped = true;
             admission.cancel();
+            if let Some(id) = &initial_delivery {
+                if let Err(error) = engine.cancel_deliveries(std::slice::from_ref(id)).await {
+                    let _ = emit(&tx, Err(failure(error)), &stop).await;
+                    stop.cancel();
+                }
+            }
         }
         if tx.send(Ok(started)).await.is_ok() {
             task = Some(send(
                 engine.clone(),
-                request.prompt.clone(),
+                if resuming_request {
+                    String::new()
+                } else {
+                    request.prompt.clone()
+                },
                 initial_images,
                 event_tx.clone(),
                 admission.clone(),
+                initial_delivery.clone(),
             ));
         } else {
             stop.cancel();
@@ -274,7 +410,7 @@ pub(super) async fn start(
                     admission.cancel();
                     stopped = true;
                     if engine.stop_turn().await.is_err() { break; }
-                    let pending = mapper.steers.iter().filter(|id| controls.turn.steer_cancelled(id)).cloned().collect::<Vec<_>>();
+                    let pending = mapper.steers.iter().chain(initial_delivery.iter()).filter(|id| controls.turn.steer_cancelled(id)).cloned().collect::<Vec<_>>();
                     match engine.cancel_deliveries(&pending).await {
                         Ok(cancelled) => for id in cancelled { mapper.steers.remove(&id); controls.turn.forget_steer(&id); },
                         Err(error) => { let _ = emit(&tx, Err(failure(error)), &stop).await; break; }
@@ -322,7 +458,7 @@ pub(super) async fn start(
                         let attachments = images(&steer.attachments).await?;
                         mapper.steers.insert(id.clone());
                         engine.enqueue(id, &root, steer.prompt, attachments, working).await.map_err(failure)?;
-                        if !working { admission = tokio_util::sync::CancellationToken::new(); admitted = false; stopped = false; working = true; task = Some(send(engine.clone(), String::new(), vec![], event_tx.clone(), admission.clone())); }
+                        if !working { admission = tokio_util::sync::CancellationToken::new(); admitted = false; stopped = false; working = true; task = Some(send(engine.clone(), String::new(), vec![], event_tx.clone(), admission.clone(), None)); }
                         Ok::<_, HarnessError>(())
                     }.await;
                     if let Err(error) = result { let _ = emit(&tx, Err(error), &stop).await; break; }
@@ -331,12 +467,14 @@ pub(super) async fn start(
             }
         }
         stop.cancel();
+        admission.cancel();
         // Freeze runners before withdrawing only the deliveries explicitly
         // cancelled by the host. A dropped stream must retain retryable mail.
         let _ = engine.interrupt(None).await;
         let cancelled = mapper
             .steers
             .iter()
+            .chain(initial_delivery.iter())
             .filter(|id| controls.turn.steer_cancelled(id))
             .cloned()
             .collect::<Vec<_>>();

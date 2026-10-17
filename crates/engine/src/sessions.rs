@@ -2513,7 +2513,16 @@ async fn drive_run(
                 if resume_state.idle {
                     harness.start_idle(wire_request, controls).await
                 } else {
-                    harness.run(wire_request, controls).await
+                    harness
+                        .run_delivery(
+                            wire_request,
+                            controls,
+                            zuse_providers::RunIdentity {
+                                chat_id: chat_id.clone(),
+                                message_id: resume_state.user_message_id.clone(),
+                            },
+                        )
+                        .await
                 }
             } else {
                 Ok(futures::stream::once(async {
