@@ -83,6 +83,7 @@ impl Host for Fixture {
         if self.mode.load(Ordering::Relaxed) == 7 && !state.reviews.is_empty()
             || self.mode.load(Ordering::Relaxed) == 9 && !state.consumed_notifications.is_empty()
             || self.mode.load(Ordering::Relaxed) == 10 && state.model == "unsaved-model"
+            || self.mode.load(Ordering::Relaxed) == 11 && !state.cancelled_notifications.is_empty()
         {
             return Err(Error::Storage);
         }
@@ -612,5 +613,71 @@ async fn failed_mail_commit_never_acknowledges_steering_and_recovery_delivers_it
         Err(Error::Storage)
     ));
     assert_eq!(recovered.snapshot().await.model, "model");
+    recovered.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_mail_is_durable_and_failed_cancellation_restores_its_original_order() {
+    let f = Fixture::new(vec![output("continued", vec![])]);
+    let e = engine(f.clone()).await;
+    for (id, text) in [("a", "first"), ("b", "second"), ("c", "third")] {
+        e.enqueue(id.into(), "root", text.into(), vec![], false)
+            .await
+            .unwrap();
+    }
+    f.mode.store(11, Ordering::Relaxed);
+    assert!(matches!(
+        e.cancel_deliveries(&["a".into(), "c".into()]).await,
+        Err(Error::Storage)
+    ));
+    assert_eq!(
+        e.snapshot()
+            .await
+            .agent("root")
+            .unwrap()
+            .mailbox
+            .iter()
+            .map(|mail| mail.id.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b", "c"]
+    );
+    f.mode.store(0, Ordering::Relaxed);
+    e.cancel_deliveries(&["a".into(), "c".into()])
+        .await
+        .unwrap();
+    e.close().await.unwrap();
+    let recovered = engine(f.clone()).await;
+    assert!(matches!(
+        recovered
+            .enqueue("a".into(), "root", "must not return".into(), vec![], false)
+            .await,
+        Err(Error::Interrupted)
+    ));
+    recovered.send(String::new(), vec![]).await.unwrap();
+    let state = recovered.snapshot().await;
+    assert!(state.cancelled_notifications.contains("a"));
+    assert!(
+        state
+            .agent("root")
+            .unwrap()
+            .history
+            .iter()
+            .any(|message| message.content == "second")
+    );
+    assert!(
+        !state
+            .agent("root")
+            .unwrap()
+            .history
+            .iter()
+            .any(|message| message.content == "first" || message.content == "third")
+    );
+    assert!(
+        recovered
+            .cancel_deliveries(&["b".into()])
+            .await
+            .unwrap()
+            .is_empty()
+    );
     recovered.close().await.unwrap();
 }

@@ -1,12 +1,14 @@
 # Rust harness
 
-`crates/harness` ports the Zuse agent kernel into Rust. It is currently a compiled and fixture-tested runtime component. It is not registered in the application's provider picker yet. Native file/process tools are implemented and tested through the kernel; model-connection consumption, provider event adaptation, and recovery controls still need application integration before this is an accepted Zuse session provider.
+`crates/harness` implements the durable Zuse agent kernel in Rust. The application registers it as the Zuse provider with account-backed model transport, native file/process tools, normalized chat events, approvals, uploads and persistent sessions. Component and application fixtures cover these paths; live authorization, hosted plugins, recovery controls and complete UI acceptance remain pending.
 
 ## Runtime authority
 
 `Engine` owns a durable graph of one root and nested children, bounded to three running children and depth two. Rust schedules concurrent child requests, records mailboxes and idempotent delivery identifiers, enforces inherited read-only and plan modes, and delivers child outcomes before root synthesis. The model request budget is shared across the graph and includes compaction and broker retries. User continuation explicitly grants another turn's budget.
 
 `Host` supplies model transport, native tools, checkpoint storage, instructions and application events. Native adapters use `Engine::open_native_with`, which acquires a per-root OS lease before reading its private journal and retains it until host cleanup succeeds. Root IDs map to hashed profile directories, and journal identities must match their owner. `Engine::open` remains available for fixtures and custom hosts that supply their own ownership authority. Tool definitions and permission decisions belong to the trusted host; model input cannot grant permission or call recovery APIs. `FileStore` writes private checkpoints using temporary files, fsync and atomic replacement. Invalid graphs and damaged journals are preserved for inspection.
+
+Steering deliveries share a host admission epoch with Stop. New deliveries wait for Stop to settle; drivers discard cancelled frames even when transport delayed them past that boundary. The kernel persists cancellation tombstones for unconsumed mail, including explicit runtime termination, so reopening the journal cannot resurrect it. Consumed history remains intact. Failed cancellation persistence restores mailbox order. An unexpected stream disconnect preserves retryable mail rather than treating it as a user cancellation.
 
 A tool's signed input identity and `started` receipt are persisted before execution. Its completed output is persisted before the tool-result message enters model history. Recovery reuses committed outputs; a started receipt with no outcome pauses execution. A trusted user control surface can call `resolve_unknown` with an inspected outcome or explicit retry approval. Approval is saved before continuation and rolled back in memory if storage fails. Approval itself never launches work. This API still needs the application's authenticated recovery controls.
 
@@ -215,3 +217,12 @@ native-filter engine regression run passes 12 tests (including the five adapter
 fixtures and host-origin stamping). Server/provider test targets compile,
 formatting passes, and the GPUI Web/WASM bundle builds. Updated desktop CI and
 live native/browser conversations remain separate acceptance gates.
+
+The Stop/steering cancellation milestone adds durable withdrawal and delayed-frame
+coverage: 36 harness tests, eight native application fixtures, 14 session-engine
+tests, one shared receiver test and 15 provider stop fixtures pass locally.
+The application cases exercise both in-place Stop and complete runtime termination
+through the document/session engine, then continue the same saved conversation.
+Server compilation and formatting also pass. CI run `39031148407` established
+macOS/Linux native compilation for the preceding UI mapping fix; it does not cover
+these subsequent cancellation changes or establish live application acceptance.

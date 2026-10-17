@@ -204,6 +204,8 @@ pub struct Checkpoint {
     pub notifications: BTreeSet<String>,
     #[serde(default)]
     pub consumed_notifications: BTreeMap<String, String>,
+    #[serde(default)]
+    pub cancelled_notifications: BTreeSet<String>,
     pub tools: BTreeMap<String, Receipt>,
     #[serde(default)]
     pub reviews: Vec<RecoveryReview>,
@@ -215,6 +217,16 @@ impl Checkpoint {
         }
         if self.consumed_notifications.iter().any(|(id, agent)| {
             !self.notifications.contains(id) || !self.agents.iter().any(|a| &a.id == agent)
+        }) {
+            return Err(Error::InvalidCheckpoint);
+        }
+        if self.cancelled_notifications.iter().any(|id| {
+            !self.notifications.contains(id)
+                || self.consumed_notifications.contains_key(id)
+                || self
+                    .agents
+                    .iter()
+                    .any(|agent| agent.mailbox.iter().any(|mail| &mail.id == id))
         }) {
             return Err(Error::InvalidCheckpoint);
         }

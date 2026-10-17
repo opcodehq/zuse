@@ -182,6 +182,7 @@ struct RunHandle {
 /// One accepted-but-unconfirmed steer: enough to re-dispatch it verbatim.
 #[derive(Debug, Clone)]
 struct RoutedSteer {
+    epoch: u64,
     prompt: String,
     message_id: String,
     /// The delivered text carried the fork's copied history: its delivery
@@ -195,6 +196,48 @@ struct RoutedSteer {
     /// re-dispatches exactly this, not whatever the chat's latest request
     /// became. `None` when the chat had no recorded request.
     request: Option<Box<RunRequest>>,
+}
+
+/// A turn stop settles before another message reaches any persistent driver.
+/// Acceptance shares the ledger lock with Stop and update admission, including
+/// when a sender was already waiting for mailbox capacity at the boundary.
+async fn publish_steer(
+    registry: &HarnessRegistry,
+    harness: HarnessId,
+    tx: &mpsc::Sender<SteerMessage>,
+    ledger: &Mutex<std::collections::VecDeque<RoutedSteer>>,
+    retiring: &std::sync::atomic::AtomicBool,
+    turn: &TurnControl,
+    message: SteerMessage,
+    row: RoutedSteer,
+) -> Result<(), SteerOutcome> {
+    let mut message = Some(message);
+    let mut row = Some(row);
+    loop {
+        let permit = tx.reserve().await.map_err(|_| SteerOutcome::NotSteerable)?;
+        let admitted = registry.while_update_clear(harness, || {
+            let mut ledger = lock(ledger);
+            let Some(epoch) = turn.admit_steer(&row.as_ref().unwrap().message_id) else {
+                return false;
+            };
+            let mut row = row.take().unwrap();
+            row.epoch = epoch;
+            row.after_stop = retiring.load(std::sync::atomic::Ordering::Acquire);
+            ledger.push_back(row);
+            permit.send(message.take().unwrap());
+            true
+        });
+        match admitted {
+            Some(true) => return Ok(()),
+            None => return Err(SteerOutcome::DeferredByUpdate),
+            Some(false) => {
+                let settled = tokio::select! {biased;_=tx.closed()=>false,result=tokio::time::timeout(std::time::Duration::from_secs(15),turn.wait_for_stop())=>result.is_ok()};
+                if !settled {
+                    return Err(SteerOutcome::NotSteerable);
+                }
+            }
+        }
+    }
 }
 
 struct Inner {
@@ -600,9 +643,12 @@ impl SessionsEngine {
                 h.routed_steers.clone(),
                 h.fork_history_sent.clone(),
                 h.retiring.clone(),
+                h.turn.clone(),
             )
         });
-        if let Some((run_id, steerable, route, steer_tx, ledger, history_sent, retiring)) = routed {
+        if let Some((run_id, steerable, route, steer_tx, ledger, history_sent, retiring, turn)) =
+            routed
+        {
             if idle {
                 // No prompt rides an idle start, so nothing could carry an
                 // in-place reconfiguration: only the runtime as is will do.
@@ -639,27 +685,25 @@ impl SessionsEngine {
                     // in place: replacing it killed its background work.
                     config: reconfigure.then(|| Box::new(request.clone())),
                 };
-                if let Ok(permit) = steer_tx.reserve().await {
-                    // Commit the reserved slot atomically with the update
-                    // marker. An accepted update releases the slot instead, and
-                    // the prompt takes the fresh-run path behind the update.
-                    self.inner
-                        .registry
-                        .while_update_clear(harness_id, || {
-                            let mut pending = lock(&ledger);
-                            pending.push_back(RoutedSteer {
-                                prompt: request.prompt.clone(),
-                                message_id: user_id.clone(),
-                                fork_history: bootstrap.is_some(),
-                                after_stop: retiring.load(std::sync::atomic::Ordering::Acquire),
-                                request: Some(Box::new(request.clone())),
-                            });
-                            permit.send(message);
-                        })
-                        .is_some()
-                } else {
-                    false
-                }
+                publish_steer(
+                    &self.inner.registry,
+                    harness_id,
+                    &steer_tx,
+                    &ledger,
+                    &retiring,
+                    &turn,
+                    message,
+                    RoutedSteer {
+                        epoch: 0,
+                        prompt: request.prompt.clone(),
+                        message_id: user_id.clone(),
+                        fork_history: bootstrap.is_some(),
+                        after_stop: false,
+                        request: Some(Box::new(request.clone())),
+                    },
+                )
+                .await
+                .is_ok()
             } else {
                 false
             };
@@ -929,9 +973,11 @@ impl SessionsEngine {
                     h.routed_steers.clone(),
                     h.fork_history_sent.clone(),
                     h.retiring.clone(),
+                    h.turn.clone(),
                 )
             });
-        let Some((run_id, harness_id, steer_tx, ledger, history_sent, retiring)) = target else {
+        let Some((run_id, harness_id, steer_tx, ledger, history_sent, retiring, turn)) = target
+        else {
             return Ok(SteerOutcome::NotSteerable);
         };
         zuse_protocol::invocation::validate_harness_invocations(prompt, harness_id)
@@ -958,26 +1004,26 @@ impl SessionsEngine {
         };
         // Saturation is backpressure, not a dead runtime. Waiting for room
         // preserves the live process and every accepted message in a burst.
-        let Ok(permit) = steer_tx.reserve().await else {
-            return Ok(SteerOutcome::NotSteerable);
-        };
-        let accepted = self.inner.registry.while_update_clear(harness_id, || {
-            // Serialize mailbox acceptance with confirmation and Done-time
-            // inspection: a fast consumer must never outrun its ledger entry.
-            // The update marker is checked in the same critical section, so an
-            // accepted update releases the reserved slot instead.
-            let mut pending = lock(&ledger);
-            pending.push_back(RoutedSteer {
+        if let Err(outcome) = publish_steer(
+            &self.inner.registry,
+            harness_id,
+            &steer_tx,
+            &ledger,
+            &retiring,
+            &turn,
+            message,
+            RoutedSteer {
+                epoch: 0,
                 prompt: prompt.to_string(),
                 message_id: user_id.clone(),
                 fork_history: bootstrap.is_some(),
-                after_stop: retiring.load(std::sync::atomic::Ordering::Acquire),
+                after_stop: false,
                 request: sent_with,
-            });
-            permit.send(message);
-        });
-        if accepted.is_none() {
-            return Ok(SteerOutcome::DeferredByUpdate);
+            },
+        )
+        .await
+        {
+            return Ok(outcome);
         }
         let handle = self.doc_handle(chat_id)?;
         handle.write_user_message(&user_id, prompt, issued_at.min(now_ms()))?;
@@ -1051,8 +1097,15 @@ impl SessionsEngine {
             .filter(|h| {
                 h.stops_turn_in_place && h.started.load(std::sync::atomic::Ordering::Acquire)
             })
-            .map(|h| (h.run_id.clone(), h.turn.clone(), h.pending_inputs.clone()));
-        let Some((run_id, turn, pending)) = target else {
+            .map(|h| {
+                (
+                    h.run_id.clone(),
+                    h.turn.clone(),
+                    h.pending_inputs.clone(),
+                    h.routed_steers.clone(),
+                )
+            });
+        let Some((run_id, turn, pending, ledger)) = target else {
             return self.terminate(chat_id).await;
         };
         if !self.turn_in_flight(chat_id) {
@@ -1063,10 +1116,16 @@ impl SessionsEngine {
         for tx in parked {
             let _ = tx.send(Vec::new());
         }
-        turn.stop_turn();
+        let epoch = {
+            let _order = lock(&ledger);
+            turn.stop_turn_epoch()
+        };
         let deadline = tokio::time::Instant::now() + STOP_SETTLE;
         while tokio::time::Instant::now() < deadline {
-            if !self.is_live(chat_id, &run_id) || !self.turn_in_flight(chat_id) {
+            if !self.is_live(chat_id, &run_id)
+                || turn.stop_settled(epoch)
+                || !self.turn_in_flight(chat_id)
+            {
                 return Ok(true);
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1088,9 +1147,10 @@ impl SessionsEngine {
                 h.pending_inputs.clone(),
                 h.routed_steers.clone(),
                 h.retiring.clone(),
+                h.turn.clone(),
             )
         });
-        let Some((run_id, token, cancel, pending, ledger, retiring)) = target else {
+        let Some((run_id, token, cancel, pending, ledger, retiring, turn)) = target else {
             return Ok(false);
         };
         // From here the runtime takes no prompt: a send now starts a fresh
@@ -1098,6 +1158,7 @@ impl SessionsEngine {
         {
             let _order = lock(&ledger);
             retiring.store(true, std::sync::atomic::Ordering::Release);
+            turn.cancel_steers();
         }
         // Publish cancellation BEFORE waking the harness. Otherwise a fast
         // EOF after token.cancel() can beat this watch notification and be
@@ -3173,6 +3234,9 @@ async fn drive_run(
                 .and_then(|h| lock(&h.routed_steers).pop_front());
             // Consumed: a steer carrying the fork history delivered it to
             // this runtime's provider session.
+            if let Some(steer) = &confirmed {
+                turn.forget_steer(&steer.message_id);
+            }
             if confirmed.is_some_and(|steer| steer.fork_history)
                 && let Some(session) = lock(&inner.harness_sessions)
                     .get(&chat_id)
@@ -3299,7 +3363,10 @@ async fn drive_run(
                     .filter(|h| h.run_id == run_id)
                     .map(|h| h.routed_steers.clone())
             {
-                lock(&ledger).clear();
+                let epoch = turn.steering_epoch();
+                // The receiver may still hold a cancelled frame in transit.
+                // Keep its cancellation record until the driver discards it.
+                lock(&ledger).retain(|steer| steer.epoch >= epoch);
             }
             // An accepted steer awaiting its boundary owns the continuation:
             // the previous Done is an internal handoff, not a completion ping.
@@ -3342,6 +3409,9 @@ async fn drive_run(
                     false,
                     completed_turn,
                 );
+                if stopped_in_place {
+                    turn.settle_stop();
+                }
                 continue;
             }
             final_completed_turn = completed_turn;
@@ -3452,6 +3522,72 @@ async fn drive_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn steering_waits_for_stop_settlement_even_after_reserving_mailbox_capacity() {
+        let registry = Arc::new(HarnessRegistry::new());
+        let ledger = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let retiring = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let turn = TurnControl::default();
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.send(SteerMessage::text("capacity blocker"))
+            .await
+            .unwrap();
+        let publisher = {
+            let registry = registry.clone();
+            let ledger = ledger.clone();
+            let retiring = retiring.clone();
+            let turn = turn.clone();
+            tokio::spawn(async move {
+                publish_steer(
+                    &registry,
+                    HarnessId::Zuse,
+                    &tx,
+                    &ledger,
+                    &retiring,
+                    &turn,
+                    SteerMessage {
+                        prompt: "after stop".into(),
+                        message_id: Some("new".into()),
+                        attachments: vec![],
+                        config: None,
+                    },
+                    RoutedSteer {
+                        epoch: 0,
+                        prompt: "after stop".into(),
+                        message_id: "new".into(),
+                        fork_history: false,
+                        after_stop: false,
+                        request: None,
+                    },
+                )
+                .await
+            })
+        };
+        {
+            let _order = lock(&ledger);
+            turn.stop_turn();
+        }
+        assert_eq!(rx.recv().await.unwrap().prompt, "capacity blocker");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), rx.recv())
+                .await
+                .is_err()
+        );
+        assert!(lock(&ledger).is_empty());
+        turn.settle_stop();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .prompt,
+            "after stop"
+        );
+        assert!(publisher.await.unwrap().is_ok());
+        assert_eq!(lock(&ledger).front().unwrap().epoch, turn.steering_epoch());
+        assert!(!turn.steer_cancelled("new"));
+    }
 
     #[test]
     fn native_tool_origin_and_endpoint_are_stamped_by_the_host() {

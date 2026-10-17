@@ -552,3 +552,197 @@ async fn stop_before_turn_admission_cannot_start_model_work_and_the_runtime_can_
     drop(stream);
     retired(&fixture).await;
 }
+
+#[tokio::test]
+async fn late_cancelled_delivery_cannot_change_configuration_or_reappear_after_stop() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = ModelFixture::new(vec![]);
+    fixture.block_root.store(true, Ordering::Release);
+    let harness = harness(root.path(), fixture.clone());
+    let initial = request(root.path());
+    let (controls, steering, _) = run_controls();
+    let control = controls.turn.clone();
+    let mut stream = harness.run(initial.clone(), controls).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), fixture.blocked.notified())
+        .await
+        .unwrap();
+    control.register_steer("old");
+    control.stop_turn();
+    let stopped = turn(&mut stream).await;
+    assert!(matches!(
+        stopped.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Interrupted,
+            ..
+        })
+    ));
+    fixture.block_root.store(false, Ordering::Release);
+    steering
+        .send(SteerMessage {
+            prompt: "cancelled constraint".into(),
+            message_id: Some("old".into()),
+            config: Some(Box::new(RunRequest {
+                model: Some("chatgpt/next".into()),
+                ..initial
+            })),
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+    control.register_steer("new");
+    steering
+        .send(SteerMessage {
+            prompt: "deliberate continuation".into(),
+            message_id: Some("new".into()),
+            config: None,
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+    let events = turn(&mut stream).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, AgentEvent::Steered { .. }))
+            .count(),
+        1
+    );
+    {
+        let seen = lock(&fixture.seen);
+        let last = seen.last().unwrap();
+        assert_eq!(last.model, "chatgpt/fixture");
+        let messages = serde_json::to_string(&last.messages).unwrap();
+        assert!(messages.contains("deliberate continuation"));
+        assert!(!messages.contains("cancelled constraint"));
+    }
+    drop(stream);
+    retired(&fixture).await;
+}
+
+async fn doc_queue_stop_case(hard_stop: bool) {
+    use sha2::{Digest, Sha256};
+    use zuse_doc::SessionCommandPayload;
+    let root = tempfile::tempdir().unwrap();
+    let fixture = ModelFixture::new(vec![]);
+    fixture.block_root.store(true, Ordering::Release);
+    let mut native = harness(root.path(), fixture.clone());
+    let profile = native.profile.clone();
+    let registry = Arc::new(crate::HarnessRegistry::new());
+    let core = crate::EngineCore::assemble_with_profile(
+        crate::EngineProfile::local(&root.path().join("engine")).unwrap(),
+        registry.clone(),
+        HarnessId::Zuse,
+        None,
+    )
+    .unwrap();
+    native.device_id = core.device_id.clone();
+    registry.register(Arc::new(native));
+    core.workspace
+        .create_chat(
+            "chat",
+            None,
+            Some(&core.device_id),
+            None,
+            Some(root.path().to_string_lossy().into_owned()),
+        )
+        .unwrap();
+    let mut request = request(root.path());
+    request.auto_approve = true;
+    core.doc_host
+        .queue_command(
+            "chat",
+            SessionCommandPayload::Run {
+                request: request.clone(),
+                message_id: "first".into(),
+            },
+        )
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), fixture.blocked.notified())
+        .await
+        .unwrap();
+    let id = core
+        .doc_host
+        .queue_message_with_behavior("chat", "cancelled constraint", vec![], true)
+        .unwrap();
+    assert!(core.doc_host.steer_queued_now("chat", &id).await.unwrap());
+    let root_id = lock(&fixture.seen)[0].root.clone();
+    let journal = profile
+        .join("harness")
+        .join(format!("{:x}", Sha256::digest(root_id.as_bytes())))
+        .join("checkpoint.json");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let state: zuse_harness::Checkpoint =
+                serde_json::from_slice(&tokio::fs::read(&journal).await.unwrap()).unwrap();
+            if state
+                .agents
+                .iter()
+                .any(|agent| agent.mailbox.iter().any(|mail| mail.id == id))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(if hard_stop {
+        core.sessions.interrupt("chat").await.unwrap()
+    } else {
+        core.sessions.stop_turn("chat").await.unwrap()
+    });
+    let state: zuse_harness::Checkpoint =
+        serde_json::from_slice(&tokio::fs::read(&journal).await.unwrap()).unwrap();
+    assert!(state.cancelled_notifications.contains(&id));
+    assert!(
+        state
+            .agents
+            .iter()
+            .all(|agent| agent.mailbox.iter().all(|mail| mail.id != id))
+    );
+    fixture.block_root.store(false, Ordering::Release);
+    request.prompt = "deliberate continuation".into();
+    core.doc_host
+        .queue_command(
+            "chat",
+            SessionCommandPayload::Run {
+                request,
+                message_id: "second".into(),
+            },
+        )
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if lock(&fixture.seen).len() >= 2
+                && core
+                    .sessions
+                    .session_status("chat")
+                    .is_some_and(|s| s.status == zuse_protocol::SessionStatus::Idle)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    {
+        let seen = lock(&fixture.seen);
+        let last = seen.last().unwrap();
+        assert_eq!(last.root, root_id);
+        let messages = serde_json::to_string(&last.messages).unwrap();
+        assert!(messages.contains("deliberate continuation"));
+        assert!(!messages.contains("cancelled constraint"));
+    }
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn doc_queue_steering_and_stop_share_the_native_durable_delivery_boundary() {
+    doc_queue_stop_case(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hard_stop_persists_steering_cancellation_before_native_runtime_retirement() {
+    doc_queue_stop_case(true).await;
+}

@@ -773,7 +773,7 @@ async fn run_session(session: Session) {
                 }
             },
 
-            steer = steering.recv(), if steering_open && !interrupted => match steer {
+            steer = crate::receive_steer(&mut steering, &turn), if steering_open && !interrupted => match steer {
                 Some(msg) => {
                     pending_steers += 1;
                     parked = false;

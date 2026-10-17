@@ -1764,7 +1764,7 @@ async fn run_session(session: Session) {
                 Some(Incoming::Eof) | None => break 'main,
             },
 
-            steer = steering.recv(), if steering_open && !interrupted => match steer {
+            steer = crate::receive_steer(&mut steering, &turn), if steering_open && !interrupted => match steer {
                 Some(msg) => {
                     let text = msg.prompt;
                     // Native operations run at a turn boundary, never as text

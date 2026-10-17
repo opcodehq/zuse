@@ -2058,7 +2058,7 @@ async fn run_session(session: Session) {
                 break 'main;
             }
 
-            steer = steering.recv(), if steering_open => {
+            steer = crate::receive_steer(&mut steering, &turn_control), if steering_open => {
                 match steer {
                     Some(steer) => {
                         let native_command_selected =

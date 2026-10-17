@@ -148,6 +148,7 @@ impl Engine {
                 requests: 0,
                 notifications: Default::default(),
                 consumed_notifications: Default::default(),
+                cancelled_notifications: Default::default(),
                 tools: Default::default(),
                 reviews: Default::default(),
                 agents: vec![Agent {
@@ -334,6 +335,9 @@ impl Engine {
         {
             let mut state = self.0.state.lock().await;
             state.agent(agent_id)?;
+            if state.cancelled_notifications.contains(&delivery_id) {
+                return Err(Error::Interrupted);
+            }
             if state.notifications.contains(&delivery_id) {
                 self.persist(&state).await?;
                 if let Some(owner) = state.consumed_notifications.get(&delivery_id) {
@@ -356,6 +360,63 @@ impl Engine {
             self.launch(agent_id.to_owned()).await?;
         }
         Ok(())
+    }
+    /// Withdraw unconsumed host deliveries durably. Consumed history is never
+    /// rewritten; its acknowledgement must settle before the stopped turn.
+    pub async fn delivery_cancelled(&self, id: &str) -> bool {
+        self.0
+            .state
+            .lock()
+            .await
+            .cancelled_notifications
+            .contains(id)
+    }
+    pub async fn cancel_deliveries(&self, ids: &[String]) -> Result<Vec<String>, Error> {
+        let mut state = self.0.state.lock().await;
+        let cancelled = ids
+            .iter()
+            .filter(|id| !state.consumed_notifications.contains_key(*id))
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut added_notifications = vec![];
+        let mut added_cancelled = vec![];
+        for id in &cancelled {
+            if state.notifications.insert(id.clone()) {
+                added_notifications.push(id.clone());
+            }
+            if state.cancelled_notifications.insert(id.clone()) {
+                added_cancelled.push(id.clone());
+            }
+        }
+        let mut removed = vec![];
+        for agent in &mut state.agents {
+            let mut mail = vec![];
+            for (index, message) in std::mem::take(&mut agent.mailbox).into_iter().enumerate() {
+                if cancelled.contains(&message.id) {
+                    mail.push((index, message));
+                } else {
+                    agent.mailbox.push(message);
+                }
+            }
+            if !mail.is_empty() {
+                removed.push((agent.id.clone(), mail));
+            }
+        }
+        if let Err(error) = self.persist(&state).await {
+            for id in added_notifications {
+                state.notifications.remove(&id);
+            }
+            for id in added_cancelled {
+                state.cancelled_notifications.remove(&id);
+            }
+            for (agent, mail) in removed {
+                for (index, message) in mail {
+                    state.agent_mut(&agent)?.mailbox.insert(index, message);
+                }
+            }
+            return Err(error);
+        }
+        Ok(cancelled.into_iter().collect())
     }
     pub async fn notify_process(
         &self,

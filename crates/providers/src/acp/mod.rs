@@ -4803,10 +4803,11 @@ async fn run_session(session: Session) {
             steer = async {
                 match released.take() {
                     Some(msg) => Some(msg),
-                    None => steering.recv().await,
+                    None => crate::receive_steer(&mut steering, &turn_control).await,
                 }
             }, if (released.is_some() || (steering_open && deferred.is_empty())) && !interrupted => match steer {
                 Some(msg) => {
+                    if crate::cancelled_steer(&msg, &turn_control) { continue 'main; }
                     if msg.config.is_some() && !quiet!() {
                         deferred.push_back(msg);
                         continue 'main;

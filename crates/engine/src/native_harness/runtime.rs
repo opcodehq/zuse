@@ -274,6 +274,11 @@ pub(super) async fn start(
                     admission.cancel();
                     stopped = true;
                     if engine.stop_turn().await.is_err() { break; }
+                    let pending = mapper.steers.iter().filter(|id| controls.turn.steer_cancelled(id)).cloned().collect::<Vec<_>>();
+                    match engine.cancel_deliveries(&pending).await {
+                        Ok(cancelled) => for id in cancelled { mapper.steers.remove(&id); controls.turn.forget_steer(&id); },
+                        Err(error) => { let _ = emit(&tx, Err(failure(error)), &stop).await; break; }
+                    }
                 },
                 event=events.recv()=>{
                     let Some(event) = event else { break; };
@@ -288,6 +293,7 @@ pub(super) async fn start(
                         Ok(route) => route,
                         Err(error) => { let _ = emit(&tx, Err(failure(error)), &stop).await; break; }
                     };
+                    if let Event::MailConsumed { delivery_id, .. } = &event { controls.turn.forget_steer(delivery_id); }
                     let translated = mapper.translate(event, &route, stopped);
                     if ended { controls.turn.set_background(engine.background_count() + native.processes.list(&root).iter().filter(|p| p.status == ProcessStatus::Running).count()); }
                     for event in translated { if !emit(&tx, Ok(event), &stop).await { stop.cancel(); break; } }
@@ -296,6 +302,13 @@ pub(super) async fn start(
                 steer=controls.steering.recv(), if steering_open && (!working || admitted)=>{
                     let Some(steer) = steer else { steering_open = false; continue; };
                     let result = async {
+                        let id = steer.message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                        controls.turn.register_steer(&id);
+                        if controls.turn.steer_cancelled(&id) || engine.delivery_cancelled(&id).await {
+                            engine.cancel_deliveries(std::slice::from_ref(&id)).await.map_err(failure)?;
+                            controls.turn.forget_steer(&id);
+                            return Ok(());
+                        }
                         if let Some(config) = steer.config {
                             if tokio::fs::canonicalize(&config.cwd).await? != PathBuf::from(&request.cwd) || (config.mcp.is_some() && config.mcp != request.mcp) { return Err(failure("The next prompt needs a different native runtime")); }
                             engine.reconfigure(harness.options(&config, &stop).await?).await.map_err(failure)?;
@@ -303,9 +316,8 @@ pub(super) async fn start(
                             engine.set_permission_mode(host::permission_mode(&config));
                         }
                         let attachments = images(&steer.attachments).await?;
-                        let id = steer.message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                         mapper.steers.insert(id.clone());
-                        engine.enqueue(id, &root, steer.prompt, attachments, false).await.map_err(failure)?;
+                        engine.enqueue(id, &root, steer.prompt, attachments, working).await.map_err(failure)?;
                         if !working { admission = tokio_util::sync::CancellationToken::new(); admitted = false; stopped = false; working = true; task = Some(send(engine.clone(), String::new(), vec![], event_tx.clone(), admission.clone())); }
                         Ok::<_, HarnessError>(())
                     }.await;
@@ -315,6 +327,18 @@ pub(super) async fn start(
             }
         }
         stop.cancel();
+        // Freeze runners before withdrawing only the deliveries explicitly
+        // cancelled by the host. A dropped stream must retain retryable mail.
+        let _ = engine.interrupt(None).await;
+        let cancelled = mapper
+            .steers
+            .iter()
+            .filter(|id| controls.turn.steer_cancelled(id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Err(error) = engine.cancel_deliveries(&cancelled).await {
+            let _ = tx.try_send(Err(failure(error)));
+        }
         let _ = engine.close().await;
         if let Some(task) = task {
             let _ = task.await;

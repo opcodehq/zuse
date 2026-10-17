@@ -65,6 +65,29 @@ impl SteerMessage {
     }
 }
 
+/// Discard cancelled host deliveries even when they reached a driver's
+/// mailbox after its protocol-level Stop had already settled.
+pub(crate) fn cancelled_steer(message: &SteerMessage, turn: &TurnControl) -> bool {
+    if let Some(id) = message.message_id.as_deref() {
+        if turn.steer_cancelled(id) {
+            turn.forget_steer(id);
+            return true;
+        }
+    }
+    false
+}
+pub(crate) async fn receive_steer(
+    receiver: &mut mpsc::Receiver<SteerMessage>,
+    turn: &TurnControl,
+) -> Option<SteerMessage> {
+    loop {
+        let message = receiver.recv().await?;
+        if !cancelled_steer(&message, turn) {
+            return Some(message);
+        }
+    }
+}
+
 /// Host ↔ runtime signals that span a persistent runtime's turns.
 ///
 /// Stopping a turn is not tearing down the runtime: a runtime holds work the
@@ -77,12 +100,94 @@ impl SteerMessage {
 pub struct TurnControl {
     stop: std::sync::Arc<tokio::sync::Notify>,
     background: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    steering: std::sync::Arc<std::sync::Mutex<SteeringState>>,
+    settled: std::sync::Arc<tokio::sync::Notify>,
+}
+#[derive(Default)]
+struct SteeringState {
+    epoch: u64,
+    settled: u64,
+    deliveries: std::collections::HashMap<String, u64>,
 }
 
 impl TurnControl {
     /// Host: end the in-flight turn, keeping the runtime and its background work.
     pub fn stop_turn(&self) {
+        self.stop_turn_epoch();
+    }
+    pub fn cancel_steers(&self) -> u64 {
+        let epoch = {
+            let mut state = self.steering.lock().unwrap_or_else(|e| e.into_inner());
+            state.epoch = state.epoch.saturating_add(1);
+            state.epoch
+        };
+        epoch
+    }
+    pub fn stop_turn_epoch(&self) -> u64 {
+        let epoch = self.cancel_steers();
         self.stop.notify_one();
+        epoch
+    }
+    pub fn steering_epoch(&self) -> u64 {
+        self.steering
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .epoch
+    }
+    /// Register under the host's pending-delivery lock, before publishing mail.
+    pub fn register_steer(&self, id: &str) -> u64 {
+        let mut state = self.steering.lock().unwrap_or_else(|e| e.into_inner());
+        let epoch = state.epoch;
+        *state.deliveries.entry(id.into()).or_insert(epoch)
+    }
+    pub fn admit_steer(&self, id: &str) -> Option<u64> {
+        let mut state = self.steering.lock().unwrap_or_else(|e| e.into_inner());
+        if state.settled < state.epoch {
+            return None;
+        }
+        let epoch = state.epoch;
+        Some(*state.deliveries.entry(id.into()).or_insert(epoch))
+    }
+    pub async fn wait_for_stop(&self) {
+        loop {
+            let notified = self.settled.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let state = self.steering.lock().unwrap_or_else(|e| e.into_inner());
+                if state.settled >= state.epoch {
+                    return;
+                }
+            }
+            notified.await;
+        }
+    }
+    pub fn steer_cancelled(&self, id: &str) -> bool {
+        let state = self.steering.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .deliveries
+            .get(id)
+            .is_some_and(|epoch| *epoch < state.epoch)
+    }
+    pub fn forget_steer(&self, id: &str) {
+        self.steering
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .deliveries
+            .remove(id);
+    }
+    pub fn settle_stop(&self) {
+        let mut state = self.steering.lock().unwrap_or_else(|e| e.into_inner());
+        state.settled = state.epoch;
+        drop(state);
+        self.settled.notify_waiters();
+    }
+    pub fn stop_settled(&self, epoch: u64) -> bool {
+        self.steering
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .settled
+            >= epoch
     }
 
     /// Driver: resolves once per [`Self::stop_turn`].
@@ -626,5 +731,35 @@ mod stderr_tests {
         let snapshot = tail.snapshot().unwrap();
         assert!(snapshot.len() <= 1400);
         assert!(snapshot.ends_with("last stderr line"));
+    }
+}
+
+#[cfg(test)]
+mod steering_control_tests {
+    use super::*;
+    #[tokio::test]
+    async fn cancelled_delivery_in_transit_is_discarded_after_stop_settles() {
+        let turn = TurnControl::default();
+        turn.register_steer("old");
+        turn.stop_turn();
+        turn.settle_stop();
+        let (tx, mut rx) = mpsc::channel(2);
+        let mut old = SteerMessage::text("cancelled constraint");
+        old.message_id = Some("old".into());
+        tx.send(old).await.unwrap();
+        turn.register_steer("new");
+        let mut next = SteerMessage::text("deliberate continuation");
+        next.message_id = Some("new".into());
+        tx.send(next).await.unwrap();
+        drop(tx);
+        assert_eq!(
+            receive_steer(&mut rx, &turn)
+                .await
+                .unwrap()
+                .message_id
+                .as_deref(),
+            Some("new")
+        );
+        assert!(receive_steer(&mut rx, &turn).await.is_none());
     }
 }
