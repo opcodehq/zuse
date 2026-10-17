@@ -10,6 +10,7 @@ Finish the standalone native macOS/Linux and browser replacement: shared Rust/GP
 - Start fresh in a separate native profile. Do not migrate or share the old SQLite database.
 - Use Zuse's layout and behavior as the main design. Include local capabilities from the native reference: animation, voice, visuals, previews, themes and navigation.
 - Use GPUI on desktop and GPUI Web/WASM in browsers. Validate browser input/rendering before expanding shared views.
+- Maintain the GPU toolkit independently in `opcodehq/zkit`, with a clean initial source snapshot and retained legal attribution. Zuse pins published toolkit revisions as Git dependencies; no submodule is required. Opus 5.5 owns a focused reusable-component cleanup task and may import/adapt licensed component implementations as its base.
 - Rust owns sessions, tools, queues, permissions, persistence and orchestration. Pinned SDK-only bridges are allowed and load on demand.
 - Keep hosted Executor v2 and existing account services. Retiring Electron does not require retiring these services.
 - Include localhost/LAN serving and hosted access through paired devices and an authenticated encrypted outbound relay.

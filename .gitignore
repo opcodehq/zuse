@@ -2,7 +2,11 @@
 /.context/
 node_modules/
 /dist/build/
+/dist/web/
 .env
 .env.local
 *.rs.bk
 .DS_Store
+
+# Independent toolkit checkout; the application pins its published Git revision.
+/vendor/zkit/
