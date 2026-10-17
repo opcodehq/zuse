@@ -13,9 +13,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-zkit
-        with:
-          token: ${{ secrets.ZKIT_READ_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -33,9 +30,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-zkit
-        with:
-          token: ${{ secrets.ZKIT_READ_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - if: runner.os == 'Linux'
@@ -51,9 +45,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-zkit
-        with:
-          token: ${{ secrets.ZKIT_READ_TOKEN }}
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src

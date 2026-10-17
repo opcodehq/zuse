@@ -35,7 +35,7 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 
 - Workspace integration milestone: WASM build passed against the published Zkit Git pin, including its existing multiline editor and code editor. Browser server binary builds. Five browser boundary/upload tests pass. The shared editor replaces the scaffold input implementation rather than duplicating its editing behavior.
 - The expanded browser shell renders and connects to the local engine. File editing uses expected checkout/content hashes and retains edits on conflicts. Queue actions use the engine's durable queue. Complete visual and runtime workflow acceptance remains pending.
-- GitHub CI cannot currently fetch the private Zkit dependency with the default repository token. Authentication setup is included; an Actions secret named `ZKIT_READ_TOKEN`, scoped to read `opcodehq/zkit`, is required before remote native checks can run. No CI pass is claimed.
+- Zkit is public; an unauthenticated Git fetch succeeds. CI no longer requires a toolkit access secret. Remote native checks remain pending; no CI pass is claimed.
 
 - Provider milestone: engine/server compile checks passed with Gemini and Kiro registered. Three focused ACP CLI tests pass, including the two new provider process/turn scenarios. No live Gemini/Kiro credential verification is claimed.
 - Zkit styled layer published in `85f4503`; delegated native/WASM checks and 26 component tests passed. Gallery styling and native platform runtime acceptance remain pending.
