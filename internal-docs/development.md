@@ -34,6 +34,12 @@ HTTPS uses Secure, HttpOnly, SameSite=Strict cookies. TLS handshakes run concurr
 
 For an interrupted-write UI fixture, build and run `cargo run -p zuse-engine --example recovery-fixture -- <new-profile-directory>`, then serve that profile. The fixture refuses existing directories, writes an evidence file, and deliberately leaves one durable tool receipt requiring inspection. It uses a scripted model and requires no provider credentials.
 
+## Browser development startup
+
+Run `bash scripts/dev-web.sh` from the checkout to build the GPUI Web bundle and start its matching stable-Rust engine. Open the printed private link in a WebGPU-capable browser. The launcher allocates the agent-tool IPC port automatically and keeps local data in `.context/local-profile`, or `ZUSE_DATA_DIR` when set. All server options pass through; an explicit `--data-dir`, `--ipc-port` or `--assets` replaces the corresponding launcher default. Paths containing spaces are preserved.
+
+For example, `bash scripts/dev-web.sh --listen 127.0.0.1:3000 --data-dir /path/to/profile` starts a separate local workspace. Use `bash scripts/dev-web.sh --help` for the startup requirements. `scripts/build-web.sh` remains available when only the browser bundle is needed. Rebuild and restart the engine alongside the browser after protocol changes.
+
 ## Local tool results
 
 New tool results are saved in the profile's `docs.sqlite3` `tool_blobs` table before their references enter the transcript. Keys include the assistant entry, provider call identity, and content digest, so repeated provider call IDs cannot replace another turn's output. Output and diff save in one transaction. Deleting a chat removes its tool payloads. Ordinary transcript snapshots carry refs and byte counts, without full output text.

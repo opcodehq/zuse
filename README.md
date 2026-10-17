@@ -29,9 +29,10 @@ cargo run -p zuse
 For the browser target, install nightly Rust with `rust-src` and the `wasm32-unknown-unknown` target, plus Trunk 0.21.14. Then build and serve the same local engine:
 
 ```sh
-bash scripts/build-web.sh
-cargo run -p zuse-cli -- --ipc-port 0 --data-dir .context/local-profile
+bash scripts/dev-web.sh
 ```
+
+The command builds the browser and matching engine from the same checkout, then starts a persistent local workspace in `.context/local-profile`. Pass server options such as `--listen 127.0.0.1:3000` or `--data-dir /path/to/profile` to override the defaults. Run `bash scripts/dev-web.sh --help` for usage.
 
 Open the printed private link in a WebGPU-capable browser. Local development does not require a hosted Zuse account; the selected agent still needs its provider credentials.
 
