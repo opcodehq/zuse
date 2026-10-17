@@ -301,3 +301,39 @@ async fn encrypted_cancel_and_revocation_release_canonical_streams() {
     .unwrap();
     host.stop().await;
 }
+
+#[tokio::test]
+async fn native_paired_client_uses_canonical_calls_stream_cancellation_and_revocation() {
+    let host = Host::new().await;
+    let origin = host.url.split("/api/").next().unwrap();
+    let target = zuse_remote::PairedTarget::new(origin, host.invitation.clone()).unwrap();
+    let client = zuse_rpc::connect_paired(&target).await.unwrap();
+    let params = json!({"text":"native private message ".repeat(8_000)});
+    let result = client.call("Echo", params.clone()).await.unwrap();
+    assert_eq!(result, params);
+    assert!(host.authority.list().unwrap()[0].paired_at.is_some());
+    let mut stream = client.subscribe_scoped("Watch", json!({})).await.unwrap();
+    assert_eq!(stream.recv().await.unwrap()["ready"], true);
+    drop(stream);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while host.subscriptions.load(Ordering::SeqCst) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let calls = host.calls.load(Ordering::SeqCst);
+    host.authority.revoke(&host.invitation.id).unwrap();
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            client.call("Echo", json!({"after":"revoke"}))
+        )
+        .await
+        .unwrap()
+        .is_err()
+    );
+    assert_eq!(host.calls.load(Ordering::SeqCst), calls);
+    drop(client);
+    host.stop().await;
+}
