@@ -49,7 +49,7 @@ jobs:
       - run: cargo test -p zuse-providers --lib command_execution_maps_exit_code_to_error
       - run: cargo test -p zuse-providers --test claude --test codex access_
       - run: cargo test -p zuse-providers --test acp access_
-      - run: cargo test -p zuse-providers --lib acp::
+      - run: "cargo test -p zuse-providers --lib acp::"
       - run: cargo test -p zuse-providers --lib skills::tests
       - run: cargo test -p zuse-sync --lib tool_blobs
       - run: cargo test -p zuse-engine --lib doc_host::tool_result_tests
