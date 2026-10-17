@@ -131,6 +131,15 @@ mod browser {
         gpui_platform::web_init();
         let (requests, outbound) = mpsc::unbounded::<Value>();
         let (events, inbound) = mpsc::unbounded::<Value>();
+        if let Ok(Some(storage)) = web_sys::window().unwrap().local_storage() {
+            if let Ok(Some(value)) = storage.get_item("zuse.workspace.preferences.v1") {
+                if value.len() <= 64 * 1024 {
+                    if let Ok(value) = serde_json::from_str::<Value>(&value) {
+                        let _ = events.unbounded_send(json!({"preferences":value}));
+                    }
+                }
+            }
+        }
         spawn_local(super::connection::run(outbound, events));
         let application = gpui_platform::application()
             .with_assets(zuse_viewport::assets::Assets)

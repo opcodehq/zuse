@@ -57,10 +57,39 @@ impl WorkspaceView {
             .into()
     }
 
+    pub(super) fn known_projects(&self) -> Vec<Value> {
+        let mut projects = self.repos.clone();
+        for space in &self.spaces {
+            if zuse_protocol::projectless::is_projectless_cwd(Some(&space.path)) {
+                continue;
+            }
+            if let Some(project) = projects.iter_mut().find(|p| p["path"] == space.path) {
+                project["name"] = json!(space.display_name());
+            } else {
+                projects.push(json!({"path":space.path,"name":space.display_name()}));
+            }
+        }
+        projects.sort_by(|a, b| {
+            a["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_lowercase()
+                .cmp(&b["name"].as_str().unwrap_or_default().to_lowercase())
+        });
+        projects
+    }
     pub(super) fn project_name(&self) -> String {
         let cwd = self.cwd();
-        if cwd.starts_with("~/.zuse/scratch/") {
+        if zuse_protocol::projectless::is_projectless_cwd(Some(&cwd)) {
             return "Local workspace".into();
+        }
+        if let Some(space) = self
+            .selected
+            .as_ref()
+            .and_then(|c| c["spaceId"].as_str())
+            .and_then(|id| self.spaces.iter().find(|s| s.id == id))
+        {
+            return space.display_name().to_owned();
         }
         cwd.trim_end_matches('/')
             .rsplit('/')
@@ -223,10 +252,14 @@ impl WorkspaceView {
     pub(super) fn choose_provider(&mut self, index: usize, cx: &mut Context<Self>) {
         self.provider_index = index;
         self.model = None;
-        self.models.clear();
+        self.reasoning = None;
+        self.model_options.clear();
         self.settings = false;
         if let Some(provider) = self.providers.get(index) {
-            self.call(methods::LIST_MODELS, json!({"harness":provider["id"]}));
+            let provider = provider["id"].as_str().unwrap_or_default().to_owned();
+            self.model = self.preferences.default_models.get(&provider).cloned();
+            let request = self.call(methods::LIST_MODELS, json!({"harness":provider}));
+            self.picker_catalog.begin(&provider, request);
         }
         cx.notify();
     }

@@ -14123,6 +14123,7 @@ dependencies = [
  "zuse-theme",
  "zuse-update",
  "zuse-veil",
+ "zuse-viewport",
  "zuse-visual",
  "zuse-visual-gpu",
  "zuse-voice",

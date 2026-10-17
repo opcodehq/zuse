@@ -54,7 +54,9 @@ assets!(
     "globe",
     "clock-circle",
     "copy",
-    "magnifer"
+    "magnifer",
+    "star",
+    "danger-triangle"
 );
 
 pub(super) fn icon(name: &str) -> Svg {

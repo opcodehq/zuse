@@ -2,14 +2,17 @@
 
 mod activity;
 pub mod assets;
+mod composer_alerts;
 mod connection;
 pub mod input;
 mod model_accounts;
+mod model_picker;
 mod navigation;
 mod previews;
 mod questions;
 mod recovery;
 mod shell;
+pub mod styling;
 mod tool_results;
 mod workspace;
 mod workspace_review;
@@ -91,6 +94,7 @@ pub struct WorkspaceView {
     queue_watch: Option<u64>,
     sessions: Vec<Value>,
     repos: Vec<Value>,
+    spaces: Vec<zuse_protocol::Space>,
     project: Option<Value>,
     project_picker: bool,
     project_input: Entity<input::TextInput>,
@@ -98,8 +102,25 @@ pub struct WorkspaceView {
     search_open: bool,
     session_search: Entity<input::TextInput>,
     agent_picker: bool,
+    preferences: zuse_protocol::presentation::WorkspacePreferences,
+    picker_catalog: zuse_protocol::presentation::PickerCatalog,
+    picker_scope: Option<String>,
+    model_search: Entity<input::TextInput>,
+    picker_active: Option<zuse_protocol::presentation::ModelSelection>,
+    picker_scroll: ScrollHandle,
+    picker_anchors: HashMap<String, ScrollAnchor>,
+    reasoning: Option<zuse_protocol::ReasoningLevel>,
+    reasoning_slider: Entity<gpui_base::slider::SliderState>,
+    reasoning_focus: FocusHandle,
+    model_options: serde_json::Map<String, Value>,
+    sandbox: zuse_protocol::SandboxLevel,
+    access_picker: bool,
+    add_menu: bool,
+    expanded_alert: Option<String>,
+    dismissed_alerts: std::collections::HashSet<String>,
     right_open: bool,
     content_width: f32,
+    content_height: f32,
     right_tab: String,
     recovery: Option<zuse_protocol::recovery::RecoverySnapshot>,
     recovery_request: Option<u64>,
@@ -134,7 +155,6 @@ pub struct WorkspaceView {
     model_name: Entity<input::TextInput>,
     model_callback: Entity<input::TextInput>,
     model_error: Option<String>,
-    models: Vec<Value>,
     model: Option<String>,
     model_picker: bool,
     terminal_id: Option<String>,
@@ -156,12 +176,20 @@ impl WorkspaceView {
     pub fn new(transport: Transport, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let workspace_focus = cx.focus_handle();
         window.focus(&workspace_focus, cx);
-        let input = cx.new(|cx| input::TextInput::multiline("Do anything…", window, cx));
+        let input = cx.new(|cx| {
+            input::TextInput::multiline("Ask to make changes or ask a question…", window, cx)
+        });
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         let project_input =
             cx.new(|cx| input::TextInput::new("Absolute project path on this machine", window, cx));
         let session_search = cx.new(|cx| input::TextInput::new("Search sessions…", window, cx));
         cx.observe(&session_search, |_, _, cx| cx.notify()).detach();
+        let model_search = cx.new(|cx| input::TextInput::new("Search models…", window, cx));
+        cx.observe(&model_search, |this, _, cx| {
+            this.picker_active = None;
+            cx.notify();
+        })
+        .detach();
         let terminal_input = cx.new(|cx| input::TextInput::new("Run a command…", window, cx));
         cx.subscribe_in(
             &input,
@@ -181,6 +209,38 @@ impl WorkspaceView {
             |this, _, _: &input::Submitted, _, cx| this.run_terminal_command(cx),
         )
         .detach();
+        let reasoning_slider = cx.new(|_| {
+            gpui_base::slider::SliderState::new()
+                .min(0.)
+                .max(1.)
+                .step(1.)
+        });
+        cx.observe(&reasoning_slider, |this, state, cx| {
+            let index = state.read(cx).value().end().round().max(0.) as usize;
+            this.reasoning = if index == 0 {
+                None
+            } else {
+                this.selected_model()
+                    .and_then(|m| m.reasoning_levels.get(index - 1))
+                    .copied()
+            };
+            cx.notify();
+        })
+        .detach();
+        cx.subscribe_in(
+            &reasoning_slider,
+            window,
+            |this, state, event: &gpui_base::slider::SliderEvent, window, cx| {
+                if let gpui_base::slider::SliderEvent::Change(value) = event {
+                    state.update(cx, |state, cx| {
+                        state.set_value(value.end().round(), window, cx)
+                    });
+                    window.focus(&this.reasoning_focus, cx);
+                }
+            },
+        )
+        .detach();
+        let reasoning_focus = cx.focus_handle();
         let file_editor = cx.new(|cx| input::TextInput::code(window, cx));
         cx.observe(&file_editor, |_, _, cx| cx.notify()).detach();
         let model_name = cx.new(|cx| input::TextInput::new("Connection name", window, cx));
@@ -249,6 +309,7 @@ impl WorkspaceView {
             queue_watch: None,
             sessions: vec![],
             repos: vec![],
+            spaces: vec![],
             project: None,
             project_picker: false,
             project_input,
@@ -256,8 +317,25 @@ impl WorkspaceView {
             search_open: false,
             session_search,
             agent_picker: false,
+            preferences: Default::default(),
+            picker_catalog: Default::default(),
+            picker_scope: None,
+            model_search,
+            picker_active: None,
+            picker_scroll: ScrollHandle::new(),
+            picker_anchors: HashMap::new(),
+            reasoning: None,
+            reasoning_slider,
+            reasoning_focus,
+            model_options: Default::default(),
+            sandbox: zuse_protocol::SandboxLevel::WorkspaceWrite,
+            access_picker: false,
+            add_menu: false,
+            expanded_alert: None,
+            dismissed_alerts: Default::default(),
             right_open: false,
             content_width: 768.,
+            content_height: 880.,
             right_tab: "files".into(),
             recovery: None,
             recovery_request: None,
@@ -292,7 +370,6 @@ impl WorkspaceView {
             model_name,
             model_callback,
             model_error: None,
-            models: vec![],
             model: None,
             model_picker: false,
             terminal_id: None,
@@ -334,6 +411,17 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if let Some(value) = frame.get("preferences") {
+            if let Ok(mut preferences) = serde_json::from_value::<
+                zuse_protocol::presentation::WorkspacePreferences,
+            >(value.clone())
+            {
+                preferences.normalize();
+                self.preferences = preferences;
+                cx.notify();
+            }
+            return;
+        }
         if let Some(local) = frame["browserLocal"].as_bool() {
             self.browser_local = local;
             return;
@@ -368,6 +456,9 @@ impl WorkspaceView {
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if method.is_empty() {
+            return;
+        }
+        if self.receive_picker_catalog(id, &frame, cx) {
             return;
         }
         if self.receive_file_reconcile(id, &frame, cx) {
@@ -490,13 +581,35 @@ impl WorkspaceView {
                 }
                 methods::LOCAL_DEVICE => self.verify_engine(value, cx),
                 methods::LIST_HARNESSES => {
+                    let previous = self
+                        .providers
+                        .get(self.provider_index)
+                        .and_then(|p| p["id"].as_str())
+                        .map(str::to_owned);
+                    let initial = previous.is_none();
                     self.providers = value
                         .as_array()
                         .cloned()
                         .unwrap_or_default()
                         .into_iter()
                         .filter(|p| p["id"] != "mock")
-                        .collect()
+                        .collect();
+                    let preferred = previous.or_else(|| {
+                        self.selected
+                            .as_ref()
+                            .and_then(|c| c["config"]["harness"].as_str())
+                            .map(str::to_owned)
+                    });
+                    if let Some(index) =
+                        preferred.and_then(|id| self.providers.iter().position(|p| p["id"] == id))
+                    {
+                        self.provider_index = index;
+                    } else {
+                        self.provider_index = 0;
+                    }
+                    if initial {
+                        self.apply_default_model();
+                    }
                 }
                 methods::WATCH_CHATS => {
                     self.workspace_synced = true;
@@ -521,12 +634,15 @@ impl WorkspaceView {
                     self.sessions = value.as_array().cloned().unwrap_or_default()
                 }
                 methods::LIST_REPOS => self.repos = value.as_array().cloned().unwrap_or_default(),
+                methods::WATCH_SPACES => {
+                    self.spaces = serde_json::from_value(value.clone()).unwrap_or_default()
+                }
                 methods::ADD_REPO => {
                     self.project = Some(value.clone());
                     self.project_picker = false;
                     self.call(methods::LIST_REPOS, json!({}));
                 }
-                methods::LIST_MODELS => self.models = value.as_array().cloned().unwrap_or_default(),
+
                 methods::LIST_AGENT_ACCOUNTS => self.accounts = value.clone(),
                 methods::WATCH_QUEUE if self.queue_watch == Some(id) => {
                     self.queue = value["items"].as_array().cloned().unwrap_or_default()
@@ -684,6 +800,19 @@ impl WorkspaceView {
         self.reset_inputs(cx);
         self.reset_tool_results();
         self.reset_previews(cx);
+        let projects = self.known_projects();
+        let roots = projects
+            .iter()
+            .filter_map(|p| p["path"].as_str())
+            .collect::<Vec<_>>();
+        let identity = zuse_protocol::presentation::project_identity(
+            chat["cwd"].as_str(),
+            chat["spaceId"].as_str(),
+            &self.spaces,
+            &roots,
+        );
+        self.project =
+            (!identity.path.is_empty()).then(|| json!({"path":identity.path,"name":identity.name}));
         self.selected = Some(chat);
         self.restore_draft(cx);
         if let Some(chat) = &self.selected {
@@ -693,6 +822,13 @@ impl WorkspaceView {
                 }
             }
             self.model = chat["config"]["model"].as_str().map(str::to_owned);
+            self.reasoning = serde_json::from_value(chat["config"]["reasoning"].clone()).ok();
+            self.model_options = chat["config"]["modelOptions"]
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+            self.sandbox = serde_json::from_value(chat["config"]["sandbox"].clone())
+                .unwrap_or(zuse_protocol::SandboxLevel::WorkspaceWrite);
         }
         self.load_directory("");
         self.settings = false;
@@ -720,6 +856,10 @@ impl WorkspaceView {
         self.reset_tool_results();
         self.reset_previews(cx);
         self.selected = None;
+        self.model = None;
+        self.reasoning = None;
+        self.model_options.clear();
+        self.apply_default_model();
         self.messages.clear();
         self.transcript_scroll.set_offset(point(px(0.), px(0.)));
         self.settings = false;
@@ -816,7 +956,7 @@ impl WorkspaceView {
         let prompt = zuse_protocol::message_attachments::with_attachments(&text, &paths);
         let message_id = uuid::Uuid::new_v4().to_string();
         draft.message_id = Some(message_id.clone());
-        let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":null,"cwd":self.cwd(),"sandbox":"workspace-write","resume":null,"attachments":self.attachment_paths()}});
+        let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"cwd":self.cwd(),"sandbox":self.sandbox,"autoApprove":self.sandbox==zuse_protocol::SandboxLevel::DangerFullAccess,"resume":null,"attachments":self.attachment_paths()}});
         let send = if let Some(chat) = &self.selected {
             self.call(
                 methods::QUEUE_COMMAND,
@@ -826,8 +966,8 @@ impl WorkspaceView {
             // IDs are client-owned, allowing the durable send to refer to the same chat.
             let id = uuid::Uuid::new_v4().to_string();
             draft.chat_id = Some(id.clone());
-            let request = self.call(methods::MUTATE, json!({"op":"createChat","chatId":id,"deviceId":device,"cwd":self.project.as_ref().and_then(|p|p["path"].as_str()),"config":{"harness":provider["id"],"model":self.model,"reasoning":null,"sandbox":"workspace-write"}}));
-            let chat = json!({"id":id,"title":text.chars().take(70).collect::<String>(),"deviceId":device,"cwd":self.cwd()});
+            let request = self.call(methods::MUTATE, json!({"op":"createChat","chatId":id,"deviceId":device,"cwd":self.project.as_ref().and_then(|p|p["path"].as_str()),"config":{"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"sandbox":self.sandbox}}));
+            let chat = json!({"id":id,"title":text.chars().take(70).collect::<String>(),"deviceId":device,"cwd":self.cwd(),"config":{"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"sandbox":self.sandbox}});
             self.creating = Some((request, chat, command));
             request
         };

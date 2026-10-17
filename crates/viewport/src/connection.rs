@@ -57,6 +57,7 @@ impl WorkspaceView {
             }
         }
         self.creating = None;
+        self.picker_catalog.interrupted();
         self.pending.clear();
         self.transcript_watch = None;
         self.queue_watch = None;
@@ -108,6 +109,7 @@ impl WorkspaceView {
             methods::LIST_HARNESSES,
             methods::WATCH_CHATS,
             methods::WATCH_SESSIONS,
+            methods::WATCH_SPACES,
             methods::LIST_REPOS,
         ] {
             self.call(method, json!({}));
@@ -264,8 +266,8 @@ impl WorkspaceView {
                         .gap_2()
                         .px_3()
                         .py_2()
-                        .rounded_lg()
-                        .bg(rgb(0x211c15))
+                        .border_b_1()
+                        .border_color(rgb(0x2b2d26))
                         .child(label(notice.clone()).flex_1().min_w_0().text_size(px(11.)))
                         .child(control("dismiss-connection-notice", "Dismiss").on_click(
                             cx.listener(|this, _, _, cx| {
@@ -315,8 +317,8 @@ impl WorkspaceView {
                     .p_3()
                     .gap_2()
                     .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(0x55432c))
+                    .border_b_1()
+                    .border_color(rgb(0x2b2d26))
                     .child(label(
                         "Delivery not confirmed · Check chat and queue before restoring",
                     ))

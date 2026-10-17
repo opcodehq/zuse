@@ -4513,8 +4513,63 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The sidebar's view options ("…"): a titlebar control at the sidebar's
-    /// trailing edge, opening the Organize / Sort / Show menu.
+    /// Two persistent navigation views reuse the existing grouping state.
+    pub(super) fn render_sidebar_modes(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex()
+            .gap(px(4.))
+            .mx(px(12.))
+            .mt(px(8.))
+            .mb(px(8.))
+            .p(px(4.))
+            .rounded(px(8.))
+            .bg(theme.glass_hover().opacity(0.35))
+            .children(
+                [
+                    (
+                        SidebarViewRow::InOneList,
+                        SidebarOrganization::InOneList,
+                        "Threads",
+                    ),
+                    (
+                        SidebarViewRow::ByProject,
+                        SidebarOrganization::ByProject,
+                        "Projects",
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (row, organization, name))| {
+                    let selected = self.settings.sidebar_organization == organization;
+                    div()
+                        .id(("sidebar-mode", index))
+                        .role(gpui::Role::Button)
+                        .aria_label(name)
+                        .flex_1()
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .text_size(px(12.))
+                        .text_color(if selected {
+                            theme.text
+                        } else {
+                            theme.text_muted
+                        })
+                        .when(selected, |d| d.bg(theme.glass_hover()))
+                        .hover(|d| d.bg(theme.glass_hover()))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.activate_sidebar_view_row(row, cx)
+                        }))
+                        .child(name)
+                }),
+            )
+            .into_any_element()
+    }
+
+    /// Open the sidebar's detailed organization and visibility options.
     pub(super) fn render_sidebar_view_trigger(
         &mut self,
         theme: &Theme,

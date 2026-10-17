@@ -10595,9 +10595,7 @@ impl Composer {
     }
 }
 
-/// The composer's send control: a size-7 filled circle with an up arrow,
-/// dimmed and inert while `blocked`. Other message composers reuse it so
-/// sending looks the same everywhere.
+/// Shared dither send action, dimmed and inert while blocked.
 pub(crate) fn send_circle(
     id: &'static str,
     blocked: bool,
@@ -10608,8 +10606,11 @@ pub(crate) fn send_circle(
         .debug_selector(move || id.into())
         .size(px(28.0))
         .flex_none()
-        .rounded_full()
-        .bg(theme.text)
+        .relative()
+        .rounded(px(6.))
+        .overflow_hidden()
+        .bg(theme.bg)
+        .child(zuse_viewport::styling::dither_background(true, !blocked))
         .flex()
         .items_center()
         .justify_center()
@@ -10620,7 +10621,7 @@ pub(crate) fn send_circle(
         .child(
             crate::icons::icon(crate::icons::ARROW_UP)
                 .size(px(14.0))
-                .text_color(theme.bg),
+                .text_color(gpui::rgb(0xffffff)),
         )
 }
 

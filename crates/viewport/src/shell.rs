@@ -142,87 +142,89 @@ impl WorkspaceView {
 
     fn composer(&self, cx: &mut Context<Self>) -> AnyElement {
         let provider = self.providers.get(self.provider_index);
-        let model = self
-            .model
-            .as_ref()
-            .map(|id| {
-                self.models
-                    .iter()
-                    .find(|m| m["id"] == id.as_str())
-                    .and_then(|m| m["label"].as_str())
-                    .unwrap_or(id)
-                    .to_owned()
-            })
-            .unwrap_or_else(|| "Agent default".into());
         let working = self.is_working();
         let has_draft =
             !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty();
-        let compact = self.content_width >= 440.
-            && self.attachments.is_empty()
-            && self.uploading == 0
-            && self.input.read(cx).value(cx).len() < 90
-            && !self.input.read(cx).value(cx).contains('\n');
         column()
             .w_full()
-            .max_w(px(860.))
+            .max_w(px(896.))
             .self_center()
             .flex_shrink_0()
-            .px_6()
-            .pb_5()
-            .gap_2()
-            .when(
-                self.connection_notice.is_some() || !self.uncertain_drafts.is_empty(),
-                |d| d.child(self.connection_recovery_view(cx)),
-            )
-            .when(!self.queue.is_empty(), |d| d.child(self.queue_view(cx)))
-            .when_some(self.error.clone(), |d, error| {
+            .px(px(if self.content_width < 500. { 12. } else { 24. }))
+            .pb_3()
+            .pt_2()
+            .when(self.has_composer_notices(), |d| {
                 d.child(
-                    row()
-                        .px_3()
-                        .py_2()
-                        .gap_2()
-                        .rounded_md()
-                        .bg(rgb(0x251715))
-                        .text_size(px(12.))
-                        .text_color(rgb(0xe6a094))
-                        .child(div().flex_1().min_w_0().child(error))
-                        .child(
-                            icon_button("dismiss-error", "close", "Dismiss error").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.error = None;
-                                    cx.notify();
-                                }),
-                            ),
-                        ),
+                    column()
+                        .w(relative(14. / 15.))
+                        .self_center()
+                        .rounded_t(px(19.))
+                        .border_1()
+                        .border_b_0()
+                        .border_color(rgb(0x2b2d26))
+                        .bg(rgb(0x1c1d19))
+                        .child(self.composer_notices(cx)),
                 )
             })
-            .when(working, |d| {
+            .when(self.selected.is_some() || self.project.is_some(), |d| {
                 d.child(
                     row()
+                        .w(relative(14. / 15.))
+                        .self_center()
+                        .min_h(px(34.))
                         .px_2()
-                        .gap_2()
-                        .child(div().size(px(5.)).rounded_full().bg(rgb(0xc59075)))
-                        .child(label("Working…"))
-                        .child(div().flex_1())
-                        .child(label("New messages join the queue")),
+                        .gap_1()
+                        .bg(rgb(0x191a17))
+                        .border_1()
+                        .border_b_0()
+                        .border_color(rgb(0x2b2d26))
+                        .when(!self.has_composer_notices(), |d| d.rounded_t(px(19.)))
+                        .child(
+                            control("composer-project", SharedString::from(self.project_name()))
+                                .h(px(28.))
+                                .text_size(px(11.))
+                                .child(icon("alt-arrow-down").size(px(10.)))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.project_picker = true;
+                                    cx.notify();
+                                })),
+                        )
+                        .when_some(
+                            self.selected
+                                .as_ref()
+                                .and_then(|c| c["branch"].as_str())
+                                .map(str::to_owned),
+                            |d, branch| {
+                                d.child(
+                                    control("composer-branch", SharedString::from(branch))
+                                        .h(px(28.))
+                                        .text_size(px(11.))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.right_open = true;
+                                            this.set_panel("changes", cx);
+                                        })),
+                                )
+                            },
+                        ),
                 )
             })
             .child(
                 column()
                     .relative()
-                    .rounded(px(if compact { 25. } else { 20. }))
+                    .rounded(px(19.))
                     .border_1()
-                    .border_color(rgb(0x292929))
-                    .bg(rgb(0x111111))
-                    .px_3()
-                    .pt_4()
-                    .pb_2()
-                    .gap_2()
-                    .when(compact, |d| d.flex_row().items_center().py_2())
+                    .border_color(rgb(0x30312b))
+                    .bg(rgb(0x181916))
+                    .shadow_sm()
+                    .when(self.model_picker, |d| d.child(self.composer_picker(cx)))
+                    .when(self.access_picker, |d| d.child(self.access_menu(cx)))
+                    .when(self.add_menu, |d| d.child(self.composer_add_menu(cx)))
                     .when(!self.attachments.is_empty() || self.uploading > 0, |d| {
                         d.child(
                             row()
                                 .flex_wrap()
+                                .px_3()
+                                .pt_3()
                                 .gap_2()
                                 .children(self.attachments.iter().enumerate().map(|(i, a)| {
                                     column()
@@ -235,43 +237,35 @@ impl WorkspaceView {
                                                 d.child(self.image_preview(
                                                     a["path"].as_str().unwrap_or_default(),
                                                     "",
-                                                    128.,
+                                                    112.,
                                                     cx,
                                                 ))
                                             },
                                         )
                                         .child(
                                             row()
-                                                .id(("attachment", i))
                                                 .px_2()
                                                 .py_1()
                                                 .gap_2()
                                                 .rounded_md()
                                                 .bg(rgb(RAISED))
+                                                .child(icon("paperclip").size(px(12.)))
                                                 .child(
-                                                    icon(
-                                                        if a["mime"].as_str().is_some_and(|s| {
-                                                            s.starts_with("image/")
-                                                        }) {
-                                                            "file-code"
-                                                        } else {
-                                                            "paperclip"
-                                                        },
+                                                    label(
+                                                        a["name"]
+                                                            .as_str()
+                                                            .unwrap_or("Attachment")
+                                                            .to_owned(),
                                                     )
-                                                    .size(px(12.)),
+                                                    .text_size(px(11.)),
                                                 )
-                                                .child(label(
-                                                    a["name"]
-                                                        .as_str()
-                                                        .unwrap_or("Attachment")
-                                                        .to_owned(),
-                                                ))
                                                 .child(
                                                     icon_button(
                                                         ("remove-attachment", i),
                                                         "close",
                                                         "Remove attachment",
                                                     )
+                                                    .size(px(22.))
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         this.attachments.remove(i);
                                                         cx.notify();
@@ -280,107 +274,157 @@ impl WorkspaceView {
                                         )
                                 }))
                                 .when(self.uploading > 0, |d| {
-                                    d.child(label(format!("Uploading {}…", self.uploading)))
+                                    d.child(
+                                        label(format!("Uploading {}…", self.uploading))
+                                            .text_size(px(11.)),
+                                    )
                                 }),
                         )
-                    })
-                    .when(self.model_picker || self.agent_picker, |d| {
-                        d.child(self.composer_picker(cx))
                     })
                     .child(
                         div()
                             .w_full()
-                            .when(compact, |d| d.flex_1().min_w_0())
-                            .min_h(px(if compact {
-                                22.
-                            } else if self.messages.is_empty() {
-                                60.
-                            } else {
-                                38.
-                            }))
+                            .px_3()
+                            .pt_3()
+                            .pb_2()
+                            .min_h(px(58.))
                             .child(self.input.clone()),
                     )
                     .child(
                         row()
+                            .relative()
+                            .px_2()
+                            .pb_2()
                             .gap_1()
                             .child(
-                                icon_button("attach", "paperclip", "Attach images or files")
-                                    .on_click(cx.listener(|this, _, _, _| this.pick_attachments())),
+                                icon_button("composer-add", "plus", "Add attachments or tools")
+                                    .size(px(28.))
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.add_menu = !this.add_menu;
+                                        this.access_picker = false;
+                                        this.model_picker = false;
+                                        cx.notify();
+                                    })),
                             )
-                            .when(!compact, |d| d.child(div().flex_1()))
                             .child(
-                                icon_button(
-                                    "agent-picker",
-                                    provider_icon(
-                                        provider.and_then(|p| p["id"].as_str()).unwrap_or_default(),
-                                    ),
-                                    "Choose agent",
+                                control(
+                                    "agent-access",
+                                    if self.content_width < 420. {
+                                        "Access"
+                                    } else if self.sandbox
+                                        == zuse_protocol::SandboxLevel::DangerFullAccess
+                                    {
+                                        "Full access"
+                                    } else {
+                                        "Ask for approval"
+                                    },
                                 )
-                                .text_color(rgb(0xd79a72))
-                                .when(self.agent_picker, |d| d.bg(rgb(RAISED)))
+                                .h(px(28.))
+                                .px_2()
+                                .text_size(px(11.))
+                                .when(
+                                    self.sandbox == zuse_protocol::SandboxLevel::DangerFullAccess,
+                                    |d| d.text_color(rgb(0xe2b876)),
+                                )
+                                .child(icon("alt-arrow-down").size(px(10.)))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_click(cx.listener(
                                     |this, _, _, cx| {
-                                        this.agent_picker = !this.agent_picker;
+                                        this.access_picker = !this.access_picker;
+                                        this.add_menu = false;
                                         this.model_picker = false;
                                         cx.notify();
                                     },
                                 )),
                             )
+                            .child(div().flex_1().min_w_0())
                             .child(
-                                control("model-picker", SharedString::from(model))
+                                row()
+                                    .id("model-picker")
+                                    .role(Role::Button)
+                                    .aria_label("Change model")
+                                    .cursor_pointer()
+                                    .h(px(28.))
+                                    .w(px(if self.content_width < 500. {
+                                        148.
+                                    } else {
+                                        176.
+                                    }))
+                                    .min_w_0()
+                                    .px_2()
+                                    .gap_2()
+                                    .rounded_full()
+                                    .bg(rgb(0x2b2d26))
+                                    .hover(|d| d.bg(rgb(0x34372c)))
                                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                         cx.stop_propagation()
                                     })
-                                    .child(icon("alt-arrow-down").size(px(12.)))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.model_picker = !this.model_picker;
-                                        this.agent_picker = false;
-                                        if let Some(p) = this.providers.get(this.provider_index) {
-                                            this.call(
-                                                methods::LIST_MODELS,
-                                                json!({"harness":p["id"]}),
-                                            );
-                                        }
-                                        cx.notify();
+                                    .child(
+                                        icon(provider_icon(
+                                            provider
+                                                .and_then(|p| p["id"].as_str())
+                                                .unwrap_or_default(),
+                                        ))
+                                        .size(px(13.))
+                                        .text_color(rgb(MUTED)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_ellipsis()
+                                            .text_size(px(11.))
+                                            .text_color(rgb(TEXT))
+                                            .child(self.picker_label()),
+                                    )
+                                    .child(
+                                        icon("alt-arrow-down").size(px(10.)).text_color(rgb(FAINT)),
+                                    )
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_model_picker(window, cx)
                                     })),
                             )
                             .when(working, |d| {
                                 d.child(
                                     icon_button("stop", "stop", "Stop agent")
-                                        .bg(rgb(0xdddddd))
-                                        .text_color(rgb(BG))
+                                        .size(px(28.))
+                                        .bg(rgb(0x33352d))
+                                        .text_color(rgb(TEXT))
                                         .on_click(cx.listener(|this, _, _, cx| this.interrupt(cx))),
                                 )
                             })
-                            .child(
-                                icon_button(
-                                    "send",
-                                    if working { "queue-send" } else { "arrow-up" },
-                                    if working {
-                                        "Queue message"
-                                    } else {
-                                        "Send message"
-                                    },
+                            .when(!working || has_draft, |d| {
+                                d.child(
+                                    crate::styling::dither_icon_action(
+                                        "send",
+                                        if working { "queue-send" } else { "arrow-up" },
+                                        if working {
+                                            "Queue message"
+                                        } else {
+                                            "Send message"
+                                        },
+                                        has_draft && self.connected,
+                                        true,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| this.submit(&Submit, window, cx),
+                                    )),
                                 )
-                                .rounded_full()
-                                .size(px(30.))
-                                .bg(rgb(if has_draft { TEXT } else { 0x535353 }))
-                                .text_color(rgb(if has_draft { BG } else { 0xa3a3a3 }))
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| this.submit(&Submit, window, cx),
-                                )),
-                            ),
+                            }),
                     ),
             )
             .into_any_element()
     }
 
-    fn queue_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn queue_view(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
-            .p_2()
+            .px_2()
+            .py_1()
             .gap_1()
-            .rounded_lg()
-            .border_1()
+            .border_b_1()
             .border_color(rgb(BORDER))
             .child(
                 row()
@@ -795,7 +839,7 @@ impl WorkspaceView {
             .child(label(
                 "Choose a known repository, or enter a path on the engine host.",
             ))
-            .children(self.repos.iter().enumerate().map(|(i, p)| {
+            .children(self.known_projects().iter().enumerate().map(|(i, p)| {
                 let project = p.clone();
                 column()
                     .id(("project", i))
@@ -1202,6 +1246,7 @@ impl Render for WorkspaceView {
         } else {
             320.
         };
+        self.content_height = f32::from(window.viewport_size().height);
         self.content_width = f32::from(window.viewport_size().width)
             - if self.sidebar_open { 296. } else { 0. }
             - panel_width;
@@ -1211,9 +1256,12 @@ impl Render for WorkspaceView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    if this.model_picker || this.agent_picker {
+                    if this.model_picker || this.agent_picker || this.access_picker || this.add_menu
+                    {
                         this.model_picker = false;
                         this.agent_picker = false;
+                        this.access_picker = false;
+                        this.add_menu = false;
                         cx.notify();
                     }
                 }),
@@ -1222,12 +1270,17 @@ impl Render for WorkspaceView {
             .on_action(
                 cx.listener(|this, _: &SearchSessions, window, cx| this.toggle_search(window, cx)),
             )
-            .on_action(cx.listener(|this, _: &NewSession, _, cx| this.new_chat(cx)))
-            .on_action(cx.listener(|this, _: &ClosePreview, _, cx| {
+            .on_action(
+                cx.listener(|this, _: &NewSession, window, cx| this.start_new_session(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
                 this.preview_open = None;
                 this.model_picker = false;
                 this.agent_picker = false;
                 this.search_open = false;
+                this.access_picker = false;
+                this.add_menu = false;
+                window.focus(&this.input.focus_handle(cx), cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| this.save_file(cx)))

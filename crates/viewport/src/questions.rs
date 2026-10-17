@@ -62,8 +62,8 @@ impl WorkspaceView {
             .p_3()
             .rounded_lg()
             .border_1()
-            .border_color(rgb(0x37302b))
-            .bg(rgb(0x141210))
+            .border_color(rgb(0x34372c))
+            .bg(rgb(0x1c1d19))
             .child(label(if resolved {
                 "Answered"
             } else if busy {
@@ -101,7 +101,7 @@ impl WorkspaceView {
                         SharedString::from(option.clone()),
                     )
                     .when(selected, |button| {
-                        button.bg(rgb(0x35302a)).text_color(rgb(0xf0d2b8))
+                        button.bg(rgb(0x343d22)).text_color(rgb(0xb4f327))
                     })
                     .when(busy, |button| button.opacity(0.5))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -168,9 +168,11 @@ impl WorkspaceView {
         }
         if !resolved {
             card = card.child(
-                control(
+                crate::styling::dither_action(
                     SharedString::from(format!("submit-question-{request}")),
                     if busy { "Sending…" } else { "Submit answers" },
+                    ready && !busy,
+                    true,
                 )
                 .when(!ready || busy, |button| button.opacity(0.4))
                 .on_click(cx.listener(move |this, _, _, cx| {

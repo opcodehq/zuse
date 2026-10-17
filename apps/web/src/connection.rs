@@ -50,6 +50,20 @@ async fn auth_status() -> Result<bool, ()> {
         _ => Err(()),
     }
 }
+fn local_action(frame: &Value) -> bool {
+    if frame["ui"] != "savePreferences" {
+        return false;
+    }
+    if let Some(value) = frame.get("value") {
+        let text = value.to_string();
+        if text.len() <= 64 * 1024 {
+            if let Ok(Some(storage)) = web_sys::window().unwrap().local_storage() {
+                let _ = storage.set_item("zuse.workspace.preferences.v1", &text);
+            }
+        }
+    }
+    true
+}
 fn reject(events: &Sender, frame: &Value) {
     if let Some(id) = frame["id"].as_u64() {
         if frame["cancel"] != true {
@@ -69,7 +83,7 @@ async fn wait_offline(
     loop {
         futures::select_biased! {
             _=timer=>return true,
-            frame=outbound.next().fuse()=>match frame {Some(frame)=>reject(events,&frame),None=>return false},
+            frame=outbound.next().fuse()=>match frame {Some(frame)=>{if !local_action(&frame){reject(events,&frame)}},None=>return false},
         }
     }
 }
@@ -80,6 +94,7 @@ fn mutation(frame: &Value) -> bool {
         | methods::LIST_HARNESSES
         | methods::WATCH_CHATS
         | methods::WATCH_SESSIONS
+        | methods::WATCH_SPACES
         | methods::LIST_REPOS
         | methods::MODEL_CONNECTIONS
         | methods::LIST_MODELS
@@ -212,6 +227,9 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             futures::pin_mut!(closed);
             loop {
                 let frame = futures::select_biased! {_=closed=>break,frame=outbound.next().fuse()=>match frame{Some(frame)=>frame,None=>{application_closed=true;break;}}};
+                if local_action(&frame) {
+                    continue;
+                }
                 if frame["ui"] == "pickAttachments" {
                     if frame["epoch"].as_u64() == Some(epoch) {
                         super::browser::pick_attachments(

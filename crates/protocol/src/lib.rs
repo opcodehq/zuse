@@ -15,6 +15,7 @@ pub mod invocation;
 pub mod methods;
 pub mod motion;
 pub mod plugins;
+pub mod presentation;
 pub mod preview;
 pub mod projectless;
 pub mod recovery;

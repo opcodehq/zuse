@@ -31,6 +31,7 @@ jobs:
       - run: cargo check -p zuse-cli
       - run: cargo test -p zuse-cli --test startup
       - run: cargo test -p zuse-protocol --lib browser_link
+      - run: cargo test -p zuse-protocol --lib presentation
       - run: cargo test -p zuse-protocol --lib input_answers
       - run: cargo test -p zuse-protocol --lib message_attachments
       - run: cargo test -p zuse-harness -p zuse-model-accounts
