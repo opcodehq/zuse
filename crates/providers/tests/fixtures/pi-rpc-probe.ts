@@ -38,6 +38,14 @@ export default function(pi) {
           msg.stopReason = options?.signal?.aborted ? 'aborted' : 'error';msg.errorMessage = 'local mock failure';
           stream.push({type:'error',reason:msg.stopReason,error:msg});stream.end();return;
         }
+        if (text === 'access-probe' && !context.messages.some(message => message.role === 'toolResult')) {
+          const call = {type:'toolCall', id:'zuse-access-probe', name:'write', arguments:{path:'access-probe.txt', content:'approved write'}};
+          msg.content.push(call);
+          msg.stopReason = 'toolUse';
+          stream.push({type:'toolcall_start',contentIndex:0,partial:msg});
+          stream.push({type:'toolcall_end',contentIndex:0,toolCall:call,partial:msg});
+          stream.push({type:'done',reason:'toolUse',message:msg});stream.end();return;
+        }
         msg.content.push({type:'text',text:''});
         stream.push({type:'text_start',contentIndex:0,partial:msg});
         msg.content[0].text = 'MOCK:'+(gate ? batch.join('|') : text);

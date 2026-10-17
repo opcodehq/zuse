@@ -44,7 +44,8 @@ for line in sys.stdin:
     if kind == 'get_state':
         data = {'sessionId': session, 'sessionFile': str(path), 'isStreaming': False, 'isCompacting': False, 'model': {'id': 'mock'}}
     if kind == 'get_commands':
-        data = {'commands': []}
+        access = json.loads(os.environ.get('ZUSE_PI_ACCESS', '{}'))
+        data = {'commands': [{'name':access['ready'], 'source':'extension'}] if access else []}
     success = not (kind == 'prompt' and req['message'] == 'require-resume' and not resumed)
     emit({'id': req.get('id'), 'type': 'response', 'command': kind, 'success': success, 'data': data, 'error': 'session must be resumed'})
     if kind == 'prompt' and success:

@@ -214,7 +214,7 @@ async fn steers_confirm_on_consumption_and_interrupt_is_terminal_once() {
         .await
         .unwrap();
     tx.send(SteerMessage {
-        prompt: "redirect".into(),
+        prompt: "interrupt-gate".into(),
         message_id: Some("user-id".into()),
         attachments: Vec::new(),
         config: None,
@@ -805,4 +805,84 @@ async fn a_model_switch_applies_to_the_live_process() {
     assert_eq!(started, 1);
     assert!(text.contains("reply:mock/medium|"), "{text}");
     assert!(text.contains("reply:mock-2/high|"), "{text}");
+}
+
+#[tokio::test]
+async fn access_guard_uses_current_posture_and_hides_its_readiness_command() {
+    for (sandbox, auto_approve, mode) in [
+        (SandboxLevel::ReadOnly, false, "read-only"),
+        (SandboxLevel::ReadOnly, true, "read-only"),
+        (SandboxLevel::WorkspaceWrite, false, "ask"),
+        (SandboxLevel::WorkspaceWrite, true, "ask"),
+        (SandboxLevel::DangerFullAccess, false, "ask"),
+        (SandboxLevel::DangerFullAccess, true, "full"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (controls, steer, _) = controls();
+        drop(steer);
+        let mut request = request(dir.path(), "hello");
+        request.sandbox = sandbox;
+        request.auto_approve = auto_approve;
+        let stream = harness()
+            .with_session_store(dir.path().join("index"))
+            .run(request, controls)
+            .await
+            .unwrap();
+        let events: Vec<_> =
+            tokio::time::timeout(Duration::from_secs(5), stream.map(Result::unwrap).collect())
+                .await
+                .unwrap();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                }
+            )),
+            "{events:?}"
+        );
+        let config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("access-config.json")).unwrap())
+                .unwrap();
+        let args: Vec<String> =
+            serde_json::from_slice(&std::fs::read(dir.path().join("access-args.json")).unwrap())
+                .unwrap();
+        assert_eq!(config["mode"], mode);
+        assert_eq!(
+            args.iter().any(|arg| arg == "--no-extensions"),
+            mode != "full"
+        );
+        assert!(dir.path().join("prompt-admitted").exists());
+        assert!(!format!("{events:?}").contains(config["ready"].as_str().unwrap()));
+    }
+}
+
+#[tokio::test]
+async fn access_guard_load_failure_prevents_prompt_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("missing-access-guard"), "yes").unwrap();
+    let (controls, steer, _) = controls();
+    drop(steer);
+    let stream = harness()
+        .with_session_store(dir.path().join("index"))
+        .run(request(dir.path(), "hello"), controls)
+        .await
+        .unwrap();
+    let events: Vec<_> =
+        tokio::time::timeout(Duration::from_secs(5), stream.map(Result::unwrap).collect())
+            .await
+            .unwrap();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Done {
+                status: DoneStatus::Errored,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    assert!(format!("{events:?}").contains("access guard did not load"));
+    assert!(!dir.path().join("prompt-admitted").exists());
 }

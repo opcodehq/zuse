@@ -1,4 +1,5 @@
 //! Native Pi JSONL RPC driver. See PROTOCOL.md for the legacy ACK barrier.
+mod access;
 mod catalog;
 mod mcp;
 mod normalize;
@@ -95,7 +96,7 @@ impl PiHarness {
         })
     }
     async fn probe(&self, cwd: &Path, models: bool) -> Result<Value, HarnessError> {
-        let mut process = self.spawn(cwd, &["--no-session".into()], None)?;
+        let mut process = self.spawn(cwd, &["--no-session".into()], None, None)?;
         let (mut tx, rx) = tokio::sync::oneshot::channel();
         let grace = self.kill_grace;
         tokio::spawn(async move {
@@ -117,6 +118,7 @@ impl PiHarness {
         cwd: &Path,
         args: &[String],
         mcp: Option<&zuse_protocol::McpServer>,
+        request: Option<&RunRequest>,
     ) -> Result<Process, HarnessError> {
         let exe = self.resolve_executable()?;
         if self.executable.is_none() {
@@ -142,6 +144,9 @@ impl PiHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        let access = request
+            .map(|request| access::configure(&mut cmd, request))
+            .transpose()?;
         let scratch = mcp
             .map(|config| self::mcp::configure(&mut cmd, config))
             .transpose()?;
@@ -162,6 +167,7 @@ impl PiHarness {
         Ok(Process {
             child,
             _scratch: scratch,
+            access,
             transport,
             tail,
             stderr_task,
@@ -173,6 +179,7 @@ impl PiHarness {
 struct Process {
     child: Child,
     _scratch: Option<crate::scratch::ScratchDir>,
+    access: Option<access::Guard>,
     transport: rpc::Transport,
     tail: crate::StderrTail,
     stderr_task: tokio::task::JoinHandle<()>,
@@ -365,7 +372,12 @@ impl Harness for PiHarness {
         if lost_context.is_some() {
             request.resume = None;
         }
-        let process = self.spawn(Path::new(&request.cwd), &args, request.mcp.as_ref())?;
+        let process = self.spawn(
+            Path::new(&request.cwd),
+            &args,
+            request.mcp.as_ref(),
+            Some(&request),
+        )?;
         let (tx, rx) = mpsc::channel(256);
         let kill_grace = self.kill_grace;
         let interrupt_grace = self.interrupt_grace;
@@ -541,10 +553,25 @@ impl Runner {
         }
         let request = self.request.clone();
         self.configure(&request, backlog).await?;
-        let commands = self
+        let mut commands = self
             .process
             .query(json!({"type":"get_commands"}), backlog)
             .await?;
+        if let Some(guard) = &self.process.access {
+            let ready = commands["commands"].as_array().is_some_and(|commands| {
+                commands.iter().any(|command| {
+                    command["name"] == guard.ready && command["source"] == "extension"
+                })
+            });
+            if !ready {
+                return Err(HarnessError::Protocol(
+                    "Pi access guard did not load; prompt was not sent".into(),
+                ));
+            }
+            if let Some(commands) = commands["commands"].as_array_mut() {
+                commands.retain(|command| command["name"] != guard.ready);
+            }
+        }
         self.extension_commands = commands["commands"]
             .as_array()
             .into_iter()

@@ -32,9 +32,10 @@ fn isolated_pi() -> (tempfile::TempDir, PiHarness) {
     std::fs::write(
         &wrapper,
         format!(
-            "#!/bin/sh\nexport PI_CODING_AGENT_DIR={}\nexec {} \"$@\"\n",
+            "#!/bin/sh\nexport PI_CODING_AGENT_DIR={}\nexec {} --extension {} \"$@\"\n",
             quote(&agent),
-            quote(&exe)
+            quote(&exe),
+            quote(&extensions.join("probe.ts"))
         ),
     )
     .unwrap();
@@ -341,4 +342,87 @@ async fn real_pi_steering_bursts_share_the_next_model_call() {
         )
     );
     assert_eq!(wait_probe_lines(&calls, 3).await.len(), 3);
+}
+
+#[tokio::test]
+#[ignore = "requires Pi >= 0.85.1 installed; exercises actual tools with a local mock provider"]
+async fn real_pi_access_gates_actual_write_tool() {
+    for (sandbox, auto_approve, answer, expected_write, expected_questions) in [
+        (SandboxLevel::WorkspaceWrite, false, Some("Yes"), true, 1),
+        (SandboxLevel::WorkspaceWrite, true, Some("No"), false, 1),
+        (SandboxLevel::DangerFullAccess, false, Some("Yes"), true, 1),
+        (SandboxLevel::DangerFullAccess, true, None, true, 0),
+        (SandboxLevel::ReadOnly, false, Some("Yes"), false, 0),
+        (SandboxLevel::ReadOnly, true, Some("Yes"), false, 0),
+        (SandboxLevel::WorkspaceWrite, false, None, false, 1),
+    ] {
+        let (dir, harness) = isolated_pi();
+        let (sender, steering) = mpsc::channel(8);
+        drop(sender);
+        let questions = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = questions.clone();
+        let controls = RunControls {
+            realtime: None,
+            execution_lease: None,
+            steering,
+            interrupt: CancellationToken::new(),
+            turn: Default::default(),
+            request_input: Box::new(move |questions| {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                assert!(questions[0].question.contains("write"));
+                let (tx, rx) = oneshot::channel();
+                if let Some(answer) = answer {
+                    let _ = tx.send(vec![UserInputAnswer {
+                        question_id: questions[0].id.clone(),
+                        labels: vec![answer.into()],
+                    }]);
+                }
+                rx
+            }),
+        };
+        let request = RunRequest {
+            prompt: "access-probe".into(),
+            harness: None,
+            model: Some("zuse-probe/mock".into()),
+            reasoning: None,
+            model_options: Default::default(),
+            cwd: dir.path().display().to_string(),
+            sandbox,
+            auto_approve,
+            resume: None,
+            attachments: vec![],
+            worktree: None,
+            mcp: None,
+        };
+        let events: Vec<_> = tokio::time::timeout(
+            Duration::from_secs(20),
+            harness
+                .run(request, controls)
+                .await
+                .unwrap()
+                .map(Result::unwrap)
+                .collect(),
+        )
+        .await
+        .expect("actual Pi tool run must settle");
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                }
+            )),
+            "{events:?}"
+        );
+        assert_eq!(
+            dir.path().join("access-probe.txt").exists(),
+            expected_write,
+            "{sandbox:?}/{auto_approve}/{answer:?}: {events:?}"
+        );
+        assert_eq!(
+            questions.load(std::sync::atomic::Ordering::SeqCst),
+            expected_questions
+        );
+    }
 }

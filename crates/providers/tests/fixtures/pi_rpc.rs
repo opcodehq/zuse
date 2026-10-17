@@ -98,11 +98,24 @@ fn main() {
                 std::fs::write("steering-mode", v["mode"].as_str().unwrap_or("")).unwrap();
                 response(&v, json!({}));
             }
-            "get_commands" => response(
-                &v,
-                json!({"commands":[{"name":"noop","description":"handled","source":"extension"},{"name":"skill:probe","description":"skill","source":"skill"}]}),
-            ),
+            "get_commands" => {
+                let mut commands = vec![
+                    json!({"name":"noop","description":"handled","source":"extension"}),
+                    json!({"name":"skill:probe","description":"skill","source":"skill"}),
+                ];
+                if let Ok(access) = std::env::var("ZUSE_PI_ACCESS") {
+                    let access: Value = serde_json::from_str(&access).unwrap();
+                    std::fs::write("access-config.json", access.to_string()).unwrap();
+                    std::fs::write("access-args.json", serde_json::to_string(&args).unwrap())
+                        .unwrap();
+                    if !std::path::Path::new("missing-access-guard").exists() {
+                        commands.push(json!({"name":access["ready"],"source":"extension"}));
+                    }
+                }
+                response(&v, json!({"commands":commands}));
+            }
             "prompt" => {
+                std::fs::write("prompt-admitted", "yes").unwrap();
                 let mut text = v["message"].as_str().unwrap_or("").to_owned();
                 if text == "env" {
                     text = format!("env:{}", std::env::var_os("CLAUDECODE").is_some());
@@ -182,6 +195,11 @@ fn main() {
                             emit(
                                 json!({"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"tree ready"}}),
                             );
+                        }
+                        // Keep the consumed steer active until the test cancels it.
+                        // A fast reply can settle before the consumer sees its receipt.
+                        while text == "interrupt-gate" && !abort.load(Ordering::SeqCst) {
+                            std::thread::sleep(Duration::from_millis(5));
                         }
                         if text == "slow" || text == "tree" {
                             for _ in 0..100 {
