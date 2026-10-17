@@ -60,6 +60,22 @@ impl RpcSubscription {
 
 impl Drop for RpcSubscription {
     fn drop(&mut self) {
+        drop(PendingCancellation {
+            id: self.id,
+            out: self.out.clone(),
+            shared: self.shared.clone(),
+        });
+    }
+}
+
+struct PendingCancellation {
+    id: u64,
+    out: mpsc::Sender<String>,
+    shared: Arc<Shared>,
+}
+
+impl Drop for PendingCancellation {
+    fn drop(&mut self) {
         if self.shared.lock().remove(&self.id).is_none() {
             return;
         }
@@ -144,9 +160,33 @@ impl RpcClient {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, RpcError> {
+        self.call_inner(method, params, false).await
+    }
+
+    /// A unary call whose caller may cancel execution by dropping the future.
+    /// Use only for handlers designed to tolerate cancellation during execution.
+    pub async fn call_scoped(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, RpcError> {
+        self.call_inner(method, params, true).await
+    }
+
+    async fn call_inner(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        cancel_on_drop: bool,
+    ) -> Result<serde_json::Value, RpcError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.shared.lock().insert(id, Pending::Call(tx));
+        let _cancel = cancel_on_drop.then(|| PendingCancellation {
+            id,
+            out: self.out.clone(),
+            shared: self.shared.clone(),
+        });
         self.send(ClientFrame {
             id,
             method: Some(method.into()),

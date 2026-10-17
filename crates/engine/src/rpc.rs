@@ -683,6 +683,8 @@ enum MutateParams {
 
 #[derive(Clone)]
 pub struct EngineRpc {
+    account: Option<crate::account::Account>,
+    plugins: Option<crate::plugins::Plugins>,
     voice: crate::voice::VoiceManager,
     sessions: SessionsEngine,
     doc_host: DocHost,
@@ -731,6 +733,8 @@ impl EngineRpc {
         };
         let github = GitHubCli::new().with_store(repos.data_dir());
         Self {
+            account: None,
+            plugins: None,
             voice: sessions.voice_manager(),
             sessions,
             doc_host,
@@ -753,6 +757,16 @@ impl EngineRpc {
             local_import: None,
             engine_info,
         }
+    }
+
+    pub fn with_account(
+        mut self,
+        account: crate::account::Account,
+        plugins: crate::plugins::Plugins,
+    ) -> Self {
+        self.account = Some(account);
+        self.plugins = Some(plugins);
+        self
     }
 
     pub fn with_previews(mut self, previews: zuse_preview::PreviewService) -> Self {
@@ -1892,6 +1906,64 @@ impl RpcService for EngineRpc {
                 .await;
         }
         match method {
+            methods::CLOUD_ACCOUNT_STATUS => {
+                let account = self
+                    .account
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
+                Ok(RpcReply::Stream(watch_stream(account.watch())))
+            }
+            methods::CLOUD_ACCOUNT_SIGN_IN => {
+                let account = self
+                    .account
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
+                let progress = account
+                    .sign_in()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&progress)
+            }
+            methods::CLOUD_ACCOUNT_SIGN_OUT => {
+                let account = self
+                    .account
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
+                account
+                    .sign_out()
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok":true}))
+            }
+            methods::PLUGINS => {
+                let gateway = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Plugin service is unavailable.".into()))?;
+                let request = parse_params(params)?;
+                let response = gateway
+                    .request(&request)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&response)
+            }
+            methods::PLUGIN_TOOLS => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase", deny_unknown_fields)]
+                struct P {
+                    chat_id: String,
+                    request: zuse_protocol::plugins::PluginToolRequest,
+                }
+                let p: P = parse_params(params)?;
+                let gateway = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Plugin service is unavailable.".into()))?;
+                let response = gateway
+                    .tools(&p.chat_id, &p.request)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&response)
+            }
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),

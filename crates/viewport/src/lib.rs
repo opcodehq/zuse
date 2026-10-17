@@ -65,6 +65,11 @@ pub struct WorkspaceView {
     file_editor: Entity<input::TextInput>,
     save_request: Option<(u64, String)>,
     accounts: Value,
+    cloud_account: Value,
+    browser_local: bool,
+    plugins: Value,
+    plugin_attempt: Value,
+    plugin_request: Option<u64>,
     models: Vec<Value>,
     model: Option<String>,
     model_picker: bool,
@@ -155,6 +160,11 @@ impl WorkspaceView {
             file_editor,
             save_request: None,
             accounts: Value::Null,
+            cloud_account: Value::Null,
+            browser_local: false,
+            plugins: Value::Null,
+            plugin_attempt: Value::Null,
+            plugin_request: None,
             models: vec![],
             model: None,
             model_picker: false,
@@ -170,12 +180,20 @@ impl WorkspaceView {
             composer_generation: 0,
             _reader: reader,
         };
+        view.call(methods::CLOUD_ACCOUNT_STATUS, json!({}));
         view.call(methods::LOCAL_DEVICE, json!({}));
         view.call(methods::LIST_HARNESSES, json!({}));
         view.call(methods::WATCH_CHATS, json!({}));
         view.call(methods::WATCH_SESSIONS, json!({}));
         view.call(methods::LIST_REPOS, json!({}));
         view
+    }
+
+    fn plugin_action(&mut self, request: Value) {
+        if self.plugin_request.is_some() {
+            return;
+        }
+        self.plugin_request = Some(self.call(methods::PLUGINS, request));
     }
 
     fn call(&mut self, method: &str, params: Value) -> u64 {
@@ -193,6 +211,10 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if let Some(local) = frame["browserLocal"].as_bool() {
+            self.browser_local = local;
+            return;
+        }
         if let Some(connection) = frame.get("connection").and_then(Value::as_str) {
             self.status = connection.into();
             cx.notify();
@@ -224,6 +246,9 @@ impl WorkspaceView {
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if let Some(error) = frame.get("err").and_then(Value::as_str) {
             self.error = Some(error.into());
+            if self.plugin_request == Some(id) {
+                self.plugin_request = None;
+            }
             if let Some(draft) = self.send_draft.remove(&id) {
                 self.restore_failed_draft(draft, cx);
             }
@@ -267,6 +292,32 @@ impl WorkspaceView {
         let value = frame.get("item").or_else(|| frame.get("ok"));
         if let Some(value) = value {
             match method.as_str() {
+                methods::CLOUD_ACCOUNT_STATUS => {
+                    let changed = self.cloud_account["user"]["id"] != value["user"]["id"];
+                    self.cloud_account = value.clone();
+                    if changed {
+                        self.plugins = Value::Null;
+                        self.plugin_attempt = Value::Null;
+                        self.plugin_request = None;
+                        if value["user"].is_object() {
+                            self.plugin_action(json!({"action":"list"}));
+                        }
+                    }
+                }
+                methods::PLUGINS if self.plugin_request == Some(id) => {
+                    self.plugin_request = None;
+                    if value["kind"] == "snapshot" {
+                        self.plugins = value.clone();
+                    } else if value["kind"] == "attempt" {
+                        self.plugin_attempt = value.clone();
+                        if value["state"] == "connected" {
+                            self.plugin_action(json!({"action":"list"}));
+                        }
+                    } else {
+                        self.plugin_attempt = Value::Null;
+                        self.plugin_action(json!({"action":"list"}));
+                    }
+                }
                 methods::LOCAL_DEVICE => {
                     self.device_id = value
                         .get("deviceId")

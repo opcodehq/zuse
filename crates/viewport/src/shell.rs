@@ -722,6 +722,50 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    fn cloud_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let signed_in = self.cloud_account["user"].is_object();
+        let tenant = self.plugins["tenantId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let busy = self.plugin_request.is_some();
+        column().gap_3().child(label("Zuse account & plugins"))
+            .child(row().gap_3()
+                .child(column().flex_1().gap_1()
+                    .child(div().text_size(px(13.)).child(self.cloud_account["user"]["email"].as_str().unwrap_or("Connect your Zuse account").to_owned()))
+                    .child(label("Hosted connections are shared across your agents. Local agents work without signing in.")))
+                .child(control("cloud-sign-in",if signed_in {"Sign out"} else {"Sign in"})
+
+                    .on_click(cx.listener(move |this,_,_,cx| {this.call(if signed_in {methods::CLOUD_ACCOUNT_SIGN_OUT} else {methods::CLOUD_ACCOUNT_SIGN_IN},json!({}));cx.notify();}))))
+            .when_some(self.cloud_account["error"].as_str().map(str::to_owned),|d,e|d.child(label(e)))
+            .when_some(self.cloud_account["login"]["url"].as_str().filter(|u|u.starts_with("https://")).map(str::to_owned),|d,url| {
+                d.child(row().gap_3().child(label(format!("Authorization code: {}",self.cloud_account["login"]["userCode"].as_str().unwrap_or_default())))
+                    .child(control("authorize-account","Open sign-in").on_click(move |_,_,cx|cx.open_url(&url))))
+            })
+            .when(signed_in,|d|d
+                .child(row().child(label("Connected plugins")).child(div().flex_1()).child(control("refresh-plugins",if busy {"Loading…"} else {"Refresh"}).on_click(cx.listener(|this,_,_,cx|{this.plugin_action(json!({"action":"list"}));cx.notify();}))))
+                .children(self.plugins["tenants"].as_array().into_iter().flatten().enumerate().map(|(i,t)| {
+                    let id=t["id"].clone();
+                    control(("plugin-tenant",i),t["name"].as_str().unwrap_or("Workspace").to_owned()).on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"list","tenantId":id}));cx.notify();}))
+                }))
+                .children(self.plugins["connections"].as_array().into_iter().flatten().enumerate().map(|(i,c)| {
+                    let id=c["id"].as_str().unwrap_or_default().to_owned();let tenant=tenant.clone();let enabled=c["enabled"]!=false;
+                    row().gap_2().p_2().child(label(c["label"].as_str().unwrap_or("Plugin").to_owned())).child(label(c["state"].as_str().unwrap_or_default().to_owned())).child(div().flex_1())
+                        .child(control(("toggle-plugin",i),if enabled {"Disable"} else {"Enable"}).on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"setEnabled","tenantId":tenant,"connectionId":id,"enabled":!enabled}));cx.notify();})))
+                }))
+                .children(self.plugins["catalog"].as_array().into_iter().flatten().enumerate().map(|(i,p)| {
+                    let plugin=p["id"].as_str().unwrap_or_default().to_owned();let name=p["name"].as_str().unwrap_or("Plugin").to_owned();let tenant=tenant.clone();let title=name.clone();
+                    row().gap_2().p_2().child(column().flex_1().gap_1().child(label(title)).child(label(p["description"].as_str().unwrap_or_default().to_owned())))
+                        .child(control(("connect-plugin",i),"Connect").on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"connect","tenantId":tenant,"pluginId":plugin,"label":name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":if this.browser_local {json!({"kind":"desktop","port":0})} else {json!({"kind":"web"})}}));cx.notify();})))
+                })))
+            .when_some(self.plugin_attempt["authorizationUrl"].as_str().filter(|u|u.starts_with("https://")).map(str::to_owned),|d,url|d.child(control("authorize-plugin","Authorize connection").on_click(move |_,_,cx|cx.open_url(&url))))
+            .when(self.plugin_attempt["id"].is_string(),|d| {
+                let attempt=self.plugin_attempt["id"].clone();let tenant=tenant.clone();
+                d.child(row().gap_3().child(label(self.plugin_attempt["state"].as_str().unwrap_or("Connecting").to_owned())).child(control("poll-plugin","Check connection").on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"poll","tenantId":tenant,"attemptId":attempt}));cx.notify();}))))
+            })
+            .into_any_element()
+    }
+
     fn settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .id("settings-body")
@@ -748,6 +792,7 @@ impl WorkspaceView {
                         ),
                     ),
             )
+            .child(self.cloud_settings(cx))
             .child(label("Agents"))
             .children(self.providers.iter().enumerate().map(|(i, p)| {
                 let installed = p["installed"] == true;

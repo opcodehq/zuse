@@ -495,6 +495,7 @@ pub(crate) struct AccountsSnapshotCache(
 impl gpui::Global for AccountsSnapshotCache {}
 
 pub struct AccountsPage {
+    plugins: Entity<super::plugins::PluginsCard>,
     state: Entity<AppState>,
     embedded: bool,
     embedded_harness: Option<HarnessId>,
@@ -550,7 +551,9 @@ impl AccountsPage {
                 this.submit_code(cx);
             }
         });
+        let plugins = cx.new(|cx| super::plugins::PluginsCard::new(state.clone(), cx));
         let mut page = Self {
+            plugins,
             state,
             embedded,
             embedded_harness,
@@ -2179,6 +2182,7 @@ impl Render for AccountsPage {
                                     )
                                     .child(self.render_device_switcher(&theme, cx)),
                             )
+                            .child(self.plugins.clone())
                             .children(sections)
                             // Footer note (zuse: `mt-6 text-[12px] leading-relaxed
                             // text-muted-foreground/60`).

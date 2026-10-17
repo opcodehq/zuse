@@ -15,6 +15,7 @@ use zuse_rpc::{RpcError, RpcReply, RpcService, methods};
 
 use zuse_sync::DocsStore;
 
+pub mod account;
 pub mod agent_accounts;
 pub mod auth;
 mod change_request_store;
@@ -30,6 +31,8 @@ mod http_error;
 pub mod instance_lock;
 pub mod local_import;
 mod model_catalogs;
+mod plugin_callback;
+pub mod plugins;
 pub mod profile;
 pub mod project_actions;
 pub mod registry;
@@ -133,6 +136,8 @@ pub struct EngineConfig {
 /// The assembled engine core — also constructible without the IPC server for tests
 /// and the in-process (headed) mode.
 pub struct EngineCore {
+    pub account: account::Account,
+    pub plugins: plugins::Plugins,
     pub sessions: SessionsEngine,
     pub doc_host: DocHost,
     pub workspace: WorkspaceHost,
@@ -327,7 +332,13 @@ impl EngineCore {
             turn_diff.note_turn_start(chat_id, cwd);
         }));
         let spaces_sync = SpacesSync::start(repos.clone(), workspace.clone(), &device_id);
+        let account =
+            account::Account::open(data_dir).map_err(|e| EngineError::Other(e.to_string()))?;
+        let plugins = plugins::Plugins::open(data_dir, account.clone(), workspace.clone())
+            .map_err(|e| EngineError::Other(e.to_string()))?;
         Ok(Self {
+            account,
+            plugins,
             sessions,
             doc_host,
             workspace,
@@ -475,6 +486,7 @@ impl EngineCore {
             self.agent_accounts.clone(),
             self.workspace_scope,
         )
+        .with_account(self.account.clone(), self.plugins.clone())
         .with_auth(self.auth())
         .with_previews(self.previews.clone())
         .with_harness_updates(self.harness_updates.clone());
@@ -506,6 +518,7 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) {
+        self.account.retire();
         self.previews.shutdown().await;
         self.harness_updates.shutdown().await;
         // A run interruption transitions its chat to Idle, and Idle normally

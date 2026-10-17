@@ -174,6 +174,15 @@ impl Zuse {
         }
     }
 
+    /// Mutating external tools cannot be retried after an uncertain transport failure.
+    pub async fn call_once(&self, method: &str, params: Value) -> anyhow::Result<Value> {
+        self.client()
+            .await?
+            .call_scoped(method, params)
+            .await
+            .map_err(|e| anyhow!("{method}: {e}"))
+    }
+
     /// Open a watch stream (reconnecting once if the socket is gone).
     pub async fn subscribe(&self, method: &str, params: Value) -> anyhow::Result<RpcSubscription> {
         let client = self.client().await?;

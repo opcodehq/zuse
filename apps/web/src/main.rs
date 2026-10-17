@@ -138,6 +138,11 @@ mod browser {
                 return;
             }
             let location = web_sys::window().unwrap().location();
+            let local = matches!(
+                location.hostname().unwrap_or_default().as_str(),
+                "localhost" | "127.0.0.1" | "[::1]" | "::1"
+            );
+            let _ = events.unbounded_send(json!({"browserLocal":local}));
             let scheme = if location.protocol().unwrap_or_default() == "https:" {
                 "wss"
             } else {

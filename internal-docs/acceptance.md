@@ -11,7 +11,7 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 | Gemini and Kiro CLI adapters | compiled | Registered on the shared ACP engine; CLI launch/model/effort and complete tool/turn lifecycle fixtures pass. Live logins, provider account settings and custom ACP parity remain pending. |
 | Zuse harness and multi-agent orchestration | pending | Port from existing local source and tests |
 | Durable queues and steering | source | Reconcile with current Zuse queue/error/recovery semantics |
-| Executor v2 plugins | pending | Implement hosted service client and per-session tool gateway |
+| Executor v2 plugins | source | Hosted client is wired through shared engine identity, durable session bindings, provider-independent MCP discovery/call tools, and native/browser Settings. Native loopback OAuth confirmation is implemented. Live account/tenant/plugin execution, API-key/custom server entry, and complete UI acceptance remain pending. |
 | Voice, interactive visuals, appearance | source | Native platform and browser capability integration pending |
 | GPUI Web/WASM | compiled | Shared editing engine, denser shell, project picker, file browsing/editing, queue controls, model picker, account usage, and PTY pane now compile for WASM. Earlier chat smoke passed; the expanded flows still need runtime acceptance. |
 | Shared transcript model | verified | 30 reconciliation/folding tests passed |
@@ -39,3 +39,10 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 
 - Provider milestone: engine/server compile checks passed with Gemini and Kiro registered. Three focused ACP CLI tests pass, including the two new provider process/turn scenarios. No live Gemini/Kiro credential verification is claimed.
 - Zkit styled layer published in `85f4503`; delegated native/WASM checks and 26 component tests passed. Gallery styling and native platform runtime acceptance remain pending.
+
+- Account/plugin integration: integrated server compile, WASM build, and workspace formatting checks pass. Four account tests and two gateway/callback tests pass: concurrent refresh rotation, late-result/account-switch fences, damaged-session fallback, durable bindings, and loopback callback isolation. Two MCP tests pass for origin attribution and cancellation reaching the engine while preserving the shared client. No live hosted account or plugin execution pass is claimed.
+- Public Zkit CI reached the native compiler and exposed a malformed CoreText method name. Platform identifier repair is published in `322c43e`; Linux toolkit platform check passed. The app pin is updated; Mac native acceptance remains pending.
+
+- Public-dependency CI run `39020031912` passed the browser, engine, and Ubuntu native compile jobs at `9857de6`. The Mac compile failed on the toolkit CoreText API rename described above. This proves the native Linux source foundation compiles; it does not verify the new account UI, native runtime workflows, or packaging.
+
+- The account/plugin milestone passes 25 focused tests: 4 account, 2 gateway/callback, 2 MCP, and 17 RPC transport tests. Hosted calls opt into cancellation without changing cancellation behavior for existing workspace mutations. Updated native Settings source awaits the next Mac/Linux CI compile.

@@ -11,3 +11,13 @@ The cloud development VM runs Amazon Linux 2023. WebKitGTK availability must be 
 ## Validation policy
 
 Use `cargo check` for integration feedback. Keep tests centered on observable behavior and run relevant suites at milestones. Run native and browser acceptance separately: a web screenshot does not verify platform-specific desktop integration.
+
+## Account and hosted plugins
+
+Local sessions do not require a cloud account. Settings → Accounts includes the engine-owned Zuse account and managed plugin connections. Sign-in opens device authorization; profile metadata and progress stream through `CloudAccountStatus`. Refresh credentials are stored in the device profile's `account/session.json` with private Unix permissions and atomic replacement. Access tokens stay in engine memory and never appear in account RPC responses.
+
+`ZUSE_API_URL` selects an HTTPS API origin (default `https://api.zuse.sh`). `ZUSE_WORKOS_CLIENT_ID` selects the public identity client for that deployment. Native plugin OAuth returns to an available loopback port from 8976–8979; the engine consumes the account-bound confirmation ticket. Browser clients running against localhost use that callback too. Remote browser clients currently use the hosted web return and still need end-to-end acceptance.
+
+All injected agents use the same `plugins_list`, `plugins_search`, `plugins_schema`, and `plugins_call` MCP tools. The gateway derives the origin chat from the injected MCP context, rejects calls in read-only sessions, and stores chat/account bindings in `plugin-sessions.sqlite`. Switching accounts requires a new plugin session for previously bound chats. Discovery can reconnect; external calls are never automatically replayed after an uncertain transport failure. MCP cancellation cancels in-flight hosted tool calls, and transport closure cancels the connection’s outstanding engine requests; cancellation cannot reverse a side effect already performed by the remote service.
+
+The HTTP connection pool and refresh authority are shared across concurrent agents. Plugin credentials and tool execution remain in the engine. Live OAuth, custom API-key/server entry, all tenant management controls, and full platform acceptance remain tracked in the acceptance matrix.

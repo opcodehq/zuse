@@ -225,6 +225,34 @@ fn catalog() -> Vec<ToolDef> {
             }),
         });
     }
+    for (name, description, properties, required) in [
+        (
+            "plugins_list",
+            "List connected hosted plugin tools for this agent's session.",
+            json!({}),
+            json!([]),
+        ),
+        (
+            "plugins_search",
+            "Search available hosted plugin tools by intent.",
+            json!({"query":{"type":"string"}}),
+            json!(["query"]),
+        ),
+        (
+            "plugins_schema",
+            "Read a hosted plugin tool's argument schema before calling it.",
+            json!({"address":{"type":"string"}}),
+            json!(["address"]),
+        ),
+        (
+            "plugins_call",
+            "Call a connected hosted plugin tool using its exact address and schema. Calls follow the session tool policy and are never automatically retried.",
+            json!({"address":{"type":"string"},"arguments":{"type":"object"}}),
+            json!(["address", "arguments"]),
+        ),
+    ] {
+        tools.push(ToolDef{name,description,input_schema:json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})});
+    }
     tools.push(ToolDef {
         name: SHOW_VISUAL,
         description: SHOW_VISUAL_DESCRIPTION,
@@ -666,7 +694,9 @@ impl Tools {
         let in_chat = self.zuse.origin().chat_id.is_some();
         catalog()
             .into_iter()
-            .filter(|tool| in_chat || tool.name != SHOW_VISUAL)
+            .filter(|tool| {
+                in_chat || (tool.name != SHOW_VISUAL && !tool.name.starts_with("plugins_"))
+            })
             .collect()
     }
 
@@ -678,6 +708,9 @@ impl Tools {
     /// should read (surfaced as `isError`, never as a protocol error).
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         let result = match name {
+            "plugins_list" | "plugins_search" | "plugins_schema" | "plugins_call" => {
+                self.plugin_tool(name, args).await
+            }
             "whoami" => self.whoami().await,
             "list_devices" => self.list_devices().await,
             "list_projects" => self.list_projects(parse(args)?).await,
@@ -698,6 +731,41 @@ impl Tools {
             other => return Err(format!("unknown tool: {other}")),
         };
         result.map_err(|e| format!("{e:#}"))
+    }
+
+    async fn plugin_tool(&self, name: &str, args: Value) -> anyhow::Result<Value> {
+        let chat_id = self
+            .zuse
+            .origin()
+            .chat_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Hosted plugins require an agent session."))?;
+        let text = |key: &str| -> anyhow::Result<String> {
+            args[key]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| anyhow::anyhow!("Missing {key}."))
+        };
+        let request = match name {
+            "plugins_list" => json!({"action":"list"}),
+            "plugins_search" => json!({"action":"search","query":text("query")?}),
+            "plugins_schema" => json!({"action":"schema","address":text("address")?}),
+            "plugins_call" => {
+                json!({"action":"call","address":text("address")?,"arguments":args["arguments"].as_object().ok_or_else(||anyhow::anyhow!("arguments must be an object."))?})
+            }
+            _ => anyhow::bail!("Unknown plugin tool."),
+        };
+        let params = json!({"chatId":chat_id,"request":request});
+        if name == "plugins_call" {
+            self.zuse
+                .call_once(zuse_rpc::methods::PLUGIN_TOOLS, params)
+                .await
+        } else {
+            self.zuse
+                .call(zuse_rpc::methods::PLUGIN_TOOLS, params)
+                .await
+        }
     }
 
     /// Poll every request together, including its optional wait. A waiting
@@ -1643,6 +1711,50 @@ mod tests {
     fn tools(world: Arc<World>, origin: Origin) -> Tools {
         let client = memory_client(world);
         Tools::new(Arc::new(Zuse::with_client(client, origin)))
+    }
+
+    #[tokio::test]
+    async fn plugin_calls_are_bound_to_origin_and_reject_invalid_arguments() {
+        #[derive(Default)]
+        struct Capture(Mutex<Vec<Value>>);
+        #[async_trait]
+        impl RpcService for Capture {
+            async fn handle(&self, method: &str, params: Value) -> Result<RpcReply, RpcError> {
+                assert_eq!(method, methods::PLUGIN_TOOLS);
+                self.0.lock().unwrap().push(params);
+                Ok(RpcReply::Value(json!({"ok":true})))
+            }
+        }
+        let capture = Arc::new(Capture::default());
+        let agent = Tools::new(Arc::new(Zuse::with_client(
+            memory_client(capture.clone()),
+            Origin {
+                chat_id: Some("origin-chat".into()),
+                device_id: None,
+            },
+        )));
+        agent.call("plugins_call",json!({"chatId":"other-chat","address":"mail/send","arguments":{"to":"test@example.test"}})).await.unwrap();
+        let requests = capture.0.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["chatId"], "origin-chat");
+        assert_eq!(requests[0]["request"]["action"], "call");
+        assert!(
+            agent
+                .call(
+                    "plugins_call",
+                    json!({"address":"mail/send","arguments":[]})
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(capture.0.lock().unwrap().len(), 1);
+        let human = Tools::new(Arc::new(Zuse::with_client(
+            memory_client(capture.clone()),
+            Origin::default(),
+        )));
+        assert!(!human.has("plugins_call"));
+        assert!(human.call("plugins_list", json!({})).await.is_err());
+        assert_eq!(capture.0.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

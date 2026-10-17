@@ -215,3 +215,10 @@ pub const APPLY_HARNESS_UPDATE: &str = "ApplyHarnessUpdate";
 pub const CANCEL_HARNESS_UPDATE: &str = "CancelHarnessUpdate";
 pub const DISMISS_HARNESS_UPDATE: &str = "DismissHarnessUpdate";
 pub const SET_HARNESS_UPDATE_POLICY: &str = "SetHarnessUpdatePolicy";
+
+/// Engine-owned Zuse account and managed Executor gateway.
+pub const CLOUD_ACCOUNT_STATUS: &str = "CloudAccountStatus";
+pub const CLOUD_ACCOUNT_SIGN_IN: &str = "CloudAccountSignIn";
+pub const CLOUD_ACCOUNT_SIGN_OUT: &str = "CloudAccountSignOut";
+pub const PLUGINS: &str = "Plugins";
+pub const PLUGIN_TOOLS: &str = "PluginTools";

@@ -3,10 +3,10 @@
 //! Requests are handled concurrently (a `wait_for_turn` may block for
 //! minutes while the client keeps pinging); responses are serialized through
 //! one writer task so frames never interleave. Notifications from the client
-//! (`notifications/initialized`, `notifications/cancelled`) are accepted and
-//! ignored — there is no server-side state to initialize or cancel.
+//! initialize the session or cancel their matching in-flight request. Dropping
+//! an external tool request also cancels its outstanding engine RPC.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -72,6 +72,7 @@ pub async fn serve_stdio(tools: Arc<Tools>) -> anyhow::Result<()> {
         }
     });
 
+    let mut running = HashMap::new();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let line = line.trim();
@@ -90,10 +91,13 @@ pub async fn serve_stdio(tools: Arc<Tools>) -> anyhow::Result<()> {
                 continue;
             }
         };
-        let Some(response) = route(&tools, message, &out_tx) else {
+        let Some(response) = route(&tools, message, &out_tx, &mut running) else {
             continue;
         };
         let _ = out_tx.send(response.to_string()).await;
+    }
+    for (_, task) in running {
+        task.abort();
     }
     drop(out_tx);
     let _ = writer.await;
@@ -102,7 +106,13 @@ pub async fn serve_stdio(tools: Arc<Tools>) -> anyhow::Result<()> {
 
 /// Classify one inbound message. Requests are answered asynchronously via
 /// `out`; an immediate `Some` is a synchronous error reply.
-fn route(tools: &Arc<Tools>, message: Value, out: &mpsc::Sender<String>) -> Option<Value> {
+fn route(
+    tools: &Arc<Tools>,
+    message: Value,
+    out: &mpsc::Sender<String>,
+    running: &mut HashMap<String, tokio::task::AbortHandle>,
+) -> Option<Value> {
+    running.retain(|_, task| !task.is_finished());
     let Some(object) = message.as_object() else {
         return Some(error_response(
             Value::Null,
@@ -118,15 +128,31 @@ fn route(tools: &Arc<Tools>, message: Value, out: &mpsc::Sender<String>) -> Opti
     let params = object.get("params").cloned().unwrap_or(Value::Null);
     match (id, method) {
         (Some(id), Some(method)) => {
+            let key = id.to_string();
+            if running.contains_key(&key) || running.len() >= 128 {
+                return Some(error_response(
+                    id,
+                    INVALID_REQUEST,
+                    "Request is already running or the concurrency limit was reached.",
+                ));
+            }
             let tools = tools.clone();
             let out = out.clone();
-            tokio::spawn(async move {
+            let task = tokio::spawn(async move {
                 let response = handle_request(&tools, id, &method, params).await;
                 let _ = out.send(response.to_string()).await;
             });
+            running.insert(key, task.abort_handle());
             None
         }
         (None, Some(method)) => {
+            if method == "notifications/cancelled" {
+                if let Some(id) = params.get("requestId") {
+                    if let Some(task) = running.remove(&id.to_string()) {
+                        task.abort();
+                    }
+                }
+            }
             tracing::debug!(method, "mcp: notification");
             None
         }
@@ -232,4 +258,82 @@ fn error_response(id: Value, code: i64, message: &str) -> Value {
         "id": id,
         "error": { "code": code, "message": message },
     })
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use crate::{Origin, Zuse};
+    use tokio::sync::Notify;
+    use zuse_rpc::{RpcError, RpcReply, RpcService, memory_client};
+    struct Blocking {
+        started: Notify,
+        ended: Arc<Notify>,
+    }
+    struct Ended(Arc<Notify>);
+    impl Drop for Ended {
+        fn drop(&mut self) {
+            self.0.notify_one();
+        }
+    }
+    #[async_trait::async_trait]
+    impl RpcService for Blocking {
+        async fn handle(&self, _: &str, params: Value) -> Result<RpcReply, RpcError> {
+            if params["request"]["action"] == "list" {
+                return Ok(RpcReply::Value(json!([])));
+            }
+            let _ended = Ended(self.ended.clone());
+            self.started.notify_one();
+            std::future::pending().await
+        }
+    }
+    #[tokio::test]
+    async fn plugin_cancellation_reaches_engine_without_closing_shared_client() {
+        let ended = Arc::new(Notify::new());
+        let service = Arc::new(Blocking {
+            started: Notify::new(),
+            ended: ended.clone(),
+        });
+        let tools = Arc::new(Tools::new(Arc::new(Zuse::with_client(
+            memory_client(service.clone()),
+            Origin {
+                chat_id: Some("chat".into()),
+                device_id: None,
+            },
+        ))));
+        let (out, mut replies) = mpsc::channel(4);
+        let mut running = HashMap::new();
+        assert!(route(&tools,json!({"id":7,"method":"tools/call","params":{"name":"plugins_call","arguments":{"address":"test/run","arguments":{}}}}),&out,&mut running).is_none());
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            service.started.notified(),
+        )
+        .await
+        .unwrap();
+        route(
+            &tools,
+            json!({"method":"notifications/cancelled","params":{"requestId":7}}),
+            &out,
+            &mut running,
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), ended.notified())
+            .await
+            .unwrap();
+        assert!(running.is_empty());
+        assert!(replies.try_recv().is_err());
+        // The cancelled request must leave this long-lived MCP client usable.
+        route(
+            &tools,
+            json!({"id":8,"method":"tools/call","params":{"name":"plugins_list","arguments":{}}}),
+            &out,
+            &mut running,
+        );
+        let response = tokio::time::timeout(std::time::Duration::from_secs(2), replies.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let response: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["id"], 8);
+        assert_ne!(response["result"]["isError"], true);
+    }
 }

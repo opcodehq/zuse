@@ -21,6 +21,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo check -p zuse-cli
       - run: cargo test -p zuse-model -p zuse-serve
+      - run: cargo test -p zuse-rpc --lib
+      - run: cargo test -p zuse-engine --lib account::tests
+      - run: cargo test -p zuse-engine -p zuse-mcp --lib plugin
 
   native:
     strategy:
