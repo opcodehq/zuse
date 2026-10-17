@@ -31,6 +31,7 @@ jobs:
       - run: cargo test -p zuse-engine --lib harness_models::tests
       - run: cargo test -p zuse-engine --lib model_connections::tests
       - run: cargo test -p zuse-engine --lib native_harness::tests
+      - run: cargo test -p zuse-engine --lib native_recovery::tests
       - run: cargo test -p zuse-engine --lib sessions::tests
       - run: cargo test -p zuse-engine -p zuse-mcp --lib plugin
 

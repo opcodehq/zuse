@@ -16,6 +16,7 @@ pub mod motion;
 pub mod plugins;
 pub mod preview;
 pub mod projectless;
+pub mod recovery;
 pub mod sidebar_pins;
 pub mod view;
 pub mod voice;

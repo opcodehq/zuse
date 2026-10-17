@@ -2217,6 +2217,7 @@ pub struct Shell {
     debug_upload: Option<String>,
     sidebar_tween: Option<WidthTween>,
     files_tween: Option<WidthTween>,
+    recovery: Entity<crate::recovery::RecoveryCard>,
     /// The session card's reveal (0 closed → 1 open).
     session_info_tween: Option<WidthTween>,
     /// Whether the card showed last frame; a change starts the reveal tween.
@@ -2503,7 +2504,7 @@ impl Shell {
             _observation: cx.observe(&shell, |_, _, cx| cx.notify()),
         });
         Self {
-            state,
+            state: state.clone(),
             sidebar_pane,
             transcript,
             composer,
@@ -2673,6 +2674,7 @@ impl Shell {
             debug_upload,
             sidebar_tween: None,
             files_tween: None,
+            recovery: cx.new(|cx| crate::recovery::RecoveryCard::new(state.clone(), cx)),
             session_info_tween: None,
             session_info_shown: false,
             session_info_overlay: false,

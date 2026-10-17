@@ -233,3 +233,7 @@ pub const MODEL_ACKNOWLEDGE_PLAN: &str = "ModelConnectionAcknowledgePlan";
 pub const MODEL_CANCEL_LOGIN: &str = "ModelConnectionCancelLogin";
 
 pub const MODEL_COMPLETE_LOGIN: &str = "ModelConnectionCompleteLogin";
+
+/// Authenticated user controls; these methods must never be model tools.
+pub const INSPECT_RECOVERY: &str = "InspectRecovery";
+pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";

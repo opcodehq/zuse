@@ -993,6 +993,7 @@ impl WorkspaceView {
                             ("files", "Files"),
                             ("changes", "Changes"),
                             ("terminal", "Terminal"),
+                            ("recovery", "Recovery"),
                         ]
                         .into_iter()
                         .map(|(tab, name)| {
@@ -1016,6 +1017,7 @@ impl WorkspaceView {
                     ),
             )
             .child(match self.right_tab.as_str() {
+                "recovery" => self.recovery_view(cx),
                 "terminal" => column()
                     .flex_1()
                     .min_h_0()

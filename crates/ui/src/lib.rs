@@ -62,6 +62,7 @@ mod pull_request_test_support;
 pub mod pull_requests;
 pub mod queue;
 pub mod rail;
+mod recovery;
 mod roll_text;
 pub mod rounded_clip;
 pub mod running_pill;

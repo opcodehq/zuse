@@ -1084,49 +1084,14 @@ impl Engine {
         if lock(&self.0.runners).contains_key(agent_id) {
             return Err(Error::paused("Stop the agent before reviewing recovery."));
         }
-        if !state
-            .agent(agent_id)?
-            .pending_calls
-            .iter()
-            .any(|c| c.id == call_id)
-        {
-            return Err(Error::Tool("Unknown pending call".into()));
-        }
         let key = format!("{agent_id}:{call_id}");
-        if !state
-            .tools
-            .get(&key)
-            .is_some_and(|r| matches!(r.status, ReceiptStatus::Started))
-        {
-            return Err(Error::Tool(
-                "This call does not need an outcome review.".into(),
-            ));
-        }
-        let previous = state.tools.get(&key).unwrap().clone();
+        let previous = state.tools.get(&key).cloned();
         let review_count = state.reviews.len();
-        let action = match decision {
-            RecoveryDecision::RetryAfterInspection => {
-                state.tools.remove(&key);
-                "retryAfterInspection"
-            }
-            RecoveryDecision::RecordOutcome { output } => {
-                if !output.validate() {
-                    return Err(Error::Tool("Invalid inspected tool result".into()));
-                }
-                let receipt = state.tools.get_mut(&key).unwrap();
-                receipt.status = ReceiptStatus::Completed;
-                receipt.output = Some(output);
-                "recordOutcome"
-            }
-        };
-        state.reviews.push(RecoveryReview {
-            agent_id: agent_id.into(),
-            call_id: call_id.into(),
-            action: action.into(),
-            at: milliseconds(),
-        });
+        state.resolve_unknown(agent_id, call_id, decision)?;
         if let Err(error) = self.persist(&state).await {
-            state.tools.insert(key, previous);
+            if let Some(previous) = previous {
+                state.tools.insert(key, previous);
+            }
             state.reviews.truncate(review_count);
             return Err(error);
         }

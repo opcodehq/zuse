@@ -93,6 +93,7 @@ impl WorkspaceView {
         self.right_open = true;
         self.right_tab = tab.into();
         match tab {
+            "recovery" => self.inspect_recovery(),
             "files" => {
                 let dir = self.directory.clone();
                 self.load_directory(&dir);

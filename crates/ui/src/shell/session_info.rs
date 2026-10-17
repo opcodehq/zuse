@@ -259,7 +259,9 @@ impl Shell {
             .child(popover::picker_divider())
             .child(side_chat)
             .child(fork)
-            .children(actions);
+            .children(actions)
+            .child(popover::picker_divider())
+            .child(self.recovery.clone());
 
         let card = div()
             .w(px(SESSION_CARD_WIDTH))

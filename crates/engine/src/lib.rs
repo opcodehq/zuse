@@ -36,6 +36,7 @@ mod model_catalogs;
 pub mod model_connections;
 #[cfg(unix)]
 mod native_harness;
+mod native_recovery;
 mod plugin_callback;
 pub mod plugins;
 pub mod profile;

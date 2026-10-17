@@ -3,6 +3,7 @@
 pub mod assets;
 pub mod input;
 mod model_accounts;
+mod recovery;
 mod shell;
 mod workspace;
 
@@ -58,6 +59,12 @@ pub struct WorkspaceView {
     project_input: Entity<input::TextInput>,
     right_open: bool,
     right_tab: String,
+    recovery: Option<zuse_protocol::recovery::RecoverySnapshot>,
+    recovery_request: Option<u64>,
+    recovery_selected: Option<usize>,
+    recovery_error: Option<String>,
+    recovery_notice: Option<String>,
+    recovery_output: Entity<input::TextInput>,
     directory: String,
     entries: Vec<Value>,
     directory_request: Option<u64>,
@@ -126,6 +133,9 @@ impl WorkspaceView {
         let model_name = cx.new(|cx| input::TextInput::new("Connection name", window, cx));
         let model_callback =
             cx.new(|cx| input::TextInput::new("Paste the localhost callback URL", window, cx));
+        let recovery_output = cx.new(|cx| {
+            input::TextInput::multiline("Describe the result you inspected…", window, cx)
+        });
         let mut events = transport.events;
         let reader = cx.spawn(async move |this, cx| {
             while let Some(frame) = events.next().await {
@@ -166,6 +176,12 @@ impl WorkspaceView {
             project_input,
             right_open: true,
             right_tab: "files".into(),
+            recovery: None,
+            recovery_request: None,
+            recovery_selected: None,
+            recovery_error: None,
+            recovery_notice: None,
+            recovery_output,
             directory: String::new(),
             entries: vec![],
             directory_request: None,
@@ -241,6 +257,7 @@ impl WorkspaceView {
             return;
         }
         if let Some(connection) = frame.get("connection").and_then(Value::as_str) {
+            self.reset_recovery(cx);
             self.status = connection.into();
             cx.notify();
             return;
@@ -270,6 +287,9 @@ impl WorkspaceView {
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if method.is_empty() {
+            return;
+        }
+        if self.receive_recovery(id, &frame, cx) {
             return;
         }
         if self.receive_model_accounts(id, &frame, cx) {
@@ -372,10 +392,18 @@ impl WorkspaceView {
                 methods::WATCH_CHATS => {
                     self.chats = value.as_array().cloned().unwrap_or_default();
                     if let Some(selected) = &self.selected {
-                        if let Some(chat) =
-                            self.chats.iter().find(|chat| chat["id"] == selected["id"])
+                        if let Some(chat) = self
+                            .chats
+                            .iter()
+                            .find(|chat| chat["id"] == selected["id"])
+                            .cloned()
                         {
-                            self.selected = Some(chat.clone());
+                            if chat["deviceId"] != selected["deviceId"]
+                                || chat["harnessSessionId"] != selected["harnessSessionId"]
+                            {
+                                self.reset_recovery(cx);
+                            }
+                            self.selected = Some(chat);
                         }
                     }
                 }
@@ -488,6 +516,7 @@ impl WorkspaceView {
         let id = self.call(methods::WATCH_DOC_MESSAGES, json!({"chatId":chat["id"]}));
         self.transcript_watch = Some(id);
         self.messages.clear();
+        self.reset_recovery(cx);
         self.selected = Some(chat);
         self.restore_draft(cx);
         if let Some(chat) = &self.selected {
@@ -518,6 +547,7 @@ impl WorkspaceView {
             self.cancel(id);
         }
         self.clear_workspace();
+        self.reset_recovery(cx);
         self.selected = None;
         self.messages.clear();
         self.settings = false;

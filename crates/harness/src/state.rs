@@ -211,6 +211,57 @@ pub struct Checkpoint {
     pub reviews: Vec<RecoveryReview>,
 }
 impl Checkpoint {
+    /// Trusted recovery control only. This mutates no runtime and starts no work.
+    pub fn resolve_unknown(
+        &mut self,
+        agent_id: &str,
+        call_id: &str,
+        decision: RecoveryDecision,
+    ) -> Result<(), Error> {
+        if !self
+            .agent(agent_id)?
+            .pending_calls
+            .iter()
+            .any(|c| c.id == call_id)
+        {
+            return Err(Error::Tool("Unknown pending call".into()));
+        }
+        let key = format!("{agent_id}:{call_id}");
+        if !self
+            .tools
+            .get(&key)
+            .is_some_and(|r| matches!(r.status, ReceiptStatus::Started))
+        {
+            return Err(Error::Tool(
+                "This call does not need an outcome review.".into(),
+            ));
+        }
+        let action = match decision {
+            RecoveryDecision::RetryAfterInspection => {
+                self.tools.remove(&key);
+                "retryAfterInspection"
+            }
+            RecoveryDecision::RecordOutcome { output } => {
+                if !output.validate() {
+                    return Err(Error::Tool("Invalid inspected tool result".into()));
+                }
+                let receipt = self.tools.get_mut(&key).unwrap();
+                receipt.status = ReceiptStatus::Completed;
+                receipt.output = Some(output);
+                "recordOutcome"
+            }
+        };
+        self.reviews.push(RecoveryReview {
+            agent_id: agent_id.into(),
+            call_id: call_id.into(),
+            action: action.into(),
+            at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        });
+        Ok(())
+    }
     pub fn validate(&self) -> Result<(), Error> {
         if self.version != 1 || self.root_id.is_empty() || self.agents.len() > 4096 {
             return Err(Error::InvalidCheckpoint);

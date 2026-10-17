@@ -1525,6 +1525,8 @@ fn forwardable(method: &str) -> bool {
             | methods::SET_TITLE_SETTINGS
             | methods::SET_HARNESS_ENABLED
             | methods::LIST_MODELS
+            | methods::INSPECT_RECOVERY
+            | methods::RESOLVE_RECOVERY
             | methods::LIST_SKILLS
             | methods::LIST_COMMANDS
             | methods::QUEUE_COMMAND
@@ -1916,6 +1918,27 @@ impl RpcService for EngineRpc {
                 .await;
         }
         match method {
+            methods::INSPECT_RECOVERY | methods::RESOLVE_RECOVERY => {
+                let profile = self.repos.data_dir().to_path_buf();
+                let workspace = self.workspace.clone();
+                let request = if method == methods::RESOLVE_RECOVERY {
+                    Some(parse_params::<zuse_protocol::recovery::ResolveRecovery>(
+                        params.clone(),
+                    )?)
+                } else {
+                    None
+                };
+                let chat: ChatParams = parse_params(params)?;
+                let result = tokio::task::spawn_blocking(move || match request {
+                    Some(request) => crate::native_recovery::resolve(&profile, &workspace, request),
+                    None => crate::native_recovery::inspect(&profile, &workspace, &chat.chat_id),
+                })
+                .await
+                .map_err(|_| RpcError::Failed("Recovery review could not finish.".into()))?
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&result)
+            }
+
             methods::MODEL_CONNECTIONS => {
                 let service = self.model_connections.as_ref().ok_or_else(|| {
                     RpcError::Failed("Model account service is unavailable.".into())

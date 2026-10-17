@@ -1,6 +1,6 @@
 # Rust harness
 
-`crates/harness` implements the durable Zuse agent kernel in Rust. The application registers it as the Zuse provider with account-backed model transport, native file/process tools, normalized chat events, approvals, uploads and persistent sessions. Component and application fixtures cover these paths; live authorization, hosted plugins, recovery controls and complete UI acceptance remain pending.
+`crates/harness` implements the durable Zuse agent kernel in Rust. The application registers it as the Zuse provider with account-backed model transport, native file/process tools, normalized chat events, approvals, uploads and persistent sessions. Component and application fixtures cover these paths; live authorization, hosted plugins and complete UI acceptance remain pending.
 
 ## Runtime authority
 
@@ -10,7 +10,7 @@
 
 Steering deliveries share a host admission epoch with Stop. New deliveries wait for Stop to settle; drivers discard cancelled frames even when transport delayed them past that boundary. The kernel persists cancellation tombstones for unconsumed mail, including explicit runtime termination, so reopening the journal cannot resurrect it. Consumed history remains intact. Failed cancellation persistence restores mailbox order. An unexpected stream disconnect preserves retryable mail rather than treating it as a user cancellation.
 
-A tool's signed input identity and `started` receipt are persisted before execution. Its completed output is persisted before the tool-result message enters model history. Recovery reuses committed outputs; a started receipt with no outcome pauses execution. A trusted user control surface can call `resolve_unknown` with an inspected outcome or explicit retry approval. Approval is saved before continuation and rolled back in memory if storage fails. Approval itself never launches work. This API still needs the application's authenticated recovery controls.
+A tool's signed input identity and `started` receipt are persisted before execution. Its completed output is persisted before the tool-result message enters model history. Recovery reuses committed outputs; a started receipt with no outcome pauses execution. A trusted user control surface can call `resolve_unknown` with an inspected outcome or explicit retry approval. Approval is saved before continuation and rolled back in memory if storage fails. Approval itself never launches work. The application exposes this through user-only recovery RPCs and native/browser review controls; live UI acceptance remains separate.
 
 Compaction retains the full journal, system instructions, original task and complete recent exchanges. Summaries create a durable boundary rather than deleting history. A summary that fails to reduce context pauses the run. Context sizes are estimates, not provider-reported billing measurements.
 
@@ -208,7 +208,7 @@ The application fixtures use scripted model output, real durable journals and
 filesystem edits. Live model authorization, real Executor tenant/plugin calls,
 full UI queue/stop flows, packaged Node/ripgrep, complete instruction/skill parity,
 provider-switch history migration, OS command sandboxing and authenticated
-unknown-outcome recovery controls still require implementation or acceptance.
+unknown-outcome recovery UI workflows still require live acceptance.
 This is not full application acceptance.
 
 Verification for this adapter milestone: all 35 harness tests pass, the five
@@ -226,3 +226,37 @@ through the document/session engine, then continue the same saved conversation.
 Server compilation and formatting also pass. CI run `39031148407` established
 macOS/Linux native compilation for the preceding UI mapping fix; it does not cover
 these subsequent cancellation changes or establish live application acceptance.
+
+## Reviewing an uncertain tool outcome
+
+The native session card contains **Review interrupted tools**. The browser workspace
+panel contains a **Recovery** tab. Stop the conversation before opening recovery;
+a running native harness retains its root lease and refuses offline review. The
+view displays the complete tool input and offers **Copy full input**. Inspect the
+checkout, external service or process output before deciding what happened.
+
+**Authorize retry after inspection** removes only the uncertain receipt.
+**Save inspected outcome** records your text as that tool's completed result.
+Both actions append a durable review audit and leave execution stopped. Continue
+from chat only when ready. Recording an outcome skips that tool on continuation;
+retry authorization permits the pending call to execute again. Existing completed
+receipts are preserved.
+
+`InspectRecovery` and `ResolveRecovery` use the existing authenticated RPC
+transport, addressed to the conversation's host device. They are absent from the
+model tool catalog. The engine derives the journal from the host-owned chat row,
+checks its native session identity, and holds the root lease throughout each
+inspection or atomic decision. Resolve checks the session and a digest of the
+exact pending call/receipt; stale clicks cannot authorize a different outcome.
+The response includes pending calls and review counts, without exporting the
+conversation history. Inspection is bounded to 1 MiB of complete call/receipt
+data; larger reviews require inspecting the local journal. Recorded result text
+is limited to 64 KiB. Native UI requests reset on conversation or engine changes;
+browser requests reset on conversation changes and connection events.
+
+Two RPC integration fixtures interrupt a real kernel tool after its execution
+starts, reopen the private journal, resolve it through the application RPC, then
+explicitly continue. They verify recording versus retry, stale decisions,
+foreign-device rejection, exclusive live ownership and no execution on review.
+The 36-test harness suite, integrated server check and browser build pass.
+Native compile and actual recovery UI interaction remain separate acceptance gates.
