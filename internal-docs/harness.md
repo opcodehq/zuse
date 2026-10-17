@@ -1,12 +1,12 @@
 # Rust harness
 
-`crates/harness` ports the Zuse agent kernel into Rust. It is currently a compiled and fixture-tested runtime component. It is not registered in the application's provider picker yet. Native filesystem/process tools, model-connection OAuth and vault integration, provider event adaptation, the ownership lease, and recovery controls still need application integration before this is an accepted Zuse session provider.
+`crates/harness` ports the Zuse agent kernel into Rust. It is currently a compiled and fixture-tested runtime component. It is not registered in the application's provider picker yet. Native filesystem/process tools, model-connection OAuth and vault integration, provider event adaptation, and recovery controls still need application integration before this is an accepted Zuse session provider.
 
 ## Runtime authority
 
 `Engine` owns a durable graph of one root and nested children, bounded to three running children and depth two. Rust schedules concurrent child requests, records mailboxes and idempotent delivery identifiers, enforces inherited read-only and plan modes, and delivers child outcomes before root synthesis. The model request budget is shared across the graph and includes compaction and broker retries. User continuation explicitly grants another turn's budget.
 
-`Host` supplies model transport, native tools, checkpoint storage, instructions and application events. It must acquire the session ownership lease before opening a runtime and retain it through shutdown. Tool definitions and permission decisions belong to the trusted host; model input cannot grant permission or call recovery APIs. `FileStore` writes private checkpoints using temporary files, fsync and atomic replacement. Invalid graphs and damaged journals are preserved for inspection.
+`Host` supplies model transport, native tools, checkpoint storage, instructions and application events. Native adapters use `Engine::open_native`, which acquires a per-root OS lease before reading its private journal and retains it until host cleanup succeeds. Root IDs map to hashed profile directories, and journal identities must match their owner. `Engine::open` remains available for fixtures and custom hosts that supply their own ownership authority. Tool definitions and permission decisions belong to the trusted host; model input cannot grant permission or call recovery APIs. `FileStore` writes private checkpoints using temporary files, fsync and atomic replacement. Invalid graphs and damaged journals are preserved for inspection.
 
 A tool's signed input identity and `started` receipt are persisted before execution. Its completed output is persisted before the tool-result message enters model history. Recovery reuses committed outputs; a started receipt with no outcome pauses execution. A trusted user control surface can call `resolve_unknown` with an inspected outcome or explicit retry approval. Approval is saved before continuation and rolled back in memory if storage fails. Approval itself never launches work. This API still needs the application's authenticated recovery controls.
 
@@ -31,3 +31,5 @@ bun run build
 ```
 
 Rust scenarios cover unknown-outcome recovery, explicit inspected retry, failed approval persistence, committed-output replay prevention, concurrent child execution and final synthesis, read-only enforcement, steering deduplication, shared budgets, compaction, checkpoint corruption, account fallback and affinity, and a real bundled Node process with concurrent mocked streams and cancellation. The SDK protocol fixtures cover text, tool calls, usage, request validation and incomplete streams. These are component and protocol fixtures; no live paid-model request or complete application harness session is claimed.
+
+Native ownership fixtures exercise same-process and child-process exclusion, independent roots, stale PID stamps, preserved damaged journals, root identity validation, and release only after host cleanup. Application provider registration and live native session acceptance remain pending.
