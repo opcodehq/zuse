@@ -260,3 +260,30 @@ explicitly continue. They verify recording versus retry, stale decisions,
 foreign-device rejection, exclusive live ownership and no execution on review.
 The 36-test harness suite, integrated server check and browser build pass.
 Native compile and actual recovery UI interaction remain separate acceptance gates.
+
+## Provider continuity
+
+Automatic resume checks the provider that owns the saved cursor, alongside its
+checkout. Live sessions record that ownership; restart recovery derives it from
+typed journal events. A native Zuse cursor also identifies its owned format.
+Legacy opaque cursors with unknown ownership take the fresh-session path with
+transcript context. Explicit invalid native resume requests still fail and
+preserve their journal for inspection.
+
+A fresh ordinary conversation turn receives prior visible messages, including
+message status, historical tool state/output references, errors and image upload
+references. The current user message is delivered once. Later accepted messages
+stay behind their own queue boundaries. Text is normalized before JSON framing,
+and Cursor avoids prepending a second copy of the same carried conversation.
+Transcript read errors propagate instead of silently opening an empty context.
+Same-provider runs continue through their own saved cursor.
+
+A scripted-provider integration fixture switches Claude, Codex, Zuse and Cursor,
+checks same-provider resume and recovers ownership after clearing the live cache.
+A real native-harness fixture migrates from an opaque foreign cursor and checks
+prior content, tool/error/image references, and exclusion of a future user row.
+All 15 session-engine tests and nine native application fixtures pass, alongside
+the server compile and formatting checks. Live cross-provider conversations,
+prior-image vision, bounded import of very large histories, deferred context
+transfer for command-only provider switches, and crash/consumed-delivery replay
+still require implementation or acceptance.

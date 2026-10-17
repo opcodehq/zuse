@@ -746,3 +746,131 @@ async fn doc_queue_steering_and_stop_share_the_native_durable_delivery_boundary(
 async fn hard_stop_persists_steering_cancellation_before_native_runtime_retirement() {
     doc_queue_stop_case(true).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn switching_from_an_opaque_provider_cursor_starts_a_native_session_with_transcript_context()
+{
+    use zuse_doc::{MessagePart, MessageRole, SessionMessageEntry};
+    let root = tempfile::tempdir().unwrap();
+    let fixture = ModelFixture::new(vec![]);
+    let mut native = harness(root.path(), fixture.clone());
+    let registry = Arc::new(crate::HarnessRegistry::new());
+    let core = crate::EngineCore::assemble_with_profile(
+        crate::EngineProfile::local(&root.path().join("engine")).unwrap(),
+        registry.clone(),
+        HarnessId::Zuse,
+        None,
+    )
+    .unwrap();
+    native.device_id = core.device_id.clone();
+    registry.register(Arc::new(native));
+    core.workspace
+        .create_chat(
+            "migration",
+            None,
+            Some(&core.device_id),
+            None,
+            Some(root.path().to_string_lossy().into_owned()),
+        )
+        .unwrap();
+    core.workspace.set_chat_harness_session(
+        "migration",
+        "foreign-provider-cursor",
+        &root.path().to_string_lossy(),
+    );
+    let handle = core.doc_host.open("migration").unwrap();
+    for (id, role, text) in [
+        (
+            "u1",
+            MessageRole::User,
+            "Original request: preserve the existing file.",
+        ),
+        (
+            "a1",
+            MessageRole::Assistant,
+            "The original provider already inspected it.",
+        ),
+        ("current", MessageRole::User, "Continue with Zuse"),
+        ("future", MessageRole::User, "future pending instruction"),
+    ] {
+        let mut parts = vec![MessagePart::Text {
+            id: format!("{id}-text"),
+            text: text.into(),
+        }];
+        if id == "a1" {
+            parts.push(MessagePart::Image {
+                id: "previous-image".into(),
+                path: "/uploads/old-evidence.png".into(),
+                name: "evidence.png".into(),
+                mime_type: "image/png".into(),
+            });
+            parts.push(serde_json::from_value(json!({"kind":"tool","id":"old-tool","call": zuse_protocol::ToolCall::Unknown {name:"inspected_file".into(),input:Some(json!({"path":"existing.txt"}))},"resolved":true,"isError":false,"output":"already inspected","outputRef":"migration/old-tool"})).unwrap());
+            parts.push(MessagePart::Error {
+                id: "old-error".into(),
+                message: "Historical failure preserved".into(),
+            });
+        }
+        handle
+            .doc()
+            .push_message(&SessionMessageEntry {
+                id: id.into(),
+                role,
+                parts,
+                created_at: 0,
+                device_id: core.device_id.clone(),
+                status: None,
+                continuation_of: None,
+                duration_ms: None,
+            })
+            .unwrap();
+    }
+    let mut request = request(root.path());
+    request.prompt = "Continue with Zuse".into();
+    request.auto_approve = true;
+    core.sessions
+        .dispatch(
+            "migration",
+            HarnessId::Zuse,
+            request,
+            Some("current".into()),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if core
+                .sessions
+                .session_status("migration")
+                .is_some_and(|s| s.status == zuse_protocol::SessionStatus::Idle)
+                && !lock(&fixture.seen).is_empty()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    {
+        let seen = lock(&fixture.seen);
+        let first = seen.first().unwrap();
+        assert!(first.root.starts_with("zuse:"));
+        let history = serde_json::to_string(&first.messages).unwrap();
+        assert!(history.contains("Original request: preserve the existing file."));
+        assert!(history.contains("The original provider already inspected it."));
+        assert_eq!(history.matches("Continue with Zuse").count(), 1);
+        assert!(!history.contains("future pending instruction"));
+        assert!(history.contains("old-evidence.png"));
+        assert!(history.contains("resolved=true"));
+        assert!(history.contains("migration/old-tool"));
+        assert!(history.contains("Historical failure preserved"));
+    }
+    assert!(
+        core.workspace
+            .chat_harness_session("migration")
+            .unwrap()
+            .0
+            .starts_with("zuse:")
+    );
+    core.shutdown().await;
+}
