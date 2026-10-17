@@ -272,6 +272,18 @@ fn provider(id: HarnessId) -> ProviderSpec {
             update_args: None,
             manual_command: "Update the configured Antigravity ACP server",
         },
+        HarnessId::Gemini => ProviderSpec {
+            version_args: &["--version"],
+            latest: LatestSource::Npm("@google/gemini-cli"),
+            update_args: None,
+            manual_command: "Update Gemini CLI with its original package manager",
+        },
+        HarnessId::Kiro => ProviderSpec {
+            version_args: &["--version"],
+            latest: LatestSource::Manual,
+            update_args: None,
+            manual_command: "kiro-cli update",
+        },
         HarnessId::Mock => ProviderSpec {
             version_args: &["--version"],
             latest: LatestSource::Manual,

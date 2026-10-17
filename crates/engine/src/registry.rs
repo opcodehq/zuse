@@ -756,6 +756,33 @@ pub fn default_registry() -> HarnessRegistry {
         Box::new(|| zuse_providers::AcpHarness::antigravity().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::AcpHarness::antigravity()) as Arc<dyn Harness>)),
     );
+    for (id, name, build) in [
+        (
+            HarnessId::Gemini,
+            "Gemini CLI",
+            zuse_providers::AcpHarness::gemini as fn() -> zuse_providers::AcpHarness,
+        ),
+        (
+            HarnessId::Kiro,
+            "Kiro CLI",
+            zuse_providers::AcpHarness::kiro as fn() -> zuse_providers::AcpHarness,
+        ),
+    ] {
+        registry.register_lazy(
+            HarnessDescriptor {
+                id,
+                name: name.into(),
+                supports_steering: true,
+                steering_mode: SteeringMode::TurnBoundary,
+                reasoning_levels: vec![],
+                installed: true,
+                can_install: false,
+                enabled: None,
+            },
+            Box::new(move || build().installed()),
+            Box::new(move || Ok(Arc::new(build()) as Arc<dyn Harness>)),
+        );
+    }
     registry
 }
 
@@ -838,7 +865,9 @@ mod tests {
                 HarnessId::Hermes,
                 HarnessId::Pi,
                 HarnessId::Opencode,
-                HarnessId::Antigravity
+                HarnessId::Antigravity,
+                HarnessId::Gemini,
+                HarnessId::Kiro,
             ]
         );
         assert!(registry.resolve(HarnessId::Mock).is_ok());

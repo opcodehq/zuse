@@ -8,7 +8,7 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 | Native shell, sidebar, chat, composer, settings | source | Integrate Zuse behavior and verify native build |
 | Files/editor, terminal, Git/worktrees/PR panes | source | Validate lifecycle and complete parity |
 | Claude/Codex/Cursor/OpenCode/Pi/ACP protocols | source | Audit capabilities; fixtures and live checks pending |
-| Gemini, Kiro, remaining Zuse provider parity | pending | Port missing protocol and account behavior |
+| Gemini and Kiro CLI adapters | compiled | Registered on the shared ACP engine; CLI launch/model/effort and complete tool/turn lifecycle fixtures pass. Live logins, provider account settings and custom ACP parity remain pending. |
 | Zuse harness and multi-agent orchestration | pending | Port from existing local source and tests |
 | Durable queues and steering | source | Reconcile with current Zuse queue/error/recovery semantics |
 | Executor v2 plugins | pending | Implement hosted service client and per-session tool gateway |
@@ -36,3 +36,6 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 - Workspace integration milestone: WASM build passed against the published Zkit Git pin, including its existing multiline editor and code editor. Browser server binary builds. Five browser boundary/upload tests pass. The shared editor replaces the scaffold input implementation rather than duplicating its editing behavior.
 - The expanded browser shell renders and connects to the local engine. File editing uses expected checkout/content hashes and retains edits on conflicts. Queue actions use the engine's durable queue. Complete visual and runtime workflow acceptance remains pending.
 - GitHub CI cannot currently fetch the private Zkit dependency with the default repository token. Authentication setup is included; an Actions secret named `ZKIT_READ_TOKEN`, scoped to read `opcodehq/zkit`, is required before remote native checks can run. No CI pass is claimed.
+
+- Provider milestone: engine/server compile checks passed with Gemini and Kiro registered. Three focused ACP CLI tests pass, including the two new provider process/turn scenarios. No live Gemini/Kiro credential verification is claimed.
+- Zkit styled layer published in `85f4503`; delegated native/WASM checks and 26 component tests passed. Gallery styling and native platform runtime acceptance remain pending.

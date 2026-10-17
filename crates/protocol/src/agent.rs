@@ -8,6 +8,10 @@ pub enum HarnessId {
     ClaudeCode,
     Codex,
     Cursor,
+    /// Gemini CLI through its native ACP server.
+    Gemini,
+    /// Kiro CLI through its native ACP server.
+    Kiro,
     /// Cognition's Devin agent, driven over ACP (`devin acp`).
     Devin,
     /// xAI's Grok Build agent, driven over ACP (`grok agent stdio`).

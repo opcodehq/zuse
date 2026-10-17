@@ -357,6 +357,40 @@ fn hermes_install_paths() -> Vec<PathBuf> {
     dirs
 }
 
+fn gemini_spec() -> AcpAgentSpec {
+    AcpAgentSpec {
+        id: HarnessId::Gemini,
+        display_name: "Gemini CLI",
+        executable: "gemini",
+        env_override: "GEMINI_EXECUTABLE",
+        args: &["--experimental-acp", "--allowed-mcp-server-names=zuse"],
+        cli_executable: "gemini",
+        extra_paths: Vec::new,
+        cli_extra_paths: Vec::new,
+        install_hint: "Install Gemini CLI and sign in with `gemini`; GEMINI_EXECUTABLE can select a custom installation.",
+        models: Vec::new,
+        skill_dirs: Vec::new,
+        ..hermes_spec()
+    }
+}
+
+fn kiro_spec() -> AcpAgentSpec {
+    AcpAgentSpec {
+        id: HarnessId::Kiro,
+        display_name: "Kiro CLI",
+        executable: "kiro-cli",
+        env_override: "KIRO_EXECUTABLE",
+        args: &["acp"],
+        cli_executable: "kiro-cli",
+        extra_paths: Vec::new,
+        cli_extra_paths: Vec::new,
+        install_hint: "Install Kiro CLI and run `kiro-cli login`; KIRO_EXECUTABLE can select a custom installation.",
+        models: Vec::new,
+        skill_dirs: Vec::new,
+        ..hermes_spec()
+    }
+}
+
 fn hermes_spec() -> AcpAgentSpec {
     AcpAgentSpec {
         id: HarnessId::Hermes,
@@ -1271,6 +1305,16 @@ impl AcpHarness {
         }
     }
 
+    /// Gemini CLI's native ACP transport, using the existing local login.
+    pub fn gemini() -> Self {
+        Self::with_spec(gemini_spec())
+    }
+
+    /// Kiro CLI's native ACP transport, using the existing local login.
+    pub fn kiro() -> Self {
+        Self::with_spec(kiro_spec())
+    }
+
     /// Devin (`devin acp`) — Cognition's native ACP server.
     pub fn devin() -> Self {
         Self::with_spec(devin_spec())
@@ -2156,6 +2200,11 @@ impl Harness for AcpHarness {
     /// change applies between turns without a new agent. Clearing one back
     /// to the agent's default cannot be expressed that way.
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
+        if self.spec.id == HarnessId::Kiro
+            && (live.model != next.model || live.model_options != next.model_options)
+        {
+            return false;
+        }
         live.cwd == next.cwd
             && (next.model.is_some() || live.model.is_none())
             && (next.reasoning.is_some() || live.reasoning.is_none())
@@ -2346,8 +2395,22 @@ impl Harness for AcpHarness {
         request: RunRequest,
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let mut launch_args = Vec::new();
+        if self.spec.id == HarnessId::Kiro {
+            if let Some(model) = request.model.as_ref().filter(|m| !m.is_empty()) {
+                launch_args.extend(["--model".into(), model.clone()]);
+            }
+            if let Some(effort) = request
+                .model_options
+                .get("effort")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                launch_args.extend(["--effort".into(), effort.into()]);
+            }
+        }
         let (scratch, mut child, stderr_tail, sign_in_prompted) = self
-            .spawn_agent(Some(&request.cwd), true, &[], request.mcp.as_ref())
+            .spawn_agent(Some(&request.cwd), true, &launch_args, request.mcp.as_ref())
             .await?;
         let stdin = child
             .stdin

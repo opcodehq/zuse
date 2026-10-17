@@ -2509,3 +2509,61 @@ async fn a_stopped_turn_keeps_the_agent_for_the_next_prompt() {
     drop(steer);
     assert!(next_event(&mut stream).await.is_none());
 }
+
+#[tokio::test]
+async fn gemini_cli_reuses_the_native_acp_turn_and_tool_lifecycle() {
+    let harness = AcpHarness::gemini().with_executable(fixture_path());
+    let (controls, steer, _token) = controls();
+    drop(steer);
+    let mut req = request("scenario:happy");
+    req.harness = Some(HarnessId::Gemini);
+    let events = run_to_end(&harness, req, controls).await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::SessionStarted {
+            harness: HarnessId::Gemini,
+            ..
+        }
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::ToolResult {
+            is_error: false,
+            ..
+        }
+    )));
+    assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
+}
+
+#[tokio::test]
+async fn kiro_cli_selects_launch_model_and_effort_and_completes_a_turn() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let executable = dir.path().join("kiro-fixture");
+    let args_file = dir.path().join("arguments.json");
+    let fixture = serde_json::to_string(&fixture_path().to_string_lossy()).unwrap();
+    let args_path = serde_json::to_string(&args_file.to_string_lossy()).unwrap();
+    let wrapper = format!(
+        "#!/usr/bin/env python3\nimport json,os,sys\nwith open({args_path},'w') as f: json.dump(sys.argv[1:],f)\nos.execv({fixture},[{fixture},*sys.argv[1:]])\n"
+    );
+    std::fs::write(&executable, wrapper).unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let harness = AcpHarness::kiro().with_executable(&executable);
+    let (controls, steer, _token) = controls();
+    drop(steer);
+    let mut req = request("scenario:happy");
+    req.harness = Some(HarnessId::Kiro);
+    req.model_options
+        .insert("effort".into(), serde_json::json!("high"));
+    let events = run_to_end(&harness, req, controls).await;
+    let args: Vec<String> = serde_json::from_slice(&std::fs::read(args_file).unwrap()).unwrap();
+    assert_eq!(args, vec!["acp", "--model", "grok-4.5", "--effort", "high"]);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::SessionStarted {
+            harness: HarnessId::Kiro,
+            ..
+        }
+    )));
+    assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
+}
