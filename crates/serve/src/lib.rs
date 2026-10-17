@@ -99,7 +99,7 @@ impl BrowserServer {
     pub async fn serve(self, listener: TcpListener, assets: PathBuf) -> anyhow::Result<()> {
         axum::serve(listener, self.router(assets))
             .with_graceful_shutdown(async {
-                let _ = tokio::signal::ctrl_c().await;
+                let _ = shutdown_signal().await;
             })
             .await?;
         Ok(())
@@ -462,5 +462,19 @@ mod upload_tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert!(ledger.chunks.lock().unwrap().is_empty());
         assert!(ledger.committed.lock().unwrap().is_none());
+    }
+}
+
+/// Drain the engine on service-manager termination as well as interactive exit.
+async fn shutdown_signal() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! { result=tokio::signal::ctrl_c()=>result, _=terminate.recv()=>Ok(()) }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
     }
 }

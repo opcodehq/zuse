@@ -145,7 +145,7 @@ fn editor_style() -> InputEditorStyle {
     InputEditorStyle {
         foreground: rgb(0xebebeb).into(),
         muted_foreground: rgb(0x737373).into(),
-        background: rgb(0x101010).into(),
+        background: rgb(0x141414).into(),
         border: rgb(0x292929).into(),
         caret: rgb(0xeeeeee).into(),
         selection: rgba(0xaabbee44).into(),

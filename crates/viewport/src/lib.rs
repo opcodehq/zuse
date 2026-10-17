@@ -3,6 +3,7 @@
 pub mod assets;
 pub mod input;
 mod model_accounts;
+mod questions;
 mod recovery;
 mod shell;
 mod workspace;
@@ -41,6 +42,13 @@ pub struct WorkspaceView {
     selected: Option<Value>,
     messages: Vec<SessionMessageEntry>,
     transcript_watch: Option<u64>,
+    transcript_scroll: ScrollHandle,
+    input_answers: HashMap<String, zuse_protocol::input_answers::InputAnswers>,
+    input_pending: HashMap<u64, String>,
+    input_submitted: std::collections::HashSet<String>,
+    input_editing: Option<(String, String)>,
+    input_text: Entity<input::TextInput>,
+    expanded_parts: std::collections::HashSet<String>,
     device_id: Option<String>,
     status: String,
     error: Option<String>,
@@ -57,6 +65,7 @@ pub struct WorkspaceView {
     project: Option<Value>,
     project_picker: bool,
     project_input: Entity<input::TextInput>,
+    sidebar_open: bool,
     right_open: bool,
     right_tab: String,
     recovery: Option<zuse_protocol::recovery::RecoverySnapshot>,
@@ -107,6 +116,7 @@ pub struct WorkspaceView {
 impl WorkspaceView {
     pub fn new(transport: Transport, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| input::TextInput::multiline("Do anything…", window, cx));
+        cx.observe(&input, |_, _, cx| cx.notify()).detach();
         let project_input =
             cx.new(|cx| input::TextInput::new("Absolute project path on this machine", window, cx));
         let terminal_input = cx.new(|cx| input::TextInput::new("Run a command…", window, cx));
@@ -136,6 +146,7 @@ impl WorkspaceView {
         let recovery_output = cx.new(|cx| {
             input::TextInput::multiline("Describe the result you inspected…", window, cx)
         });
+        let input_text = cx.new(|cx| input::TextInput::multiline("Write an answer…", window, cx));
         let mut events = transport.events;
         let reader = cx.spawn(async move |this, cx| {
             while let Some(frame) = events.next().await {
@@ -158,6 +169,13 @@ impl WorkspaceView {
             selected: None,
             messages: vec![],
             transcript_watch: None,
+            transcript_scroll: ScrollHandle::new(),
+            input_answers: HashMap::new(),
+            input_pending: HashMap::new(),
+            input_submitted: Default::default(),
+            input_editing: None,
+            input_text,
+            expanded_parts: Default::default(),
             device_id: None,
             status: "Connecting to your engine…".into(),
             error: None,
@@ -174,7 +192,8 @@ impl WorkspaceView {
             project: None,
             project_picker: false,
             project_input,
-            right_open: true,
+            sidebar_open: true,
+            right_open: false,
             right_tab: "files".into(),
             recovery: None,
             recovery_request: None,
@@ -289,6 +308,7 @@ impl WorkspaceView {
         if method.is_empty() {
             return;
         }
+        self.receive_input(id, &frame);
         if self.receive_recovery(id, &frame, cx) {
             return;
         }
@@ -472,11 +492,17 @@ impl WorkspaceView {
                 methods::WATCH_DOC_MESSAGES if self.transcript_watch == Some(id) => {
                     match serde_json::from_value::<TranscriptUpdate>(value.clone()) {
                         Ok(update) => {
+                            let follow = self.transcript_scroll.max_offset().y
+                                + self.transcript_scroll.offset().y
+                                <= px(24.);
                             if let Err(error) =
                                 apply_transcript_frame(&mut self.messages, update.frame)
                             {
                                 self.error =
                                     Some(format!("Transcript needs resynchronization: {error}"));
+                            }
+                            if follow {
+                                self.transcript_scroll.scroll_to_bottom();
                             }
                         }
                         Err(error) => {
@@ -516,7 +542,9 @@ impl WorkspaceView {
         let id = self.call(methods::WATCH_DOC_MESSAGES, json!({"chatId":chat["id"]}));
         self.transcript_watch = Some(id);
         self.messages.clear();
+        self.transcript_scroll.scroll_to_bottom();
         self.reset_recovery(cx);
+        self.reset_inputs(cx);
         self.selected = Some(chat);
         self.restore_draft(cx);
         if let Some(chat) = &self.selected {
@@ -548,6 +576,7 @@ impl WorkspaceView {
         }
         self.clear_workspace();
         self.reset_recovery(cx);
+        self.reset_inputs(cx);
         self.selected = None;
         self.messages.clear();
         self.settings = false;

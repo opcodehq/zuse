@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::{net::SocketAddr, path::PathBuf};
 use zuse_engine::{Engine, EngineConfig, EngineProfile};
@@ -14,6 +15,9 @@ struct Args {
     command: Option<Command>,
     #[arg(long, default_value = "127.0.0.1:27656")]
     listen: SocketAddr,
+    /// Loopback RPC endpoint used by agent tools; 0 chooses an available port.
+    #[arg(long, default_value_t = 27654)]
+    ipc_port: u16,
     #[arg(long, env = "ZUSE_DATA_DIR")]
     data_dir: Option<PathBuf>,
     #[arg(long, default_value = "dist/web")]
@@ -53,37 +57,52 @@ async fn run() -> anyhow::Result<()> {
         PathBuf::from(std::env::var_os("HOME").expect("HOME or --data-dir is required"))
             .join(".zuse-native")
     });
+    std::fs::create_dir_all(&data_dir).context("Could not create the local data directory")?;
+    let data_dir =
+        std::fs::canonicalize(data_dir).context("Could not resolve the local data directory")?;
+    // Bind before starting engine workers, so port conflicts leave no live runtime.
+    let ipc = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, args.ipc_port))
+        .await
+        .context("Could not bind the agent RPC port; choose another --ipc-port")?;
+    let ipc_port = ipc.local_addr()?.port();
+    let listener = tokio::net::TcpListener::bind(args.listen).await?;
+    let address = listener.local_addr()?;
     let config = EngineConfig {
         data_dir: data_dir.clone(),
         edge_url: "http://127.0.0.1:27655".into(),
         edge_token: None,
-        ipc_port: 27654,
+        ipc_port,
         default_harness: HarnessId::ClaudeCode,
         org_id: None,
         workos_client_id: None,
     };
     let auth = Engine::build_auth(&config).await;
     let runtime = Engine::assemble_runtime(&config, auth, EngineProfile::local(&data_dir)?).await?;
-    let ipc =
-        tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, config.ipc_port)).await?;
+    // Agent-origin attribution and plugin tools must dial this engine's real port.
+    runtime.core().sessions.set_ipc_port(ipc_port);
+    let token = args.token.unwrap_or_else(BrowserServer::random_token);
+    let browser = match BrowserServer::new(
+        runtime.core().rpc_service(),
+        token.clone(),
+        args.public_origin.clone(),
+    ) {
+        Ok(browser) => browser,
+        Err(error) => {
+            runtime.shutdown().await;
+            return Err(error);
+        }
+    };
     let ipc_task = tokio::spawn(zuse_rpc::serve_ws_listener(
         ipc,
         runtime.core().rpc_service(),
     ));
-    let token = args.token.unwrap_or_else(BrowserServer::random_token);
-    let listener = tokio::net::TcpListener::bind(args.listen).await?;
-    let address = listener.local_addr()?;
-    let browser = BrowserServer::new(
-        runtime.core().rpc_service(),
-        token.clone(),
-        args.public_origin.clone(),
-    )?;
     let origin = args
         .public_origin
         .unwrap_or_else(|| format!("http://{address}"));
+    println!("Agent tools listen on 127.0.0.1:{ipc_port}");
     println!("Open {origin}/#token={token}");
-    browser.serve(listener, args.assets).await?;
+    let result = browser.serve(listener, args.assets).await;
     ipc_task.abort();
     runtime.shutdown().await;
-    Ok(())
+    result
 }

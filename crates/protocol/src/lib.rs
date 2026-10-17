@@ -10,6 +10,7 @@ pub mod chat_mentions;
 pub mod device_paths;
 pub mod entities;
 pub mod file_mentions;
+pub mod input_answers;
 pub mod invocation;
 pub mod methods;
 pub mod motion;

@@ -3,13 +3,13 @@ use super::*;
 use crate::assets::icon;
 use zuse_markdown::{Block, InlineRun, parse_full};
 
-const BG: u32 = 0x060606;
-const SURFACE: u32 = 0x0d0d0d;
+const BG: u32 = 0x0c0c0c;
+const SURFACE: u32 = 0x171717;
 const RAISED: u32 = 0x181818;
-const BORDER: u32 = 0x232323;
+const BORDER: u32 = 0x292929;
 const TEXT: u32 = 0xebebeb;
 const MUTED: u32 = 0xa3a3a3;
-const FAINT: u32 = 0x686868;
+const FAINT: u32 = 0x777777;
 
 pub(super) fn row() -> Div {
     div().flex().items_center()
@@ -67,7 +67,7 @@ impl WorkspaceView {
     fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.selected.as_ref().map(|c| c["id"].clone());
         column()
-            .w(px(252.))
+            .w(px(264.))
             .h_full()
             .flex_shrink_0()
             .bg(rgb(SURFACE))
@@ -75,14 +75,14 @@ impl WorkspaceView {
             .border_color(rgb(BORDER))
             .child(
                 row()
-                    .h(px(46.))
-                    .px_4()
+                    .h(px(48.))
+                    .px_3()
                     .gap_2()
-                    .child(icon("zuse-logo").size(px(20.)).text_color(rgb(TEXT)))
+                    .child(icon("zuse-logo").size(px(22.)).text_color(rgb(TEXT)))
                     .child(
                         div()
-                            .font_weight(FontWeight::SEMIBOLD)
                             .text_size(px(14.))
+                            .font_weight(FontWeight::SEMIBOLD)
                             .child("Zuse"),
                     )
                     .child(div().flex_1())
@@ -92,19 +92,17 @@ impl WorkspaceView {
                     ),
             )
             .child(
-                column()
-                    .px_2()
-                    .gap_1()
+                row()
+                    .px_3()
                     .py_2()
+                    .gap_2()
+                    .child(icon("folder").size(px(15.)))
                     .child(
-                        control("new-session", "New session")
+                        control("project-picker", SharedString::from(self.project_name()))
+                            .flex_1()
+                            .min_w_0()
                             .child(div().flex_1())
-                            .on_click(cx.listener(|this, _, _, cx| this.new_chat(cx))),
-                    )
-                    .child(
-                        control("project-picker", "Open project")
-                            .child(div().flex_1())
-                            .child(icon("folder"))
+                            .child(icon("alt-arrow-down").size(px(12.)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.project_picker = !this.project_picker;
                                 cx.notify();
@@ -116,9 +114,14 @@ impl WorkspaceView {
                     .px_4()
                     .mt_4()
                     .mb_2()
-                    .gap_2()
-                    .child(icon("folder").size(px(14.)).text_color(rgb(FAINT)))
-                    .child(label(self.project_name()))
+                    .child(
+                        label(if self.show_archive {
+                            "Archived sessions"
+                        } else {
+                            "Sessions"
+                        })
+                        .text_size(px(11.)),
+                    )
                     .child(div().flex_1())
                     .child(
                         icon_button("archive-view", "archive-minimalistic", "Show archive")
@@ -138,7 +141,18 @@ impl WorkspaceView {
                     .overflow_y_scroll()
                     .gap_1()
                     .when(self.chats.is_empty(), |d| {
-                        d.child(label("Your sessions will appear here").px_2().py_3())
+                        d.child(
+                            column()
+                                .px_3()
+                                .py_4()
+                                .gap_2()
+                                .child(label("A space for your next idea"))
+                                .child(
+                                    label("Start a session to work with your agents.")
+                                        .text_size(px(11.))
+                                        .text_color(rgb(FAINT)),
+                                ),
+                        )
                     })
                     .children(
                         self.chats
@@ -149,10 +163,15 @@ impl WorkspaceView {
                             .map(|chat| {
                                 let chat = chat.clone();
                                 let selected = current.as_ref().is_some_and(|id| *id == chat["id"]);
-                                let working = self
-                                    .sessions
-                                    .iter()
-                                    .any(|s| s["chatId"] == chat["id"] && s["status"] == "working");
+                                let session =
+                                    self.sessions.iter().find(|s| s["chatId"] == chat["id"]);
+                                let working = session.is_some_and(|s| {
+                                    matches!(
+                                        s["status"].as_str(),
+                                        Some("working" | "awaitingInput")
+                                    )
+                                });
+                                let harness = chat["harness"].as_str().unwrap_or("zuse");
                                 column()
                                     .id(SharedString::from(format!(
                                         "chat-{}",
@@ -166,28 +185,31 @@ impl WorkspaceView {
                                             .to_owned(),
                                     ))
                                     .cursor_pointer()
-                                    .px_3()
+                                    .px_2()
                                     .py_2()
                                     .gap_1()
                                     .rounded_lg()
-                                    .when(selected, |s| s.bg(rgb(0x242424)))
-                                    .hover(|s| s.bg(rgb(0x1b1b1b)))
+                                    .when(selected, |s| s.bg(rgb(0x292929)))
+                                    .hover(|s| {
+                                        s.bg(rgb(if selected { 0x303030 } else { 0x202020 }))
+                                    })
                                     .child(
                                         row()
                                             .gap_2()
                                             .child(
                                                 div()
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .text_size(px(12.))
+                                                    .text_size(px(10.))
+                                                    .text_color(rgb(FAINT))
                                                     .text_ellipsis()
                                                     .child(
-                                                        chat["title"]
+                                                        chat["cwd"]
                                                             .as_str()
-                                                            .unwrap_or("Untitled session")
+                                                            .and_then(|s| s.rsplit('/').next())
+                                                            .unwrap_or("Local workspace")
                                                             .to_owned(),
                                                     ),
                                             )
+                                            .child(div().flex_1())
                                             .when(working, |d| {
                                                 d.child(
                                                     div()
@@ -199,10 +221,38 @@ impl WorkspaceView {
                                     )
                                     .child(
                                         row()
-                                            .gap_1()
+                                            .gap_2()
+                                            .child(
+                                                icon(provider_icon(harness))
+                                                    .size(px(14.))
+                                                    .text_color(rgb(0xd79a72)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .text_size(px(12.))
+                                                    .text_ellipsis()
+                                                    .text_color(rgb(if selected {
+                                                        TEXT
+                                                    } else {
+                                                        0xc9c9c9
+                                                    }))
+                                                    .child(
+                                                        chat["title"]
+                                                            .as_str()
+                                                            .unwrap_or("Untitled session")
+                                                            .to_owned(),
+                                                    ),
+                                            ),
+                                    )
+                                    .child(
+                                        row()
+                                            .gap_2()
+                                            .pl(px(22.))
                                             .child(
                                                 icon("git-branch")
-                                                    .size(px(12.))
+                                                    .size(px(10.))
                                                     .text_color(rgb(FAINT)),
                                             )
                                             .child(
@@ -225,15 +275,50 @@ impl WorkspaceView {
                     ),
             )
             .child(
-                column()
-                    .border_t_1()
-                    .border_color(rgb(BORDER))
-                    .p_2()
-                    .gap_1()
+                row()
+                    .p_3()
+                    .gap_2()
                     .child(
-                        control("settings", "Settings & usage")
-                            .child(div().flex_1())
-                            .child(icon("settings-minimalistic"))
+                        div()
+                            .size(px(28.))
+                            .rounded_full()
+                            .bg(rgb(0xe5e5e5))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(11.))
+                            .text_color(rgb(BG))
+                            .child("Z"),
+                    )
+                    .child(
+                        column()
+                            .flex_1()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Local workspace"),
+                            )
+                            .child(
+                                row()
+                                    .gap_1()
+                                    .child(div().size(px(4.)).rounded_full().bg(rgb(
+                                        if self.status == "Local engine connected" {
+                                            0x76b993
+                                        } else {
+                                            0xb79363
+                                        },
+                                    )))
+                                    .child(
+                                        label(self.status.clone())
+                                            .text_size(px(10.))
+                                            .text_color(rgb(FAINT)),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        icon_button("settings", "settings-minimalistic", "Settings & usage")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.settings = !this.settings;
                                 this.call(
@@ -242,25 +327,6 @@ impl WorkspaceView {
                                 );
                                 cx.notify();
                             })),
-                    )
-                    .child(
-                        row()
-                            .px_2()
-                            .py_1()
-                            .gap_2()
-                            .child(div().size(px(5.)).rounded_full().bg(rgb(
-                                if self.status == "Local engine connected" {
-                                    0x769d7c
-                                } else {
-                                    0xb79363
-                                },
-                            )))
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(rgb(FAINT))
-                                    .child(self.status.clone()),
-                            ),
                     ),
             )
             .into_any_element()
@@ -268,12 +334,20 @@ impl WorkspaceView {
 
     fn header(&self, cx: &mut Context<Self>) -> AnyElement {
         row()
-            .h(px(46.))
+            .h(px(48.))
             .flex_shrink_0()
             .px_3()
             .border_b_1()
             .border_color(rgb(BORDER))
             .gap_2()
+            .child(
+                icon_button("toggle-sidebar", "split-columns", "Toggle session sidebar").on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.sidebar_open = !this.sidebar_open;
+                        cx.notify();
+                    }),
+                ),
+            )
             .child(
                 icon(provider_icon(
                     self.providers
@@ -327,9 +401,18 @@ impl WorkspaceView {
             .to_owned();
         let model = self.model.clone().unwrap_or_else(|| "Default model".into());
         let working = self.is_working();
+        let compact = !self.messages.is_empty()
+            && self.attachments.is_empty()
+            && self.uploading == 0
+            && self.input.read(cx).value(cx).len() < 90
+            && !self.input.read(cx).value(cx).contains('\n');
         column()
-            .px_5()
-            .pb_2()
+            .w_full()
+            .max_w(px(816.))
+            .self_center()
+            .flex_shrink_0()
+            .px_6()
+            .pb_3()
             .gap_2()
             .when(!self.queue.is_empty(), |d| d.child(self.queue_view(cx)))
             .when_some(self.error.clone(), |d, error| {
@@ -367,12 +450,15 @@ impl WorkspaceView {
             })
             .child(
                 column()
-                    .rounded_xl()
+                    .rounded(px(26.))
                     .border_1()
-                    .border_color(rgb(0x292929))
-                    .bg(rgb(0x101010))
-                    .p_3()
+                    .border_color(rgb(0x303030))
+                    .bg(rgb(0x141414))
+                    .px_4()
+                    .pt_4()
+                    .pb_2()
                     .gap_2()
+                    .when(compact, |d| d.flex_row().items_center().py_2())
                     .when(!self.attachments.is_empty() || self.uploading > 0, |d| {
                         d.child(
                             row()
@@ -421,7 +507,19 @@ impl WorkspaceView {
                                 }),
                         )
                     })
-                    .child(div().w_full().min_h(px(36.)).child(self.input.clone()))
+                    .child(
+                        div()
+                            .w_full()
+                            .when(compact, |d| d.flex_1().min_w_0())
+                            .min_h(px(if compact {
+                                22.
+                            } else if self.messages.is_empty() {
+                                60.
+                            } else {
+                                38.
+                            }))
+                            .child(self.input.clone()),
+                    )
                     .child(
                         row()
                             .gap_1()
@@ -429,13 +527,22 @@ impl WorkspaceView {
                                 icon_button("attach", "paperclip", "Attach images or files")
                                     .on_click(cx.listener(|this, _, _, _| this.pick_attachments())),
                             )
-                            .child(div().flex_1())
-                            .child(control("agent-picker", agent).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.settings = true;
-                                    cx.notify();
-                                },
-                            )))
+                            .when(!compact, |d| d.child(div().flex_1()))
+                            .child(
+                                icon(provider_icon(
+                                    provider.and_then(|p| p["id"].as_str()).unwrap_or_default(),
+                                ))
+                                .size(px(14.))
+                                .text_color(rgb(0xd79a72)),
+                            )
+                            .when(!compact, |d| {
+                                d.child(control("agent-picker", agent).on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.settings = true;
+                                        cx.notify();
+                                    },
+                                )))
+                            })
                             .child(
                                 control("model-picker", SharedString::from(model))
                                     .child(icon("alt-arrow-down").size(px(12.)))
@@ -513,6 +620,13 @@ impl WorkspaceView {
                         })),
                 )
             })
+            .child(
+                row().justify_center().h(px(14.)).child(
+                    label("Enter to send · Shift + Enter for a new line")
+                        .text_size(px(10.))
+                        .text_color(rgb(FAINT)),
+                ),
+            )
             .child(
                 row()
                     .h(px(24.))
@@ -613,9 +727,13 @@ impl WorkspaceView {
             .into_any_element()
     }
 
-    fn transcript(&self) -> AnyElement {
+    fn transcript(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.transcript_scroll.max_offset().y + self.transcript_scroll.offset().y <= px(24.) {
+            self.transcript_scroll.scroll_to_bottom();
+        }
         column()
             .id("transcript")
+            .track_scroll(&self.transcript_scroll)
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -623,101 +741,181 @@ impl WorkspaceView {
             .py_6()
             .gap_6()
             .when(self.messages.is_empty(), |d| {
-                d.child(
-                    column()
-                        .flex_1()
-                        .justify_center()
-                        .items_center()
-                        .gap_3()
-                        .child(icon("zuse-logo").size(px(32.)).text_color(rgb(0xcccccc)))
-                        .child(
-                            div()
-                                .text_size(px(21.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .child("Where should we start?"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(rgb(FAINT))
-                                .child("Choose a project, or start a local session."),
-                        ),
-                )
+                d.child(column().flex_1().justify_center().w_full().max_w(px(680.)).self_center().gap_4()
+                    .child(row().gap_2()
+                        .child(icon("zuse-logo").size(px(24.)).text_color(rgb(TEXT)))
+                        .child(label("Zuse").text_size(px(10.)).text_color(rgb(FAINT))))
+                    .child(div().text_size(px(30.)).line_height(px(38.)).font_weight(FontWeight::MEDIUM).child("What are we building?"))
+                    .child(div().text_size(px(13.)).line_height(px(22.)).text_color(rgb(MUTED))
+                        .child("Bring an idea, a question, or a codebase. Your agents can take it from here."))
+                    .child(row().mt_4().gap_3()
+                        .child(column().id("welcome-project").flex_1().min_w_0().p_4().gap_3().rounded_xl()
+                            .border_1().border_color(rgb(BORDER)).cursor_pointer().hover(|d|d.bg(rgb(RAISED)))
+                            .child(icon("folder").size(px(19.)).text_color(rgb(MUTED)))
+                            .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child("Work on a project"))
+                            .child(label("Open a folder on this machine").text_size(px(11.)))
+                            .on_click(cx.listener(|this, _, _, cx|{this.project_picker = true; cx.notify();})))
+                        .child(column().id("welcome-agents").flex_1().min_w_0().p_4().gap_3().rounded_xl()
+                            .border_1().border_color(rgb(BORDER)).cursor_pointer().hover(|d|d.bg(rgb(RAISED)))
+                            .child(icon("settings-minimalistic").size(px(19.)).text_color(rgb(MUTED)))
+                            .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child("Connect your agents"))
+                            .child(label("Models, accounts, and tools").text_size(px(11.)))
+                            .on_click(cx.listener(|this, _, _, cx|{this.settings = true; cx.notify();}))))
+                    .child(label("Your agents run on this machine.").mt_2().text_size(px(11.)).text_color(rgb(FAINT))))
             })
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);
                 let user = message["role"] == "user";
-                column().id(("message", i)).w_full().gap_3().children(
-                    message["parts"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|part| {
-                            let kind = part["kind"].as_str().unwrap_or_default();
-                            match kind {
-                                "text" => {
-                                    let text = part["text"].as_str().unwrap_or_default();
-                                    Some(if user {
-                                        row()
-                                            .justify_end()
-                                            .child(
-                                                div()
-                                                    .max_w(relative(0.9))
-                                                    .px_4()
-                                                    .py_3()
-                                                    .rounded_xl()
-                                                    .bg(rgb(0x202020))
-                                                    .text_size(px(13.))
-                                                    .line_height(px(21.))
-                                                    .child(text.to_owned()),
-                                            )
-                                            .into_any_element()
-                                    } else {
+                column()
+                    .id(("message", i))
+                    .w_full().max_w(px(768.)).self_center()
+                    .flex_shrink_0()
+                    .gap_3()
+                    .children(
+                        message["parts"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|part| {
+                                let kind = part["kind"].as_str().unwrap_or_default();
+                                match kind {
+                                    "text" => {
+                                        let text = part["text"].as_str().unwrap_or_default();
+                                        Some(if user {
+                                            row()
+                                                .justify_end()
+                                                .child(
+                                                    div()
+                                                        .max_w(relative(0.85))
+                                                        .px_4()
+                                                        .py_3()
+                                                        .rounded_xl()
+                                                        .bg(rgb(0x242424))
+                                                        .text_size(px(14.))
+                                                        .line_height(px(21.))
+                                                        .child(text.to_owned()),
+                                                )
+                                                .into_any_element()
+                                        } else {
+                                            column()
+                                                .text_size(px(14.))
+                                                .line_height(px(24.))
+                                                .gap_3()
+                                                .children(
+                                                    parse_full(text)
+                                                        .blocks
+                                                        .iter()
+                                                        .map(|b| markdown_block(&b.block)),
+                                                )
+                                                .into_any_element()
+                                        })
+                                    }
+                                    "error" => Some(
                                         column()
-                                            .text_size(px(13.))
-                                            .line_height(px(22.))
-                                            .gap_3()
-                                            .children(
-                                                parse_full(text)
-                                                    .blocks
-                                                    .iter()
-                                                    .map(|b| markdown_block(&b.block)),
+                                            .p_3()
+                                            .rounded_lg()
+                                            .bg(rgb(0x251715))
+                                            .text_color(rgb(0xe6a094))
+                                            .text_size(px(12.))
+                                            .line_height(px(20.))
+                                            .child(
+                                                part["message"]
+                                                    .as_str()
+                                                    .unwrap_or("The agent reported an error.")
+                                                    .to_owned(),
                                             )
-                                            .into_any_element()
-                                    })
+                                            .into_any_element(),
+                                    ),
+                                    "input" => Some(self.input_card(part, cx)),
+                                    "fork" => Some(
+                                        row()
+                                            .gap_2()
+                                            .text_color(rgb(FAINT))
+                                            .child(icon("split-columns").size(px(12.)))
+                                            .child(label(format!(
+                                                "Branched from {}",
+                                                part["sourceTitle"]
+                                                    .as_str()
+                                                    .unwrap_or("conversation")
+                                            )))
+                                            .into_any_element(),
+                                    ),
+                                    "visual" => Some(
+                                        row()
+                                            .gap_2()
+                                            .child(icon("file-code").size(px(13.)))
+                                            .child(label(format!(
+                                                "Interactive visual: {}",
+                                                part["title"].as_str().unwrap_or("Visual")
+                                            )))
+                                            .into_any_element(),
+                                    ),
+                                    "tool" | "reasoning" => {
+                                        let key = format!(
+                                            "{kind}:{}",
+                                            part["id"].as_str().unwrap_or_default()
+                                        );
+                                        let expanded = self.expanded_parts.contains(&key);
+                                        let title = if kind == "tool" {
+                                            tool_label(part)
+                                        } else {
+                                            "Thought process".into()
+                                        };
+                                        let mut item =
+                                            column().border_l_1().border_color(rgb(BORDER)).pl_3().gap_2().child(
+                                                control(
+                                                    SharedString::from(format!("expand-{key}")),
+                                                    SharedString::from(title),
+                                                )
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    if !this.expanded_parts.remove(&key) {
+                                                        this.expanded_parts.insert(key.clone());
+                                                    }
+                                                    cx.notify();
+                                                })),
+                                            );
+                                        if expanded {
+                                            let text = if kind == "reasoning" {
+                                                part["text"].as_str().unwrap_or_default().to_owned()
+                                            } else {
+                                                format!(
+                                                    "{}\n\n{}",
+                                                    serde_json::to_string_pretty(&part["call"])
+                                                        .unwrap_or_default(),
+                                                    part["output"]
+                                                        .as_str()
+                                                        .unwrap_or(if part["resolved"] == true { "Tool completed." } else { "Waiting for tool output…" })
+                                                )
+                                            };
+                                            item = item.child(
+                                                column()
+                                                    .px_3()
+                                                    .py_2()
+                                                    .rounded_md()
+                                                    .bg(rgb(0x101010))
+                                                    .text_size(px(12.))
+                                                    .line_height(px(20.))
+                                                    .child(SharedString::from(text)),
+                                            );
+                                        }
+                                        Some(item.into_any_element())
+                                    }
+                                    "image" => Some(
+                                        row()
+                                            .gap_2()
+                                            .child(icon("paperclip"))
+                                            .child(label(
+                                                part["name"]
+                                                    .as_str()
+                                                    .unwrap_or("Image attachment")
+                                                    .to_owned(),
+                                            ))
+                                            .into_any_element(),
+                                    ),
+                                    _ => None,
                                 }
-                                "tool" => Some(
-                                    row()
-                                        .gap_2()
-                                        .text_color(rgb(MUTED))
-                                        .child(icon("terminal").size(px(13.)))
-                                        .child(label(tool_label(part)))
-                                        .into_any_element(),
-                                ),
-                                "reasoning" => Some(
-                                    row()
-                                        .gap_2()
-                                        .text_color(rgb(FAINT))
-                                        .child(icon("alt-arrow-right").size(px(12.)))
-                                        .child(label("Thought process"))
-                                        .into_any_element(),
-                                ),
-                                "image" => Some(
-                                    row()
-                                        .gap_2()
-                                        .child(icon("paperclip"))
-                                        .child(label(
-                                            part["name"]
-                                                .as_str()
-                                                .unwrap_or("Image attachment")
-                                                .to_owned(),
-                                        ))
-                                        .into_any_element(),
-                                ),
-                                _ => None,
-                            }
-                        }),
-                )
+                            }),
+                    )
             }))
             .into_any_element()
     }
@@ -974,13 +1172,13 @@ impl WorkspaceView {
             } else if self.right_tab == "terminal" {
                 360.
             } else {
-                286.
+                320.
             }))
             .flex_shrink_0()
             .h_full()
             .border_l_1()
             .border_color(rgb(BORDER))
-            .bg(rgb(0x090909))
+            .bg(rgb(0x111111))
             .child(
                 row()
                     .h(px(46.))
@@ -998,6 +1196,9 @@ impl WorkspaceView {
                         .into_iter()
                         .map(|(tab, name)| {
                             control(SharedString::from(format!("panel-{tab}")), name)
+                                .px_1()
+                                .gap_1()
+                                .text_size(px(11.))
                                 .when(self.right_tab == tab, |s| {
                                     s.text_color(rgb(TEXT)).bg(rgb(RAISED))
                                 })
@@ -1277,7 +1478,7 @@ impl Render for WorkspaceView {
             .text_color(rgb(TEXT))
             .font_family("Geist")
             .text_size(px(13.))
-            .child(self.sidebar(cx))
+            .when(self.sidebar_open, |d| d.child(self.sidebar(cx)))
             .child(
                 column()
                     .flex_1()
@@ -1292,7 +1493,7 @@ impl Render for WorkspaceView {
                         column()
                             .flex_1()
                             .min_h_0()
-                            .child(self.transcript())
+                            .child(self.transcript(cx))
                             .child(self.composer(cx))
                             .into_any_element()
                     }),
@@ -1306,8 +1507,16 @@ impl Render for WorkspaceView {
 
 fn tool_label(part: &Value) -> String {
     let call = &part["call"];
-    let name = call["title"]
-        .as_str()
+    let mcp_name = (call["kind"] == "mcp").then(|| {
+        format!(
+            "{} · {}",
+            call["server"].as_str().unwrap_or("MCP"),
+            call["tool"].as_str().unwrap_or("tool")
+        )
+    });
+    let name = mcp_name
+        .as_deref()
+        .or_else(|| call["title"].as_str())
         .or_else(|| call["name"].as_str())
         .or_else(|| call["kind"].as_str())
         .unwrap_or("Tool call");

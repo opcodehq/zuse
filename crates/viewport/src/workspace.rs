@@ -54,9 +54,10 @@ impl WorkspaceView {
 
     pub(super) fn is_working(&self) -> bool {
         self.selected.as_ref().is_some_and(|chat| {
-            self.sessions
-                .iter()
-                .any(|s| s["chatId"] == chat["id"] && s["status"] == "working")
+            self.sessions.iter().any(|s| {
+                s["chatId"] == chat["id"]
+                    && matches!(s["status"].as_str(), Some("working" | "awaitingInput"))
+            })
         })
     }
 
