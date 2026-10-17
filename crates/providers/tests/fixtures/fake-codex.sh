@@ -93,6 +93,25 @@ if has "$turnline" '"method":"review/start"'; then
 fi
 
 case "$turnline" in
+*scenario:access-policy*)
+  case "$turnline" in
+    *readonly*) sandbox=read-only; policy=never; kind=readOnly ;;
+    *workspace*) sandbox=workspace-write; policy=on-request; kind=workspaceWrite ;;
+    *full-ask*) sandbox=danger-full-access; policy=on-request; kind=dangerFullAccess ;;
+    *) sandbox=danger-full-access; policy=never; kind=dangerFullAccess ;;
+  esac
+  has "$thread_line" "\"sandbox\":\"$sandbox\"" || { fail_turn "$tid" "wrong sandbox"; exit 0; }
+  has "$thread_line" "\"approvalPolicy\":\"$policy\"" || { fail_turn "$tid" "wrong thread policy"; exit 0; }
+  has "$turnline" "\"approvalPolicy\":\"$policy\"" || { fail_turn "$tid" "wrong turn policy"; exit 0; }
+  has "$turnline" "\"type\":\"$kind\"" || { fail_turn "$tid" "wrong turn sandbox"; exit 0; }
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"policy-turn\"}}}"
+  emit '{"id":900,"method":"item/fileChange/requestApproval","params":{"changes":[{"path":"/tmp/policy.txt"}]}}'
+  read -r answer || exit 1
+  case "$turnline" in *deny*) expected=decline ;; *) expected=accept ;; esac
+  has "$answer" "\"decision\":\"$expected\"" || { fail_turn "$tid" "wrong approval decision"; exit 0; }
+  emit '{"method":"turn/completed","params":{"turn":{"id":"policy-turn","status":"completed"}}}'
+  ;;
+
 *scenario:native-skills*)
   for want in '"type":"skill"' '"path":"/repo/a b/SKILL.md"' '[lib.rs](src/lib.rs)'; do
     has "$turnline" "$want" || { fail_turn "$tid" "initial native skill or file path missing"; exit 0; }
@@ -205,12 +224,12 @@ case "$turnline" in
 *scenario:happy*)
   # Verify the turn/start + thread/start params the harness must send.
   for want in '"method":"turn/start"' '"effort":"ultra"' '"model":"gpt-5.6-sol"' \
-    '"sandboxPolicy":{"type":"dangerFullAccess"}' \
-    '"approvalPolicy":"never"' '"summary":"auto"' \
+    '"sandboxPolicy":{"networkAccess":false,"type":"workspaceWrite"}' \
+    '"approvalPolicy":"on-request"' '"summary":"auto"' \
     '"serviceTier":"fast"'; do
     has "$turnline" "$want" || { fail_turn "$tid" "turn param missing: $want"; exit 0; }
   done
-  for want in '"approvalPolicy":"never"' '"sandbox":"danger-full-access"' '"cwd":"/tmp"' \
+  for want in '"approvalPolicy":"on-request"' '"sandbox":"workspace-write"' '"cwd":"/tmp"' \
     '"serviceTier":"fast"'; do
     has "$thread_line" "$want" || { fail_turn "$tid" "thread param missing: $want"; exit 0; }
   done
@@ -410,13 +429,11 @@ case "$turnline" in
   ;;
 
 *scenario:approve*)
-  # Wire policy is always "never" (unattended parity with the Claude
-  # adapter); the requests below are the STRAY-approval path, which must
-  # still round-trip as input questions.
-  has "$thread_line" '"approvalPolicy":"never"' ||
-    { fail_turn "$tid" "thread approvalPolicy should be never"; exit 0; }
-  has "$turnline" '"approvalPolicy":"never"' ||
-    { fail_turn "$tid" "turn approvalPolicy should be never"; exit 0; }
+  # Restricted requests must reach the user rather than bypassing approvals.
+  has "$thread_line" '"approvalPolicy":"on-request"' ||
+    { fail_turn "$tid" "thread approvalPolicy should be on-request"; exit 0; }
+  has "$turnline" '"approvalPolicy":"on-request"' ||
+    { fail_turn "$tid" "turn approvalPolicy should be on-request"; exit 0; }
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
   emit '{"method":"turn/started","params":{"turn":{"id":"t-1"}}}'
   emit '{"id":101,"method":"item/commandExecution/requestApproval","params":{"itemId":"c1","command":"rm -rf /tmp/x"}}'

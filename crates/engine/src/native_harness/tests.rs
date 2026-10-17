@@ -648,6 +648,7 @@ async fn doc_queue_stop_case(hard_stop: bool) {
         .unwrap();
     let mut request = request(root.path());
     request.auto_approve = true;
+    request.sandbox = SandboxLevel::DangerFullAccess;
     core.doc_host
         .queue_command(
             "chat",
@@ -827,6 +828,7 @@ async fn switching_from_an_opaque_provider_cursor_starts_a_native_session_with_t
     let mut request = request(root.path());
     request.prompt = "Continue with Zuse".into();
     request.auto_approve = true;
+    request.sandbox = SandboxLevel::DangerFullAccess;
     core.sessions
         .dispatch(
             "migration",

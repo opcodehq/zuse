@@ -11,9 +11,8 @@
 //!   live against 2.1.228: `can_use_tool` control requests arrive and
 //!   allow/deny responses are honored). The alternative channel — an MCP
 //!   permission tool — needs a server process and was rejected. Tool calls
-//!   auto-allow (zuse sessions run unattended, parity with the ACP
-//!   harness's preferred-allow behavior); `AskUserQuestion` round-trips
-//!   through [`RunControls::request_input`].
+//!   respect the run's access posture; approvals and `AskUserQuestion`
+//!   round-trip through [`RunControls::request_input`].
 //! - DONE is the CLI's own `result` frame, eagerly: background work (a
 //!   spawned subagent) never holds the turn. The CLI natively runs a second
 //!   wake turn when a background task finishes — a fresh `init` (same
@@ -60,8 +59,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 use zuse_protocol::{
-    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SlashCommand,
-    SteeringMode, UserInputAnswer, UserInputQuestion,
+    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
+    SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
 };
 
 use crate::process::{Child, ChildStdin, Command, Stdio};
@@ -239,7 +238,9 @@ impl ClaudeHarness {
         if let Some(effort) = to_effort(request.reasoning, request.model.as_deref()) {
             args.extend(["--effort".into(), effort.into()]);
         }
-        if request.auto_approve {
+        if request.sandbox == SandboxLevel::ReadOnly {
+            args.extend(["--permission-mode".into(), "plan".into()]);
+        } else if request.auto_approves_tools() {
             args.extend(
                 [
                     "--permission-mode",
@@ -459,8 +460,7 @@ impl Harness for ClaudeHarness {
     fn stops_turn_in_place(&self) -> bool {
         true
     }
-    /// Same launch arguments and cwd. The CLI ignores the sandbox level, and
-    /// option spellings that launch the same flags are the same runtime.
+    /// Same launch arguments and cwd, including the read-only permission mode.
     fn same_runtime(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd && Self::launch_args(live) == Self::launch_args(next)
     }
@@ -468,7 +468,9 @@ impl Harness for ClaudeHarness {
     /// change on the live process (`set_model`, `apply_flag_settings`). Only
     /// the directory and the permission mode it launched with need a new one.
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
-        live.cwd == next.cwd && live.auto_approve == next.auto_approve
+        live.cwd == next.cwd
+            && live.auto_approve == next.auto_approve
+            && live.sandbox == next.sandbox
     }
 
     /// Credential and executable identity scopes both initialize and catalog caches.
@@ -918,7 +920,7 @@ async fn run_session(session: Session) {
                             }));
                             let _ = stdin_tx.send(StdinMsg::Line(line));
                         } else {
-                            handle_control_request(req, &request_input, &stdin_tx);
+                            handle_control_request(req, config.sandbox, config.auto_approves_tools(), &request_input, &stdin_tx);
                         }
                         continue;
                     }
@@ -1323,15 +1325,13 @@ type RequestInputFn = Box<
         + Sync,
 >;
 
-/// Serve one `can_use_tool` control request. Every tool is auto-approved
-/// (unattended parity — the CLI still blocks until SOME response arrives, so
-/// every request must be answered); `AskUserQuestion` is intercepted —
-/// surface the questions through the engine's input bridge (which owns the
-/// `InputRequested`/`InputResolved` lifecycle), wait for the user's answers
-/// (in a subtask so the frame loop keeps flowing), and hand them back keyed
-/// by question text, as the tool expects.
+/// Permission requests use the selected posture. Read-only never grants a
+/// requested escalation; full access bypasses approval only when explicitly
+/// enabled. Content questions always use the engine's input bridge.
 fn handle_control_request(
     req: ControlRequestFrame,
+    sandbox: SandboxLevel,
+    auto_approve: bool,
     request_input: &Arc<RequestInputFn>,
     stdin_tx: &mpsc::UnboundedSender<StdinMsg>,
 ) {
@@ -1343,8 +1343,41 @@ fn handle_control_request(
         return;
     }
     if req.request.tool_name != "AskUserQuestion" {
-        let line = control_response_line(&req.request_id, allow_response(req.request.input));
-        let _ = stdin_tx.send(StdinMsg::Line(line));
+        if sandbox == SandboxLevel::ReadOnly {
+            let line = control_response_line(
+                &req.request_id,
+                serde_json::json!({"behavior":"deny","message":"This chat is read only. Change its permission mode before allowing this action."}),
+            );
+            let _ = stdin_tx.send(StdinMsg::Line(line));
+        } else if auto_approve && sandbox == SandboxLevel::DangerFullAccess {
+            let line = control_response_line(&req.request_id, allow_response(req.request.input));
+            let _ = stdin_tx.send(StdinMsg::Line(line));
+        } else {
+            let question = tool_approval_question(&req.request.tool_name, &req.request.input);
+            let request_input = Arc::clone(request_input);
+            let stdin_tx = stdin_tx.clone();
+            tokio::spawn(async move {
+                let answers = (request_input)(vec![question.clone()])
+                    .await
+                    .unwrap_or_default();
+                let approved = answers.iter().any(|answer| {
+                    answer.question_id == question.id
+                        && answer
+                            .labels
+                            .iter()
+                            .any(|label| label.eq_ignore_ascii_case("yes"))
+                });
+                let response = if approved {
+                    allow_response(req.request.input)
+                } else {
+                    serde_json::json!({"behavior":"deny","message":"The user did not approve this action."})
+                };
+                let _ = stdin_tx.send(StdinMsg::Line(control_response_line(
+                    &req.request_id,
+                    response,
+                )));
+            });
+        }
         return;
     }
     let request_input = Arc::clone(request_input);
@@ -1367,6 +1400,19 @@ fn handle_control_request(
         let line = control_response_line(&request_id, allow_response(updated));
         let _ = stdin_tx.send(StdinMsg::Line(line));
     });
+}
+
+fn tool_approval_question(tool: &str, input: &Value) -> UserInputQuestion {
+    let preview: String = input.to_string().chars().take(4000).collect();
+    UserInputQuestion {
+        id: uuid::Uuid::new_v4().to_string(),
+        header: format!("Approve {tool}"),
+        question: format!("Claude wants to use {tool}. Allow this action?\n\n{preview}"),
+        options: vec!["Yes".into(), "No".into()],
+        prefill: None,
+        multiline: false,
+        multi_select: false,
+    }
 }
 
 /// Parse Claude's `AskUserQuestion` tool input into [`UserInputQuestion`]s

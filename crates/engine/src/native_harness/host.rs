@@ -119,7 +119,7 @@ impl ProcessNotifier for Notices {
     }
 }
 pub(super) fn mode(request: &RunRequest) -> RuntimeMode {
-    if request.auto_approve || request.sandbox == SandboxLevel::DangerFullAccess {
+    if request.auto_approves_tools() {
         RuntimeMode::FullAccess
     } else {
         RuntimeMode::ApprovalRequired

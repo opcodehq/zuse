@@ -259,6 +259,35 @@ pub struct RunRequest {
     pub mcp: Option<McpServer>,
 }
 
+impl RunRequest {
+    /// Bypassing approvals requires both explicit full access and the opt-in.
+    /// A stale auto-approval flag must never weaken a restricted sandbox.
+    pub fn auto_approves_tools(&self) -> bool {
+        self.auto_approve && self.sandbox == SandboxLevel::DangerFullAccess
+    }
+}
+
+#[cfg(test)]
+mod access_posture_tests {
+    use super::*;
+    #[test]
+    fn approval_bypass_requires_both_full_access_and_explicit_opt_in() {
+        for sandbox in [
+            SandboxLevel::ReadOnly,
+            SandboxLevel::WorkspaceWrite,
+            SandboxLevel::DangerFullAccess,
+        ] {
+            for enabled in [false, true] {
+                let request: RunRequest = serde_json::from_value(serde_json::json!({"prompt":"test","cwd":"/tmp","sandbox":sandbox,"autoApprove":enabled})).unwrap();
+                assert_eq!(
+                    request.auto_approves_tools(),
+                    sandbox == SandboxLevel::DangerFullAccess && enabled
+                );
+            }
+        }
+    }
+}
+
 /// A stdio MCP server the harness should add to the agent's session, on top
 /// of whatever the user configured. Each driver spells it in its own dialect
 /// (Claude `--mcp-config`, ACP `session/new` `mcpServers`, Codex

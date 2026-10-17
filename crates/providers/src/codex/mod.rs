@@ -15,12 +15,8 @@
 //! - Notifications map to [`AgentEvent`]s: agentMessage/reasoning deltas (both
 //!   `delta`/`textDelta` spellings), item lifecycles → typed ToolCall/ToolResult,
 //!   `thread/tokenUsage/updated` → Usage, turn/completed|failed|aborted → Done.
-//! - Approvals + sandbox: yolo mode. The wire policy is always `"never"` and
-//!   the sandbox is forced to `danger-full-access` — parity with the Claude
-//!   adapter's auto-approve-everything (unattended runs). Stray
-//!   `item/commandExecution/requestApproval` +
-//!   `item/fileChange/requestApproval` still round-trip through
-//!   [`RunControls::request_input`] as a synthesized yes/no question.
+//! - Approvals and sandbox follow the selected run posture. Restricted
+//!   requests use the engine's input bridge; read-only denies escalation.
 //! - Subagents are full child app-server threads. Parent spawn items establish
 //!   their stable ownership; content arriving before the spawn is buffered.
 //!   A registered child's notifications route through an EXPLICIT table
@@ -629,10 +625,10 @@ impl Harness for CodexHarness {
     fn stops_turn_in_place(&self) -> bool {
         true
     }
-    /// What the app-server launch and its turns read: the sandbox is forced
-    /// to full access, and `serviceTier` is the only model option used.
+    /// Runtime identity includes sandbox and approval posture.
     fn same_runtime(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd
+            && live.sandbox == next.sandbox
             && live.model == next.model
             && to_effort(live.reasoning) == to_effort(next.reasoning)
             && service_tier(live) == service_tier(next)
@@ -644,6 +640,7 @@ impl Harness for CodexHarness {
     /// that way (an omitted parameter keeps the previous value).
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd
+            && live.sandbox == next.sandbox
             && live.auto_approve == next.auto_approve
             && (next.model.is_some() || live.model.is_none())
             && (to_effort(next.reasoning).is_some() || to_effort(live.reasoning).is_none())
@@ -767,18 +764,9 @@ impl CodexHarness {
                 .canonicalize()
                 .map_err(HarnessError::Io)?,
         );
-        // Yolo mode: danger-full-access + approvalPolicy "never" (set below) —
-        // codex's --dangerously-bypass-approvals-and-sandbox equivalent.
-        // Parity with the Claude adapter, which auto-approves every
-        // can_use_tool and so effectively grants full access. This also
-        // sidesteps codex ≤0.144.x's workspace-write bug where a linked
-        // worktree on a slash-named branch derives a malformed mount that
-        // kills every command.
-        request.sandbox = if title_only {
-            zuse_protocol::SandboxLevel::ReadOnly
-        } else {
-            zuse_protocol::SandboxLevel::DangerFullAccess
-        };
+        if title_only {
+            request.sandbox = zuse_protocol::SandboxLevel::ReadOnly;
+        }
         let mut cmd = Command::new(&exe);
         cmd.arg("app-server");
         crate::compose_child_path(&mut cmd, &exe);
@@ -1069,14 +1057,7 @@ async fn run_session(session: Session) {
     let request_input = Arc::new(request_input);
 
     // ---- wire params ------------------------------------------------------
-    // Parity with the Claude adapter, which auto-approves every `can_use_tool`
-    // regardless of `auto_approve` (zuse sessions run unattended; combined
-    // with the danger-full-access override above this is codex's yolo mode):
-    // never surface wire approvals. "on-request" turned
-    // every command into a yes/no question (user report: "asking me for
-    // approval at every step"). The approval-as-input plumbing below stays for
-    // stray requests and a future explicit permission-mode setting.
-    let approval_policy = "never";
+    let approval_policy = policy_for(&request);
     let start_tier = service_tier(&request);
 
     let start_params = {
@@ -1245,7 +1226,7 @@ async fn run_session(session: Session) {
         let mut p = serde_json::Map::new();
         p.insert("threadId".into(), Value::String(thread_id.clone()));
         p.insert("input".into(), prompt_input(text));
-        p.insert("approvalPolicy".into(), approval_policy.into());
+        p.insert("approvalPolicy".into(), policy_for(live).into());
         p.insert("sandboxPolicy".into(), sandbox_policy_value(live.sandbox));
         // Reasoning summaries stream (`item/reasoning/summaryTextDelta`) only
         // when asked for — without this codex "thinks" in silence for minutes:
@@ -1755,7 +1736,8 @@ async fn run_session(session: Session) {
                         id,
                         &method,
                         &params,
-                        request.auto_approve,
+                        live.auto_approves_tools(),
+                        live.sandbox,
                         &request_input,
                     );
                 }
@@ -2047,10 +2029,18 @@ type RequestInputFn = Box<
         + Sync,
 >;
 
+fn policy_for(request: &RunRequest) -> &'static str {
+    if request.sandbox == zuse_protocol::SandboxLevel::ReadOnly || request.auto_approves_tools() {
+        "never"
+    } else {
+        "on-request"
+    }
+}
+
 /// Serve one server→client request. Approval requests round-trip through
 /// `request_input` as a synthesized yes/no question (in a subtask so the
 /// message loop keeps flowing); with `auto_approve` they're accepted outright
-/// (belt to the wire-level `approvalPolicy: "never"`). Anything else is
+/// when paired with full access. Read-only declines escalations. Anything else is
 /// rejected as unsupported so the server never wedges awaiting a reply.
 fn handle_server_request(
     client: &RpcClient,
@@ -2058,6 +2048,7 @@ fn handle_server_request(
     method: &str,
     params: &Value,
     auto_approve: bool,
+    sandbox: zuse_protocol::SandboxLevel,
     request_input: &Arc<RequestInputFn>,
 ) {
     // A tool's user-input request (EXPERIMENTAL, codex 0.146.x) is a CONTENT
@@ -2099,7 +2090,11 @@ fn handle_server_request(
         client.respond_error(&id, -32601, &format!("unsupported method: {method}"));
         return;
     }
-    if auto_approve {
+    if sandbox == zuse_protocol::SandboxLevel::ReadOnly {
+        client.respond(&id, json!({ "decision": "decline" }));
+        return;
+    }
+    if auto_approve && sandbox == zuse_protocol::SandboxLevel::DangerFullAccess {
         client.respond(&id, json!({ "decision": "accept" }));
         return;
     }

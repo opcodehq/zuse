@@ -2003,3 +2003,71 @@ async fn external_voice_keeps_canonical_events_without_any_local_helper() {
     token.cancel();
     pump.abort();
 }
+
+#[tokio::test]
+async fn access_policy_preserves_sandbox_and_routes_only_explicit_approvals() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for (profile, sandbox, auto_approve, answer, prompts) in [
+        ("readonly deny", SandboxLevel::ReadOnly, true, "Yes", 0),
+        ("workspace", SandboxLevel::WorkspaceWrite, true, "Yes", 1),
+        (
+            "workspace deny",
+            SandboxLevel::WorkspaceWrite,
+            false,
+            "No",
+            1,
+        ),
+        ("full", SandboxLevel::DangerFullAccess, true, "No", 0),
+        (
+            "full-ask deny",
+            SandboxLevel::DangerFullAccess,
+            false,
+            "No",
+            1,
+        ),
+    ] {
+        let (mut control, _steer, _token) = controls(answer);
+        let count = Arc::new(AtomicUsize::new(0));
+        let seen = count.clone();
+        let original = control.request_input;
+        control.request_input = Box::new(move |questions| {
+            seen.fetch_add(questions.len(), Ordering::SeqCst);
+            original(questions)
+        });
+        let mut request = request(&format!("scenario:access-policy {profile}"));
+        request.sandbox = sandbox;
+        request.auto_approve = auto_approve;
+        let events = run_to_end(&harness(), request, control).await;
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                }
+            )),
+            "{profile}: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                AgentEvent::Done {
+                    status: DoneStatus::Errored,
+                    ..
+                }
+            )),
+            "{profile}: {events:?}"
+        );
+        assert_eq!(count.load(Ordering::SeqCst), prompts, "{profile}");
+    }
+}
+
+#[test]
+fn changing_access_posture_requires_a_new_runtime() {
+    let mut before = request("before");
+    before.sandbox = SandboxLevel::DangerFullAccess;
+    let mut after = before.clone();
+    after.sandbox = SandboxLevel::ReadOnly;
+    assert!(!harness().same_runtime(&before, &after));
+    assert!(!harness().reconfigures_in_place(&before, &after));
+}

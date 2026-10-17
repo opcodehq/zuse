@@ -4,6 +4,8 @@ Rust desktop and browser control plane for coding agents. The native application
 
 This repository is under active implementation. See [the implementation plan](internal-docs/implementation-plan.md) and [acceptance status](internal-docs/acceptance.md) for the distinction between adapted source, compiled features and verified behavior.
 
+Chat access controls and their current provider-specific limits are described in [permissions](internal-docs/permissions.md).
+
 ## Repository
 
 - `apps/desktop`: native entrypoint and service commands.

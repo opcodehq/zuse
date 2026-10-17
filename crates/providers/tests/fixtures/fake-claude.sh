@@ -27,6 +27,20 @@ emit() { printf '%s\n' "$1"; }
 uuid_of() { printf '%s\n' "$1" | sed 's/.*"uuid":"\([^"]*\)".*/\1/'; }
 
 case "$first" in
+*scenario:access-policy*)
+  case "$first" in
+    *readonly*) expected_mode=plan ;;
+    *workspace*|*full-ask*) expected_mode=default ;;
+    *) expected_mode=bypassPermissions ;;
+  esac
+  case " $* " in *" --permission-mode $expected_mode "*) ;; *) emit '{"type":"result","subtype":"error_during_execution","errors":["wrong permission mode"],"session_id":"policy-session"}'; exit 0 ;; esac
+  emit '{"type":"control_request","request_id":"policy-tool","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"/tmp/policy.txt","content":"test"}}}'
+  read -r answer || exit 1
+  case "$first" in *deny*) expected=deny ;; *) expected=allow ;; esac
+  case "$answer" in *"\"behavior\":\"$expected\""*) ;; *) emit '{"type":"result","subtype":"error_during_execution","errors":["wrong approval decision"],"session_id":"policy-session"}'; exit 0 ;; esac
+  emit '{"type":"result","subtype":"success","result":"policy-ok","usage":{"input_tokens":1,"output_tokens":1},"session_id":"policy-session"}'
+  ;;
+
 
 *scenario:command-echo*)
   content=$(printf '%s\n' "$first" | sed 's/.*"content":"\([^"]*\)".*/\1/')
