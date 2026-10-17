@@ -17,8 +17,9 @@
 - Persist steering cancellation across stop and resume, and retain workspace ownership until host cleanup completes.
 - Protect pending file edits and saves when navigating between workspace files.
 - Complete local browser chat controls and native provider settings labels.
+- Refine browser navigation and preserve in-progress work across connection interruptions and reconnects.
 
 ### Release scope
 
-- Includes all changes on `main` through `addee8f84c4545768629b66c8a13e3e114c3b2e0`, followed by the 0.25.0 version update.
+- Includes all changes on `main` through `4a41b7f85d7c924d480f6ab69ea96dc31574b12d`, with the 0.25.0 version update.
 - Source release. This repository does not currently contain an installer publishing workflow. Platform and integration acceptance status remains documented in `internal-docs/acceptance.md`.
