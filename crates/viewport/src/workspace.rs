@@ -388,6 +388,13 @@ impl WorkspaceView {
             text: self.input.read(cx).value(cx),
             attachments: self.attachments.clone(),
             key: key.clone(),
+            chat_id: self
+                .selected
+                .as_ref()
+                .and_then(|chat| chat["id"].as_str())
+                .map(str::to_owned),
+            host_id: self.draft_host(),
+            not_sent: true,
             ..Default::default()
         };
         if draft.text.is_empty() && draft.attachments.is_empty() {
@@ -403,6 +410,15 @@ impl WorkspaceView {
             .get(&self.draft_key())
             .cloned()
             .unwrap_or_default();
+        if !draft.attachments.is_empty() && draft.host_id != self.draft_host() {
+            if !self.uncertain_drafts.contains(&draft) {
+                self.uncertain_drafts.push(draft);
+            }
+            self.attachments.clear();
+            self.input
+                .update(cx, |input, cx| input.set_value(String::new(), cx));
+            return;
+        }
         self.attachments = draft.attachments;
         self.input
             .update(cx, |input, cx| input.set_value(draft.text, cx));
@@ -417,10 +433,15 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
-        if self.draft_key() == draft.key && self.input.read(cx).value(cx).is_empty() {
+        let current = self.draft_key() == draft.key;
+        if current && self.input.read(cx).value(cx).is_empty() && self.attachments.is_empty() {
             self.attachments = draft.attachments;
             self.input
                 .update(cx, |input, cx| input.set_value(draft.text, cx));
+        } else if current || self.drafts.contains_key(&draft.key) {
+            if !self.uncertain_drafts.contains(&draft) {
+                self.uncertain_drafts.push(draft);
+            }
         } else {
             self.drafts.insert(draft.key.clone(), draft);
         }

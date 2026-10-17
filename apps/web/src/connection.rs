@@ -47,7 +47,10 @@ async fn auth_status() -> Result<bool, ()> {
         _ => Err(()),
     }
 }
-fn local_action(frame: &Value) -> bool {
+fn local_action(frame: &Value, events: &Sender) -> bool {
+    if crate::drafts::handle(frame, events) {
+        return true;
+    }
     if frame["ui"] == "playCompletionSound" {
         if let Ok(preset) = serde_json::from_value(frame["preset"].clone()) {
             crate::audio::play(preset);
@@ -93,7 +96,7 @@ async fn wait_offline(
     loop {
         futures::select_biased! {
             _=timer=>return true,
-            frame=outbound.next().fuse()=>match frame {Some(frame)=>{if !local_action(&frame){reject(events,&frame)}},None=>return false},
+            frame=outbound.next().fuse()=>match frame {Some(frame)=>{if !local_action(&frame, events){reject(events,&frame)}},None=>return false},
         }
     }
 }
@@ -161,6 +164,7 @@ fn paired_target() -> Result<Option<PairedTarget>, String> {
 }
 
 pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Sender) {
+    crate::drafts::initialize().await;
     let target = match paired_target() {
         Ok(target) => target,
         Err(message) => {
@@ -269,7 +273,7 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
                     break;
                 }
             };
-            if local_action(&frame) {
+            if local_action(&frame, &events) {
                 continue;
             }
             if frame["ui"] == "pickAttachments" {

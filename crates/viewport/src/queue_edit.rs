@@ -33,6 +33,13 @@ pub(super) struct QueueEdit {
     _timer: Option<Task<()>>,
 }
 impl WorkspaceView {
+    pub(super) fn queue_edit_journal(&self, cx: &App) -> Option<(Draft, Draft)> {
+        let edit = self.queue_edit.as_ref()?;
+        let previous = edit.previous.clone()?;
+        let mut current = self.queue_edit_copy(cx);
+        current.host_id = edit.chat["deviceId"].as_str().map(str::to_owned);
+        Some((previous, current))
+    }
     pub(super) fn queue_edit_navigation_blocked(&mut self, cx: &mut Context<Self>) -> bool {
         if self.queue_edit.is_some() {
             self.error =
@@ -188,6 +195,7 @@ impl WorkspaceView {
                 .as_ref()
                 .and_then(|chat| chat["id"].as_str())
                 .map(str::to_owned),
+            host_id: self.draft_host(),
             not_sent: false,
             ..Default::default()
         }
@@ -201,7 +209,8 @@ impl WorkspaceView {
         }
         if let Some(previous) = edit.previous {
             if keep_copy {
-                let draft = self.queue_edit_copy(cx);
+                let mut draft = self.queue_edit_copy(cx);
+                draft.host_id = edit.chat["deviceId"].as_str().map(str::to_owned);
                 if !draft.text.is_empty() || !draft.attachments.is_empty() {
                     self.uncertain_drafts.push(draft);
                 }

@@ -3,6 +3,8 @@ mod audio;
 #[cfg(target_family = "wasm")]
 mod connection;
 #[cfg(target_family = "wasm")]
+mod drafts;
+#[cfg(target_family = "wasm")]
 mod socket;
 #[cfg(not(target_family = "wasm"))]
 fn main() {

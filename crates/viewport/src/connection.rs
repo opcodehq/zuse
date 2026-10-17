@@ -126,7 +126,13 @@ impl WorkspaceView {
             self.connected = false;
             return;
         }
+        let first_identity = self.device_id.is_none();
         self.device_id = Some(device.into());
+        if first_identity {
+            let _ = self
+                .requests
+                .unbounded_send(json!({"ui":"loadDrafts","deviceId":device}));
+        }
         self.connected = true;
         self.status = if self.paired {
             "Paired engine connected"
@@ -267,6 +273,7 @@ impl WorkspaceView {
         let Some(draft) = self.uncertain_drafts.get(index).cloned() else {
             return;
         };
+        let destination = self.drafts.get(&draft.key).cloned();
         if draft.chat_id.as_deref() != self.selected.as_ref().and_then(|chat| chat["id"].as_str()) {
             if self.file_navigation_blocked(cx) {
                 return;
@@ -282,6 +289,17 @@ impl WorkspaceView {
                 self.new_chat(cx);
             }
         }
+        if !draft.attachments.is_empty() && draft.host_id != self.draft_host() {
+            self.error = Some("These attachments belong to another computer. Reopen the original host or upload the files again before restoring this draft.".into());
+            cx.notify();
+            return;
+        }
+        if let Some(current) = destination {
+            if !current.is_empty() && current != draft && !self.uncertain_drafts.contains(&current)
+            {
+                self.uncertain_drafts.push(current);
+            }
+        }
         self.uncertain_drafts.remove(index);
         let not_sent = draft.not_sent;
         self.attachments = draft.attachments;
@@ -293,6 +311,11 @@ impl WorkspaceView {
     }
     pub(super) fn connection_recovery_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut view = column().gap_2();
+        if let Some(error) = &self.draft_journal_error {
+            view = view.child(row().gap_2()
+                .child(label(format!("Browser draft storage: {error}. Keep this tab open or copy your text before closing.")).flex_1())
+                .child(control("retry-draft-storage", "Retry").on_click(cx.listener(|this, _, _, cx| this.retry_draft_storage(cx)))));
+        }
         if let Some(notice) = &self.connection_notice {
             view =
                 view.child(
@@ -354,7 +377,7 @@ impl WorkspaceView {
                     .border_b_1()
                     .border_color(rgb(0x2b2d26))
                     .child(label(
-                        "Delivery not confirmed · Check chat and queue before restoring",
+                        "Recovered drafts · Review chat and queue before restoring",
                     ))
                     .children(rows),
             );

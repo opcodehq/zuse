@@ -35,6 +35,8 @@ cargo run -p zuse-cli -- --ipc-port 0 --data-dir .context/local-profile
 
 Open the printed private link in a WebGPU-capable browser. Local development does not require a hosted Zuse account; the selected agent still needs its provider credentials.
 
+Browser drafts are saved per engine and tab, including committed attachment references. Reopening a chat restores its unsent draft; interrupted sends and queue edits appear as recovery copies for review. Fresh sessions can recover saved copies from other tabs. Attachment copies retain their execution host, and storage failures show a retry control while preserving the live text.
+
 For LAN access, supply a certificate trusted by the connecting device and a matching private key. Replace the example hostname with your certificate's LAN hostname or IP:
 
 ```sh

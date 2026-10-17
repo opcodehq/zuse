@@ -5,6 +5,7 @@ mod activity;
 pub mod assets;
 mod composer_alerts;
 mod connection;
+mod draft_journal;
 pub mod input;
 mod model_accounts;
 mod model_picker;
@@ -47,15 +48,7 @@ pub struct Transport {
     pub events: UnboundedReceiver<Value>,
 }
 
-#[derive(Clone, Default)]
-struct Draft {
-    text: String,
-    attachments: Vec<Value>,
-    key: String,
-    message_id: Option<String>,
-    chat_id: Option<String>,
-    not_sent: bool,
-}
+use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 
 pub struct WorkspaceView {
     workspace_focus: FocusHandle,
@@ -112,6 +105,9 @@ pub struct WorkspaceView {
     provider_index: usize,
     send_draft: HashMap<u64, Draft>,
     drafts: HashMap<String, Draft>,
+    draft_journal_ready: bool,
+    draft_journal_last: Option<Value>,
+    draft_journal_error: Option<String>,
     creating: Option<(u64, Value, Value)>,
     queue: Vec<Value>,
     queue_watch: Option<u64>,
@@ -213,6 +209,7 @@ pub struct WorkspaceView {
 
 impl WorkspaceView {
     pub fn new(transport: Transport, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.observe_self(|this, cx| this.persist_drafts(cx)).detach();
         let workspace_focus = cx.focus_handle();
         window.focus(&workspace_focus, cx);
         let input = cx.new(|cx| {
@@ -351,6 +348,9 @@ impl WorkspaceView {
             provider_index: 0,
             send_draft: HashMap::new(),
             drafts: HashMap::new(),
+            draft_journal_ready: false,
+            draft_journal_last: None,
+            draft_journal_error: None,
             creating: None,
             queue: vec![],
             queue_watch: None,
@@ -474,6 +474,9 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if self.receive_draft_journal(&frame, cx) {
+            return;
+        }
         if let Some(value) = frame.get("preferences") {
             if let Ok(mut preferences) = serde_json::from_value::<
                 zuse_protocol::presentation::WorkspacePreferences,
@@ -1081,10 +1084,12 @@ impl WorkspaceView {
                 .and_then(|chat| chat["id"].as_str())
                 .map(str::to_owned),
             message_id: None,
+            host_id: self.draft_host(),
             not_sent: false,
         };
         self.drafts.remove(&draft.key);
         if self.is_working() {
+            self.persist_outgoing_draft(draft.clone(), cx);
             let chat = self.selected.as_ref().unwrap();
             let id = self.call(methods::QUEUE_MESSAGE, zuse_protocol::presentation::chat_request(chat, json!({"text":text, "holdForTurnEnd":true, "attachments":self.attachment_paths()})));
             self.send_draft.insert(id, draft);
@@ -1102,6 +1107,10 @@ impl WorkspaceView {
         let prompt = zuse_protocol::message_attachments::with_attachments(&text, &paths);
         let message_id = uuid::Uuid::new_v4().to_string();
         draft.message_id = Some(message_id.clone());
+        if self.selected.is_none() {
+            draft.chat_id = Some(uuid::Uuid::new_v4().to_string());
+        }
+        self.persist_outgoing_draft(draft.clone(), cx);
         let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"cwd":self.cwd(),"sandbox":self.sandbox,"autoApprove":self.sandbox==zuse_protocol::SandboxLevel::DangerFullAccess,"resume":null,"attachments":self.attachment_paths()}});
         let send = if let Some(chat) = &self.selected {
             self.call(
@@ -1110,8 +1119,7 @@ impl WorkspaceView {
             )
         } else {
             // IDs are client-owned, allowing the durable send to refer to the same chat.
-            let id = uuid::Uuid::new_v4().to_string();
-            draft.chat_id = Some(id.clone());
+            let id = draft.chat_id.clone().unwrap();
             let request = self.call(methods::MUTATE, json!({"op":"createChat","chatId":id,"deviceId":device,"cwd":self.project.as_ref().and_then(|p|p["path"].as_str()),"config":{"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"sandbox":self.sandbox}}));
             let chat = json!({"id":id,"title":text.chars().take(70).collect::<String>(),"deviceId":device,"cwd":self.cwd(),"config":{"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"sandbox":self.sandbox}});
             self.creating = Some((request, chat, command));
