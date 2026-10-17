@@ -63,6 +63,7 @@ pub struct ShortcutsPage {
     appshots_page: bool,
     general_page: bool,
     general_account: Entity<crate::settings::plugins::PluginsCard>,
+    completion_preset_select: widgets::SelectState,
     appshots_focus_pending: bool,
     scroll: crate::settings::widgets::PageScroll,
     /// Working copy (kept in sync with the shell via change events).
@@ -109,6 +110,7 @@ impl ShortcutsPage {
         Self {
             appshots_page: false,
             general_page: false,
+            completion_preset_select: Default::default(),
             appshots_focus_pending: false,
             scroll: crate::settings::widgets::PageScroll::default(),
             keymap,

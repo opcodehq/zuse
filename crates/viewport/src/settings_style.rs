@@ -74,6 +74,7 @@ pub fn frame() -> Div {
         .p(px(4.))
 }
 pub fn header(title: impl Into<SharedString>, description: impl Into<SharedString>) -> Div {
+    let description = description.into();
     div()
         .flex()
         .items_start()
@@ -88,7 +89,9 @@ pub fn header(title: impl Into<SharedString>, description: impl Into<SharedStrin
                 .flex_col()
                 .gap(px(2.))
                 .child(title_text(title))
-                .child(description_text(description)),
+                .when(!description.is_empty(), |view| {
+                    view.child(description_text(description))
+                }),
         )
 }
 pub fn card() -> Div {

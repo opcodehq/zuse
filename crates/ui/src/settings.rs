@@ -890,6 +890,7 @@ pub struct UiSettings {
     pub sound_enabled: bool,
     /// Chime when an agent run completes successfully.
     pub sound_completion_enabled: bool,
+    pub completion_sound_preset: zuse_protocol::completion_sound::CompletionSoundPreset,
     /// Chime when an agent is waiting for user input.
     pub sound_input_enabled: bool,
     /// Chime when a run fails or the durable connection state degrades.
@@ -1051,12 +1052,13 @@ impl Default for UiSettings {
             space_order: Vec::new(),
             sound_enabled: true,
             sound_completion_enabled: true,
+            completion_sound_preset: Default::default(),
             sound_input_enabled: true,
             sound_attention_enabled: true,
             notifications_enabled: true,
             notifications_background_only: true,
             files_panel_width: FILES_PANEL_DEFAULT,
-            agent_update_notifications: true,
+            agent_update_notifications: false,
             right_pane_width: RIGHT_PANE_DEFAULT,
             pull_request_pane_width: PULL_REQUEST_PANE_DEFAULT,
             right_pane_open: false,
@@ -1704,6 +1706,7 @@ impl UiSettings {
             space_order,
             sound_enabled,
             sound_completion_enabled,
+            completion_sound_preset,
             sound_input_enabled,
             sound_attention_enabled,
             notifications_enabled,

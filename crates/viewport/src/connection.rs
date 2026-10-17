@@ -39,6 +39,7 @@ impl WorkspaceView {
             self.connection_notice=Some("An action may have completed before the connection closed. Check its current state before trying it again.".into());
         }
         self.connected = false;
+        self.notification_baselines.clear();
         self.workspace_synced = false;
         self.status = if frame["connection"] == "pairingRequired" {
             self.error = frame["message"].as_str().map(str::to_owned);

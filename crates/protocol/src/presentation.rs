@@ -42,6 +42,7 @@ impl AppearanceMode {
 pub struct WorkspacePreferences {
     pub sidebar_view: SidebarView,
     pub appearance: AppearanceMode,
+    pub completion_sound: crate::completion_sound::CompletionSoundPreferences,
     pub collapsed_projects: Vec<String>,
     pub default_provider: Option<String>,
     pub default_models: BTreeMap<String, String>,
@@ -274,5 +275,94 @@ mod tests {
         assert_eq!(decoded.recent_models[0], choice);
         assert_eq!(decoded.default_models["claude-code"], "11");
         assert_eq!(decoded.sidebar_view, SidebarView::Projects);
+    }
+}
+
+/// Switches represent boolean speed settings and binary context sizes;
+/// two arbitrary model names remain a choice menu.
+pub fn model_option_switch_values<'a>(
+    id: &str,
+    choices: impl IntoIterator<Item = &'a str>,
+) -> Option<(&'a str, &'a str)> {
+    let mut choices = choices.into_iter();
+    let values = [choices.next()?, choices.next()?];
+    if choices.next().is_some() {
+        return None;
+    }
+    let has = |value: &str| {
+        values
+            .iter()
+            .any(|choice| choice.eq_ignore_ascii_case(value))
+    };
+    let boolean = (has("on") && has("off")) || (has("true") && has("false"));
+    if !boolean && !has("fast") && !id.to_ascii_lowercase().contains("context") {
+        return None;
+    }
+    binary_switch_values(values)
+}
+
+/// Canonical enabled/disabled identities for a binary model option. Stored
+/// defaults may themselves be enabled; they do not determine switch position.
+pub fn binary_switch_values<'a>(
+    choices: impl IntoIterator<Item = &'a str>,
+) -> Option<(&'a str, &'a str)> {
+    let mut choices = choices.into_iter();
+    let first = choices.next()?;
+    let second = choices.next()?;
+    if choices.next().is_some() {
+        return None;
+    }
+    let enabled = |value: &str| {
+        ["on", "true", "fast"]
+            .iter()
+            .any(|on| value.eq_ignore_ascii_case(on))
+    };
+    let context_size = |value: &str| {
+        let value = value.to_ascii_lowercase();
+        let (number, scale) = if let Some(value) = value.strip_suffix('m') {
+            (value, 1_000_000.)
+        } else if let Some(value) = value.strip_suffix('k') {
+            (value, 1_000.)
+        } else {
+            return None;
+        };
+        number.parse::<f64>().ok().map(|number| number * scale)
+    };
+    if enabled(first)
+        || (!enabled(second)
+            && context_size(first)
+                .zip(context_size(second))
+                .is_some_and(|(first, second)| first > second))
+    {
+        Some((first, second))
+    } else {
+        Some((second, first))
+    }
+}
+
+#[cfg(test)]
+mod binary_switch_tests {
+    use super::{binary_switch_values, model_option_switch_values};
+    #[test]
+    fn enabled_identity_survives_reordered_catalogs_and_enabled_defaults() {
+        for (choices, expected) in [
+            (["off", "on"], ("on", "off")),
+            (["true", "false"], ("true", "false")),
+            (["fast", "default"], ("fast", "default")),
+            (["1m", "200k"], ("1m", "200k")),
+            (["200k", "1m"], ("1m", "200k")),
+        ] {
+            assert_eq!(binary_switch_values(choices), Some(expected));
+        }
+        assert_eq!(binary_switch_values(["off", "auto", "on"]), None);
+        assert_eq!(model_option_switch_values("lead", ["fable", "sol"]), None);
+        assert_eq!(
+            model_option_switch_values("contextWindow", ["1m", "200k"]),
+            Some(("1m", "200k"))
+        );
+        assert_eq!(
+            model_option_switch_values("serviceTier", ["default", "fast"]),
+            Some(("fast", "default"))
+        );
     }
 }

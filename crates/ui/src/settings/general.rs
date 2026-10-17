@@ -53,7 +53,7 @@ impl ShortcutsPage {
         let appearance = widgets::group(
             theme,
             "Appearance",
-            "Choose the app theme or follow your system setting.",
+            "Choose the app theme, or follow your system setting.",
         )
         .child(
             widgets::section_card(theme).mt_0().child(
@@ -61,7 +61,7 @@ impl ShortcutsPage {
                     .child(general_details(
                         theme,
                         "Theme",
-                        "Choose the app theme or follow your system setting.",
+                        "Choose the app theme, or follow your system setting.",
                     ))
                     .child(modes),
             ),
@@ -102,11 +102,47 @@ impl ShortcutsPage {
                 });
                 cx.refresh_windows();
             }));
+        use zuse_protocol::completion_sound::CompletionSoundPreset as Preset;
+        let preset = preferences.completion_sound_preset;
+        let selected = Preset::ALL
+            .iter()
+            .position(|choice| *choice == preset)
+            .unwrap_or(0);
+        let selector = if sound {
+            widgets::select(
+                "general-completion-preset",
+                "Completion sound preset",
+                theme,
+                |page: &mut Self| &mut page.completion_preset_select,
+            )
+            .options(
+                Preset::ALL
+                    .into_iter()
+                    .map(|preset| widgets::SelectOption::new(preset.label())),
+                selected,
+            )
+            .width(160.)
+            .on_select(|_, selected, _, cx| {
+                if let Some(preset) = Preset::ALL.get(selected) {
+                    crate::settings::update(SavePolicy::Immediate, cx, |settings| {
+                        settings.completion_sound_preset = *preset
+                    });
+                    cx.refresh_windows();
+                }
+            })
+            .render(&self.completion_preset_select, cx)
+            .into_any_element()
+        } else {
+            widgets::text_action(theme, widgets::ActionTone::Outlined, preset.label())
+                .w(px(160.))
+                .opacity(0.5)
+                .into_any_element()
+        };
         let notifications=widgets::group(theme,"Notifications","")
             .child(widgets::section_card(theme).mt_0()
                 .child(widgets::card_row(theme,true).child(general_details(theme,"Provider update notifications","Show a notification when a newer version of an agent provider is available. Off by default.")).child(update_switch))
-                .child(widgets::card_row(theme,false).child(general_details(theme,"Agent completion sound","Play a short sound when any agent turn finishes, including agents working in background chats.")).child(sound_switch)
-                    .child(widgets::text_action(theme,widgets::ActionTone::Outlined,"Preview").id("general-preview-sound").on_click(move|_,_,_|{if sound{crate::sound::play(crate::sound::Sound::Done);}}))));
+                .child(widgets::card_row(theme,false).child(general_details(theme,"Agent completion sound","Play a short sound when any agent turn finishes, including agents working in background chats.")).child(sound_switch).child(selector)
+                    .child(widgets::text_action(theme,widgets::ActionTone::Outlined,"Preview").id("general-preview-sound").when(!sound, |button| button.opacity(0.5)).on_click(move|_,_,_|{if sound{crate::sound::play_with_completion_preset(crate::sound::Sound::Done, preset);}}))));
         div()
             .flex()
             .flex_col()

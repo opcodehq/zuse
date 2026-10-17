@@ -428,3 +428,7 @@ for each license.
 ## Model SDK transport
 
 The Zuse harness bundles pinned AI SDK transport code for model requests. Direct SDK versions, transitive integrity records, reproducible build sources, and retained notices are in `crates/harness/bridge/package.json`, `bun.lock`, and `THIRD_PARTY_LICENSES.txt`. The SDK code uses Apache-2.0 and MIT licenses as recorded in that notice file; Zuse's transport wrapper and Rust harness use the root application license.
+
+## Hugeicons controls
+
+Native and browser control glyphs use Hugeicons. The bundled free vectors come from `@hugeicons/core-free-icons` 4.2.1 (MIT), with their export mapping and package provenance in `crates/icons/`. The complete notice is retained in `crates/icons/LICENSE.Hugeicons`. Provider marks and file-identity artwork retain their existing notices. Licensed builds may prepare `@hugeicons-pro/core-solid-rounded` using the build operator's license; those source assets are kept in build output and are not part of this source distribution.

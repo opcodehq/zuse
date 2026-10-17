@@ -81,3 +81,5 @@ cargo run -p zuse-cli --bin zuse-server -- --relay-origin http://127.0.0.1:27657
 Create an invitation from the execution host's Settings → Devices. Its link points to the relay. The host opens outbound sockets; agent RPC, file uploads and subscriptions still authenticate and decrypt on the execution host. Remote relay origins require trusted HTTPS. For LAN/public serving, use `--tls-cert`/`--tls-key`, or explicitly configure `--public-origin https://…` behind a trusted HTTPS reverse proxy. The routing credential authorizes host registration only; it cannot authenticate paired RPC.
 
 This is an operator-managed relay. Embedded-desktop relay configuration, account-scoped broker provisioning, encrypted end-to-end heartbeat acceptance and production deployment remain pending. See [remote access](internal-docs/remote.md).
+
+Control icons use the bundled Hugeicons free set. Builds with `HUGEICONS_LICENSE_KEY` prepare licensed solid rounded icons for both clients; [icon build configuration](internal-docs/icons.md) covers the optional version pin and CI setup.

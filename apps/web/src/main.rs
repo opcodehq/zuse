@@ -1,4 +1,6 @@
 #[cfg(target_family = "wasm")]
+mod audio;
+#[cfg(target_family = "wasm")]
 mod connection;
 #[cfg(target_family = "wasm")]
 mod socket;
@@ -212,6 +214,7 @@ mod browser {
     }
 
     pub fn run() {
+        crate::audio::install();
         // Opening an invitation in an existing tab is a fragment navigation,
         // so import it through the same fresh connection path as a cold load.
         let import = Closure::<dyn FnMut()>::new(|| {

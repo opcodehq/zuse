@@ -913,6 +913,60 @@ impl WorkspaceView {
                     .get(&id)
                     .and_then(Value::as_str)
                     .unwrap_or(&option.default_choice);
+                if let Some((on, off)) = zuse_protocol::presentation::model_option_switch_values(
+                    &option.id,
+                    option.choices.iter().map(|choice| choice.id.as_str()),
+                ) {
+                    let checked = selected == on;
+                    let value = if checked { off } else { on }.to_owned();
+                    let current_label = option
+                        .choices
+                        .iter()
+                        .find(|choice| choice.id == selected)
+                        .map(|choice| choice.label.clone())
+                        .unwrap_or_default();
+                    return row()
+                        .justify_between()
+                        .gap_3()
+                        .min_h(px(28.))
+                        .child(label(option.label.clone()).text_size(px(11.)))
+                        .child(
+                            row()
+                                .gap_2()
+                                .child(label(current_label).text_size(px(11.)))
+                                .child(
+                                    crate::settings_style::toggle(
+                                        SharedString::from(format!("model-option-switch-{i}")),
+                                        checked,
+                                        &option.label,
+                                    )
+                                    .tab_index(0)
+                                    .on_click(cx.listener({
+                                        let id = id.clone();
+                                        let value = value.clone();
+                                        move |this, _, _, cx| {
+                                            this.model_options.insert(id.clone(), json!(value));
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .on_key_down(cx.listener(
+                                        move |this, event: &KeyDownEvent, _, cx| {
+                                            if !event.is_held
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                this.model_options.insert(id.clone(), json!(value));
+                                                cx.stop_propagation();
+                                                cx.notify();
+                                            }
+                                        },
+                                    )),
+                                ),
+                        )
+                        .into_any_element();
+                }
                 column()
                     .gap_1()
                     .child(label(option.label.clone()).text_size(px(11.)))
@@ -937,6 +991,7 @@ impl WorkspaceView {
                             ))
                         }),
                     ))
+                    .into_any_element()
             }))
             .into_any_element()
     }

@@ -2,6 +2,7 @@
 resolver = "2"
 exclude = ["vendor/zkit"]
 members = [
+    "crates/icons",
     "crates/voice",
     "crates/voice-media",
     "crates/voice-session",
@@ -45,6 +46,7 @@ license = "AGPL-3.0-only"
 publish = false
 
 [workspace.dependencies]
+zuse-icons = { path = "crates/icons" }
 zuse-remote = { path = "crates/remote" }
 zuse-harness = { path = "crates/harness" }
 zuse-model-accounts = { path = "crates/model-accounts" }

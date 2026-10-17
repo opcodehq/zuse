@@ -48,6 +48,12 @@ async fn auth_status() -> Result<bool, ()> {
     }
 }
 fn local_action(frame: &Value) -> bool {
+    if frame["ui"] == "playCompletionSound" {
+        if let Ok(preset) = serde_json::from_value(frame["preset"].clone()) {
+            crate::audio::play(preset);
+        }
+        return true;
+    }
     if frame["ui"] == "forgetPairing" {
         if let Ok(Some(storage)) = web_sys::window().unwrap().session_storage() {
             let _ = storage.remove_item("zuse.paired-target.v1");

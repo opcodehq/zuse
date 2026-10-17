@@ -27,11 +27,11 @@ impl Section {
     }
     fn icon(self) -> &'static str {
         match self {
-            Self::General => "settings-minimalistic",
-            Self::Providers => "terminal",
-            Self::Defaults => "check",
-            Self::Devices => "globe",
-            Self::Plugins => "split-columns",
+            Self::General => "settings-general",
+            Self::Providers => "settings-providers",
+            Self::Defaults => "settings-defaults",
+            Self::Devices => "settings-remote",
+            Self::Plugins => "settings-plugins",
             Self::Usage => "clock-circle",
         }
     }
@@ -97,6 +97,7 @@ impl WorkspaceView {
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.settings_section = item;
+                            this.completion_preset_menu = false;
                             if item == Section::Devices {
                                 this.refresh_pairings();
                             }
@@ -115,6 +116,7 @@ impl WorkspaceView {
                 .gap_4()
                 .child(self.account_settings(cx))
                 .child(self.appearance_settings(cx))
+                .child(self.completion_sound_settings(cx))
                 .into_any_element(),
             Section::Defaults => self.default_model_settings(cx),
             Section::Providers => column()
@@ -155,6 +157,7 @@ impl WorkspaceView {
                             .child("Back to app")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.settings = false;
+                                this.completion_preset_menu = false;
                                 window.focus(&this.input.focus_handle(cx), cx);
                                 cx.notify();
                             })),
@@ -277,14 +280,14 @@ impl WorkspaceView {
         s::frame()
             .child(s::header(
                 "Appearance",
-                "Choose the app theme or follow your system setting.",
+                "Choose the app theme, or follow your system setting.",
             ))
             .child(
                 s::card().child(
                     s::setting_row(true)
                         .child(s::details(
                             "Theme",
-                            "Choose the app theme or follow your system setting.",
+                            "Choose the app theme, or follow your system setting.",
                         ))
                         .child(choices),
                 ),

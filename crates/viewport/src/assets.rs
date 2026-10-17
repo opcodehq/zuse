@@ -7,13 +7,15 @@ macro_rules! assets {
     ($($name:literal),* $(,)?) => {
         impl AssetSource for Assets {
             fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+                if let Some(bytes) = zuse_icons::load(path) { return Ok(Some(Cow::Borrowed(bytes))); }
                 Ok(match path {
                     $(concat!("icons/",$name,".svg") => Some(Cow::Borrowed(include_bytes!(concat!("../../ui/assets/icons/",$name,".svg")).as_slice())),)*
                     _ => None,
                 })
             }
             fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
-                Ok([$(concat!("icons/",$name,".svg")),*].into_iter().filter(|p|p.starts_with(path)).map(Into::into).collect())
+                let mut names: Vec<SharedString> = [$(concat!("icons/",$name,".svg")),*].into_iter().chain(zuse_icons::NAMES.iter().copied()).filter(|p|p.starts_with(path)).map(Into::into).collect();
+                names.sort(); names.dedup(); Ok(names)
             }
         }
     }

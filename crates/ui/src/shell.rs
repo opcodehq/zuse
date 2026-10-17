@@ -2962,7 +2962,10 @@ impl Shell {
                                 .attention_sound_gate
                                 .should_play(std::time::Instant::now());
                         if should_play {
-                            crate::sound::play(sound);
+                            crate::sound::play_with_completion_preset(
+                                sound,
+                                self.settings.completion_sound_preset,
+                            );
                         }
                     }
                     if self.settings.notifications_enabled
@@ -7987,16 +7990,16 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let section_icon = |item: SettingsSection| match item {
-            SettingsSection::Devices => icons::MONITOR,
-            SettingsSection::Harnesses => icons::WIDGET,
-            SettingsSection::Plugins => icons::WIDGET,
+            SettingsSection::Devices => icons::SETTINGS_REMOTE,
+            SettingsSection::Harnesses => icons::SETTINGS_PROVIDERS,
+            SettingsSection::Plugins => icons::SETTINGS_PLUGINS,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
             SettingsSection::Appearance => icons::TUNING,
             SettingsSection::Files => icons::FOLDER,
             SettingsSection::Notifications => icons::BELL,
             SettingsSection::Voice => icons::MICROPHONE,
             SettingsSection::Shortcuts => icons::KEYBOARD,
-            SettingsSection::General => icons::SETTINGS,
+            SettingsSection::General => icons::SETTINGS_GENERAL,
             SettingsSection::Appshots => icons::MONITOR,
             SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
         };

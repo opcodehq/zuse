@@ -727,10 +727,33 @@ fn card_order(mut groups: Vec<SettingGroup>) -> Vec<SettingGroup> {
 
 const CONFIG_CARD_WIDTH: f32 = 252.0;
 
-/// A two-choice option renders as a switch in the hover card (Fast Mode):
-/// on = the non-default choice.
+/// Boolean speed settings and binary context sizes use switches.
+/// Enabled defaults retain their actual on position.
 fn is_toggle(group: &SettingGroup) -> bool {
-    matches!(group.id, ModelSetting::Option(_)) && group.choices.len() == 2
+    let ModelSetting::Option(id) = &group.id else {
+        return false;
+    };
+    zuse_protocol::presentation::model_option_switch_values(
+        id,
+        group.choices.iter().map(|choice| choice.value.as_str()),
+    )
+    .is_some()
+}
+
+fn toggle_group_is_on(group: &SettingGroup) -> bool {
+    let ModelSetting::Option(id) = &group.id else {
+        return false;
+    };
+    zuse_protocol::presentation::model_option_switch_values(
+        id,
+        group.choices.iter().map(|choice| choice.value.as_str()),
+    )
+    .is_some_and(|(on, _)| {
+        group
+            .choices
+            .iter()
+            .any(|choice| choice.selected && choice.value == on)
+    })
 }
 
 #[derive(Clone)]
@@ -2408,8 +2431,12 @@ impl Pickers {
         } else if self.compact_model_picker(cx) && self.compact_model_list {
             self.activate_model_index(self.active, cx);
         } else if let Some(index) = self.active.checked_sub(self.model_rows_len(cx)) {
-            if let Some(group) = self.setting_groups(cx).get(index) {
-                self.open_setting(SettingScope::Tray, group.id.clone(), cx);
+            if let Some(group) = self.setting_groups(cx).get(index).cloned() {
+                if is_toggle(&group) {
+                    self.toggle_tray_option(group, cx);
+                } else {
+                    self.open_setting(SettingScope::Tray, group.id.clone(), cx);
+                }
             }
         } else {
             self.activate_model_index(self.active, cx);
@@ -4993,7 +5020,7 @@ impl Pickers {
             .filter(is_toggle)
             .enumerate()
             .map(|(i, group)| {
-                let on = group.choices.iter().any(|c| c.selected && !c.default);
+                let on = toggle_group_is_on(&group);
                 let label = SharedString::from(group.label.clone());
                 popover::menu_row_nav(&theme, false, false, format!("card-toggle-{i}"))
                     .id(("card-toggle", i))
@@ -5322,6 +5349,20 @@ impl Pickers {
         self.pick_option(id, next.value, next.default, cx);
     }
 
+    fn toggle_tray_option(&mut self, group: SettingGroup, cx: &mut Context<Self>) {
+        let ModelSetting::Option(id) = group.id else {
+            return;
+        };
+        let Some(next) = group.choices.into_iter().find(|choice| !choice.selected) else {
+            return;
+        };
+        self.cancel_setting_hover();
+        self.setting_menu = None;
+        self.setting_bounds = None;
+        self.pick_option(id, next.value, next.default, cx);
+        cx.notify();
+    }
+
     /// Each model setting gets a compact trigger and its own nested choices.
     fn render_traits_sections(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.render_setting_rows(SettingScope::Tray, cx)
@@ -5362,6 +5403,66 @@ impl Pickers {
                 && self.compact_model_picker(cx)
                 && !Self::compact_option_visible(&group.id, &self.compact_hidden_options(cx))
             {
+                continue;
+            }
+            if tray && is_toggle(&group) {
+                let on = toggle_group_is_on(&group);
+                let label = SharedString::from(group.label.clone());
+                let value = group
+                    .choices
+                    .iter()
+                    .find(|choice| choice.selected)
+                    .map(|choice| choice.label.clone())
+                    .unwrap_or_default();
+                let key_group = group.clone();
+                rows.push(
+                    popover::menu_row_nav(
+                        &theme,
+                        false,
+                        self.active == base_index + ix,
+                        format!("model-toggle-{ix}"),
+                    )
+                    .id(("model-toggle", ix))
+                    .role(gpui::Role::Switch)
+                    .aria_label(label.clone())
+                    .aria_toggled(if on {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .tab_index(0)
+                    .h(px(if self.compact_model_picker(cx) {
+                        26.
+                    } else {
+                        30.
+                    }))
+                    .py(px(0.))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.active = base_index + ix;
+                        this.toggle_tray_option(group.clone(), cx);
+                        cx.stop_propagation();
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if !event.is_held
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            this.toggle_tray_option(key_group.clone(), cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child(div().flex_1().child(label))
+                    .child(
+                        div()
+                            .text_color(theme.text_muted)
+                            .child(SharedString::from(value)),
+                    )
+                    .child(crate::settings::widgets::toggle_switch(
+                        &theme,
+                        on,
+                        format!("model-tray-{ix}"),
+                    ))
+                    .into_any_element(),
+                );
                 continue;
             }
             let open = self.setting_scope == scope && self.setting_menu.as_ref() == Some(&group.id);
@@ -8817,7 +8918,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn compact_fast_button_toggles_cursor_fast_by_default_models(cx: &mut gpui::TestAppContext) {
+    fn compact_fast_switch_preserves_enabled_provider_defaults(cx: &mut gpui::TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
             cx.set_global(Theme::dark());

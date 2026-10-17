@@ -53,3 +53,6 @@ pub mod message_attachments;
 pub mod browser_link;
 
 pub mod provider_setup;
+
+pub mod completion_sound;
+pub mod notifications;

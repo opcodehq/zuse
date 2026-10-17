@@ -8,6 +8,7 @@ pub mod input;
 mod model_accounts;
 mod model_picker;
 mod navigation;
+mod notifications;
 mod pairing;
 pub mod palette;
 mod previews;
@@ -112,6 +113,10 @@ pub struct WorkspaceView {
     queue: Vec<Value>,
     queue_watch: Option<u64>,
     sessions: Vec<Value>,
+    notification_baselines: HashMap<String, zuse_protocol::notifications::SessionNotificationState>,
+    completion_preset_menu: bool,
+    completion_preset_active: usize,
+    completion_preset_focus: FocusHandle,
     repos: Vec<Value>,
     spaces: Vec<zuse_protocol::Space>,
     project: Option<Value>,
@@ -342,6 +347,10 @@ impl WorkspaceView {
             queue: vec![],
             queue_watch: None,
             sessions: vec![],
+            notification_baselines: HashMap::new(),
+            completion_preset_menu: false,
+            completion_preset_active: 0,
+            completion_preset_focus: cx.focus_handle(),
             repos: vec![],
             spaces: vec![],
             project: None,
@@ -680,6 +689,7 @@ impl WorkspaceView {
                     }
                 }
                 methods::WATCH_SESSIONS => {
+                    self.receive_session_notifications(value);
                     self.sessions = value.as_array().cloned().unwrap_or_default()
                 }
                 methods::LIST_REPOS => self.repos = value.as_array().cloned().unwrap_or_default(),

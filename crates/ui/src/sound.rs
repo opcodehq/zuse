@@ -1,16 +1,5 @@
-//! Session notification sounds — the herdr approach (state-transition chimes
-//! played through the platform's own audio CLI, zero Rust audio deps):
-//!
-//! - embedded completion, input-request, attention and Appshot chimes, and
-//!   the start and end of a voice call;
-//! - macOS Appshots use a preloaded native player; other cues write to a
-//!   temp file and use the system player on a
-//!   background thread: `afplay` (macOS), PowerShell `Media.SoundPlayer`
-//!   (Windows), first of `paplay`/`pw-play`/`aplay`/`ffplay`/`mpv` (Linux —
-//!   WAV, so even bare ALSA `aplay` decodes it);
-//! - `ZUSE_DISABLE_SOUND` env kill-switch + the `soundEnabled` ui-setting;
-//! - failures are logged and swallowed — a missing player must never bother
-//!   the session flow.
+//! Session notification cues use the platform audio player on a background worker.
+//! Completion presets share their notes and envelopes with the browser client.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -23,28 +12,35 @@ static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 static SOUND_APPSHOT: &[u8] = include_bytes!("../assets/sounds/appshot.wav");
 
-static SOUND_DONE: &[u8] = include_bytes!("../assets/sounds/done.wav");
 static SOUND_REQUEST: &[u8] = include_bytes!("../assets/sounds/request.wav");
 static SOUND_ATTENTION: &[u8] = include_bytes!("../assets/sounds/attention.wav");
 static SOUND_VOICE_START: &[u8] = include_bytes!("../assets/sounds/voice-start.wav");
 static SOUND_VOICE_END: &[u8] = include_bytes!("../assets/sounds/voice-end.wav");
 
-/// Which notification chime to play.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sound {
-    /// An agent turn completed successfully.
-    Done,
-    /// The agent is waiting on a question (→ AwaitingInput).
-    Request,
-    /// A run failed or the durable connection state degraded.
-    Attention,
-}
+pub use zuse_protocol::notifications::NotificationSound as Sound;
 
 /// Play a chime on a background thread. Silently a no-op when disabled or no
 /// player is available.
 pub fn play(sound: Sound) {
+    play_with_completion_preset(sound, Default::default());
+}
+
+pub fn play_with_completion_preset(
+    sound: Sound,
+    preset: zuse_protocol::completion_sound::CompletionSoundPreset,
+) {
+    if sound == Sound::Done {
+        if std::env::var_os(DISABLE_ENV).is_none() {
+            std::thread::spawn(move || {
+                if let Err(error) = play_bytes(&preset.wav()) {
+                    tracing::debug!(%error, "completion playback failed");
+                }
+            });
+        }
+        return;
+    }
     let data = match sound {
-        Sound::Done => SOUND_DONE,
+        Sound::Done => unreachable!(),
         Sound::Request => SOUND_REQUEST,
         Sound::Attention => SOUND_ATTENTION,
     };
@@ -320,52 +316,7 @@ fn run_checked(program: &str, args: &[&str], path: &Path) -> Result<(), String> 
 // Notification decision (shared by sound and desktop banners)
 // ---------------------------------------------------------------------------
 
-use zuse_protocol::{
-    Session,
-    view::{Indicator, effective_indicator},
-};
-
-/// Notification baseline is separate from the visual activity indicator:
-/// going idle can mean cancellation, expiry, or an internal handoff.
-#[derive(Debug, Clone)]
-pub(crate) struct SessionNotificationState {
-    indicator: Indicator,
-    last_completed_turn: Option<String>,
-    fresh: bool,
-}
-
-impl SessionNotificationState {
-    pub(crate) fn new(session: &Session, now: chrono::DateTime<chrono::Utc>) -> Self {
-        Self {
-            indicator: effective_indicator(Some(session), now),
-            last_completed_turn: session.last_completed_turn.clone(),
-            fresh: now
-                .signed_duration_since(session.updated_at)
-                .num_milliseconds()
-                <= zuse_protocol::view::SESSION_STALE_MS,
-        }
-    }
-
-    /// Call after saving the new baseline, including when delivery is pending
-    /// or outputs are disabled. Suppressed pings must never be replayed later.
-    pub(crate) fn sound_since(&self, prev: &Self, send_pending: bool) -> Option<Sound> {
-        if self.indicator == Indicator::Errored && prev.indicator != Indicator::Errored {
-            return Some(Sound::Attention);
-        }
-        if self.indicator == Indicator::AwaitingInput && prev.indicator != Indicator::AwaitingInput
-        {
-            return Some(Sound::Request);
-        }
-        if !send_pending
-            && self.fresh
-            && self.last_completed_turn.is_some()
-            && self.last_completed_turn != prev.last_completed_turn
-        {
-            return Some(Sound::Done);
-        }
-        None
-    }
-}
+pub(crate) use zuse_protocol::notifications::SessionNotificationState;
 
 /// The engine already holds raw transport degradation for four seconds before
 /// exposing `Offline` or `Reconnecting`. Notify once when that durable state is
@@ -444,34 +395,6 @@ impl AttentionSoundGate {
 mod tests {
     use super::*;
 
-    fn baseline(indicator: Indicator, turn: Option<&str>) -> SessionNotificationState {
-        SessionNotificationState {
-            indicator,
-            last_completed_turn: turn.map(str::to_owned),
-            fresh: true,
-        }
-    }
-
-    #[test]
-    fn interrupted_and_expired_activity_never_chime() {
-        let working = baseline(Indicator::Working, Some("old"));
-        let idle = baseline(Indicator::None, Some("old"));
-        assert_eq!(idle.sound_since(&working, false), None);
-        // An older host without explicit completion metadata is silent too.
-        assert_eq!(
-            baseline(Indicator::None, None).sound_since(&baseline(Indicator::Working, None), false),
-            None
-        );
-    }
-
-    #[test]
-    fn a_run_error_chimes_once_and_never_masquerades_as_completion() {
-        let working = baseline(Indicator::Working, Some("old"));
-        let errored = baseline(Indicator::Errored, Some("failed"));
-        assert_eq!(errored.sound_since(&working, false), Some(Sound::Attention));
-        assert_eq!(errored.sound_since(&errored, false), None);
-    }
-
     #[test]
     fn durable_connectivity_degradation_chimes_once_per_outage() {
         use zuse_protocol::ConnectivityState as State;
@@ -499,38 +422,6 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_queue_completions_survive_coalesced_working_states() {
-        let first = baseline(Indicator::Working, None);
-        let second = baseline(Indicator::Working, Some("first"));
-        assert_eq!(second.sound_since(&first, false), Some(Sound::Done));
-        assert_eq!(second.sound_since(&second, false), None);
-        let last = baseline(Indicator::None, Some("second"));
-        assert_eq!(last.sound_since(&second, false), Some(Sound::Done));
-        assert_eq!(last.sound_since(&last, false), None);
-    }
-
-    #[test]
-    fn pending_send_consumes_completion_but_preserves_input_requests() {
-        let before = baseline(Indicator::Working, None);
-        let settled = baseline(Indicator::None, Some("first"));
-        assert_eq!(settled.sound_since(&before, true), None);
-        assert_eq!(settled.sound_since(&settled, false), None);
-        let question = baseline(Indicator::AwaitingInput, Some("first"));
-        assert_eq!(question.sound_since(&settled, true), Some(Sound::Request));
-        assert_eq!(question.sound_since(&question, false), None);
-    }
-
-    #[test]
-    fn stale_completion_is_consumed_without_replaying_on_a_heartbeat() {
-        let before = baseline(Indicator::Working, None);
-        let mut stale = baseline(Indicator::None, Some("old"));
-        stale.fresh = false;
-        assert_eq!(stale.sound_since(&before, false), None);
-        let refreshed = baseline(Indicator::Working, Some("old"));
-        assert_eq!(refreshed.sound_since(&stale, false), None);
-    }
-
-    #[test]
     fn temp_files_are_exclusive_and_cleaned_up() {
         let (first_file, first) = create_temp_file().expect("reserve first temp file");
         let (second_file, second) = create_temp_file().expect("reserve second temp file");
@@ -550,7 +441,6 @@ mod tests {
     #[test]
     fn embedded_chimes_are_wav() {
         for data in [
-            SOUND_DONE,
             SOUND_REQUEST,
             SOUND_ATTENTION,
             #[cfg(any(target_os = "macos", target_os = "linux"))]

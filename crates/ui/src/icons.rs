@@ -1,18 +1,6 @@
-//! Embedded icon assets + the gpui [`AssetSource`] that serves them.
-//!
-//! The set mirrors the original zuse's icon usage exactly:
-//! - Most glyphs come from the **Solar Icons** set (Linear weight) by 480 Design,
-//!   the same set the Electron app used via `@solar-icons/react`. Solar Icons is
-//!   licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/);
-//!   attribution: "Solar Icons by 480 Design".
-//! - The terminal tab glyphs (`terminal`, `plus`, `close`) and the stop square
-//!   are ports of the hand-drawn inline SVGs in zuse's `terminal-panel.tsx` /
-//!   `composer-actions.tsx`.
-//! - The harness brand marks (`claude-mark`, `openai-mark`, `cursor-mark`) are
-//!   ports of zuse's `icons.tsx`. gpui tints SVGs with the text color, so the
-//!   Claude mark's brand orange is applied at the call site ([`CLAUDE_BRAND`]).
-//!
-//! Icons render via [`icon`]: `icon(icons::PAPERCLIP).size(px(16.)).text_color(…)`.
+//! Embedded Hugeicons controls and provider brand assets.
+//! The shared icon crate selects licensed solid assets when configured and
+//! bundles the free set otherwise. File-identity glyphs keep their own theme.
 
 use std::borrow::Cow;
 
@@ -53,27 +41,18 @@ macro_rules! icon_assets {
 icon_assets![
     (PROJECT_DEFAULT, "project-default"),
     (REMOTE_SERVER, "remote-server"),
-    // Service-tier bolt, drawn in the toolbar family's linear weight; the
-    // filled twin marks fast mode on.
     (FAST_TIER, "fast-tier"),
     (FAST_TIER_BOLD, "fast-tier-bold"),
-    // Solar Icons (Linear), CC BY 4.0 — 480 Design.
     (MONITOR, "monitor"),
     (SUN, "sun"),
     (MOON, "moon"),
-    // Browser globe, drawn in the same linear weight as the toolbar family.
     (GLOBE, "globe"),
     (LAPTOP, "laptop"),
     (PEN_NEW_SQUARE, "pen-new-square"),
     (SORT, "sort"),
     (MORE_HORIZONTAL, "more-horizontal"),
     (SORT_VERTICAL, "sort-vertical"),
-    // Compact six-dot grip used to reorder queued prompts.
     (DRAG_HANDLE, "drag-handle"),
-    // Original queue-only line family: 24px canvas, 1.5px round strokes and
-    // medium-radius geometry. Kept separate so the queue can adopt the visual
-    // language of the supplied Central Icons reference without changing
-    // shared application glyphs or copying third-party artwork.
     (QUEUE_DRAG_HANDLE, "queue-drag-handle"),
     (QUEUE_SEND, "queue-send"),
     (QUEUE_CHECK, "queue-check"),
@@ -83,14 +62,9 @@ icon_assets![
     (CALENDAR, "calendar"),
     (LIST, "list"),
     (FOLDER_WITH_FILES, "folder-with-files"),
-    // Original tree glyph with compact nodes for the independent Files panel.
     (FILE_TREE, "file-tree"),
     (FOLDER_TREE, "folder-tree"),
-    // Hand-drawn floppy disk in the Solar Linear style. Workspace editor save.
     (FLOPPY_DISK, "floppy-disk"),
-    // Zuse Icons (icons.zuse.sh): 24px canvas, 1.75px round strokes. The
-    // git family shares rails at x=6/18 and 2.25-radius nodes; the carets
-    // and arrows are the site's one path pre-rotated per direction.
     (FOLDER, "folder"),
     (FORK, "fork"),
     (GIT_BRANCH, "git-branch"),
@@ -104,33 +78,18 @@ icon_assets![
     (ALT_ARROW_LEFT, "alt-arrow-left"),
     (ALT_ARROW_RIGHT, "alt-arrow-right"),
     (PULL_REQUEST_DRAFT, "pull-request-draft"),
-    // Compact history-ref glyphs, drawn in the same linear style.
     (CLOUD, "cloud"),
     (TAG, "tag"),
     (KEY_MINIMALISTIC, "key-minimalistic"),
     (KEYBOARD, "keyboard"),
     (ARROW_UP, "arrow-up"),
-    // arrow-up mirrored (like the sidebar flip) — the Solar Linear set here
-    // has no plain arrow-down.
     (ARROW_DOWN, "arrow-down"),
-    // arrow-up rotated 45° — the "opens elsewhere" glyph on spawn chips;
-    // the set has no diagonal arrow.
     (ARROW_UP_RIGHT, "arrow-up-right"),
-    // Hand-drawn return/enter arrow in the Solar Linear style (like the
-    // terminal/plus/close ports) — the set has no return glyph.
     (RETURN, "return"),
-    // Hand-drawn expand/maximize arrows in the Solar Linear style (like the
-    // terminal/plus/return ports) — the set has no expand glyph.
     (EXPAND_ARROWS, "expand-arrows"),
-    // Inward-pointing companion used to restore an expanded pane.
     (COLLAPSE_ARROWS, "collapse-arrows"),
-    // Hand-drawn fold-all chevrons, drawn as a family with EXPAND_ARROWS
-    // (same stroke, caps, 90° joints) — Solar has no unfold-less either.
     (FOLD_VERTICAL, "fold-vertical"),
-    // The changes pane's unified/split toggle: a rounded frame halved by a
-    // centre rule (Solar Linear weight).
     (SPLIT_COLUMNS, "split-columns"),
-    // Long-line wrapping toggle shared by changes and agent Markdown fences.
     (WRAP_TEXT, "wrap-text"),
     (SMARTPHONE, "smartphone"),
     (ARCHIVE_UP_MINIMALISTIC, "archive-up-minimalistic"),
@@ -141,28 +100,23 @@ icon_assets![
     (EYE, "eye"),
     (EYE_CLOSED, "eye-closed"),
     (PAPERCLIP, "paperclip"),
-    // Hand-drawn pushpin in the Solar Linear style for local sidebar pins.
     (PIN, "pin"),
     (PEN, "pen"),
     (ARCHIVE_MINIMALISTIC, "archive-minimalistic"),
     (TRASH_BIN_MINIMALISTIC, "trash-bin-minimalistic"),
-    // Shared settings glyph: user-supplied horizontal sliders.
     (SETTINGS, "settings"),
     (SETTINGS_MINIMALISTIC, "settings-minimalistic"),
     (LOGOUT_2, "logout-2"),
     (MAGNIFER, "magnifer"),
-    // Compact magnifier with a distinct handle, matching the linear icon family.
     (PALETTE_SEARCH, "palette-search"),
     (COMMAND, "command"),
     (DOCUMENT, "document"),
     (DOCUMENT_ADD, "document-add"),
-    // File-kind glyphs, drawn in the same linear family for transcript badges.
     (FILE_CODE, "file-code"),
     (FILE_STYLE, "file-style"),
     (FILE_DATA, "file-data"),
     (FILE_MARKDOWN, "file-markdown"),
     (FILE_IMAGE, "file-image"),
-    // A framed picture: the icon of `Image N` chips.
     (GALLERY, "gallery"),
     (GLOBAL, "global"),
     (CHECKLIST, "checklist"),
@@ -170,55 +124,34 @@ icon_assets![
     (MAGIC_STICK_3, "magic-stick-3"),
     (WIFI_OFF, "wifi-off"),
     (CLOSE_CIRCLE, "close-circle"),
-    // Hand-drawn info glyph in the Solar Linear style (like the terminal/
-    // plus/return ports) — the embedded set has no info-circle.
     (INFO_CIRCLE, "info-circle"),
     (DANGER_TRIANGLE, "danger-triangle"),
     (CHAT_ROUND_LINE, "chat-round-line"),
-    // Hand-drawn bot head (antenna + eyes + ears) in the Solar Linear style
-    // — the embedded set has no bot/robot glyph. Subagent tabs.
     (BOT, "bot"),
-    // Hand-drawn bell + speaker in the Solar Linear style (like the terminal/
-    // plus/return ports) — the embedded set has neither.
     (BELL, "bell"),
     (VOLUME_LOUD, "volume-loud"),
-    // Hand-drawn microphone pair in the Solar Linear style — voice controls.
     (MICROPHONE, "microphone"),
     (MICROPHONE_OFF, "microphone-off"),
     (PHONE_HANG_UP, "phone-hang-up"),
-    // Hand-drawn zuse glyphs (terminal-panel.tsx / composer-actions.tsx /
-    // menu-check.tsx / logo.tsx).
     (TERMINAL, "terminal"),
     (CLOSE, "close"),
-    // Hand-drawn Linux caption glyphs (minimize dash, maximize square,
-    // restore stacked squares) in the same style as `close` — drawn for the
-    // client-side-decoration window controls; no system glyph font exists on
-    // Linux the way Segoe Fluent Icons does on Windows.
     (WINDOW_MINIMIZE, "window-minimize"),
     (WINDOW_MAXIMIZE, "window-maximize"),
     (WINDOW_RESTORE, "window-restore"),
-    // Hand-drawn hard-drive + home glyphs in the Solar Linear style (like the
-    // terminal/plus/return ports) — drawn for the add-space palette's
-    // Locations rail; the set has neither.
     (HARD_DRIVE, "hard-drive"),
     (HOME, "home"),
     (STOP, "stop"),
     (CHECK, "check"),
     (COPY, "copy"),
-    // Project Action icon family (Solar Linear-compatible strokes).
     (ACTION_PLAY, "action-play"),
     (ACTION_TEST, "action-test"),
     (ACTION_LINT, "action-lint"),
     (ACTION_CONFIGURE, "action-configure"),
     (ACTION_BUILD, "action-build"),
     (ACTION_DEBUG, "action-debug"),
-    // Hand-drawn star pair in the Solar Linear style (like the terminal/
-    // plus/return ports) — outline for the favorite affordance, bold for the
-    // favorited state and the picker's favorites rail tab.
     (STAR, "star"),
     (STAR_BOLD, "star-bold"),
     (ZUSE_LOGO, "zuse-logo"),
-    // Harness brand marks (icons.tsx).
     (CLAUDE_MARK, "claude-mark"),
     (OPENAI_MARK, "openai-mark"),
     (CURSOR_MARK, "cursor-mark"),
@@ -230,12 +163,21 @@ icon_assets![
     (ANTIGRAVITY_MARK, "antigravity-mark"),
 ];
 
+pub const SETTINGS_GENERAL: &str = "icons/settings-general.svg";
+pub const SETTINGS_PROVIDERS: &str = "icons/settings-providers.svg";
+pub const SETTINGS_DEFAULTS: &str = "icons/settings-defaults.svg";
+pub const SETTINGS_PLUGINS: &str = "icons/settings-plugins.svg";
+pub const SETTINGS_REMOTE: &str = "icons/settings-remote.svg";
+
 /// Serves both the compact control-icon set and the complete file-identity
 /// icon theme through the single asset source registered at app startup.
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(bytes) = zuse_icons::load(path) {
+            return Ok(Some(Cow::Borrowed(bytes)));
+        }
         if let Some(asset) = ControlAssets.load(path)? {
             return Ok(Some(asset));
         }
@@ -245,6 +187,14 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut assets = ControlAssets.list(path)?;
         assets.extend(crate::file_icons::Assets.list(path)?);
+        assets.extend(
+            zuse_icons::NAMES
+                .iter()
+                .filter(|name| name.starts_with(path))
+                .map(|name| SharedString::from(*name)),
+        );
+        assets.sort();
+        assets.dedup();
         Ok(assets)
     }
 }

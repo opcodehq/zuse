@@ -37,6 +37,8 @@ jobs:
       - run: cargo test -p zuse-client --test live
       - run: cargo test -p zuse-protocol --lib methods::retry_tests
       - run: cargo test -p zuse-protocol --lib browser_link
+      - run: cargo test -p zuse-protocol --lib notifications
+      - run: cargo test -p zuse-protocol --lib completion_sound
       - run: cargo test -p zuse-protocol --lib presentation
       - run: cargo test -p zuse-protocol --lib input_answers
       - run: cargo test -p zuse-protocol --lib message_attachments
@@ -61,8 +63,14 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+      HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - if: runner.os == 'Linux'
@@ -76,8 +84,14 @@ jobs:
 
   browser:
     runs-on: ubuntu-24.04
+    env:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+      HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src

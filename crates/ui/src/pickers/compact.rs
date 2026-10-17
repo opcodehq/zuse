@@ -99,7 +99,6 @@ pub(super) struct CompactMotion {
     /// per frame so changing intensity never jumps the band.
     shimmer_phase: f32,
     shimmer_last_frame: Option<std::time::Instant>,
-    fast: Option<ScalarTransition>,
     height: Option<ScalarTransition>,
     page: Option<CompactPage>,
     reveal: Option<ScalarTransition>,
@@ -623,7 +622,7 @@ impl Pickers {
             Some(EffortStops::Option { id, .. }) => Some(id),
             _ => None,
         };
-        self.fast_option_id(cx).into_iter().chain(effort).collect()
+        effort.into_iter().collect()
     }
 
     pub(super) fn pick_effort_at(&mut self, x: gpui::Pixels, cx: &mut Context<Self>) {
@@ -962,88 +961,6 @@ impl Pickers {
                             ),
                     ),
             );
-        let mut fast_button = None;
-        if let Some((option, choice, default, fast)) = self.compact_fast_choice(cx) {
-            let (fast_t, fading) = ScalarTransition::sample(
-                &mut self.compact_motion.fast,
-                if fast { 1.0 } else { 0.0 },
-                now,
-                reduced,
-            );
-            if fading {
-                window.request_animation_frame();
-            }
-            let fast_key: SharedString = format!("compact-fast-{}", cx.entity_id()).into();
-            let fast_hover = motion::hover_t(&fast_key);
-            fast_button = Some(
-                div()
-                    .id("compact-fast")
-                    .role(gpui::Role::Button)
-                    .aria_label("Fast mode")
-                    .aria_toggled(if fast {
-                        gpui::Toggled::True
-                    } else {
-                        gpui::Toggled::False
-                    })
-                    .tooltip(move |_, cx| {
-                        cx.new(|_| {
-                            PickerHint(
-                                if fast {
-                                    "Fast mode on · Turn off"
-                                } else {
-                                    "Fast mode off · Turn on"
-                                }
-                                .into(),
-                            )
-                        })
-                        .into()
-                    })
-                    // Bare like the model button beside it: a plate only on
-                    // hover. The glyph's colour is the state, and the
-                    // slider's fill carries the accent.
-                    .w(px(FAST_BUTTON_WIDTH))
-                    .h_full()
-                    .flex_none()
-                    .rounded(px(popover::MENU_ITEM_RADIUS))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .bg(crate::theme::ink(0.05 * fast_hover))
-                    .on_hover(motion::hover_listener(fast_key))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.compact_keyboard = false;
-                        this.pick_option(option.clone(), choice.clone(), default, cx);
-                    }))
-                    .child({
-                        let color = motion::mix(
-                            motion::mix(theme.text_muted, theme.text, fast_hover),
-                            theme.accent,
-                            fast_t,
-                        );
-                        // On fills the bolt: the solid twin fades in over the
-                        // outline, which shares its silhouette.
-                        div()
-                            .relative()
-                            .size(px(15.0))
-                            .child(
-                                crate::icons::icon(crate::icons::FAST_TIER)
-                                    .size(px(15.0))
-                                    .text_color(color),
-                            )
-                            .when(fast_t > 0.0, |el| {
-                                el.child(
-                                    crate::icons::icon(crate::icons::FAST_TIER_BOLD)
-                                        .absolute()
-                                        .top_0()
-                                        .left_0()
-                                        .size(px(15.0))
-                                        .text_color(color.opacity(fast_t)),
-                                )
-                            })
-                    }),
-            );
-        }
         let header_height = if levels.is_empty() {
             HEADER_HEIGHT_SINGLE
         } else {
@@ -1054,8 +971,7 @@ impl Pickers {
             .flex_none()
             .flex()
             .gap(px(popover::CARD_INSET))
-            .child(title)
-            .children(fast_button);
+            .child(title);
         let mut panel = div()
             .p(px(popover::CARD_INSET))
             .flex()

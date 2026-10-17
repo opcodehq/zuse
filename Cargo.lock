@@ -13806,6 +13806,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zuse-icons"
+version = "0.25.0"
+
+[[package]]
 name = "zuse-markdown"
 version = "0.25.0"
 dependencies = [
@@ -14183,6 +14187,7 @@ dependencies = [
  "x11rb 0.14.0",
  "zuse-doc",
  "zuse-engine",
+ "zuse-icons",
  "zuse-markdown",
  "zuse-orb",
  "zuse-protocol",
@@ -14236,6 +14241,7 @@ dependencies = [
  "unicode-segmentation",
  "uuid",
  "vt100",
+ "zuse-icons",
  "zuse-markdown",
  "zuse-model",
  "zuse-protocol",
