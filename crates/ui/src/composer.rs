@@ -7,6 +7,8 @@
 //! pending-input detection) lives in free functions/structs with unit tests;
 //! the gpui element only feeds them measurements.
 
+mod permissions;
+
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::PathBuf;
@@ -5991,6 +5993,11 @@ pub struct Composer {
     /// Composer actions row plus the new-session floating target tab
     /// ([`Pickers::render_new_thread_target_selectors`]).
     pickers: Entity<Pickers>,
+    permission_open: bool,
+    permission_active: usize,
+    permission_focus: FocusHandle,
+    permission_saving: Option<String>,
+    permission_task: Option<Task<()>>,
     /// Draft text per chat key ("" = new-chat canvas), surviving navigation.
     drafts: HashMap<String, String>,
     /// Staged-but-unsent attachments per chat key (use-attachments.ts `stash`):
@@ -6227,6 +6234,9 @@ impl Composer {
         // by the composer from picker state — a pickers-side notify (refs
         // loaded, popover toggled, pick made) must repaint the composer too.
         let pickers_observe = cx.observe(&pickers, |this, _, cx| {
+            if this.pickers.read(cx).is_open() {
+                this.permission_open = false;
+            }
             this.on_input_edited(cx);
             cx.notify();
         });
@@ -6318,6 +6328,11 @@ impl Composer {
             queue_edit_draft: None,
             queue_edit_attachment_draft: None,
             pickers,
+            permission_open: false,
+            permission_active: 0,
+            permission_focus: cx.focus_handle(),
+            permission_saving: None,
+            permission_task: None,
             drafts: HashMap::new(),
             attachments: HashMap::new(),
             attachment_drafts: HashMap::new(),
@@ -8449,6 +8464,10 @@ impl Composer {
             )
         };
 
+        if key != self.current_key {
+            self.permission_open = false;
+        }
+
         // A queue edit belongs to exactly one visible row. Navigation or a
         // remote drain/removal cancels it instead of leaving a focused but
         // unmounted editor entity behind.
@@ -8789,6 +8808,14 @@ impl Composer {
     /// is on), `Mutate createChat` with the `ChatConfig` + cwd, and the model /
     /// reasoning / options on the Run request itself (§1.7).
     fn send(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
+        if self.permission_saving.as_deref() == self.state.read(cx).selected_chat.as_deref()
+            && self.permission_saving.is_some()
+        {
+            self.failure = Some("Wait for the permission change to finish before sending.".into());
+            self.failure_key = self.state.read(cx).selected_chat.clone();
+            cx.notify();
+            return;
+        }
         if !self.check_reference_delivery(&text, cx) {
             return;
         }
@@ -11276,7 +11303,7 @@ impl Render for Composer {
                 cx.listener(|this, _, window, cx| {
                     // Padding and action controls are part of the text composer.
                     // Open menus keep their own keyboard/search focus.
-                    if !this.pickers.read(cx).is_open() {
+                    if !this.pickers.read(cx).is_open() && !this.permission_open {
                         window.focus(&this.input.focus_handle(cx), cx);
                         window.prevent_default();
                     }
@@ -11352,6 +11379,9 @@ impl Render for Composer {
             });
         let beneath_voice = 1.0 - voice_t.clamp(0.0, 1.0);
         let model_picker = model_picker.opacity(beneath_voice);
+        let permission = self
+            .render_permission_control(expanded, &theme, cx)
+            .opacity(beneath_voice);
         let body = if expanded {
             // Expanded: textarea on top (`px-4 pb-1 pt-4`), actions row
             // (8px bottom + 2px top, 32px chips → 42px) ABSOLUTE at the pill's
@@ -11402,7 +11432,8 @@ impl Render for Composer {
                                 .flex_row()
                                 .items_center()
                                 .gap(px(ACTION_UTILITY_GAP))
-                                .child(attach),
+                                .child(attach)
+                                .child(permission),
                         )
                         .child(model_picker)
                         .child(
@@ -11456,7 +11487,8 @@ impl Render for Composer {
                                 .flex()
                                 .items_center()
                                 .gap(px(ACTION_UTILITY_GAP))
-                                .child(attach),
+                                .child(attach)
+                                .child(permission),
                         )
                         .child(
                             div()

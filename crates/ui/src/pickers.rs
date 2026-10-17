@@ -98,6 +98,7 @@ pub struct DraftConfig {
     pub harness: Option<HarnessId>,
     pub model: Option<String>,
     pub reasoning: Option<ReasoningLevel>,
+    pub sandbox: Option<SandboxLevel>,
     /// The picked ref (base branch in NewWorktree mode; a worktree's branch
     /// when reusing one). `None` = the repo's current branch.
     pub branch: Option<String>,
@@ -986,6 +987,7 @@ impl Pickers {
                 this.config.harness = None;
                 this.config.model = None;
                 this.config.reasoning = None;
+                this.config.sandbox = None;
                 this.switch_error = None;
             }
             // A space switch invalidates the branch draft + cache — the folder
@@ -1165,6 +1167,13 @@ impl Pickers {
             && let Err(err) = self.defaults.save(dir)
         {
             tracing::warn!(error = %err, "composer-defaults save failed");
+        }
+    }
+
+    pub fn set_draft_sandbox(&mut self, sandbox: SandboxLevel, cx: &mut Context<Self>) {
+        if self.state.read(cx).selected_chat.is_none() {
+            self.config.sandbox = Some(sandbox);
+            cx.notify();
         }
     }
 
@@ -1444,8 +1453,14 @@ impl Pickers {
     /// `Mutate createChat`: concrete model + reasoning whenever the catalog is
     /// loaded (no "engine picks a default" passthrough).
     pub fn resolved(&self, cx: &App) -> ResolvedRunConfig {
-        let sandbox = crate::settings::default_permission_mode(cx)
-            .for_chat(self.state.read(cx).selected_chat_row());
+        let sandbox = if self.state.read(cx).selected_chat.is_none() {
+            self.config
+                .sandbox
+                .unwrap_or_else(|| crate::settings::default_permission_mode(cx).sandbox())
+        } else {
+            crate::settings::default_permission_mode(cx)
+                .for_chat(self.state.read(cx).selected_chat_row())
+        };
         let harness = self.effective_harness(cx);
         // A catalog still from the previous device must not pick for this
         // one (its default model, its effort ladder): send only what was
