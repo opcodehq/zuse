@@ -9,7 +9,7 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 | Files/editor, terminal, Git/worktrees/PR panes | source | Validate lifecycle and complete parity |
 | Claude/Codex/Cursor/OpenCode/Pi/ACP protocols | source | Audit capabilities; fixtures and live checks pending |
 | Gemini and Kiro CLI adapters | compiled | Registered on the shared ACP engine; CLI launch/model/effort and complete tool/turn lifecycle fixtures pass. Live logins, provider account settings and custom ACP parity remain pending. |
-| Zuse harness and multi-agent orchestration | pending | Port from existing local source and tests |
+| Zuse harness and multi-agent orchestration | source | Rust kernel, durable recovery, nested concurrent agents, mailboxes, shared budget/account broker, compaction, and bundled SDK transport are implemented and fixture-tested. Native tools, model OAuth/vault integration, provider registration/event adaptation, ownership lease, and authenticated recovery controls remain pending. See `harness.md`. |
 | Durable queues and steering | source | Reconcile with current Zuse queue/error/recovery semantics |
 | Executor v2 plugins | source | Hosted client is wired through shared engine identity, durable session bindings, provider-independent MCP discovery/call tools, and native/browser Settings. Native loopback OAuth confirmation is implemented. Live account/tenant/plugin execution, API-key/custom server entry, and complete UI acceptance remain pending. |
 | Voice, interactive visuals, appearance | source | Native platform and browser capability integration pending |
@@ -46,3 +46,6 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 - Public-dependency CI run `39020031912` passed the browser, engine, and Ubuntu native compile jobs at `9857de6`. The Mac compile failed on the toolkit CoreText API rename described above. This proves the native Linux source foundation compiles; it does not verify the new account UI, native runtime workflows, or packaging.
 
 - The account/plugin milestone passes 25 focused tests: 4 account, 2 gateway/callback, 2 MCP, and 17 RPC transport tests. Hosted calls opt into cancellation without changing cancellation behavior for existing workspace mutations. Updated native Settings source awaits the next Mac/Linux CI compile.
+
+- CI run `39021451590` passed the Mac and Ubuntu native compile jobs, including the account/plugin Settings source. The browser job also passed. The engine test job remains in progress; native runtime and live hosted-plugin acceptance are still pending.
+- Rust harness component milestone: 13 Rust tests pass (9 runtime/recovery, 3 broker, 1 actual bundled-process fixture). SDK protocol fixtures also pass. This component is not yet a selectable application provider; full harness integration and live model/account acceptance remain pending.

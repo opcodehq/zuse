@@ -424,3 +424,7 @@ as `Voice/WebRTC-LICENSE.txt`. The binary also contains WebRTC's own bundled
 third-party components (such as BoringSSL, libsrtp, Opus, libyuv and Abseil)
 under their respective licenses; see the WebRTC source tree's `third_party/`
 for each license.
+
+## Model SDK transport
+
+The Zuse harness bundles pinned AI SDK transport code for model requests. Direct SDK versions, transitive integrity records, reproducible build sources, and retained notices are in `crates/harness/bridge/package.json`, `bun.lock`, and `THIRD_PARTY_LICENSES.txt`. The SDK code uses Apache-2.0 and MIT licenses as recorded in that notice file; Zuse's transport wrapper and Rust harness use the root application license.

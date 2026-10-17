@@ -1,0 +1,2 @@
+# Preserve whitespace inside generated SDK template literals.
+crates/harness/bridge/model-bridge.mjs -whitespace linguist-generated=true

@@ -6,13 +6,17 @@ on:
 
 concurrency:
   group: validate-${{ github.ref }}
-  cancel-in-progress: true
+  # Let the current native build finish and save its cache during iterative pushes.
+  cancel-in-progress: false
 
 jobs:
   engine:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -20,6 +24,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev
       - run: cargo fmt --all --check
       - run: cargo check -p zuse-cli
+      - run: cargo test -p zuse-harness
       - run: cargo test -p zuse-model -p zuse-serve
       - run: cargo test -p zuse-rpc --lib
       - run: cargo test -p zuse-engine --lib account::tests
@@ -63,3 +68,19 @@ jobs:
         with:
           name: zuse-browser
           path: dist/web
+
+  model-transport:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+      - run: bun install --frozen-lockfile
+        working-directory: crates/harness/bridge
+      - run: bun run test && bun run build
+        working-directory: crates/harness/bridge
+      - run: git diff --exit-code -- crates/harness/bridge/model-bridge.mjs crates/harness/bridge/THIRD_PARTY_LICENSES.txt
