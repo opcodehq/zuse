@@ -223,11 +223,17 @@ fn discover_at(harness: HarnessId, cwd: &Path, home: &Path) -> Result<Vec<Skill>
     }
     let mut found = BTreeMap::new();
     let mut remaining = MAX_DISCOVERY_ENTRIES;
-    for (root, namespace) in roots {
+    // Spend the bounded scan on the highest-priority roots first. A large
+    // global installation must not hide the current project's skills.
+    for (root, namespace) in roots.into_iter().rev() {
         if remaining == 0 {
             break;
         }
-        scan_root(&root, &namespace, harness, &mut found, &mut remaining)?;
+        let mut candidates = BTreeMap::new();
+        scan_root(&root, &namespace, harness, &mut candidates, &mut remaining)?;
+        for (name, skill) in candidates {
+            found.entry(name).or_insert(skill);
+        }
     }
     Ok(found.into_values().collect())
 }
@@ -470,7 +476,10 @@ mod tests {
         }
         let skills = discover_at(HarnessId::Pi, &repo, &home).unwrap();
         assert_eq!(skills.len(), MAX_DISCOVERY_ENTRIES);
-        assert!(skills.iter().any(|skill| skill.name == "global"));
+        assert!(
+            !skills.iter().any(|skill| skill.name == "global"),
+            "project entries take priority when the budget is exhausted"
+        );
 
         // Directories count too; pending nested work cannot restart the budget.
         let mut found = BTreeMap::new();
@@ -478,6 +487,34 @@ mod tests {
         scan_root(&repo, "", HarnessId::Pi, &mut found, &mut remaining).unwrap();
         assert_eq!(remaining, 0);
         assert!(found.is_empty());
+    }
+
+    #[test]
+    fn project_skills_survive_an_oversized_global_installation() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        for index in 0..4200 {
+            write(
+                &home,
+                &format!(".claude/skills/global-{index}.md"),
+                "Global",
+            );
+        }
+        let project = write(
+            &repo,
+            ".agents/skills/compact/SKILL.md",
+            "---\nname: compact\n---\nCompact JSON fixtures.",
+        );
+        let skills = discover_at(HarnessId::ClaudeCode, &repo, &home).unwrap();
+        assert_eq!(
+            skills
+                .iter()
+                .find(|skill| skill.name == "compact")
+                .map(|skill| skill.path.as_str()),
+            Some(project.to_str().unwrap())
+        );
     }
 
     #[cfg(unix)]
