@@ -91,6 +91,8 @@ impl Drop for WatchPreparation {
 /// Everything needed to reach (or start) an engine.
 #[derive(Debug, Clone)]
 pub struct EngineBootConfig {
+    /// An explicit paired connection never falls back to a local engine.
+    pub paired_target: Option<zuse_remote::PairedTarget>,
     /// Data directory for the embedded engine (`~/.zuse`).
     pub data_dir: PathBuf,
     /// Localhost IPC port to probe / serve.
@@ -270,6 +272,28 @@ impl EngineBackend for RemoteEngine {
     }
 }
 
+/// A remote host stays authoritative; no local engine is created on failure.
+struct PairedEngine {
+    client: Arc<RpcClient>,
+    target: zuse_remote::PairedTarget,
+}
+#[async_trait]
+impl EngineBackend for PairedEngine {
+    fn client(&self) -> &RpcClient {
+        &self.client
+    }
+    fn mode(&self) -> EngineMode {
+        EngineMode::Remote {
+            url: self.target.origin().into(),
+        }
+    }
+    async fn media_client(&self) -> Result<RpcClient, RpcError> {
+        zuse_rpc::connect_paired(&self.target).await
+    }
+    async fn shutdown(&self) { /* The paired host owns its agent lifecycle. */
+    }
+}
+
 /// Cheaply clonable handle to whichever backend won the probe.
 #[derive(Clone)]
 pub struct EngineHandle {
@@ -287,6 +311,23 @@ impl EngineHandle {
     /// Must run on the tokio runtime (`Tokio::spawn`): both transports spawn
     /// tokio tasks.
     pub async fn bootstrap(config: EngineBootConfig) -> anyhow::Result<EngineHandle> {
+        if let Some(target) = config.paired_target {
+            let client = zuse_rpc::connect_paired(&target).await?;
+            let engine_info = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                query_engine_info(&client),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("Paired engine identity timed out"))??;
+            return Ok(EngineHandle {
+                inner: Arc::new(PairedEngine {
+                    client: Arc::new(client),
+                    target,
+                }),
+                engine_info,
+                deferred_state: None,
+            });
+        }
         // Invariant: at most one bootstrap in this process runs probe+embed at
         // a time. The winner binds the deferred IPC listener before releasing
         // the gate, so a concurrent viewport's probe finds it and attaches as
@@ -3602,6 +3643,7 @@ mod tests {
         ));
         let dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
+            paired_target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3632,6 +3674,7 @@ mod tests {
     async fn bootstrap_embeds_engine_when_port_is_free() {
         let dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
+            paired_target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: free_port().await,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3670,6 +3713,7 @@ mod tests {
         let port = free_port().await;
 
         let error = match EngineHandle::bootstrap(EngineBootConfig {
+            paired_target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3727,6 +3771,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
+            paired_target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3765,6 +3810,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let port = free_port().await;
         let handle = EngineHandle::bootstrap(EngineBootConfig {
+            paired_target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3807,6 +3853,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let port = free_port().await;
         let config = EngineBootConfig {
+            paired_target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3867,6 +3914,7 @@ mod tests {
         let port = squatter.local_addr().unwrap().port();
         let dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
+            paired_target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3894,6 +3942,7 @@ mod tests {
     async fn production_bootstrap_opens_local_data_without_sign_in() {
         let dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
+            paired_target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: free_port().await,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3945,6 +3994,7 @@ mod tests {
         )
         .unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
+            paired_target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: free_port().await,
             edge_url: "http://127.0.0.1:1".into(),
@@ -4003,6 +4053,7 @@ mod tests {
 
         let ui_dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
+            paired_target: None,
             data_dir: ui_dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),

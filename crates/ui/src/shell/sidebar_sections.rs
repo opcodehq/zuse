@@ -600,6 +600,7 @@ mod tests {
             Shell::new(
                 state,
                 EngineBootConfig {
+                    paired_target: None,
                     data_dir: path.into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),

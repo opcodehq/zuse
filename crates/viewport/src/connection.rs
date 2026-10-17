@@ -40,12 +40,22 @@ impl WorkspaceView {
         }
         self.connected = false;
         self.workspace_synced = false;
-        self.status = if frame["connection"] == "authRequired" {
+        self.status = if frame["connection"] == "pairingRequired" {
+            self.error = frame["message"].as_str().map(str::to_owned);
+            "Pairing invitation required · Open a new invitation"
+        } else if frame["connection"] == "authRequired" {
             "Authentication required · Open the engine access link"
+        } else if self.paired {
+            "Reconnecting to paired engine…"
         } else {
             "Reconnecting to your engine…"
         }
         .into();
+        if self.paired
+            && let Some(message) = frame["message"].as_str()
+        {
+            self.status = format!("Paired engine unavailable · {message}");
+        }
         let had_pending = !self.pending.is_empty();
         for (id, mut draft) in std::mem::take(&mut self.send_draft) {
             draft.not_sent = frame.get("interrupted").is_some() && !sent.contains(&id);
@@ -75,6 +85,8 @@ impl WorkspaceView {
             self.model_error=Some("Connection interrupted during sign-in. Check linked accounts before starting again.".into());
         }
         self.plugin_request = None;
+        self.pairing_fetch = None;
+        self.pairing_action = None;
         self.terminal_watch = None;
         self.terminal_write = None;
         self.interrupt_tool_results();
@@ -103,7 +115,12 @@ impl WorkspaceView {
         }
         self.device_id = Some(device.into());
         self.connected = true;
-        self.status = "Local engine connected".into();
+        self.status = if self.paired {
+            "Paired engine connected"
+        } else {
+            "Local engine connected"
+        }
+        .into();
         for method in [
             methods::CLOUD_ACCOUNT_STATUS,
             methods::LIST_HARNESSES,
@@ -114,6 +131,7 @@ impl WorkspaceView {
         ] {
             self.call(method, json!({}));
         }
+        self.refresh_pairings();
         self.refresh_model_connections();
         if self.settings {
             self.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":false}));

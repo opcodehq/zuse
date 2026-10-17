@@ -19,6 +19,8 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 mod client;
+mod paired;
+pub use paired::connect_paired;
 pub mod device_room;
 mod server;
 

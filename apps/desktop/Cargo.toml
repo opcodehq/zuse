@@ -10,6 +10,7 @@ name = "zuse"
 path = "src/main.rs"
 
 [dependencies]
+zuse-remote.workspace = true
 zuse-engine.workspace = true
 zuse-rpc.workspace = true
 zuse-ui.workspace = true

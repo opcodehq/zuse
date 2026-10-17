@@ -1,20 +1,17 @@
 //! Browser socket lifetime and request admission. Only the view reopens reads.
-use futures::{
-    FutureExt, StreamExt,
-    channel::{mpsc, oneshot},
-};
+use futures::{FutureExt, StreamExt, channel::mpsc};
 use serde_json::{Value, json};
-use std::{cell::RefCell, rc::Rc};
 use wasm_bindgen::{JsCast, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{MessageEvent, Request, RequestInit, Response, WebSocket};
+use web_sys::{Request, RequestInit, Response};
 use zuse_protocol::{
     browser_link::{BrowserLink, retry_delay_ms},
     methods,
 };
+use zuse_remote::{Invitation, PairedTarget};
 
 type Sender = mpsc::UnboundedSender<Value>;
-async fn delay(ms: u32) {
+pub(super) async fn delay(ms: u32) {
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
         if let Err(error) = web_sys::window()
             .unwrap()
@@ -51,6 +48,13 @@ async fn auth_status() -> Result<bool, ()> {
     }
 }
 fn local_action(frame: &Value) -> bool {
+    if frame["ui"] == "forgetPairing" {
+        if let Ok(Some(storage)) = web_sys::window().unwrap().session_storage() {
+            let _ = storage.remove_item("zuse.paired-target.v1");
+        }
+        let _ = web_sys::window().unwrap().location().reload();
+        return true;
+    }
     if frame["ui"] != "savePreferences" {
         return false;
     }
@@ -94,47 +98,127 @@ fn mutation(frame: &Value) -> bool {
     )
 }
 
+fn paired_target() -> Result<Option<PairedTarget>, String> {
+    let window = web_sys::window().unwrap();
+    let location = window.location();
+    let hash = location
+        .hash()
+        .map_err(|_| "Could not read pairing invitation")?;
+    let storage = window.session_storage().ok().flatten();
+    if hash.starts_with("#token=") {
+        if let Some(storage) = &storage {
+            let _ = storage.remove_item("zuse.paired-target.v1");
+        }
+        return Ok(None);
+    }
+    if hash.starts_with("#pair=") {
+        // Remove the capability even when its contents are invalid.
+        let clean = format!(
+            "{}{}",
+            location.pathname().unwrap_or_else(|_| "/".into()),
+            location.search().unwrap_or_default()
+        );
+        window
+            .history()
+            .map_err(|_| "Could not clear private invitation")?
+            .replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&clean))
+            .map_err(|_| "Could not clear private invitation")?;
+        if let Some(storage) = &storage {
+            let _ = storage.remove_item("zuse.paired-target.v1");
+        }
+        let invitation =
+            Invitation::parse_fragment(&hash).map_err(|_| "Invalid pairing invitation")?;
+        let target = PairedTarget::new(
+            &location.origin().map_err(|_| "Invalid engine origin")?,
+            invitation,
+        )
+        .map_err(|_| "Pairing requires HTTPS, or localhost for development")?;
+        if let Some(storage) = storage {
+            let _ = storage.set_item(
+                "zuse.paired-target.v1",
+                &target
+                    .export_link()
+                    .map_err(|_| "Invalid pairing invitation")?,
+            );
+        }
+        return Ok(Some(target));
+    }
+    let saved =
+        storage.and_then(|storage| storage.get_item("zuse.paired-target.v1").ok().flatten());
+    saved
+        .map(|link| {
+            PairedTarget::parse_link(&link).map_err(|_| {
+                "Saved pairing is invalid. Forget it and open a new invitation.".into()
+            })
+        })
+        .transpose()
+}
+
 pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Sender) {
-    if let Err(error) = super::browser::unlock().await {
-        let _=events.unbounded_send(json!({"connection":"authRequired","message":error.as_string().unwrap_or_else(||"Authentication required".into())}));
+    let target = match paired_target() {
+        Ok(target) => target,
+        Err(message) => {
+            let _ = events.unbounded_send(
+                json!({"connection":"pairingRequired","message":message,"paired":true}),
+            );
+            while wait_offline(8_000, &mut outbound, &events).await {}
+            return;
+        }
+    };
+    let paired = target.is_some();
+    if !paired {
+        if let Err(error) = super::browser::unlock().await {
+            let _=events.unbounded_send(json!({"connection":"authRequired","message":error.as_string().unwrap_or_else(||"Authentication required".into())}));
+        }
     }
     let location = web_sys::window().unwrap().location();
-    let local = matches!(
-        location.hostname().unwrap_or_default().as_str(),
-        "localhost" | "127.0.0.1" | "[::1]" | "::1"
-    );
-    let _ = events.unbounded_send(json!({"browserLocal":local}));
+    let local = !paired
+        && matches!(
+            location.hostname().unwrap_or_default().as_str(),
+            "localhost" | "127.0.0.1" | "[::1]" | "::1"
+        );
+    let _ = events.unbounded_send(json!({"browserLocal":local,"paired":paired,"pairingOrigin":target.as_ref().map(|target|target.origin().to_owned()).unwrap_or_else(||location.origin().unwrap_or_default())}));
     let scheme = if location.protocol().unwrap_or_default() == "https:" {
         "wss"
     } else {
         "ws"
     };
-    let url = format!("{scheme}://{}/api/rpc", location.host().unwrap_or_default());
-    let link = Rc::new(RefCell::new(BrowserLink::default()));
+    let url = target
+        .as_ref()
+        .map(PairedTarget::socket_url)
+        .unwrap_or_else(|| format!("{scheme}://{}/api/rpc", location.host().unwrap_or_default()));
+    let mut link = BrowserLink::default();
     let mut attempt = 0;
     loop {
-        match auth_status().await {
-            Ok(false) => {
-                let _ = events.unbounded_send(json!({"connection":"authRequired"}));
-                if !wait_offline(8_000, &mut outbound, &events).await {
-                    return;
+        if !paired {
+            match auth_status().await {
+                Ok(false) => {
+                    let _ = events.unbounded_send(json!({"connection":"authRequired"}));
+                    if !wait_offline(8_000, &mut outbound, &events).await {
+                        return;
+                    }
+                    continue;
                 }
-                continue;
-            }
-            Err(()) => {
-                let _ = events.unbounded_send(json!({"connection":"retrying"}));
-                if !wait_offline(retry_delay_ms(attempt), &mut outbound, &events).await {
-                    return;
+                Err(()) => {
+                    let _ = events.unbounded_send(json!({"connection":"retrying"}));
+                    if !wait_offline(retry_delay_ms(attempt), &mut outbound, &events).await {
+                        return;
+                    }
+                    attempt = attempt.saturating_add(1);
+                    continue;
                 }
-                attempt = attempt.saturating_add(1);
-                continue;
+                Ok(true) => {}
             }
-            Ok(true) => {}
         }
-        let socket = match WebSocket::new(&url) {
+        let socket =
+            super::socket::Socket::connect(&url, target.as_ref().map(PairedTarget::invitation))
+                .await;
+        let mut socket = match socket {
             Ok(socket) => socket,
-            Err(_) => {
-                let _ = events.unbounded_send(json!({"connection":"retrying"}));
+            Err(message) => {
+                let _ = events.unbounded_send(
+                    json!({"connection":"retrying","paired":paired,"message":message}),
+                );
                 if !wait_offline(retry_delay_ms(attempt), &mut outbound, &events).await {
                     return;
                 }
@@ -142,118 +226,87 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
                 continue;
             }
         };
-        let (ready_tx, ready_rx) = oneshot::channel();
-        let ready = Rc::new(RefCell::new(Some(ready_tx)));
-        let open_ready = ready.clone();
-        let open = Closure::<dyn FnMut()>::new(move || {
-            if let Some(tx) = open_ready.borrow_mut().take() {
-                let _ = tx.send(true);
-            }
-        });
-        socket.set_onopen(Some(open.as_ref().unchecked_ref()));
-        let (closed_tx, closed_rx) = oneshot::channel();
-        let closed = Rc::new(RefCell::new(Some(closed_tx)));
-        let close_ready = ready.clone();
-        let close_signal = closed.clone();
-        let close = Closure::<dyn FnMut()>::new(move || {
-            if let Some(tx) = close_ready.borrow_mut().take() {
-                let _ = tx.send(false);
-            }
-            if let Some(tx) = close_signal.borrow_mut().take() {
-                let _ = tx.send(());
-            }
-        });
-        socket.set_onclose(Some(close.as_ref().unchecked_ref()));
-        let error_ready = ready.clone();
-        let error_closed = closed.clone();
-        let error = Closure::<dyn FnMut()>::new(move || {
-            if let Some(tx) = error_ready.borrow_mut().take() {
-                let _ = tx.send(false);
-            }
-            if let Some(tx) = error_closed.borrow_mut().take() {
-                let _ = tx.send(());
-            }
-        });
-        socket.set_onerror(Some(error.as_ref().unchecked_ref()));
-        let connected = futures::select_biased! {ready=ready_rx.fuse()=>ready==Ok(true),_=delay(5_000).fuse()=>false};
+        let epoch = link.open();
+        attempt = 0;
+        let _ =
+            events.unbounded_send(json!({"connection":"connected","epoch":epoch,"paired":paired}));
         let mut application_closed = false;
-        let mut epoch = 0;
-        let message_link = link.clone();
-        let message_events = events.clone();
-        // Installed after opening, before any request can be admitted.
-        if connected {
-            epoch = link.borrow_mut().open();
-            attempt = 0;
-        }
-        let message = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
-            if let Some(text) = event.data().as_string() {
-                for line in text.lines() {
-                    if let Ok(frame) = serde_json::from_str::<Value>(line) {
-                        if let Some(id) = frame["id"].as_u64() {
-                            let terminal = frame.get("ok").is_some()
-                                || frame.get("err").is_some()
-                                || frame["done"] == true;
-                            if message_link.borrow_mut().receive(epoch, id, terminal) {
-                                let _ = message_events.unbounded_send(frame);
+        loop {
+            enum Next {
+                Inbound(Result<String, String>),
+                Outbound(Option<Value>),
+            }
+            let next = futures::select_biased! {
+                text = socket.receive().fuse() => Next::Inbound(text),
+                frame = outbound.next().fuse() => Next::Outbound(frame),
+            };
+            let frame = match next {
+                Next::Inbound(Ok(text)) => {
+                    for line in text.lines() {
+                        if let Ok(frame) = serde_json::from_str::<Value>(line) {
+                            if let Some(id) = frame["id"].as_u64() {
+                                let terminal = frame.get("ok").is_some()
+                                    || frame.get("err").is_some()
+                                    || frame["done"] == true;
+                                if link.receive(epoch, id, terminal) {
+                                    let _ = events.unbounded_send(frame);
+                                }
                             }
                         }
                     }
-                }
-            }
-        });
-        socket.set_onmessage(Some(message.as_ref().unchecked_ref()));
-        if connected {
-            let _ = events.unbounded_send(json!({"connection":"connected","epoch":epoch}));
-            let closed = closed_rx.fuse();
-            futures::pin_mut!(closed);
-            loop {
-                let frame = futures::select_biased! {_=closed=>break,frame=outbound.next().fuse()=>match frame{Some(frame)=>frame,None=>{application_closed=true;break;}}};
-                if local_action(&frame) {
                     continue;
                 }
-                if frame["ui"] == "pickAttachments" {
-                    if frame["epoch"].as_u64() == Some(epoch) {
-                        super::browser::pick_attachments(
-                            events.clone(),
-                            frame["generation"].as_u64().unwrap_or_default(),
-                        );
-                    } else {
-                        reject(&events, &frame);
-                    }
-                    continue;
-                }
-                let Some(id) = frame["id"].as_u64() else {
-                    continue;
-                };
-                let generation = frame["epoch"].as_u64().unwrap_or(0);
-                let admitted = if frame["cancel"] == true {
-                    link.borrow_mut().cancel(generation, id)
-                } else {
-                    link.borrow_mut().admit(
-                        generation,
-                        id,
-                        frame["method"].as_str().unwrap_or_default(),
-                        mutation(&frame),
-                    )
-                };
-                if !admitted {
-                    reject(&events, &frame);
-                    continue;
-                }
-                let mut wire = frame;
-                wire.as_object_mut().unwrap().remove("epoch");
-                if socket.send_with_str(&wire.to_string()).is_err() {
+                Next::Inbound(Err(_)) => break,
+                Next::Outbound(Some(frame)) => frame,
+                Next::Outbound(None) => {
+                    application_closed = true;
                     break;
                 }
+            };
+            if local_action(&frame) {
+                continue;
+            }
+            if frame["ui"] == "pickAttachments" {
+                if frame["epoch"].as_u64() == Some(epoch) {
+                    super::browser::pick_attachments(
+                        events.clone(),
+                        frame["generation"].as_u64().unwrap_or_default(),
+                        target.clone(),
+                    );
+                } else {
+                    reject(&events, &frame);
+                }
+                continue;
+            }
+            let Some(id) = frame["id"].as_u64() else {
+                continue;
+            };
+            let generation = frame["epoch"].as_u64().unwrap_or(0);
+            let admitted = if frame["cancel"] == true {
+                link.cancel(generation, id)
+            } else {
+                link.admit(
+                    generation,
+                    id,
+                    frame["method"].as_str().unwrap_or_default(),
+                    mutation(&frame),
+                )
+            };
+            if !admitted {
+                reject(&events, &frame);
+                continue;
+            }
+            let mut wire = frame;
+            wire.as_object_mut().unwrap().remove("epoch");
+            if socket.send(&wire.to_string()).is_err() {
+                break;
             }
         }
-        socket.set_onopen(None);
-        socket.set_onmessage(None);
-        socket.set_onclose(None);
-        socket.set_onerror(None);
-        let _ = socket.close();
-        let interrupted = link.borrow_mut().close();
-        let _ = events.unbounded_send(json!({"connection":"retrying","interrupted":interrupted}));
+        drop(socket);
+        let interrupted = link.close();
+        let _ = events.unbounded_send(
+            json!({"connection":"retrying","interrupted":interrupted,"paired":paired}),
+        );
         if application_closed {
             return;
         }

@@ -191,6 +191,7 @@ fn files_panel_workspace_navigation_and_external_updates() {
             crate::terminal::panel::init(cx);
             crate::app_menus::init(cx);
             let boot = EngineBootConfig {
+                paired_target: None,
                 data_dir: data,
                 ipc_port: port,
                 edge_url: String::new(),

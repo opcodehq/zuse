@@ -96,6 +96,7 @@ pub use zuse_protocol::HarnessId;
 /// `apps/zuse`, not here).
 #[derive(Debug, Clone)]
 pub struct UiConfig {
+    pub paired_target: Option<zuse_remote::PairedTarget>,
     /// Data directory — engine stores + `ui-settings.json`.
     pub data_dir: PathBuf,
     /// Localhost IPC port: connect if an engine daemon is listening, embed if not.
@@ -118,6 +119,7 @@ pub struct UiConfig {
 impl UiConfig {
     fn boot(&self) -> EngineBootConfig {
         EngineBootConfig {
+            paired_target: self.paired_target.clone(),
             data_dir: self.data_dir.clone(),
             ipc_port: self.ipc_port,
             edge_url: self.edge_url.clone(),

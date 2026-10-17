@@ -43,6 +43,18 @@ cargo run -p zuse-cli -- --listen 0.0.0.0:27656 --ipc-port 0 \
 
 Direct HTTPS uses Secure browser cookies and WSS for agent RPC. See [development setup](internal-docs/development.md) for reverse-proxy configuration and platform requirements. Packaging and full cross-device runtime acceptance remain in progress.
 
+## Paired access
+
+In the browser workspace, open **Settings → Paired devices**, name the device and create an invitation. Share its private link with that device. Opening it imports paired access and clears the secret from the address bar. The tab retains access across reloads; revoke it from the host's pairing list to disconnect it. Paired chat, settings and file uploads use encrypted RPC.
+
+For the desktop app, save the copied invitation in a private text file and open:
+
+```sh
+zuse --paired-link-file ~/.zuse/paired-engine-link.txt
+```
+
+An explicit paired connection never falls back to another local engine. Remote destinations require trusted HTTPS; localhost HTTP is supported for development. Native pairing settings controls, outbound connectivity through a broker and physical desktop acceptance remain in progress. See [paired access](internal-docs/remote.md) for the current transport and acceptance scope.
+
 ## License
 
 AGPL-3.0-only. Adapted third-party source retains its applicable attribution and license in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

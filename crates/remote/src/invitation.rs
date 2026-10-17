@@ -1,7 +1,7 @@
 use crate::Error;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PairId(String);
@@ -78,6 +78,11 @@ struct WireInvitation {
     v: u32,
     id: String,
     secret: String,
+}
+impl Drop for WireInvitation {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
 }
 impl Invitation {
     pub fn generate() -> Result<Self, Error> {

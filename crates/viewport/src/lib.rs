@@ -8,6 +8,7 @@ pub mod input;
 mod model_accounts;
 mod model_picker;
 mod navigation;
+mod pairing;
 mod previews;
 mod questions;
 mod recovery;
@@ -86,6 +87,13 @@ pub struct WorkspaceView {
     error: Option<String>,
     show_archive: bool,
     settings: bool,
+    paired: bool,
+    pairing_origin: String,
+    pairings: Value,
+    pairing_name: Entity<input::TextInput>,
+    pairing_fragment: Option<String>,
+    pairing_fetch: Option<u64>,
+    pairing_action: Option<u64>,
     provider_index: usize,
     send_draft: HashMap<u64, Draft>,
     drafts: HashMap<String, Draft>,
@@ -250,6 +258,7 @@ impl WorkspaceView {
             input::TextInput::multiline("Describe the result you inspected…", window, cx)
         });
         let input_text = cx.new(|cx| input::TextInput::multiline("Write an answer…", window, cx));
+        let pairing_name = cx.new(|cx| input::TextInput::new("Device name", window, cx));
         let mut events = transport.events;
         let reader = cx.spawn(async move |this, cx| {
             while let Some(frame) = events.next().await {
@@ -301,6 +310,13 @@ impl WorkspaceView {
             error: None,
             show_archive: false,
             settings: false,
+            paired: false,
+            pairing_origin: String::new(),
+            pairings: Value::Null,
+            pairing_name,
+            pairing_fragment: None,
+            pairing_fetch: None,
+            pairing_action: None,
             provider_index: 0,
             send_draft: HashMap::new(),
             drafts: HashMap::new(),
@@ -422,6 +438,12 @@ impl WorkspaceView {
             }
             return;
         }
+        if let Some(paired) = frame["paired"].as_bool() {
+            self.paired = paired;
+        }
+        if let Some(origin) = frame["pairingOrigin"].as_str() {
+            self.pairing_origin = origin.into();
+        }
         if let Some(local) = frame["browserLocal"].as_bool() {
             self.browser_local = local;
             return;
@@ -475,6 +497,9 @@ impl WorkspaceView {
         }
         self.receive_input(id, &frame);
         if self.receive_recovery(id, &frame, cx) {
+            return;
+        }
+        if self.receive_pairing(id, &frame, cx) {
             return;
         }
         if self.receive_model_accounts(id, &frame, cx) {

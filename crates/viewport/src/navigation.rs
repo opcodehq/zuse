@@ -393,7 +393,11 @@ impl WorkspaceView {
                                 div()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child("Local workspace"),
+                                    .child(if self.paired {
+                                        "Paired workspace"
+                                    } else {
+                                        "Local workspace"
+                                    }),
                             )
                             .child(
                                 row()
@@ -405,7 +409,11 @@ impl WorkspaceView {
                                     )
                                     .child(
                                         label(if self.connected {
-                                            "This device"
+                                            if self.paired {
+                                                "Paired engine"
+                                            } else {
+                                                "This device"
+                                            }
                                         } else {
                                             &self.status
                                         })
@@ -544,7 +552,14 @@ impl WorkspaceView {
                                 .text_ellipsis()
                                 .text_size(px(10.))
                                 .text_color(rgb(FAINT))
-                                .child(format!("{project} · This device")),
+                                .child(format!(
+                                    "{project} · {}",
+                                    if self.paired {
+                                        "Paired engine"
+                                    } else {
+                                        "This device"
+                                    }
+                                )),
                         )
                         .child(label(age.clone()).text_size(px(10.)).text_color(rgb(FAINT))),
                 )

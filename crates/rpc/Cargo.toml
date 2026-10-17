@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+zuse-remote.workspace = true
 zuse-protocol.workspace = true
 zuse-sync.workspace = true
 tokio.workspace = true

@@ -13654,6 +13654,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "zuse-engine",
  "zuse-mcp",
+ "zuse-remote",
  "zuse-rpc",
  "zuse-ui",
  "zuse-update",
@@ -13964,6 +13965,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio-util",
+ "url",
  "zeroize",
 ]
 
@@ -13983,6 +13985,7 @@ dependencies = [
  "uuid",
  "zuse-doc",
  "zuse-protocol",
+ "zuse-remote",
  "zuse-sync",
 ]
 
@@ -14169,6 +14172,7 @@ dependencies = [
  "zuse-orb",
  "zuse-protocol",
  "zuse-providers",
+ "zuse-remote",
  "zuse-rpc",
  "zuse-syntax",
  "zuse-theme",
@@ -14297,15 +14301,18 @@ dependencies = [
 name = "zuse-web"
 version = "0.25.0"
 dependencies = [
+ "base64 0.22.1",
  "futures",
  "gpui",
  "gpui_platform",
  "js-sys",
  "serde_json",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
  "zuse-protocol",
+ "zuse-remote",
  "zuse-viewport",
 ]
 

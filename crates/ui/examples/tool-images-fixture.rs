@@ -269,6 +269,7 @@ fn main() -> anyhow::Result<()> {
     let data = temp.path().join("ui");
     std::fs::create_dir(&data)?;
     let boot = EngineBootConfig {
+        paired_target: None,
         data_dir: data.clone(),
         ipc_port,
         edge_url: String::new(),

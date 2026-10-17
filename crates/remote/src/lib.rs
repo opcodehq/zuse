@@ -4,13 +4,17 @@
 //! This module only bounds and reassembles application messages into Noise records.
 mod channel;
 mod invitation;
+mod target;
 pub use channel::{
     ClientHandshake, MAX_MESSAGE_BYTES, MAX_RECORD_BYTES, SecureChannel, accept, initiate,
 };
 pub use invitation::{Invitation, PairId, PairSecret};
+pub use target::PairedTarget;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Use an HTTPS engine origin, or HTTP on localhost")]
+    Endpoint,
     #[error("Invalid pairing invitation")]
     Invitation,
     #[error("Secure randomness is unavailable")]

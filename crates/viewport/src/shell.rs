@@ -518,7 +518,7 @@ impl WorkspaceView {
                             .border_1().border_color(rgb(BORDER)).cursor_pointer().hover(|d|d.bg(rgb(RAISED)))
                             .child(icon("folder").size(px(19.)).text_color(rgb(MUTED)))
                             .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child("Work on a project"))
-                            .child(label("Open a folder on this machine").text_size(px(11.)))
+                            .child(label(if self.paired { "Open a folder on your paired engine" } else { "Open a folder on this machine" }).text_size(px(11.)))
                             .on_click(cx.listener(|this, _, _, cx|{this.project_picker = true; cx.notify();})))
                         .child(column().id("welcome-agents").flex_1().min_w_0().p_4().gap_3().rounded_xl()
                             .border_1().border_color(rgb(BORDER)).cursor_pointer().hover(|d|d.bg(rgb(RAISED)))
@@ -526,7 +526,7 @@ impl WorkspaceView {
                             .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child("Connect your agents"))
                             .child(label("Models, accounts, and tools").text_size(px(11.)))
                             .on_click(cx.listener(|this, _, _, cx|{this.settings = true; cx.notify();}))))
-                    .child(label("Your agents run on this machine.").mt_2().text_size(px(11.)).text_color(rgb(FAINT))))
+                    .child(label(if self.paired { "Your agents run on your paired engine." } else { "Your agents run on this machine." }).mt_2().text_size(px(11.)).text_color(rgb(FAINT))))
             })
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);
@@ -706,6 +706,7 @@ impl WorkspaceView {
                         ),
                     ),
             )
+            .child(self.pairing_settings(cx))
             .child(self.cloud_settings(cx))
             .child(self.model_accounts_settings(cx))
             .child(label("Agents"))
@@ -734,7 +735,11 @@ impl WorkspaceView {
                                     .child(p["name"].as_str().unwrap_or("Agent").to_owned()),
                             )
                             .child(label(if installed {
-                                "Installed on this machine"
+                                if self.paired {
+                                    "Installed on your paired engine"
+                                } else {
+                                    "Installed on this machine"
+                                }
                             } else {
                                 "CLI installation required"
                             })),

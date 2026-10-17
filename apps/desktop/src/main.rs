@@ -23,6 +23,9 @@ struct Cli {
     /// Open a Zuse conversation URL.
     #[arg(value_name = "URL")]
     open_url: Option<String>,
+    /// Connect to a paired host using a private file containing its invitation URL.
+    #[arg(long, value_name = "FILE")]
+    paired_link_file: Option<std::path::PathBuf>,
     #[cfg(windows)]
     #[arg(long, hide = true)]
     wait_for_exit: Option<u32>,
@@ -220,6 +223,10 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    anyhow::ensure!(
+        cli.paired_link_file.is_none() || cli.command.is_none(),
+        "--paired-link-file is available for the desktop workspace"
+    );
     if long_running {
         // Finder launches have no visible stderr. Mirror the panic location
         // and backtrace into the same rotating log as engine diagnostics.
@@ -291,7 +298,13 @@ fn main() -> anyhow::Result<()> {
             let edge_token = std::env::var("ZUSE_EDGE_TOKEN").ok();
             // Headed: the UI probes ZUSE_IPC_PORT and connects to a running
             // daemon, or embeds the engine in-process (ARCHITECTURE §1).
+            let paired_target = cli
+                .paired_link_file
+                .as_deref()
+                .map(read_paired_target)
+                .transpose()?;
             zuse_ui::run_app(zuse_ui::UiConfig {
+                paired_target,
                 data_dir: paths::data_dir(),
                 ipc_port: std::env::var("ZUSE_IPC_PORT")
                     .ok()
@@ -621,4 +634,10 @@ fn sweep_stale_pid_logs(dir: &std::path::Path, mode: &str) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
+}
+
+/// Import without printing capabilities in diagnostics.
+fn read_paired_target(path: &std::path::Path) -> anyhow::Result<zuse_remote::PairedTarget> {
+    zuse_remote::PairedTarget::read_link_file(path)
+        .map_err(|_| anyhow::anyhow!("Could not read a valid private pairing link file"))
 }
