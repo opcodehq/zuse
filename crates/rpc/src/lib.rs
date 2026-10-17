@@ -436,6 +436,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replacing_request_ids_and_aborting_dispatch_release_subscription_tasks() {
+        use std::time::Duration;
+        let (first_drop, first_dropped) = tokio::sync::oneshot::channel();
+        let service = Arc::new(CancelAwareService {
+            dropped: Mutex::new(Some(first_drop)),
+        });
+        let (incoming, requests) = tokio::sync::mpsc::channel(4);
+        let (responses, mut outgoing) = tokio::sync::mpsc::channel(4);
+        let dispatcher = tokio::spawn(serve_connection(service.clone(), responses, requests));
+        let frame = serde_json::json!({"id":7,"method":methods::WATCH_HARNESS_UPDATES,"params":{}})
+            .to_string();
+        incoming.send(frame.clone()).await.unwrap();
+        assert!(outgoing.recv().await.is_some());
+        let (second_drop, second_dropped) = tokio::sync::oneshot::channel();
+        *service.dropped.lock().unwrap() = Some(second_drop);
+        incoming.send(frame).await.unwrap();
+        assert!(outgoing.recv().await.is_some());
+        tokio::time::timeout(Duration::from_secs(1), first_dropped)
+            .await
+            .expect("reused request ID leaked its old subscription")
+            .unwrap();
+        dispatcher.abort();
+        let _ = dispatcher.await;
+        tokio::time::timeout(Duration::from_secs(1), second_dropped)
+            .await
+            .expect("aborted dispatcher leaked its subscription")
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn dropping_stream_receiver_cancels_server_side() {
         let client = memory_client(Arc::new(TestService));
         let items = client

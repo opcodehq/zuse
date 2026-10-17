@@ -21,6 +21,13 @@ async fn pairing_rpc_keeps_capabilities_private_and_profile_scoped_across_restar
     let local = EngineProfile::local(root.path()).unwrap();
     let account = EngineProfile::development(root.path(), "account-org", "account-user");
     let host = core(local.clone());
+    host.browser_access
+        .control()
+        .register_external(
+            "127.0.0.1:27656".parse().unwrap(),
+            "https://relay.example".into(),
+        )
+        .await;
     let client = zuse_rpc::memory_client(host.rpc_service());
     let created = client
         .call(methods::CREATE_PAIRING, json!({"label":"My laptop"}))
@@ -30,6 +37,7 @@ async fn pairing_rpc_keeps_capabilities_private_and_profile_scoped_across_restar
         zuse_remote::Invitation::parse_fragment(created["fragment"].as_str().unwrap()).unwrap();
     assert_eq!(created["peer"]["id"], invitation.id.as_str());
     assert_eq!(created["peer"]["label"], "My laptop");
+    assert_eq!(created["origin"], "https://relay.example");
     let listed = client
         .call(methods::LIST_PAIRINGS, json!({}))
         .await

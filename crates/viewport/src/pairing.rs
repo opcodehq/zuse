@@ -36,6 +36,12 @@ impl WorkspaceView {
             }
             if action {
                 self.pairing_fragment = value["fragment"].as_str().map(str::to_owned);
+                if let Some(origin) = value["origin"]
+                    .as_str()
+                    .and_then(|origin| zuse_remote::normalized_origin(origin).ok())
+                {
+                    self.pairing_origin = origin;
+                }
                 if let Some(fetch) = self.pairing_fetch.take() {
                     self.cancel(fetch);
                 }

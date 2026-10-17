@@ -1965,7 +1965,13 @@ impl RpcService for EngineRpc {
                     let fragment = invitation.fragment().map_err(|_| {
                         RpcError::Failed("Could not encode pairing invitation".into())
                     })?;
-                    RpcReply::value(&serde_json::json!({"peer":peer,"fragment":fragment}))
+                    let origin = match &self.browser_access {
+                        Some(access) => access.status().await.origin,
+                        None => None,
+                    };
+                    RpcReply::value(
+                        &serde_json::json!({"peer":peer,"fragment":fragment,"origin":origin}),
+                    )
                 }
                 _ => {
                     #[derive(Deserialize)]

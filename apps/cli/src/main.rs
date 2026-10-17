@@ -32,6 +32,12 @@ struct Args {
     /// Matching PEM private key for direct HTTPS.
     #[arg(long, env = "ZUSE_TLS_KEY", requires = "tls_cert")]
     tls_key: Option<PathBuf>,
+    /// Public relay origin. Pairing keys stay on this host.
+    #[arg(long, requires = "relay_host_token_file")]
+    relay_origin: Option<String>,
+    /// Operator-issued relay routing credential, independent of pairing keys.
+    #[arg(long, requires = "relay_origin")]
+    relay_host_token_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -59,6 +65,15 @@ async fn run() -> anyhow::Result<()> {
         zuse_mcp::run(zuse_mcp::McpConfig::from_env()).await?;
         return Ok(());
     }
+    let relay = match (&args.relay_origin, &args.relay_host_token_file) {
+        (Some(origin), Some(path)) => Some((
+            zuse_serve::relay::validate_origin(origin)?,
+            zuse_serve::relay::HostToken::read_file(path)?,
+        )),
+        (None, None) => None,
+        _ => anyhow::bail!("Relay access requires its origin and host token file"),
+    };
+    let shutdown = tokio_util::sync::CancellationToken::new();
     let tls = match (&args.tls_cert, &args.tls_key) {
         (Some(certificate), Some(key)) => Some(TlsConfig::from_pem_files(certificate, key)?),
         (None, None) => None,
@@ -105,10 +120,12 @@ async fn run() -> anyhow::Result<()> {
         token.clone(),
         args.public_origin.clone(),
     ) {
-        Ok(browser) => browser.with_pairings(
-            runtime.core().pairings.clone(),
-            runtime.core().device_id.clone(),
-        ),
+        Ok(browser) => browser
+            .with_pairings(
+                runtime.core().pairings.clone(),
+                runtime.core().device_id.clone(),
+            )
+            .with_shutdown_token(shutdown.clone()),
         Err(error) => {
             runtime.shutdown().await;
             return Err(error);
@@ -128,14 +145,30 @@ async fn run() -> anyhow::Result<()> {
         .core()
         .browser_access
         .control()
-        .register_external(address, origin.clone())
+        .register_external(
+            address,
+            relay
+                .as_ref()
+                .map(|(origin, _)| origin.clone())
+                .unwrap_or_else(|| origin.clone()),
+        )
         .await;
     println!("Agent tools listen on 127.0.0.1:{ipc_port}");
     println!("Open {origin}/#token={token}");
+    let connector = relay.map(|(origin, token)| {
+        let browser = browser.clone();
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            zuse_serve::relay::serve_host(browser, &origin, token).await
+        }))
+    });
     let result = match tls {
         Some(tls) => browser.serve_tls(listener, args.assets, tls).await,
         None => browser.serve(listener, args.assets).await,
     };
+    shutdown.cancel();
+    if let Some(connector) = connector {
+        let _ = connector.await;
+    }
     ipc_task.abort();
     runtime.shutdown().await;
     result

@@ -13686,6 +13686,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite 0.24.0",
+ "tokio-util",
  "tracing-subscriber",
  "zuse-engine",
  "zuse-mcp",
@@ -13951,6 +13952,19 @@ dependencies = [
  "zip",
  "zuse-protocol",
  "zuse-voice-media",
+]
+
+[[package]]
+name = "zuse-relay"
+version = "0.25.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "reqwest",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "zuse-serve",
 ]
 
 [[package]]
@@ -14225,6 +14239,7 @@ dependencies = [
  "zuse-markdown",
  "zuse-model",
  "zuse-protocol",
+ "zuse-remote",
 ]
 
 [[package]]

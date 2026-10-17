@@ -9,7 +9,7 @@ pub use channel::{
     ClientHandshake, MAX_MESSAGE_BYTES, MAX_RECORD_BYTES, SecureChannel, accept, initiate,
 };
 pub use invitation::{Invitation, PairId, PairSecret};
-pub use target::PairedTarget;
+pub use target::{PairedTarget, normalized_origin};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

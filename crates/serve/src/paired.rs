@@ -1,17 +1,11 @@
 //! Pair-authorized binary RPC. This endpoint never accepts plaintext RPC frames.
 use crate::BrowserServer;
 use axum::{
-    extract::{
-        Path, State, WebSocketUpgrade,
-        ws::{Message, WebSocket},
-    },
+    extract::{Path, State, WebSocketUpgrade, ws::Message},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use futures::{
-    SinkExt, StreamExt,
-    stream::{SplitSink, SplitStream},
-};
+use futures::{Sink, SinkExt, Stream, StreamExt};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use zuse_remote::{
@@ -69,26 +63,29 @@ impl RpcService for Authorized {
         self.inner.handle(method, params).await
     }
 }
-async fn binary(
-    reader: &mut SplitStream<WebSocket>,
-    writer: &mut SplitSink<WebSocket, Message>,
-) -> Result<Vec<u8>, ()> {
+async fn binary<R, W, E>(reader: &mut R, writer: &mut W) -> Result<Vec<u8>, ()>
+where
+    R: Stream<Item = Result<Message, E>> + Unpin,
+    W: Sink<Message> + Unpin,
+{
     loop {
         match reader.next().await {
             Some(Ok(Message::Binary(bytes))) => return Ok(bytes.to_vec()),
-            Some(Ok(Message::Ping(bytes))) => {
-                writer.send(Message::Pong(bytes)).await.map_err(|_| ())?
-            }
+            Some(Ok(Message::Ping(bytes))) => send(writer, Message::Pong(bytes)).await?,
             Some(Ok(Message::Pong(_))) => {}
             _ => return Err(()),
         }
     }
 }
-async fn message(
+async fn message<R, W, E>(
     channel: &mut SecureChannel,
-    reader: &mut SplitStream<WebSocket>,
-    writer: &mut SplitSink<WebSocket, Message>,
-) -> Result<String, ()> {
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<String, ()>
+where
+    R: Stream<Item = Result<Message, E>> + Unpin,
+    W: Sink<Message> + Unpin,
+{
     loop {
         let record = binary(reader, writer).await?;
         if let Some(bytes) = channel.open(&record).map_err(|_| ())? {
@@ -115,13 +112,15 @@ fn valid_first(frame: &str) -> bool {
     }
     request
 }
-async fn session(
+pub(crate) async fn session<S, E>(
     server: BrowserServer,
     authority: Authority,
     device: String,
     credentials: Arc<Credentials>,
-    socket: WebSocket,
-) {
+    socket: S,
+) where
+    S: Stream<Item = Result<Message, E>> + Sink<Message> + Unpin,
+{
     if server.shutdown.is_cancelled() || !credentials.is_live() {
         return;
     }
@@ -132,10 +131,7 @@ async fn session(
             .map_err(|_| ())??;
         let (mut channel, reply) =
             zuse_remote::accept(credentials.id(), credentials.secret(), &first).map_err(|_| ())?;
-        writer
-            .send(Message::Binary(reply.into()))
-            .await
-            .map_err(|_| ())?;
+        send(&mut writer, Message::Binary(reply.into())).await?;
         let first = tokio::time::timeout(
             Duration::from_secs(30),
             message(&mut channel, &mut reader, &mut writer),
@@ -163,7 +159,9 @@ async fn session(
         credentials: credentials.clone(),
         device,
     });
-    let dispatch = tokio::spawn(zuse_rpc::serve_connection(service, out_tx, in_rx));
+    let dispatch = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+        zuse_rpc::serve_connection(service, out_tx, in_rx),
+    ));
     {
         let exchange = async {
             in_tx.send(first).await.map_err(|_| ())?;
@@ -172,7 +170,7 @@ async fn session(
                     data = out_rx.recv() => {
                         let Some(data) = data else { return Ok::<_, ()>(()); };
                         for record in channel.seal(data.as_bytes()).map_err(|_| ())? {
-                            writer.send(Message::Binary(record.into())).await.map_err(|_| ())?;
+                            send(&mut writer, Message::Binary(record.into())).await?;
                         }
                     },
                     frame = reader.next() => match frame {
@@ -182,7 +180,7 @@ async fn session(
                                 in_tx.send(payload).await.map_err(|_| ())?;
                             }
                         },
-                        Some(Ok(Message::Ping(data))) => writer.send(Message::Pong(data)).await.map_err(|_| ())?,
+                        Some(Ok(Message::Ping(data))) => send(&mut writer, Message::Pong(data)).await?,
                         Some(Ok(Message::Pong(_))) => {},
                         _ => return Ok(()),
                     }
@@ -198,4 +196,11 @@ async fn session(
     channel.close();
     drop(in_tx);
     let _ = dispatch.await;
+}
+
+async fn send<W: Sink<Message> + Unpin>(writer: &mut W, message: Message) -> Result<(), ()> {
+    tokio::time::timeout(Duration::from_secs(30), writer.send(message))
+        .await
+        .map_err(|_| ())?
+        .map_err(|_| ())
 }

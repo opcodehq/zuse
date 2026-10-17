@@ -32,30 +32,8 @@ impl PairedTarget {
     }
 
     pub fn new(origin: &str, invitation: Invitation) -> Result<Self, Error> {
-        let mut url = url::Url::parse(origin).map_err(|_| Error::Endpoint)?;
-        if !url.username().is_empty()
-            || url.password().is_some()
-            || url.host_str().is_none()
-            || url.path() != "/"
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
-            return Err(Error::Endpoint);
-        }
-        let scheme = match url.scheme() {
-            "https" | "wss" => "https",
-            "http" | "ws" => "http",
-            _ => return Err(Error::Endpoint),
-        };
-        // Remote app bundles must arrive over trusted TLS. Local development can
-        // use HTTP while Noise still authenticates and encrypts the RPC session.
-        if scheme == "http" && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
-        {
-            return Err(Error::Endpoint);
-        }
-        url.set_scheme(scheme).map_err(|_| Error::Endpoint)?;
         Ok(Self {
-            origin: url.origin().ascii_serialization(),
+            origin: normalized_origin(origin)?,
             invitation,
         })
     }
@@ -92,4 +70,30 @@ impl PairedTarget {
     pub fn export_link(&self) -> Result<String, Error> {
         Ok(format!("{}/{}", self.origin, self.invitation.fragment()?))
     }
+}
+
+/// Validate a public application origin without creating or exporting a capability.
+pub fn normalized_origin(origin: &str) -> Result<String, Error> {
+    let mut url = url::Url::parse(origin).map_err(|_| Error::Endpoint)?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.host_str().is_none()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(Error::Endpoint);
+    }
+    let scheme = match url.scheme() {
+        "https" | "wss" => "https",
+        "http" | "ws" => "http",
+        _ => return Err(Error::Endpoint),
+    };
+    // Remote app bundles must arrive over trusted TLS. Local development can
+    // use HTTP while Noise still authenticates and encrypts the RPC session.
+    if scheme == "http" && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")) {
+        return Err(Error::Endpoint);
+    }
+    url.set_scheme(scheme).map_err(|_| Error::Endpoint)?;
+    Ok(url.origin().ascii_serialization())
 }

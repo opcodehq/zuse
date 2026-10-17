@@ -1,6 +1,6 @@
 # Paired remote access
 
-The shared encrypted channel is implemented in `zuse-remote` for native and WASM. The engine owns persistent pairing grants, and the browser server exposes a binary paired RPC endpoint. Native and browser connection adapters plus pairing settings controls are implemented. Native controls still require desktop runtime acceptance; the outbound broker remains pending. Existing device-room relay traffic retains its previous transport.
+The shared encrypted channel is implemented in `zuse-remote` for native and WASM. The engine owns persistent pairing grants, and the browser server exposes a binary paired RPC endpoint. Native and browser connection adapters plus pairing settings controls are implemented. Native controls still require desktop runtime acceptance; the operator-managed outbound broker is implemented; account-scoped provisioning and production relay acceptance remain pending. Existing device-room relay traffic retains its previous transport.
 
 ## Channel contract
 
@@ -35,7 +35,7 @@ Paired origins require HTTPS; HTTP is accepted only on localhost for development
 ## Integration still required
 
 - Persisted target selection and physical acceptance of connection management across desktop windows.
-- Outbound host connectivity through an opaque broker, bounded handshake/session queues, reconnect and end-to-end liveness. Paired mode must reject legacy plaintext RPC instead of falling back after an authentication failure.
+- Encrypted end-to-end heartbeat acceptance across an untrusted broker. Current control-frame heartbeats detect link failure; they do not establish application responsiveness through a broker. Paired mode rejects plaintext RPC and does not fall back after authentication failure.
 - Host identity pinning and complete connection-target selection. Pairing secrets stay outside relay URLs, logs and ordinary settings metadata.
 - Physical Mac/Linux and browser acceptance, revoked and expired keys, broker outages, profile/account changes and deployment packaging. A trusted application bundle remains necessary for browser-held capabilities.
 
@@ -56,3 +56,19 @@ Native Settings → Devices exposes browser access status, start/stop, listen ad
 `BrowserAccessStatus`, `StartBrowserAccess` and `StopBrowserAccess` reject foreign targets. Status exposes no access token. The optional start parameters are `listen`, `publicOrigin`, `tlsCert`, `tlsKey` and `assets`. Non-loopback access requires an explicit HTTPS public origin; direct HTTPS also requires a certificate and matching key. Browser assets are discovered from `ZUSE_WEB_ASSETS`, an executable sibling `web`, macOS bundle `Resources/web`, or development `dist/web`. Starting access is currently explicit per engine session; auto-start preferences and complete bundle assets packaging remain pending.
 
 Three real-engine/control scenarios exercise start/stop/restart with a native paired RPC subscription, persisted grants, shutdown/drop ownership, duplicate admission and invalid/foreign settings. Evidence: `.context/native-pairing-browser-access-tests.log` and `.context/settings-engine-final-tests.log`.
+
+## Operator-managed outbound relay
+
+`zuse-relay` serves the browser assets and two rendezvous endpoints. Hosts authenticate `/api/paired-host/{pairId}` with an independent 64-hex-character operator token in an Authorization header. Clients use the existing `/api/paired-rpc/{pairId}` path. The broker forwards binary records and has no Noise secrets or canonical RPC dispatcher. A host must register before a client can connect. Client text frames are rejected. There are at most 256 host sockets and eight idle registrations per pair ID, with RAII route cleanup, bounded WebSocket messages, five-second send deadlines and link heartbeats.
+
+`zuse-server --relay-origin ORIGIN --relay-host-token-file FILE` maintains four outbound sockets per saved grant, within the 32-grant profile limit. Freshly created invitations register automatically. Expiry, revocation and shutdown cancel workers and sessions. Disconnection retries host registration with bounded backoff; each client connection performs fresh Noise authentication and application proof through the same host session as direct access. The existing shared 64-session host admission limit also applies to relayed RPC. Restarting a connector preserves grants and cannot replay actions. Private routing files are bounded and made 0600 on Unix; their contents are never in URLs or status metadata.
+
+The foreground server advertises the broker origin for invitations while its local owner browser remains on the direct origin. Creation returns that public origin to native/browser controls. Browser-held capabilities therefore use the normal paired adapter without a second transport policy.
+
+Three actual-socket relay scenarios cover concurrent native clients, 180 KB payloads, canonical subscriptions, profile routing rejection, revocation, connector process-task replacement, shutdown, unauthorized host registration, wrong pairing keys and rejected plaintext. The full transport suite remains a regression gate for the shared direct/relay session. Evidence: `.context/relay-transport-tests.log`.
+
+Still pending: embedded-desktop relay configuration and status, per-account host credential provisioning/rotation, encrypted end-to-end heartbeats, broker restart/outage acceptance through browser and physical Mac/Linux clients, and production deployment. The global operator token is suitable for an operator-controlled relay; it is not a tenant authorization service. Control-frame pings are not proof that an untrusted broker can reach the execution host.
+
+Connector cancellation is also a canonical RPC lifetime gate. Request tasks now have a connection-owned drop guard, so aborting the dispatcher cancels its subscriptions. Reusing a request ID cancels the previous task. The connector-replacement scenario asserts that its subscription guard is released; it failed before this fix (`.context/relay-cancellation-regression-before.log`) and passes afterward in the transport suite. Shared host writes have a 30-second deadline.
+
+The current connector keeps four sockets per grant. Burst media/uploads can exhaust those slots; queued connection admission remains an acceptance gap alongside embedded relay controls and end-to-end heartbeats.

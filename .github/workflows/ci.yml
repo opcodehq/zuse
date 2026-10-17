@@ -28,8 +28,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
       - run: cargo fmt --all --check
-      - run: cargo check -p zuse-cli
+      - run: cargo check -p zuse-cli -p zuse-relay
       - run: cargo test -p zuse-cli --test startup
+      - run: cargo test -p zuse-relay --test startup
       - run: cargo test -p zuse-remote
       - run: cargo test -p zuse-engine --test pairing
       - run: cargo test -p zuse-engine --test browser_access
@@ -71,7 +72,7 @@ jobs:
           libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev
           libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
           libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
-      - run: cargo check -p zuse -p zuse-cli -p zuse-remote
+      - run: cargo check -p zuse -p zuse-cli -p zuse-relay -p zuse-remote
 
   browser:
     runs-on: ubuntu-24.04

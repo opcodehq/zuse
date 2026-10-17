@@ -21,6 +21,7 @@ use tower_http::{
 use zuse_rpc::RpcService;
 mod access_token;
 mod paired;
+pub mod relay;
 mod tls;
 pub use tls::TlsConfig;
 

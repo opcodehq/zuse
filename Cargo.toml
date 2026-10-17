@@ -27,6 +27,7 @@ members = [
     "crates/visual-gpu",
     "apps/desktop",
     "apps/cli",
+    "apps/relay",
     "apps/web",
     "crates/viewport",
     "crates/model",
