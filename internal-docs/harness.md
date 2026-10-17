@@ -166,3 +166,52 @@ turn cancellation, explicit cleanup, retained-child continuation, in-place model
 changes, fractional context limits, duplicate/recovered acknowledgements, and
 failed-save recovery. These are kernel/tool fixtures; selectable application
 provider/session integration and live chat acceptance remain pending.
+
+
+## Application session adapter
+
+`engine::native_harness` registers Zuse in the engine provider catalog on macOS
+and Linux. It uses the shared account inventory/broker/SDK transport and the
+owned Rust kernel rather than launching another coding-agent CLI. The existing
+provider picker, chat stream and session engine consume its standard protocol.
+Earlier milestone notes above describe the component state at those milestones.
+
+Each runtime owns a `zuse:<UUID>` journal, a checkout manifest and the native
+root lease. Resume rejects foreign cursors, missing journals and checkout
+mismatches. The persistent event stream translates assistant text/boundaries,
+normalized tools/results/plans, context, usage, compaction and nested child
+transcripts. Child user messages are emitted after their history is persisted.
+Event attribution reads only model/parent identifiers; it never clones the full
+transcript or inline images for each text chunk. Bounded event channels cancel a
+failed/overflowed stream and retain its journal for inspection.
+
+Permission prompts and questions use the session engine's existing input bridge.
+Read-only contexts also constrain application tools. Hosted plugin discovery and
+execution reuse the shared MCP tool catalog, namespaced as `zuse_*`, for root and
+child agents alike. The engine overwrites incoming MCP fields with the host's
+loopback endpoint and originating chat/device; model arguments cannot choose the
+plugin origin. `zuse_read_upload` reads bounded text/base64 chunks through the
+profile upload cache's path jail. Image attachments arrive as bounded inline
+content, with magic-byte MIME validation. Repository instruction reads reject
+symlinks and non-regular files.
+
+The adapter correlates durable mail-consumption IDs with session steering ACKs,
+retains background work on turn stop, reports that work before publishing Done,
+and adopts model/effort/context/permission changes without replacing the runtime.
+Process notices hold a weak kernel reference, avoiding a host/engine retain cycle.
+Dropping the stream cancels and drains the owned runtime before its execution
+lease is released.
+
+The application fixtures use scripted model output, real durable journals and
+filesystem edits. Live model authorization, real Executor tenant/plugin calls,
+full UI queue/stop flows, packaged Node/ripgrep, complete instruction/skill parity,
+provider-switch history migration, OS command sandboxing and authenticated
+unknown-outcome recovery controls still require implementation or acceptance.
+This is not full application acceptance.
+
+Verification for this adapter milestone: all 35 harness tests pass, the five
+application session fixtures pass, and all 13 session-engine tests pass. The
+native-filter engine regression run passes 12 tests (including the five adapter
+fixtures and host-origin stamping). Server/provider test targets compile,
+formatting passes, and the GPUI Web/WASM bundle builds. Updated desktop CI and
+live native/browser conversations remain separate acceptance gates.

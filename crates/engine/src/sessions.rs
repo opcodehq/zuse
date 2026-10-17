@@ -1572,6 +1572,11 @@ impl Inner {
     /// mcp` subcommand, dialing the engine's IPC port and stamped with the
     /// originating chat + device so the agent's side chats link back here.
     /// None when the engine serves no port or its executable is unknown.
+    fn stamp_mcp(&self, chat_id: &str, request: &mut RunRequest) {
+        // Origin and the loopback endpoint are host authority, even when an
+        // incoming RPC supplied a field with the same wire shape.
+        request.mcp = self.zuse_mcp(chat_id);
+    }
     fn zuse_mcp(&self, chat_id: &str) -> Option<zuse_protocol::McpServer> {
         let port = self.ipc_port.load(std::sync::atomic::Ordering::Relaxed);
         if port == 0 {
@@ -2217,9 +2222,7 @@ async fn drive_run(
     }
     // The host stamps its own MCP server onto every run it drives, so the
     // agent can spawn and talk to side chats through the engine it runs in.
-    if request.mcp.is_none() {
-        request.mcp = inner.zuse_mcp(&chat_id);
-    }
+    inner.stamp_mcp(&chat_id, &mut request);
     // Kept whole for the startup-crash retry (same user entry; dispatch
     // re-injects the stored resume id). Option so the retry branch (inside
     // the event loop) can take ownership.
@@ -3449,6 +3452,37 @@ async fn drive_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_tool_origin_and_endpoint_are_stamped_by_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = SessionsEngine::new(
+            "host-device".into(),
+            Arc::new(RunJournal::open(dir.path()).unwrap()),
+            Arc::new(HarnessRegistry::new()),
+        );
+        sessions.set_ipc_port(27654);
+        let mut request = request();
+        request.mcp = Some(zuse_protocol::McpServer {
+            name: "forged".into(),
+            env: [
+                ("ZUSE_CHAT_ID".into(), "other-chat".into()),
+                ("ZUSE_IPC_PORT".into(), "1".into()),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        });
+        sessions.inner.stamp_mcp("owner-chat", &mut request);
+        let mcp = request.mcp.as_ref().unwrap();
+        assert_eq!(mcp.name, "zuse");
+        assert_eq!(mcp.env["ZUSE_CHAT_ID"], "owner-chat");
+        assert_eq!(mcp.env["ZUSE_DEVICE_ID"], "host-device");
+        assert_eq!(mcp.env["ZUSE_IPC_PORT"], "27654");
+        sessions.set_ipc_port(0);
+        sessions.inner.stamp_mcp("owner-chat", &mut request);
+        assert!(request.mcp.is_none());
+    }
 
     #[test]
     fn cursor_recovery_converts_rich_messages_before_json_encoding() {

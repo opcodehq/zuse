@@ -11,7 +11,7 @@ pub mod prompt;
 pub mod state;
 pub mod store;
 use async_trait::async_trait;
-pub use engine::{Engine, Options};
+pub use engine::{AgentRoute, Engine, Options, WeakEngine};
 use serde::{Deserialize, Serialize};
 pub use state::*;
 use std::{collections::BTreeMap, sync::Arc};
@@ -90,6 +90,14 @@ pub struct ModelOutput {
     rename_all_fields = "camelCase"
 )]
 pub enum Event {
+    UserMessage {
+        agent_id: String,
+        text: String,
+    },
+    ModelCompleted {
+        agent_id: String,
+        item_id: String,
+    },
     /// Mail is part of durable history at a model boundary. Replayed delivery
     /// IDs may repeat this acknowledgement without replaying their content.
     MailConsumed {

@@ -52,7 +52,7 @@ fn methods(id: HarnessId, platform: Platform) -> Vec<Method> {
     use Method::*;
     let windows = platform == Platform::Windows;
     match id {
-        Mock | Kiro => vec![],
+        Zuse | Mock | Kiro => vec![],
         Gemini => vec![Npm("@google/gemini-cli", false)],
         Antigravity => vec![Archive],
         ClaudeCode if windows => vec![PowerShell("irm https://claude.ai/install.ps1 | iex")],
@@ -160,7 +160,7 @@ pub fn manual_command(id: HarnessId) -> Option<&'static str> {
         Hermes => "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
         Devin => "curl -fsSL https://cli.devin.ai/install.sh | bash",
         Gemini => "npm install -g @google/gemini-cli",
-        Kiro | Antigravity | Mock => return None,
+        Zuse | Kiro | Antigravity | Mock => return None,
     })
 }
 
@@ -178,6 +178,7 @@ fn cli_and_dir(id: HarnessId) -> (&'static str, &'static str) {
         Antigravity => ("agy_acp_server", "~/.zuse/adapters"),
         Gemini => ("gemini", "the npm global bin"),
         Kiro => ("kiro-cli", "~/.local/bin"),
+        Zuse => ("zuse", "built in"),
         Mock => ("mock", "PATH"),
     }
 }
@@ -196,6 +197,7 @@ pub fn installed(id: HarnessId) -> bool {
         Antigravity => crate::AcpHarness::antigravity().installed(),
         Gemini => crate::AcpHarness::gemini().installed(),
         Kiro => crate::AcpHarness::kiro().installed(),
+        Zuse => cfg!(unix),
         Mock => false,
     }
 }

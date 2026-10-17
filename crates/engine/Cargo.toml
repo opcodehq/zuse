@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 zuse-harness.workspace = true
+zuse-mcp.workspace = true
 zuse-preview.workspace = true
 zuse-protocol.workspace = true
 zuse-plugins.workspace = true
@@ -51,7 +52,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
-zuse-mcp.workspace = true
 zuse-providers = { workspace = true, features = ["installer-fixture"] }
 # Paused-clock tests (the 30-minute idle reaper).
 tokio = { workspace = true, features = ["test-util"] }

@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicBool, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
@@ -56,6 +56,18 @@ struct Inner {
 }
 #[derive(Clone)]
 pub struct Engine(Arc<Inner>);
+#[derive(Clone)]
+pub struct WeakEngine(Weak<Inner>);
+/// Lightweight event attribution, independent of transcript and attachment size.
+pub struct AgentRoute {
+    pub model: String,
+    pub parents: Vec<String>,
+}
+impl WeakEngine {
+    pub fn upgrade(&self) -> Option<Engine> {
+        self.0.upgrade().map(Engine)
+    }
+}
 fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     value.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -190,6 +202,29 @@ impl Engine {
             closed: AtomicBool::new(false),
         })))
     }
+    pub fn downgrade(&self) -> WeakEngine {
+        WeakEngine(Arc::downgrade(&self.0))
+    }
+    pub async fn route(&self, agent_id: &str) -> Result<AgentRoute, Error> {
+        let state = self.0.state.lock().await;
+        let mut current = agent_id;
+        let mut parents = vec![];
+        loop {
+            let agent = state.agent(current)?;
+            match (&agent.parent_id, &agent.parent_item_id) {
+                (Some(parent), Some(call)) if parents.len() < 2 => {
+                    parents.push(call.clone());
+                    current = parent;
+                }
+                (None, None) => break,
+                _ => return Err(Error::InvalidCheckpoint),
+            }
+        }
+        Ok(AgentRoute {
+            model: state.model.clone(),
+            parents,
+        })
+    }
     pub async fn snapshot(&self) -> Checkpoint {
         self.0.state.lock().await.clone()
     }
@@ -222,6 +257,9 @@ impl Engine {
     pub fn set_permission_mode(&self, mode: PermissionMode) {
         *lock(&self.0.mode) = mode;
     }
+    pub fn tool_names(&self) -> Vec<String> {
+        self.0.tools.keys().cloned().collect()
+    }
     pub fn background_count(&self) -> usize {
         lock(&self.0.runners).len()
     }
@@ -229,6 +267,18 @@ impl Engine {
         self.0.host.save(state).await
     }
     pub async fn send(&self, text: String, images: Vec<Image>) -> Result<(), Error> {
+        self.send_with_cancel(text, images, &CancellationToken::new())
+            .await
+    }
+    /// Cancel admission before a queued turn can create runners. Once admitted,
+    /// stop_turn owns generation cancellation and retained background work.
+    pub async fn send_with_cancel(
+        &self,
+        text: String,
+        images: Vec<Image>,
+        admission: &CancellationToken,
+    ) -> Result<(), Error> {
+        check(admission)?;
         if self.0.closed.load(Ordering::Acquire) {
             return Err(Error::paused("Harness is closed"));
         }
@@ -241,9 +291,10 @@ impl Engine {
             return Err(Error::paused("Harness is already running"));
         }
         let _active = ActiveTurn(self.clone());
-        self.0.stopping.store(false, Ordering::Release);
         let (root, children) = {
             let mut state = self.0.state.lock().await;
+            check(admission)?;
+            self.0.stopping.store(false, Ordering::Release);
             state.requests = 0;
             let root = state.root_id.clone();
             if !text.trim().is_empty() || !images.is_empty() {
@@ -263,9 +314,9 @@ impl Engine {
             (root, children)
         };
         for child in children {
-            self.launch(child).await?;
+            tokio::select! {biased;_=admission.cancelled()=>return Err(Error::Interrupted),result=self.launch(child)=>{result?;}}
         }
-        let done = self.launch(root).await?;
+        let done = tokio::select! {biased;_=admission.cancelled()=>return Err(Error::Interrupted),result=self.launch(root)=>result?};
         completion(done, &CancellationToken::new()).await
     }
     /// Durable delivery is idempotent across process outbox and steering replays.
@@ -532,7 +583,11 @@ impl Engine {
                 let mut state = self.0.state.lock().await;
                 let mail = std::mem::take(&mut state.agent_mut(agent_id)?.mailbox);
                 let mut consumed = Vec::new();
+                let mut child_messages = Vec::new();
                 for message in mail {
+                    if agent_id != state.root_id {
+                        child_messages.push(message.text.clone());
+                    }
                     if state.notifications.contains(&message.id) {
                         state
                             .consumed_notifications
@@ -542,6 +597,12 @@ impl Engine {
                     state.agent_mut(agent_id)?.history.push(message.message());
                 }
                 self.persist(&state).await?;
+                for text in child_messages {
+                    self.0.host.notify(Event::UserMessage {
+                        agent_id: agent_id.into(),
+                        text,
+                    });
+                }
                 for delivery_id in consumed {
                     self.0.host.notify(Event::MailConsumed {
                         agent_id: agent_id.into(),
@@ -569,6 +630,7 @@ impl Engine {
             self.reserve().await?;
             let item_id = id();
             let host = self.0.host.clone();
+            let completed_item = item_id.clone();
             let agent = agent_id.to_owned();
             let response = self
                 .request(
@@ -607,6 +669,10 @@ impl Engine {
                 agent.turns += 1;
                 self.persist(&state).await?;
             }
+            self.0.host.notify(Event::ModelCompleted {
+                agent_id: agent_id.into(),
+                item_id: completed_item,
+            });
             self.0.host.notify(Event::Usage {
                 agent_id: agent_id.into(),
                 usage: response.usage,
@@ -1079,6 +1145,7 @@ impl Engine {
             for attempt in 0..2 {
                 self.reserve().await?;let mut messages=prefix.clone();messages.push(Message::text(Role::User,format!("Summarize this context for continuation in at most {} tokens. Preserve the original task, requirements, decisions, unresolved work, instructions, paths, and tool outcomes. Do not claim pending work is complete. Omit raw tool output and repetition. {}",(budget/(attempt+1)).max(64),if attempt>0{"The previous summary was too large; make this substantially shorter."}else{""})));
                 let result=self.request(agent_id,messages,Tools::new(),cancel,Arc::new(|_|{})).await?;
+                self.0.host.notify(Event::Usage { agent_id: agent_id.into(), usage: result.usage.clone() });
                 if !result.calls.is_empty() || result.text.trim().is_empty(){continue;}
                 let after=prompt::estimate(&prompt::render(&agent.history,Some(&Compaction{covered,summary:result.text.clone()})));
                 if best.as_ref().is_none_or(|(_,size)|after<*size){best=Some((result.text,after));}if after<=target{break;}

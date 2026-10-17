@@ -3,7 +3,7 @@
 `crates/model-accounts` owns model registrations, OAuth, encrypted local records,
 and account-scoped storage leases. `crates/engine/src/model_connections.rs`
 combines the local and hosted stores under the active Zuse identity. CLI logins
-remain independent. The engine model service consumes this account authority; the selectable application provider/session adapter remains pending.
+remain independent. The selectable Zuse provider consumes this account authority through the engine model service. Live authorization and complete application workflow acceptance remain pending.
 
 Local storage uses a private profile directory, a 0600 key file, and an SQLite
 WAL database. AES-256-GCM uses a fresh nonce for every write and authenticates the

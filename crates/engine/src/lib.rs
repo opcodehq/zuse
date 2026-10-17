@@ -34,6 +34,8 @@ pub use zuse_harness::processes::supervisor as command_host;
 pub mod harness_models;
 mod model_catalogs;
 pub mod model_connections;
+#[cfg(unix)]
+mod native_harness;
 mod plugin_callback;
 pub mod plugins;
 pub mod profile;
@@ -346,6 +348,16 @@ impl EngineCore {
             data_dir.join("harness/model-bridge"),
         )
         .map_err(|error| EngineError::Other(error.to_string()))?;
+        #[cfg(unix)]
+        registry.register(Arc::new(
+            native_harness::NativeHarness::new(
+                data_dir.to_path_buf(),
+                device_id.clone(),
+                harness_models.clone(),
+                uploads.clone(),
+            )
+            .map_err(|error| EngineError::Other(error.to_string()))?,
+        ));
         let plugins = plugins::Plugins::open(data_dir, account.clone(), workspace.clone())
             .map_err(|e| EngineError::Other(e.to_string()))?;
         Ok(Self {
