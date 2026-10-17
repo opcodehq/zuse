@@ -291,9 +291,11 @@ impl WorkspaceView {
                 .find(|chat| chat["id"].as_str() == draft.chat_id.as_deref())
                 .cloned()
             {
-                self.select(chat, cx);
-            } else {
-                self.new_chat(cx);
+                if !self.select(chat, cx) {
+                    return;
+                }
+            } else if !self.new_chat(cx) {
+                return;
             }
         }
         if !draft.attachments.is_empty() && draft.host_id != self.draft_host() {

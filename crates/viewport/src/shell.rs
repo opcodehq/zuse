@@ -219,7 +219,9 @@ impl WorkspaceView {
                     .border_color(rgb(0x30312b))
                     .bg(rgb(0x181916))
                     .shadow_sm()
-                    .when(self.model_picker, |d| d.child(self.composer_picker(cx)))
+                    .when(self.model_picker, |d| {
+                        d.child(self.composer_picker(cx, None))
+                    })
                     .when(self.access_picker, |d| d.child(self.access_menu(cx)))
                     .when(self.add_menu, |d| d.child(self.composer_add_menu(cx)))
                     .when(!self.attachments.is_empty() || self.uploading > 0, |d| {
@@ -760,7 +762,9 @@ impl WorkspaceView {
                     )
                     .child(label(p["path"].as_str().unwrap_or_default().to_owned()))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.new_chat(cx);
+                        if !this.new_chat(cx) {
+                            return;
+                        }
                         this.project = Some(project.clone());
                         this.project_picker = false;
                         cx.notify();
@@ -1190,8 +1194,22 @@ impl Render for WorkspaceView {
             )
             .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
                 if this.settings {
-                    this.settings = false;
-                    window.focus(&this.input.focus_handle(cx), cx);
+                    if this.model_picker && this.model_picker_default {
+                        this.model_picker = false;
+                        this.model_picker_default = false;
+                        window.focus(&this.default_model_focus, cx);
+                    } else if this.default_permission_menu {
+                        this.default_permission_menu = false;
+                        window.focus(&this.default_permission_focus, cx);
+                    } else if this.completion_preset_menu {
+                        this.completion_preset_menu = false;
+                        window.focus(&this.completion_preset_focus, cx);
+                    } else {
+                        this.settings = false;
+                        this.model_picker = false;
+                        this.model_picker_default = false;
+                        window.focus(&this.input.focus_handle(cx), cx);
+                    }
                     cx.notify();
                     return;
                 }

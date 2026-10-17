@@ -28,7 +28,9 @@ impl WorkspaceView {
         {
             return;
         }
-        self.new_chat(cx);
+        if !self.new_chat(cx) {
+            return;
+        }
         self.model_picker = false;
         self.access_picker = false;
         self.add_menu = false;
@@ -41,7 +43,9 @@ impl WorkspaceView {
         {
             return;
         }
-        self.new_chat(cx);
+        if !self.new_chat(cx) {
+            return;
+        }
         self.project = if path.is_empty() {
             None
         } else {

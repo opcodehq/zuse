@@ -145,6 +145,7 @@ pub struct WorkspaceView {
     preferences_loaded: bool,
     default_permission_menu: bool,
     default_permission_focus: FocusHandle,
+    default_model_focus: FocusHandle,
     default_permission_active: usize,
     picker_catalog: zuse_protocol::presentation::PickerCatalog,
     picker_scope: Option<String>,
@@ -404,6 +405,7 @@ impl WorkspaceView {
             preferences_loaded: false,
             default_permission_menu: false,
             default_permission_focus: cx.focus_handle(),
+            default_model_focus: cx.focus_handle(),
             default_permission_active: 0,
             picker_catalog: Default::default(),
             picker_scope: None,
@@ -952,15 +954,15 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    fn select(&mut self, chat: Value, cx: &mut Context<Self>) {
+    fn select(&mut self, chat: Value, cx: &mut Context<Self>) -> bool {
         if !self.require_connection(cx) {
-            return;
+            return false;
         }
         if self.file_navigation_blocked(cx)
             || self.queue_edit_navigation_blocked(cx)
             || self.model_navigation_blocked(cx)
         {
-            return;
+            return false;
         }
         self.stash_draft(cx);
         self.composer_generation += 1;
@@ -1021,17 +1023,18 @@ impl WorkspaceView {
         self.settings = false;
         self.error = None;
         cx.notify();
+        true
     }
 
-    fn new_chat(&mut self, cx: &mut Context<Self>) {
+    fn new_chat(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.require_connection(cx) {
-            return;
+            return false;
         }
         if self.file_navigation_blocked(cx)
             || self.queue_edit_navigation_blocked(cx)
             || self.model_navigation_blocked(cx)
         {
-            return;
+            return false;
         }
         self.stash_draft(cx);
         self.composer_generation += 1;
@@ -1057,6 +1060,7 @@ impl WorkspaceView {
         self.settings = false;
         self.restore_draft(cx);
         cx.notify();
+        true
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {

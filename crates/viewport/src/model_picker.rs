@@ -6,6 +6,7 @@ use crate::shell::{
 };
 use zuse_protocol::{Model, presentation::ModelSelection};
 const ACCENT: u32 = 0x89ca21;
+pub(super) type TriggerBounds = std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>;
 
 impl WorkspaceView {
     pub(super) fn save_preferences(&self) {
@@ -75,6 +76,21 @@ impl WorkspaceView {
             self.load_picker_catalogs(false);
         }
         cx.notify();
+    }
+    fn return_model_picker_focus(
+        &self,
+        defaults: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(
+            &if defaults {
+                self.default_model_focus.clone()
+            } else {
+                self.input.focus_handle(cx)
+            },
+            cx,
+        );
     }
     pub(super) fn load_picker_catalogs(&mut self, force: bool) {
         if !self.connected {
@@ -291,12 +307,19 @@ impl WorkspaceView {
                 d.child(icon("check").size(px(14.)).text_color(rgb(ACCENT)))
             })
             .on_click(cx.listener(move |this, _, window, cx| {
+                let defaults = this.model_picker_default;
                 this.choose_model(provider_id.clone(), Some(model_id.clone()), cx);
-                window.focus(&this.input.focus_handle(cx), cx);
+                if !this.model_picker {
+                    this.return_model_picker_focus(defaults, window, cx);
+                }
             }))
             .into_any_element()
     }
-    pub(super) fn composer_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn composer_picker(
+        &self,
+        cx: &mut Context<Self>,
+        trigger: Option<TriggerBounds>,
+    ) -> AnyElement {
         let query = self.model_search.read(cx).value(cx).to_lowercase();
         let current = if self.model_picker_default {
             self.preferences
@@ -342,6 +365,21 @@ impl WorkspaceView {
             .shadow_lg()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .capture_key_down(cx.listener(Self::on_picker_key))
+            .when_some(trigger, |view, trigger| {
+                view.on_mouse_down_out(cx.listener(
+                    move |this, event: &MouseDownEvent, window, cx| {
+                        if !trigger
+                            .get()
+                            .is_some_and(|bounds| bounds.contains(&event.position))
+                        {
+                            this.model_picker = false;
+                            this.model_picker_default = false;
+                            this.return_model_picker_focus(true, window, cx);
+                            cx.notify();
+                        }
+                    },
+                ))
+            })
             .child(
                 column()
                     .id("provider-rail")
@@ -756,8 +794,10 @@ impl WorkspaceView {
         }
         let key = event.keystroke.key.as_str();
         if key == "escape" {
+            let defaults = self.model_picker_default;
             self.model_picker = false;
-            window.focus(&self.input.focus_handle(cx), cx);
+            self.model_picker_default = false;
+            self.return_model_picker_focus(defaults, window, cx);
             cx.stop_propagation();
             cx.notify();
             return;
@@ -792,8 +832,11 @@ impl WorkspaceView {
             return;
         };
         if key == "enter" || shortcut {
+            let defaults = self.model_picker_default;
             self.choose_model(choice.provider, Some(choice.model), cx);
-            window.focus(&self.input.focus_handle(cx), cx);
+            if !self.model_picker {
+                self.return_model_picker_focus(defaults, window, cx);
+            }
         } else {
             if let Some(anchor) = self
                 .picker_anchors

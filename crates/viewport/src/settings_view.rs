@@ -256,6 +256,8 @@ impl WorkspaceView {
                                 this.settings = false;
                                 this.completion_preset_menu = false;
                                 this.default_permission_menu = false;
+                                this.model_picker = false;
+                                this.model_picker_default = false;
                                 window.focus(&this.input.focus_handle(cx), cx);
                                 cx.notify();
                             })),
@@ -411,6 +413,11 @@ impl WorkspaceView {
             .into_any_element()
     }
     fn default_model_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        use super::model_picker::TriggerBounds;
+        let model_bounds = TriggerBounds::default();
+        let model_bounds_measure = model_bounds.clone();
+        let permission_bounds = TriggerBounds::default();
+        let permission_bounds_measure = permission_bounds.clone();
         let provider = self.preferences.default_provider.as_deref();
         let model = provider.and_then(|provider| self.preferences.default_models.get(provider));
         let label = model
@@ -423,16 +430,60 @@ impl WorkspaceView {
             .or_else(|| model.map(String::as_str))
             .unwrap_or("Agent default")
             .to_owned();
-        let trigger = s::button("settings-default-model", label)
+        let trigger = column()
+            .relative()
             .w(px(256.))
-            .justify_between()
-            .child(icon("alt-arrow-down").size(px(14.)))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.open_model_picker(window, cx);
-                this.model_picker_default = true;
-                this.default_permission_menu = false;
-                cx.notify();
-            }));
+            .child(
+                canvas(
+                    move |bounds, _, _| model_bounds_measure.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .child(
+                s::button("settings-default-model", "")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .w_full()
+                    .justify_between()
+                    .role(Role::ComboBox)
+                    .aria_label(format!("Default model: {label}"))
+                    .aria_expanded(self.model_picker && self.model_picker_default)
+                    .track_focus(&self.default_model_focus)
+                    .tab_index(0)
+                    .child(
+                        row()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_2()
+                            .when_some(provider, |view, provider| {
+                                view.child(icon(provider_icon(provider)).size(px(14.)))
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(label),
+                            ),
+                    )
+                    .child(icon("alt-arrow-down").size(px(14.)))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_model_picker(window, cx);
+                        this.model_picker_default = this.model_picker;
+                        this.default_permission_menu = false;
+                        if !this.model_picker {
+                            window.focus(&this.default_model_focus, cx);
+                        }
+                        cx.notify();
+                    })),
+            )
+            .when(self.model_picker && self.model_picker_default, |view| {
+                view.child(
+                    deferred(self.composer_picker(cx, Some(model_bounds.clone()))).priority(1),
+                )
+            });
         use zuse_protocol::presentation::PermissionMode;
         let selected = self.preferences.default_permission_mode;
         let permission = column()
@@ -440,6 +491,14 @@ impl WorkspaceView {
             .track_focus(&self.default_permission_focus)
             .on_key_down(cx.listener(Self::on_default_permission_key))
             .relative()
+            .child(
+                canvas(
+                    move |bounds, _, _| permission_bounds_measure.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(
                 s::button("settings-default-permission", selected.label())
                     .w(px(256.))
@@ -465,6 +524,18 @@ impl WorkspaceView {
                     deferred(
                         column()
                             .id("default-permission-options")
+                            .on_mouse_down_out(cx.listener(
+                                move |this, event: &MouseDownEvent, window, cx| {
+                                    if !permission_bounds
+                                        .get()
+                                        .is_some_and(|bounds| bounds.contains(&event.position))
+                                    {
+                                        this.default_permission_menu = false;
+                                        window.focus(&this.default_permission_focus, cx);
+                                        cx.notify();
+                                    }
+                                },
+                            ))
                             .role(Role::ListBox)
                             .absolute()
                             .top_full()
@@ -510,12 +581,16 @@ impl WorkspaceView {
                     .priority(1),
                 )
             });
+        let description = provider
+            .and_then(|id| self.providers.iter().find(|provider| provider["id"] == id))
+            .and_then(|provider| provider["name"].as_str())
+            .map(|name| format!("Model for new chats · {name}"))
+            .unwrap_or_else(|| "Model for new chats.".into());
         let card = s::card()
-            .child(s::setting_row(true).child(s::details("Default model", "Model for new chats.")).child(trigger))
+            .child(s::setting_row(true).child(s::details("Default model", description)).child(trigger))
             .child(s::setting_row(false).child(s::details("Default permission mode", "How new chats handle tool calls. Each chat can override this from the composer.")).child(permission));
-        column().relative()
+        column()
             .child(s::frame().child(s::header("Chat defaults", "These choices apply when you start a new chat. You can still change either one from the composer.")).child(card))
-            .when(self.model_picker,|view|view.child(self.composer_picker(cx)))
             .into_any_element()
     }
     fn on_default_permission_key(
