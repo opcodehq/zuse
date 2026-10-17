@@ -711,7 +711,8 @@ impl WorkspaceView {
                             .find(|chat| chat["id"] == selected["id"])
                             .cloned()
                         {
-                            let recovery_changed = chat["deviceId"] != selected["deviceId"]
+                            let host_changed = chat["deviceId"] != selected["deviceId"];
+                            let recovery_changed = host_changed
                                 || chat["harnessSessionId"] != selected["harnessSessionId"];
                             if chat["config"]["sandbox"] != selected["config"]["sandbox"]
                                 || self.access_unconfirmed.as_deref() == chat["id"].as_str()
@@ -724,6 +725,9 @@ impl WorkspaceView {
                                 self.access_unconfirmed = None;
                             }
                             self.selected = Some(chat);
+                            if host_changed {
+                                self.rebind_chat_host(cx);
+                            }
                             if recovery_changed {
                                 self.reset_recovery(cx);
                             }

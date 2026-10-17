@@ -162,6 +162,7 @@ impl WorkspaceView {
         cx.notify();
     }
     pub(super) fn interrupt_queue_edit(&mut self, cx: &mut Context<Self>) {
+        let mut request = None;
         if let Some(edit) = self.queue_edit.as_mut() {
             edit.finish_failed |= edit.pending.as_ref().is_some_and(|pending| {
                 matches!(
@@ -169,9 +170,12 @@ impl WorkspaceView {
                     EditOp::Commit | EditOp::Cancel | EditOp::Discard
                 )
             });
-            edit.pending = None;
+            request = edit.pending.take().map(|pending| pending.id);
             edit.uncertain = true;
             cx.notify();
+        }
+        if let Some(id) = request {
+            self.cancel(id);
         }
     }
     fn queue_edit_copy(&self, cx: &App) -> Draft {

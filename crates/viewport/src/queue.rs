@@ -106,16 +106,55 @@ impl WorkspaceView {
         if let Some(id) = chat["id"].as_str() {
             self.queue_unconfirmed.insert(id.to_owned());
         }
-        if !self.connected
-            || !self.selected.as_ref().is_some_and(|selected| {
-                selected["id"] == chat["id"] && selected["deviceId"] == chat["deviceId"]
-            })
-        {
+        if !self.connected {
             return;
         }
+        // An editor can retain the previous host after a handoff. Read from the
+        // current chat authority; never send its old lease to the new host.
+        let Some(chat) = self
+            .selected
+            .clone()
+            .filter(|selected| selected["id"] == chat["id"])
+        else {
+            return;
+        };
         if let Some(watch) = self.queue_watch.take() {
             self.cancel(watch);
         }
-        self.queue_watch = Some(self.call(methods::WATCH_QUEUE, chat_request(chat, json!({}))));
+        self.queue_watch = Some(self.call(methods::WATCH_QUEUE, chat_request(&chat, json!({}))));
+    }
+    pub(super) fn rebind_chat_host(&mut self, cx: &mut Context<Self>) {
+        let Some(chat) = self.selected.clone() else {
+            return;
+        };
+        let requests = self
+            .queue_actions
+            .iter()
+            .filter(|(_, action)| chat["id"] == action.chat)
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        for id in requests {
+            self.queue_actions.remove(&id);
+            self.cancel(id);
+        }
+        self.interrupt_queue_edit(cx);
+        if let Some(watch) = self.transcript_watch.take() {
+            self.cancel(watch);
+        }
+        // Until the new snapshot arrives, old approval cards must not submit
+        // answers to a different host. Canceled subscription frames are ignored.
+        self.messages.clear();
+        self.queue.clear();
+        let inputs = self.input_pending.keys().copied().collect::<Vec<_>>();
+        for id in inputs {
+            self.cancel(id);
+        }
+        self.reset_inputs(cx);
+        self.reset_tool_results();
+        self.reset_previews(cx);
+        self.refresh_queue_snapshot(&chat);
+        self.transcript_watch =
+            Some(self.call(methods::WATCH_DOC_MESSAGES, chat_request(&chat, json!({}))));
+        self.connection_notice = Some("This chat moved to another computer. Its queue and transcript are refreshing. Check any action already sent before trying it again.".into());
     }
 }
