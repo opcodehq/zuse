@@ -29,3 +29,5 @@ Native/browser startup, packaging and integration commands will be documented as
 ## License
 
 AGPL-3.0-only. Adapted third-party source retains its applicable attribution and license in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+The pinned toolkit repository is private. CI needs a `ZKIT_READ_TOKEN` Actions secret with read-only access to `opcodehq/zkit`; the default repository token cannot fetch another private repository. Developer builds use the developer's normal Git credentials.

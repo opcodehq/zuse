@@ -10,6 +10,11 @@ zuse-protocol.workspace = true
 zuse-model.workspace = true
 uuid = { workspace = true, features = ["js"] }
 gpui.workspace = true
+gpui-base.workspace = true
 futures.workspace = true
 serde_json.workspace = true
 unicode-segmentation.workspace = true
+
+base64 = "0.22"
+vt100 = "0.15"
+zuse-markdown.workspace = true

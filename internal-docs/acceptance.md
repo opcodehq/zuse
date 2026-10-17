@@ -13,11 +13,11 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 | Durable queues and steering | source | Reconcile with current Zuse queue/error/recovery semantics |
 | Executor v2 plugins | pending | Implement hosted service client and per-session tool gateway |
 | Voice, interactive visuals, appearance | source | Native platform and browser capability integration pending |
-| GPUI Web/WASM | compiled | Initial WASM build passed; browser shell renders and connects to the local engine; keyboard and text insertion fixes verified with a live Claude turn; full integration pending |
+| GPUI Web/WASM | compiled | Shared editing engine, denser shell, project picker, file browsing/editing, queue controls, model picker, account usage, and PTY pane now compile for WASM. Earlier chat smoke passed; the expanded flows still need runtime acceptance. |
 | Shared transcript model | verified | 30 reconciliation/folding tests passed |
-| Browser authentication boundary | verified | 3 origin/cookie isolation tests passed |
+| Browser authentication boundary | verified | 5 tests passed: origin/cookie isolation, foreign-origin upload rejection, and byte-preserving chunked uploads |
 | Localhost and LAN serving | compiled | Running engine serves authenticated HTTP/WebSocket sessions; LAN TLS remains pending |
-| Owned GPU toolkit | source | Independent `opcodehq/zkit` snapshot published; pinned Git dependency passes browser build; component cleanup underway |
+| Owned GPU toolkit | compiled | Independent `opcodehq/zkit` snapshot published; pinned Git dependency passes browser build; component cleanup underway |
 | Pairing and encrypted relay | pending | Rust relay and native/browser client integration |
 | Fresh profile and local persistence | source | Separate native paths and crash recovery validation |
 | macOS packaging and native acceptance | pending | Actual Mac build and runtime evidence required |
@@ -32,3 +32,7 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 - Browser runtime exposed an application-owner lifetime bug; the entrypoint now retains its embedded application handle. A real GPU canvas renders the shell and connects to the local engine. Keyboard testing exposed missing GPUI composer focus and browser text-event routing. Both are fixed; a fresh typed prompt produced the exact requested Claude response through the running engine. Uploads and complete browser workflows remain pending. The current browser layout is an integration scaffold; visual parity with the native UI is not accepted.
 
 - Zkit browser text handling verified with both physical key events and browser text insertion. The first complete typed prompt is preserved, and Claude returned `ZUSE_INPUT_OK`. Toolkit fix published in `6823c76`.
+
+- Workspace integration milestone: WASM build passed against the published Zkit Git pin, including its existing multiline editor and code editor. Browser server binary builds. Five browser boundary/upload tests pass. The shared editor replaces the scaffold input implementation rather than duplicating its editing behavior.
+- The expanded browser shell renders and connects to the local engine. File editing uses expected checkout/content hashes and retains edits on conflicts. Queue actions use the engine's durable queue. Complete visual and runtime workflow acceptance remains pending.
+- GitHub CI cannot currently fetch the private Zkit dependency with the default repository token. Authentication setup is included; an Actions secret named `ZKIT_READ_TOKEN`, scoped to read `opcodehq/zkit`, is required before remote native checks can run. No CI pass is claimed.

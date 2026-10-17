@@ -16,6 +16,8 @@ serde_json.workspace = true
 uuid.workspace = true
 subtle.workspace = true
 anyhow.workspace = true
+base64 = "0.22"
+zuse-protocol.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true

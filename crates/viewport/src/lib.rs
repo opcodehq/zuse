@@ -1,6 +1,9 @@
 //! Browser-compatible GPUI views. Native process/filesystem access stays behind RPC.
 
+pub mod assets;
 pub mod input;
+mod shell;
+mod workspace;
 
 use futures::{
     StreamExt,
@@ -12,11 +15,18 @@ use std::collections::HashMap;
 use zuse_model::{SessionMessageEntry, TranscriptUpdate, apply_transcript_frame};
 use zuse_protocol::methods;
 
-actions!(zuse_client, [Submit]);
+actions!(zuse_client, [Submit, SaveFile]);
 
 pub struct Transport {
     pub requests: UnboundedSender<Value>,
     pub events: UnboundedReceiver<Value>,
+}
+
+#[derive(Clone, Default)]
+struct Draft {
+    text: String,
+    attachments: Vec<Value>,
+    key: String,
 }
 
 pub struct WorkspaceView {
@@ -35,14 +45,68 @@ pub struct WorkspaceView {
     show_archive: bool,
     settings: bool,
     provider_index: usize,
-    send_draft: HashMap<u64, String>,
+    send_draft: HashMap<u64, Draft>,
+    drafts: HashMap<String, Draft>,
     creating: Option<(u64, Value, Value)>,
+    queue: Vec<Value>,
+    queue_watch: Option<u64>,
+    sessions: Vec<Value>,
+    repos: Vec<Value>,
+    project: Option<Value>,
+    project_picker: bool,
+    project_input: Entity<input::TextInput>,
+    right_open: bool,
+    right_tab: String,
+    directory: String,
+    entries: Vec<Value>,
+    directory_request: Option<u64>,
+    file_request: Option<u64>,
+    open_file: Option<Value>,
+    file_editor: Entity<input::TextInput>,
+    save_request: Option<(u64, String)>,
+    accounts: Value,
+    models: Vec<Value>,
+    model: Option<String>,
+    model_picker: bool,
+    terminal_id: Option<String>,
+    terminal_watch: Option<u64>,
+    terminal_text: String,
+    terminal: vt100::Parser,
+    terminal_input: Entity<input::TextInput>,
+    changes: Value,
+    changes_request: Option<u64>,
+    attachments: Vec<Value>,
+    uploading: usize,
+    composer_generation: u64,
     _reader: Task<()>,
 }
 
 impl WorkspaceView {
-    pub fn new(transport: Transport, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| input::TextInput::new("Ask Zuse to work on something…", cx));
+    pub fn new(transport: Transport, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let input = cx.new(|cx| input::TextInput::multiline("Do anything…", window, cx));
+        let project_input =
+            cx.new(|cx| input::TextInput::new("Absolute project path on this machine", window, cx));
+        let terminal_input = cx.new(|cx| input::TextInput::new("Run a command…", window, cx));
+        cx.subscribe_in(
+            &input,
+            window,
+            |this, _, _: &input::Submitted, window, cx| this.submit(&Submit, window, cx),
+        )
+        .detach();
+        cx.subscribe_in(
+            &project_input,
+            window,
+            |this, _, _: &input::Submitted, _, cx| this.add_project(cx),
+        )
+        .detach();
+        cx.subscribe_in(
+            &terminal_input,
+            window,
+            |this, _, _: &input::Submitted, _, cx| this.run_terminal_command(cx),
+        )
+        .detach();
+        let file_editor = cx.new(|cx| input::TextInput::code(window, cx));
+        cx.observe(&file_editor, |_, _, cx| cx.notify()).detach();
         let mut events = transport.events;
         let reader = cx.spawn(async move |this, cx| {
             while let Some(frame) = events.next().await {
@@ -72,12 +136,45 @@ impl WorkspaceView {
             settings: false,
             provider_index: 0,
             send_draft: HashMap::new(),
+            drafts: HashMap::new(),
             creating: None,
+            queue: vec![],
+            queue_watch: None,
+            sessions: vec![],
+            repos: vec![],
+            project: None,
+            project_picker: false,
+            project_input,
+            right_open: true,
+            right_tab: "files".into(),
+            directory: String::new(),
+            entries: vec![],
+            directory_request: None,
+            file_request: None,
+            open_file: None,
+            file_editor,
+            save_request: None,
+            accounts: Value::Null,
+            models: vec![],
+            model: None,
+            model_picker: false,
+            terminal_id: None,
+            terminal_watch: None,
+            terminal_text: String::new(),
+            terminal: vt100::Parser::new(28, 80, 2000),
+            terminal_input,
+            changes: Value::Null,
+            changes_request: None,
+            attachments: vec![],
+            uploading: 0,
+            composer_generation: 0,
             _reader: reader,
         };
         view.call(methods::LOCAL_DEVICE, json!({}));
         view.call(methods::LIST_HARNESSES, json!({}));
         view.call(methods::WATCH_CHATS, json!({}));
+        view.call(methods::WATCH_SESSIONS, json!({}));
+        view.call(methods::LIST_REPOS, json!({}));
         view
     }
 
@@ -101,6 +198,26 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
+        if frame.get("attachment").is_some() || frame.get("uploading").is_some() {
+            if frame["generation"].as_u64() != Some(self.composer_generation) {
+                return;
+            }
+        }
+        if frame.get("attachment").is_some() {
+            self.uploading = self.uploading.saturating_sub(1);
+            if let Some(error) = frame["attachment"]["error"].as_str() {
+                self.error = Some(error.to_owned());
+            } else {
+                self.attachments.push(frame["attachment"].clone());
+            }
+            cx.notify();
+            return;
+        }
+        if frame.get("uploading").is_some() {
+            self.uploading += frame["uploading"].as_u64().unwrap_or(0) as usize;
+            cx.notify();
+            return;
+        }
         let Some(id) = frame.get("id").and_then(Value::as_u64) else {
             return;
         };
@@ -108,12 +225,16 @@ impl WorkspaceView {
         if let Some(error) = frame.get("err").and_then(Value::as_str) {
             self.error = Some(error.into());
             if let Some(draft) = self.send_draft.remove(&id) {
-                if self.input.read(cx).value().is_empty() {
-                    self.input
-                        .update(cx, |input, cx| input.set_value(draft, cx));
-                }
+                self.restore_failed_draft(draft, cx);
             }
             self.pending.remove(&id);
+            if self
+                .save_request
+                .as_ref()
+                .is_some_and(|(request, _)| *request == id)
+            {
+                self.save_request = None;
+            }
             if self
                 .creating
                 .as_ref()
@@ -132,8 +253,9 @@ impl WorkspaceView {
         {
             let (_, chat, command) = self.creating.take().unwrap();
             self.pending.remove(&id);
-            let draft = self.send_draft.remove(&id).unwrap_or_default();
+            let mut draft = self.send_draft.remove(&id).unwrap_or_default();
             self.select(chat.clone(), cx);
+            draft.key = chat["id"].as_str().unwrap_or_default().into();
             let send = self.call(
                 methods::QUEUE_COMMAND,
                 json!({"chatId":chat["id"],"command":command}),
@@ -161,7 +283,78 @@ impl WorkspaceView {
                         .filter(|p| p["id"] != "mock")
                         .collect()
                 }
-                methods::WATCH_CHATS => self.chats = value.as_array().cloned().unwrap_or_default(),
+                methods::WATCH_CHATS => {
+                    self.chats = value.as_array().cloned().unwrap_or_default();
+                    if let Some(selected) = &self.selected {
+                        if let Some(chat) =
+                            self.chats.iter().find(|chat| chat["id"] == selected["id"])
+                        {
+                            self.selected = Some(chat.clone());
+                        }
+                    }
+                }
+                methods::WATCH_SESSIONS => {
+                    self.sessions = value.as_array().cloned().unwrap_or_default()
+                }
+                methods::LIST_REPOS => self.repos = value.as_array().cloned().unwrap_or_default(),
+                methods::ADD_REPO => {
+                    self.project = Some(value.clone());
+                    self.project_picker = false;
+                    self.call(methods::LIST_REPOS, json!({}));
+                }
+                methods::LIST_MODELS => self.models = value.as_array().cloned().unwrap_or_default(),
+                methods::LIST_AGENT_ACCOUNTS => self.accounts = value.clone(),
+                methods::WATCH_QUEUE if self.queue_watch == Some(id) => {
+                    self.queue = value["items"].as_array().cloned().unwrap_or_default()
+                }
+                methods::LIST_WORKSPACE_DIRECTORY if self.directory_request == Some(id) => {
+                    self.directory = value["directory"].as_str().unwrap_or_default().into();
+                    self.entries = value["entries"].as_array().cloned().unwrap_or_default();
+                }
+                methods::READ_WORKSPACE_FILE if self.file_request == Some(id) => {
+                    let text = value["text"].as_str().unwrap_or_default().to_owned();
+                    self.file_editor.update(cx, |input, cx| {
+                        input.set_readonly(
+                            value["readOnlyReason"].is_string() || value["truncated"] == true,
+                            cx,
+                        );
+                        input.set_value(text, cx);
+                    });
+                    self.open_file = Some(value.clone());
+                }
+                methods::WRITE_WORKSPACE_FILE
+                    if self
+                        .save_request
+                        .as_ref()
+                        .is_some_and(|(request, _)| *request == id) =>
+                {
+                    let (_, text) = self.save_request.take().unwrap();
+                    if value["status"] == "written" {
+                        if let Some(file) = &mut self.open_file {
+                            file["contentHash"] = value["file"]["contentHash"].clone();
+                            file["text"] = json!(text);
+                        }
+                    } else {
+                        self.error=Some("This file changed on disk. Reload it before saving; your edits are still in the editor.".into());
+                    }
+                }
+                methods::GET_CHECKOUT_DIFF if self.changes_request == Some(id) => {
+                    self.changes = value.clone()
+                }
+                methods::OPEN_TERMINAL => {
+                    if let Some(terminal) = value["id"].as_str() {
+                        self.terminal_id = Some(terminal.into());
+                        let watch =
+                            self.call(methods::SUBSCRIBE_TERMINAL, json!({"terminalId":terminal}));
+                        self.terminal_watch = Some(watch);
+                    }
+                }
+                methods::SUBSCRIBE_TERMINAL if self.terminal_watch == Some(id) => {
+                    self.receive_terminal(value)
+                }
+                methods::QUEUE_MESSAGE => {
+                    self.send_draft.remove(&id);
+                }
                 methods::WATCH_DOC_MESSAGES if self.transcript_watch == Some(id) => {
                     match serde_json::from_value::<TranscriptUpdate>(value.clone()) {
                         Ok(update) => {
@@ -190,33 +383,86 @@ impl WorkspaceView {
     }
 
     fn select(&mut self, chat: Value, cx: &mut Context<Self>) {
+        if self.file_dirty(cx) {
+            self.error = Some("Save or discard file edits before switching sessions.".into());
+            cx.notify();
+            return;
+        }
+        self.stash_draft(cx);
+        self.composer_generation += 1;
+        self.attachments.clear();
+        self.uploading = 0;
         if let Some(id) = self.transcript_watch.take() {
             let _ = self.requests.unbounded_send(json!({"id":id,"cancel":true}));
             self.pending.remove(&id);
         }
+        self.clear_workspace();
+        let queue_watch = self.call(methods::WATCH_QUEUE, json!({"chatId":chat["id"]}));
+        self.queue_watch = Some(queue_watch);
         let id = self.call(methods::WATCH_DOC_MESSAGES, json!({"chatId":chat["id"]}));
         self.transcript_watch = Some(id);
         self.messages.clear();
         self.selected = Some(chat);
+        self.restore_draft(cx);
+        if let Some(chat) = &self.selected {
+            if let Some(harness) = chat["config"]["harness"].as_str() {
+                if let Some(index) = self.providers.iter().position(|p| p["id"] == harness) {
+                    self.provider_index = index;
+                }
+            }
+            self.model = chat["config"]["model"].as_str().map(str::to_owned);
+        }
+        self.load_directory("");
         self.settings = false;
         self.error = None;
         cx.notify();
     }
 
     fn new_chat(&mut self, cx: &mut Context<Self>) {
+        if self.file_dirty(cx) {
+            self.error = Some("Save or discard file edits before starting another session.".into());
+            cx.notify();
+            return;
+        }
+        self.stash_draft(cx);
+        self.composer_generation += 1;
+        self.attachments.clear();
+        self.uploading = 0;
+        if let Some(id) = self.transcript_watch.take() {
+            self.cancel(id);
+        }
+        self.clear_workspace();
         self.selected = None;
         self.messages.clear();
         self.settings = false;
-        self.input
-            .update(cx, |input, cx| input.set_value(String::new(), cx));
+        self.restore_draft(cx);
         cx.notify();
     }
 
-    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
-        if self.creating.is_some() {
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.project_picker
+            && self
+                .project_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        {
+            self.add_project(cx);
             return;
         }
-        let text = self.input.read(cx).value();
+        if self
+            .terminal_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            self.run_terminal_command(cx);
+            return;
+        }
+        if self.creating.is_some() || self.uploading > 0 {
+            return;
+        }
+        let text = self.input.read(cx).value(cx);
         if text.trim().is_empty() {
             return;
         }
@@ -238,7 +484,23 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
-        let command = json!({"kind":"run","messageId":uuid::Uuid::new_v4().to_string(),"request":{"prompt":text,"harness":provider["id"],"model":null,"reasoning":null,"cwd":"","sandbox":"workspace-write","resume":null}});
+        let draft = Draft {
+            text: text.clone(),
+            attachments: self.attachments.clone(),
+            key: self.draft_key(),
+        };
+        self.drafts.remove(&draft.key);
+        if self.is_working() {
+            let chat = self.selected.as_ref().unwrap();
+            let id = self.call(methods::QUEUE_MESSAGE, json!({"chatId":chat["id"], "text":text, "holdForTurnEnd":true, "attachments":self.attachment_paths()}));
+            self.send_draft.insert(id, draft);
+            self.input
+                .update(cx, |input, cx| input.set_value(String::new(), cx));
+            self.attachments.clear();
+            cx.notify();
+            return;
+        }
+        let command = json!({"kind":"run","messageId":uuid::Uuid::new_v4().to_string(),"request":{"prompt":text,"harness":provider["id"],"model":self.model,"reasoning":null,"cwd":self.cwd(),"sandbox":"workspace-write","resume":null,"attachments":self.attachment_paths()}});
         let send = if let Some(chat) = &self.selected {
             self.call(
                 methods::QUEUE_COMMAND,
@@ -247,310 +509,32 @@ impl WorkspaceView {
         } else {
             // IDs are client-owned, allowing the durable send to refer to the same chat.
             let id = uuid::Uuid::new_v4().to_string();
-            let request = self.call(methods::MUTATE, json!({"op":"createChat","chatId":id,"deviceId":device,"config":{"harness":provider["id"],"model":null,"reasoning":null,"sandbox":"workspace-write"}}));
-            let chat = json!({"id":id,"title":text.chars().take(70).collect::<String>(),"deviceId":device});
+            let request = self.call(methods::MUTATE, json!({"op":"createChat","chatId":id,"deviceId":device,"cwd":self.project.as_ref().and_then(|p|p["path"].as_str()),"config":{"harness":provider["id"],"model":self.model,"reasoning":null,"sandbox":"workspace-write"}}));
+            let chat = json!({"id":id,"title":text.chars().take(70).collect::<String>(),"deviceId":device,"cwd":self.cwd()});
             self.creating = Some((request, chat, command));
             request
         };
-        self.send_draft.insert(send, text);
+        self.attachments.clear();
+        self.send_draft.insert(send, draft);
         self.input
             .update(cx, |input, cx| input.set_value(String::new(), cx));
         self.error = None;
         cx.notify();
     }
-
-    fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-        div()
-            .id(id)
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .cursor_pointer()
-            .text_sm()
-            .text_color(rgb(0xc6c6cc))
-            .hover(|s| s.bg(rgb(0x29292e)))
-            .child(label.into())
-    }
-}
-
-impl Render for WorkspaceView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let chats = self
-            .chats
-            .iter()
-            .filter(|chat| chat["archived"].as_bool().unwrap_or(false) == self.show_archive)
-            .cloned()
-            .collect::<Vec<_>>();
-        let sidebar = div()
-            .w(px(244.))
-            .h_full()
-            .flex_shrink_0()
-            .bg(rgb(0x101012))
-            .p_3()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .px_3()
-                    .py_3()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_lg()
-                    .child("zuse"),
-            )
-            .child(
-                Self::button("new-chat", "+ New thread")
-                    .on_click(cx.listener(|this, _, _, cx| this.new_chat(cx))),
-            )
-            .child(
-                Self::button(
-                    "archive",
-                    if self.show_archive {
-                        "← Active threads"
-                    } else {
-                        "Archive"
-                    },
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.show_archive = !this.show_archive;
-                    cx.notify();
-                })),
-            )
-            .child(
-                div()
-                    .px_3()
-                    .mt_4()
-                    .mb_2()
-                    .text_xs()
-                    .text_color(rgb(0x777780))
-                    .child(if self.show_archive {
-                        "ARCHIVED"
-                    } else {
-                        "THREADS"
-                    }),
-            )
-            .child(
-                div()
-                    .id("threads")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .children(chats.into_iter().map(|chat| {
-                        let title = chat["title"]
-                            .as_str()
-                            .unwrap_or("Untitled thread")
-                            .to_owned();
-                        let id = chat["id"].as_str().unwrap_or_default().to_owned();
-                        Self::button(SharedString::from(id), SharedString::from(title)).on_click(
-                            cx.listener(move |this, _, _, cx| this.select(chat.clone(), cx)),
-                        )
-                    })),
-            )
-            .child(
-                Self::button("settings", "Settings").on_click(cx.listener(|this, _, _, cx| {
-                    this.settings = !this.settings;
-                    cx.notify();
-                })),
-            )
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .text_xs()
-                    .text_color(rgb(0x777780))
-                    .child(self.status.clone()),
-            );
-
-        let title = self
-            .selected
-            .as_ref()
-            .and_then(|c| c["title"].as_str())
-            .unwrap_or("New thread")
-            .to_owned();
-        let mut center = div().flex_1().min_w_0().h_full().flex().flex_col().child(
-            div()
-                .h(px(54.))
-                .px_6()
-                .flex()
-                .items_center()
-                .border_b_1()
-                .border_color(rgb(0x26262b))
-                .text_sm()
-                .child(title),
-        );
-        if self.settings {
-            center = center.child(div().id("settings-content").flex_1().overflow_y_scroll().p_8().flex().flex_col().gap_4()
-                .child(div().text_xl().child("Agent setup"))
-                .child(div().text_sm().text_color(rgb(0x96969f)).child("Agents run on the connected engine host. Installed CLI credentials stay on that machine."))
-                .children(self.providers.iter().enumerate().map(|(index,p)| {
-                    Self::button(("provider",index), SharedString::from(format!("{}  ·  {}",p["name"].as_str().unwrap_or("Agent"), if p["installed"] == true { "Installed" } else { "Not installed" })))
-                        .on_click(cx.listener(move |this, _, _, cx| { this.provider_index = index; this.settings = false; cx.notify(); }))
-                })));
-        } else {
-            let timeline = div()
-                .id("transcript")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .px_8()
-                .py_6()
-                .flex()
-                .flex_col()
-                .gap_5()
-                .when(self.messages.is_empty(), |d| {
-                    d.child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .justify_center()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .text_2xl()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("What are we building?"),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(0x8a8a94))
-                                    .child("Your workspace. Your agents. One place to work."),
-                            ),
-                    )
-                })
-                .children(self.messages.iter().enumerate().map(|(index, message)| {
-                    let message = serde_json::to_value(message).unwrap_or(Value::Null);
-                    let parts = message
-                        .get("parts")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default();
-                    div()
-                        .id(("message", index))
-                        .w_full()
-                        .max_w(px(800.))
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(0x888892))
-                                .child(message["role"].as_str().unwrap_or("assistant").to_owned()),
-                        )
-                        .children(parts.into_iter().filter_map(|part| {
-                            part.get("text")
-                                .or_else(|| part.get("message"))
-                                .and_then(Value::as_str)
-                                .map(|s| div().text_sm().child(s.to_owned()))
-                        }))
-                }));
-            center = center
-                .child(timeline)
-                .when_some(self.error.clone(), |d, error| {
-                    d.child(
-                        div()
-                            .mx_6()
-                            .mb_2()
-                            .p_3()
-                            .rounded_md()
-                            .bg(rgb(0x392326))
-                            .text_sm()
-                            .text_color(rgb(0xf4a0a0))
-                            .child(error),
-                    )
-                })
-                .child(
-                    div()
-                        .mx_6()
-                        .mb_5()
-                        .p_3()
-                        .rounded_xl()
-                        .bg(rgb(0x202024))
-                        .border_1()
-                        .border_color(rgb(0x34343b))
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .child(self.input.clone())
-                        .child(
-                            div()
-                                .flex()
-                                .justify_between()
-                                .items_center()
-                                .child(
-                                    Self::button(
-                                        "provider-picker",
-                                        SharedString::from(
-                                            self.providers
-                                                .get(self.provider_index)
-                                                .and_then(|p| p["name"].as_str())
-                                                .unwrap_or("Choose an agent")
-                                                .to_owned(),
-                                        ),
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            this.settings = true;
-                                            cx.notify();
-                                        },
-                                    )),
-                                )
-                                .child(
-                                    Self::button("send", "Send ↑")
-                                        .bg(rgb(0xe3e3e8))
-                                        .text_color(rgb(0x171719))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.submit(&Submit, window, cx)
-                                        })),
-                                ),
-                        ),
-                );
-        }
-        div()
-            .key_context("Workspace")
-            .on_action(cx.listener(Self::submit))
-            .size_full()
-            .flex()
-            .bg(rgb(0x171719))
-            .text_color(rgb(0xe5e5ea))
-            .font_family("Geist")
-            .child(sidebar)
-            .child(center)
-            .child(
-                div()
-                    .w(px(260.))
-                    .flex_shrink_0()
-                    .h_full()
-                    .border_l_1()
-                    .border_color(rgb(0x26262b))
-                    .p_5()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(div().text_sm().child("Workspace"))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(0x85858e))
-                            .child("Files · Changes · Terminal"),
-                    )
-                    .child(
-                        div()
-                            .mt_3()
-                            .text_sm()
-                            .text_color(rgb(0x777780))
-                            .child("Select a project thread to inspect its workspace."),
-                    ),
-            )
-    }
 }
 
 pub fn initialize(cx: &mut App) {
     input::bind_keys(cx);
-    cx.bind_keys([KeyBinding::new("enter", Submit, Some("Workspace"))]);
+    cx.bind_keys([
+        KeyBinding::new("cmd-s", SaveFile, Some("Workspace")),
+        KeyBinding::new("ctrl-s", SaveFile, Some("Workspace")),
+    ]);
+
+    cx.text_system()
+        .add_fonts(vec![std::borrow::Cow::Borrowed(include_bytes!(
+            "../../ui/assets/fonts/GeistMono.ttf"
+        ))])
+        .expect("bundled monospace font");
     cx.text_system()
         .add_fonts(vec![std::borrow::Cow::Borrowed(include_bytes!(
             "../../ui/assets/fonts/Geist.ttf"

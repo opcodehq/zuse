@@ -2,11 +2,13 @@
 
 use axum::{
     Json, Router,
-    extract::{State, WebSocketUpgrade, ws::Message},
+    body::Body,
+    extract::{Query, State, WebSocketUpgrade, ws::Message},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::{path::PathBuf, sync::Arc};
@@ -36,8 +38,15 @@ impl BrowserServer {
             "browser access token must contain at least 32 characters"
         );
         if let Some(origin) = &public_origin {
+            let parsed: axum::http::Uri = origin.parse()?;
             anyhow::ensure!(
-                origin.starts_with("https://") && !origin.ends_with('/'),
+                parsed.scheme_str() == Some("https")
+                    && parsed
+                        .authority()
+                        .is_some_and(|a| !a.as_str().contains('@'))
+                    && parsed.path() == "/"
+                    && parsed.query().is_none()
+                    && !origin.ends_with('/'),
                 "public origin must be an HTTPS origin without a trailing slash"
             );
         }
@@ -64,6 +73,7 @@ impl BrowserServer {
             )
             .route("/api/session", post(unlock).delete(lock))
             .route("/api/rpc", get(socket))
+            .route("/api/attachments", post(upload))
             .fallback_service(
                 ServeDir::new(&assets).not_found_service(ServeFile::new(assets.join("index.html"))),
             )
@@ -283,5 +293,174 @@ mod tests {
         );
         assert!(server.authorized(&headers));
         assert!(!server.valid_origin(&headers));
+    }
+}
+
+#[derive(Deserialize)]
+struct UploadName {
+    name: String,
+}
+
+/// Raw file bytes are staged through the same bounded upload ledger as native
+/// clients. Keep chunks aligned so concatenating their base64 is lossless.
+async fn upload(
+    State(server): State<BrowserServer>,
+    Query(input): Query<UploadName>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    use zuse_protocol::methods;
+    if !server.authorized(&headers) || !server.valid_origin(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if input.name.is_empty() || input.name.len() > 1024 {
+        return (StatusCode::BAD_REQUEST, "Invalid filename").into_response();
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut data = body.into_data_stream();
+    let mut carry = Vec::new();
+    let mut total = 0usize;
+    let mut seq = 0u64;
+    while let Some(chunk) = data.next().await {
+        let Ok(chunk) = chunk else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        total = total.saturating_add(chunk.len());
+        if total > 32 * 1024 * 1024 {
+            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        }
+        carry.extend_from_slice(&chunk);
+        while carry.len() >= 196608 {
+            let bytes = carry.drain(..196608).collect::<Vec<_>>();
+            if server
+                .service
+                .handle(
+                    methods::UPLOAD_CHUNK,
+                    serde_json::json!({"uploadId":id,"data":STANDARD.encode(bytes),"seq":seq}),
+                )
+                .await
+                .is_err()
+            {
+                return (StatusCode::BAD_GATEWAY, "Upload failed").into_response();
+            }
+            seq += 1;
+        }
+    }
+    if !carry.is_empty() || seq == 0 {
+        if server
+            .service
+            .handle(
+                methods::UPLOAD_CHUNK,
+                serde_json::json!({"uploadId":id,"data":STANDARD.encode(carry),"seq":seq}),
+            )
+            .await
+            .is_err()
+        {
+            return (StatusCode::BAD_GATEWAY, "Upload failed").into_response();
+        }
+    }
+    match server
+        .service
+        .handle(
+            methods::UPLOAD_COMMIT,
+            serde_json::json!({"uploadId":id,"fileName":input.name}),
+        )
+        .await
+    {
+        Ok(zuse_rpc::RpcReply::Value(value)) => Json(value).into_response(),
+        _ => (StatusCode::BAD_GATEWAY, "Could not commit attachment").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use axum::http::Request;
+    use std::sync::Mutex;
+    use tower::ServiceExt;
+    use zuse_rpc::{RpcError, RpcReply};
+
+    #[derive(Default)]
+    struct UploadLedger {
+        chunks: Mutex<Vec<(u64, String)>>,
+        committed: Mutex<Option<Vec<u8>>>,
+    }
+    #[async_trait]
+    impl RpcService for UploadLedger {
+        async fn handle(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<RpcReply, RpcError> {
+            match method {
+                zuse_protocol::methods::UPLOAD_CHUNK => {
+                    self.chunks.lock().unwrap().push((
+                        params["seq"].as_u64().unwrap(),
+                        params["data"].as_str().unwrap().into(),
+                    ));
+                    RpcReply::value(&serde_json::json!({"ok":true}))
+                }
+                zuse_protocol::methods::UPLOAD_COMMIT => {
+                    let mut chunks = self.chunks.lock().unwrap().clone();
+                    chunks.sort_by_key(|(seq, _)| *seq);
+                    let encoded = chunks.into_iter().map(|(_, data)| data).collect::<String>();
+                    *self.committed.lock().unwrap() = Some(STANDARD.decode(encoded).unwrap());
+                    RpcReply::value(&serde_json::json!({"path":"uploads/fixture/image.png"}))
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_upload_preserves_bytes_across_arbitrary_http_chunks() {
+        let ledger = Arc::new(UploadLedger::default());
+        let server = BrowserServer::new(ledger.clone(), "a".repeat(64), None).unwrap();
+        let bytes = (0..500_003).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+        let chunks = bytes
+            .chunks(100_001)
+            .map(|c| Ok::<_, std::io::Error>(c.to_vec()))
+            .collect::<Vec<_>>();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/attachments?name=image.png")
+            .header("host", "127.0.0.1:27656")
+            .header("origin", "http://127.0.0.1:27656")
+            .header("cookie", format!("zuse_session={}", "a".repeat(64)))
+            .body(Body::from_stream(futures::stream::iter(chunks)))
+            .unwrap();
+        let response = server
+            .router(PathBuf::new())
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            ledger.committed.lock().unwrap().as_deref(),
+            Some(bytes.as_slice())
+        );
+    }
+
+    #[tokio::test]
+    async fn foreign_origin_upload_cannot_write_to_the_engine() {
+        let ledger = Arc::new(UploadLedger::default());
+        let server = BrowserServer::new(ledger.clone(), "a".repeat(64), None).unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/attachments?name=payload.txt")
+            .header("host", "127.0.0.1:27656")
+            .header("origin", "https://foreign.example")
+            .header("cookie", format!("zuse_session={}", "a".repeat(64)))
+            .body(Body::from("untrusted content"))
+            .unwrap();
+        let response = server
+            .router(PathBuf::new())
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(ledger.chunks.lock().unwrap().is_empty());
+        assert!(ledger.committed.lock().unwrap().is_none());
     }
 }
