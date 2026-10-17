@@ -683,6 +683,7 @@ enum MutateParams {
 
 #[derive(Clone)]
 pub struct EngineRpc {
+    model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
     plugins: Option<crate::plugins::Plugins>,
     voice: crate::voice::VoiceManager,
@@ -733,6 +734,7 @@ impl EngineRpc {
         };
         let github = GitHubCli::new().with_store(repos.data_dir());
         Self {
+            model_connections: None,
             account: None,
             plugins: None,
             voice: sessions.voice_manager(),
@@ -757,6 +759,14 @@ impl EngineRpc {
             local_import: None,
             engine_info,
         }
+    }
+
+    pub fn with_model_connections(
+        mut self,
+        connections: crate::model_connections::ModelConnections,
+    ) -> Self {
+        self.model_connections = Some(connections);
+        self
     }
 
     pub fn with_account(
@@ -1906,6 +1916,69 @@ impl RpcService for EngineRpc {
                 .await;
         }
         match method {
+            methods::MODEL_CONNECTIONS => {
+                let service = self.model_connections.as_ref().ok_or_else(|| {
+                    RpcError::Failed("Model account service is unavailable.".into())
+                })?;
+                RpcReply::value(&service.status().await)
+            }
+            methods::MODEL_CONNECT => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    connection_id: Option<String>,
+                    provider: Option<zuse_model_accounts::Provider>,
+                    storage: Option<String>,
+                }
+                let p: P = parse_params(params)?;
+                let service = self.model_connections.as_ref().ok_or_else(|| {
+                    RpcError::Failed("Model account service is unavailable.".into())
+                })?;
+                let stream = service
+                    .connect(
+                        p.connection_id,
+                        p.provider.unwrap_or(zuse_model_accounts::Provider::Chatgpt),
+                        p.storage.as_deref().unwrap_or("local"),
+                    )
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                Ok(RpcReply::Stream(stream))
+            }
+            methods::MODEL_RENAME
+            | methods::MODEL_PREFERRED
+            | methods::MODEL_DISCONNECT
+            | methods::MODEL_ACKNOWLEDGE_PLAN
+            | methods::MODEL_CANCEL_LOGIN => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    connection_id: String,
+                    name: Option<String>,
+                }
+                let p: P = parse_params(params)?;
+                let service = self.model_connections.as_ref().ok_or_else(|| {
+                    RpcError::Failed("Model account service is unavailable.".into())
+                })?;
+                let result = match method {
+                    methods::MODEL_RENAME => {
+                        service
+                            .rename(&p.connection_id, p.name.as_deref().unwrap_or_default())
+                            .await
+                    }
+                    methods::MODEL_PREFERRED => service.preferred(&p.connection_id).await,
+                    methods::MODEL_ACKNOWLEDGE_PLAN => {
+                        service.acknowledge_plan(&p.connection_id).await
+                    }
+                    methods::MODEL_CANCEL_LOGIN => service.cancel_login(&p.connection_id).await,
+                    _ => {
+                        return RpcReply::value(
+                            &serde_json::json!({"revoked":service.disconnect(&p.connection_id).await.map_err(|e|RpcError::Failed(e.to_string()))?}),
+                        );
+                    }
+                };
+                result.map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok":true}))
+            }
             methods::CLOUD_ACCOUNT_STATUS => {
                 let account = self
                     .account

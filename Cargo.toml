@@ -33,6 +33,7 @@ members = [
     "crates/serve",
     "crates/plugins",
     "crates/harness",
+    "crates/model-accounts",
 ]
 
 [workspace.package]
@@ -43,6 +44,7 @@ publish = false
 
 [workspace.dependencies]
 zuse-harness = { path = "crates/harness" }
+zuse-model-accounts = { path = "crates/model-accounts" }
 zuse-voice-session = { path = "crates/voice-session" }
 zuse-orb = { path = "crates/orb" }
 zuse-veil = { path = "crates/veil" }

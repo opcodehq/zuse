@@ -31,6 +31,7 @@ mod http_error;
 pub mod instance_lock;
 pub mod local_import;
 mod model_catalogs;
+pub mod model_connections;
 mod plugin_callback;
 pub mod plugins;
 pub mod profile;
@@ -137,6 +138,7 @@ pub struct EngineConfig {
 /// and the in-process (headed) mode.
 pub struct EngineCore {
     pub account: account::Account,
+    pub model_connections: model_connections::ModelConnections,
     pub plugins: plugins::Plugins,
     pub sessions: SessionsEngine,
     pub doc_host: DocHost,
@@ -334,9 +336,12 @@ impl EngineCore {
         let spaces_sync = SpacesSync::start(repos.clone(), workspace.clone(), &device_id);
         let account =
             account::Account::open(data_dir).map_err(|e| EngineError::Other(e.to_string()))?;
+        let model_connections =
+            model_connections::ModelConnections::new(data_dir.to_path_buf(), account.clone());
         let plugins = plugins::Plugins::open(data_dir, account.clone(), workspace.clone())
             .map_err(|e| EngineError::Other(e.to_string()))?;
         Ok(Self {
+            model_connections,
             account,
             plugins,
             sessions,
@@ -486,6 +491,7 @@ impl EngineCore {
             self.agent_accounts.clone(),
             self.workspace_scope,
         )
+        .with_model_connections(self.model_connections.clone())
         .with_account(self.account.clone(), self.plugins.clone())
         .with_auth(self.auth())
         .with_previews(self.previews.clone())
@@ -519,6 +525,7 @@ impl EngineCore {
     /// snapshot.
     pub async fn shutdown(&self) {
         self.account.retire();
+        self.model_connections.retire().await;
         self.previews.shutdown().await;
         self.harness_updates.shutdown().await;
         // A run interruption transitions its chat to Idle, and Idle normally

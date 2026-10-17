@@ -49,3 +49,5 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 
 - CI run `39021451590` passed the Mac and Ubuntu native compile jobs, including the account/plugin Settings source. The browser job also passed. The engine test job remains in progress; native runtime and live hosted-plugin acceptance are still pending.
 - Rust harness component milestone: 13 Rust tests pass (9 runtime/recovery, 3 broker, 1 actual bundled-process fixture). SDK protocol fixtures also pass. This component is not yet a selectable application provider; full harness integration and live model/account acceptance remain pending.
+- CI run `39022923827` passed all jobs for the harness component milestone.
+- Model-account source milestone: encrypted local storage, account-scoped storage leases, ChatGPT browser OAuth, SuperGrok device authorization, refresh handling, metadata controls, and engine RPC integration compile with the server. Settings integration, focused account tests, and live authorization acceptance remain pending.

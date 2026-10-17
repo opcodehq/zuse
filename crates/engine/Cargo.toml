@@ -9,6 +9,7 @@ publish.workspace = true
 zuse-preview.workspace = true
 zuse-protocol.workspace = true
 zuse-plugins.workspace = true
+zuse-model-accounts.workspace = true
 zuse-doc.workspace = true
 zuse-sync.workspace = true
 zuse-providers.workspace = true

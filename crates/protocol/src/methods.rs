@@ -222,3 +222,12 @@ pub const CLOUD_ACCOUNT_SIGN_IN: &str = "CloudAccountSignIn";
 pub const CLOUD_ACCOUNT_SIGN_OUT: &str = "CloudAccountSignOut";
 pub const PLUGINS: &str = "Plugins";
 pub const PLUGIN_TOOLS: &str = "PluginTools";
+
+/// Public model connection metadata and sign-in controls; no credential read RPC.
+pub const MODEL_CONNECTIONS: &str = "ModelConnections";
+pub const MODEL_CONNECT: &str = "ModelConnect";
+pub const MODEL_RENAME: &str = "ModelConnectionRename";
+pub const MODEL_PREFERRED: &str = "ModelConnectionPreferred";
+pub const MODEL_DISCONNECT: &str = "ModelConnectionDisconnect";
+pub const MODEL_ACKNOWLEDGE_PLAN: &str = "ModelConnectionAcknowledgePlan";
+pub const MODEL_CANCEL_LOGIN: &str = "ModelConnectionCancelLogin";
