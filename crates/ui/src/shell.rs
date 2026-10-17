@@ -559,12 +559,12 @@ impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
     pub const ALL: [SettingsSection; 10] = [
         SettingsSection::General,
+        SettingsSection::Harnesses,
+        SettingsSection::Devices,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Voice,
         SettingsSection::Shortcuts,
-        SettingsSection::Harnesses,
-        SettingsSection::Devices,
         SettingsSection::Files,
         SettingsSection::Appshots,
         SettingsSection::Archived,
@@ -7838,15 +7838,31 @@ impl Shell {
             // Tab remains the explicit way to enter its navigation or content.
             window.focus(&self.settings_focus, cx);
         }
-        let sidebar_width = self.settings.sidebar_width;
-        // Dropdowns contain themselves to the page pane beside this column.
+        let sidebar_width = 208.0;
         settings::widgets::set_sidebar_width(sidebar_width, cx);
         let nav = self.render_settings_nav(section, &theme, window, cx);
-        // The footer uses the chat sidebar's theme so the account and
-        // settings buttons render identically in both places.
-        let footer_theme = Theme::of(cx).clone();
-        let footer = self.render_sidebar_footer_row(&footer_theme, cx);
         let outlet = self.settings_outlet(section, window, cx);
+        let back = div()
+            .id("settings-back")
+            .role(gpui::Role::Button)
+            .aria_label("Back to app")
+            .tab_index(0)
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .p(px(4.))
+            .rounded(px(4.))
+            .cursor_pointer()
+            .text_size(crate::typography::ui_rems(12.))
+            .text_color(theme.text_muted)
+            .hover(|style| {
+                style
+                    .bg(theme.settings_frame_bg().opacity(0.4))
+                    .text_color(theme.text)
+            })
+            .on_click(cx.listener(|this, _, _, cx| this.close_settings(cx)))
+            .child(icon(icons::ALT_ARROW_LEFT).size(px(14.)))
+            .child("Back to app");
         div()
             .id("settings-page")
             .role(gpui::Role::Group)
@@ -7856,74 +7872,67 @@ impl Shell {
             .tab_stop(false)
             .size_full()
             .flex()
-            .flex_row()
+            .flex_col()
+            .bg(theme.bg)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                let key = &event.keystroke.key;
-                if key == "escape" {
-                    if !this.dismiss_settings_escape_surface(cx) {
-                        this.close_settings(cx);
+                match event.keystroke.key.as_str() {
+                    "escape" => {
+                        if !this.dismiss_settings_escape_surface(cx) {
+                            this.close_settings(cx);
+                        }
+                        cx.stop_propagation();
                     }
-                    cx.stop_propagation();
-                } else if key == "tab" {
-                    move_settings_focus(
-                        &this.settings_focus,
-                        &this.settings_end_focus,
-                        event.keystroke.modifiers.shift,
-                        window,
-                        cx,
-                    );
-                    cx.stop_propagation();
+                    "tab" => {
+                        move_settings_focus(
+                            &this.settings_focus,
+                            &this.settings_end_focus,
+                            event.keystroke.modifiers.shift,
+                            window,
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    }
+                    _ => {}
                 }
             }))
             .child(
-                // Same width and footer wrapper as the chat sidebar, so the
-                // account controls hold their position across the swap.
                 div()
-                    .w(px(sidebar_width))
-                    .h_full()
+                    .h(px(36.))
                     .flex_none()
                     .flex()
-                    .flex_col()
-                    .pt(px(Theme::TITLEBAR_HEIGHT))
-                    .child(
-                        div().flex_none().px(px(Theme::SPACE_SM)).child(
-                            settings::widgets::section_tab(
-                                &theme,
-                                false,
-                                0.0,
-                                "settings-back",
-                                "settings-back-hover",
-                            )
-                            .role(gpui::Role::Button)
-                            .aria_label("Back")
-                            .tab_index(0)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent))
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, _, cx| this.close_settings(cx)))
-                            .child(icon(icons::ARROW_LEFT).size(px(16.0)).text_color(
-                                motion::hover_blend(
-                                    "settings-back-hover",
-                                    theme.text_muted,
-                                    theme.text,
-                                ),
-                            ))
-                            .child("Back"),
-                        ),
-                    )
-                    .child(div().flex_1().min_h_0().child(nav))
-                    .child(div().p(px(Theme::SPACE_SM)).flex_none().child(footer)),
+                    .items_center()
+                    .px(px(12.))
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(div().w(px(64.)).flex_none())
+                    .child(back)
+                    .child(div().flex_1()),
             )
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    // Pages scroll to the window's top edge; `page_column`
-                    // carries the titlebar clearance inside the scroll.
+                    .min_h_0()
                     .flex()
-                    .flex_col()
-                    .opacity(self.voice_stage_underlay_opacity(cx))
-                    .child(div().flex_1().min_h_0().child(outlet)),
+                    .child(
+                        div()
+                            .w(px(sidebar_width))
+                            .h_full()
+                            .flex_none()
+                            .border_r_1()
+                            .border_color(theme.border)
+                            .bg(theme.surface)
+                            .child(nav),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .opacity(self.voice_stage_underlay_opacity(cx))
+                            .child(outlet),
+                    ),
             )
             .child(
                 div()
@@ -7971,9 +7980,9 @@ impl Shell {
                 .child(
                     div()
                         .flex_none()
-                        .px(px(Theme::SPACE_SM))
-                        .pt(px(Theme::SPACE_MD))
-                        .pb(px(Theme::SPACE_SM))
+                        .px(px(10.))
+                        .pt(px(12.))
+                        .pb(px(12.))
                         .flex()
                         .flex_col()
                         .gap(px(2.0))
@@ -8007,7 +8016,6 @@ impl Shell {
                                         key.clone(),
                                         hover_key,
                                     )
-                                    .when(item.starts_nav_group(), |el| el.mt(px(Theme::SPACE_LG)))
                                     .role(gpui::Role::Tab)
                                     .aria_label(item.label())
                                     .aria_selected(selected)

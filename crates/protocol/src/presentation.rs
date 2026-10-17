@@ -18,10 +18,30 @@ pub struct ModelSelection {
     pub model: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AppearanceMode {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+impl AppearanceMode {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WorkspacePreferences {
     pub sidebar_view: SidebarView,
+    pub appearance: AppearanceMode,
     pub collapsed_projects: Vec<String>,
     pub default_provider: Option<String>,
     pub default_models: BTreeMap<String, String>,

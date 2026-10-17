@@ -5,7 +5,7 @@ use crate::shell::{
     BORDER, FAINT, MUTED, TEXT, column, control, icon_button, label, provider_icon, row,
 };
 use zuse_protocol::{Model, ReasoningLevel, presentation::ModelSelection};
-const ACCENT: u32 = 0xb4f327;
+const ACCENT: u32 = 0x89ca21;
 
 impl WorkspaceView {
     pub(super) fn save_preferences(&self) {
@@ -18,11 +18,9 @@ impl WorkspaceView {
             return;
         }
         if let Some(provider) = &self.preferences.default_provider {
-            if let Some(index) = self
-                .providers
-                .iter()
-                .position(|p| p["id"] == provider.as_str())
-            {
+            if let Some(index) = self.providers.iter().position(|p| {
+                p["id"] == provider.as_str() && p["enabled"] != false && p["installed"] != false
+            }) {
                 self.provider_index = index;
                 self.model = self.preferences.default_models.get(provider).cloned();
             }
@@ -42,6 +40,7 @@ impl WorkspaceView {
     }
     pub(super) fn open_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model_picker = !self.model_picker;
+        self.model_picker_default = false;
         self.agent_picker = false;
         self.access_picker = false;
         self.add_menu = false;
@@ -121,6 +120,20 @@ impl WorkspaceView {
         let Some(index) = self.providers.iter().position(|p| p["id"] == provider) else {
             return;
         };
+        if self.model_picker_default {
+            self.preferences.default_provider = Some(provider.clone());
+            if let Some(model) = model {
+                self.preferences
+                    .set_default(ModelSelection { provider, model });
+            } else {
+                self.preferences.default_models.remove(&provider);
+            }
+            self.save_preferences();
+            self.model_picker = false;
+            self.model_picker_default = false;
+            cx.notify();
+            return;
+        }
         self.provider_index = index;
         self.model = model.clone();
         self.reasoning = None;
@@ -144,7 +157,7 @@ impl WorkspaceView {
     ) -> AnyElement {
         let provider_id = provider.to_owned();
         let model_id = model.id.clone();
-        let active = self
+        let active_chat = self
             .providers
             .get(self.provider_index)
             .is_some_and(|p| p["id"] == provider)
@@ -152,6 +165,11 @@ impl WorkspaceView {
                 || (self.model.is_none() && model.id == "default"));
         let default = self.preferences.default_provider.as_deref() == Some(provider)
             && self.preferences.default_models.get(provider) == Some(&model.id);
+        let active = if self.model_picker_default {
+            default
+        } else {
+            active_chat
+        };
         let selection = ModelSelection {
             provider: provider.to_owned(),
             model: model.id.clone(),
@@ -243,11 +261,17 @@ impl WorkspaceView {
     }
     pub(super) fn composer_picker(&self, cx: &mut Context<Self>) -> AnyElement {
         let query = self.model_search.read(cx).value(cx).to_lowercase();
-        let current = self
-            .providers
-            .get(self.provider_index)
-            .and_then(|p| p["id"].as_str())
-            .unwrap_or_default();
+        let current = if self.model_picker_default {
+            self.preferences
+                .default_provider
+                .as_deref()
+                .unwrap_or_default()
+        } else {
+            self.providers
+                .get(self.provider_index)
+                .and_then(|p| p["id"].as_str())
+                .unwrap_or_default()
+        };
         let total = self
             .picker_catalog
             .providers
@@ -263,8 +287,8 @@ impl WorkspaceView {
         row()
             .id("composer-picker")
             .absolute()
-            .bottom_full()
-            .mb_2()
+            .when(!self.model_picker_default, |view| view.bottom_full().mb_2())
+            .when(self.model_picker_default, |view| view.top_full().mt_2())
             .right_0()
             .w(px(width))
             .h(px(height))
@@ -307,7 +331,12 @@ impl WorkspaceView {
                         self.providers
                             .iter()
                             .enumerate()
-                            .filter(|(_, p)| p["installed"] != false || p["id"] == current)
+                            .filter(|(_, p)| {
+                                (p["installed"] != false && p["enabled"] != false)
+                                    || (!self.model_picker_default
+                                        && self.selected.is_some()
+                                        && p["id"] == current)
+                            })
                             .map(|(i, p)| {
                                 let provider = p["id"].as_str().unwrap_or_default().to_owned();
                                 let live = self
@@ -450,7 +479,12 @@ impl WorkspaceView {
                             .children(
                                 self.providers
                                     .iter()
-                                    .filter(|p| p["installed"] != false || p["id"] == current)
+                                    .filter(|p| {
+                                        (p["installed"] != false && p["enabled"] != false)
+                                            || (!self.model_picker_default
+                                                && self.selected.is_some()
+                                                && p["id"] == current)
+                                    })
                                     .filter(|p| {
                                         self.picker_scope
                                             .as_deref()
@@ -601,9 +635,10 @@ impl WorkspaceView {
                             ),
                     )
                     .when(
-                        self.selected_model().is_some_and(|m| {
-                            !m.reasoning_levels.is_empty() || !m.options.is_empty()
-                        }),
+                        !self.model_picker_default
+                            && self.selected_model().is_some_and(|m| {
+                                !m.reasoning_levels.is_empty() || !m.options.is_empty()
+                            }),
                         |d| d.child(self.model_options_view(cx)),
                     ),
             )
@@ -611,15 +646,23 @@ impl WorkspaceView {
     }
     fn picker_matches(&self, cx: &App) -> Vec<ModelSelection> {
         let query = self.model_search.read(cx).value(cx).to_lowercase();
-        let current = self
-            .providers
-            .get(self.provider_index)
-            .and_then(|p| p["id"].as_str())
-            .unwrap_or_default();
+        let current = if self.model_picker_default {
+            self.preferences
+                .default_provider
+                .as_deref()
+                .unwrap_or_default()
+        } else {
+            self.providers
+                .get(self.provider_index)
+                .and_then(|p| p["id"].as_str())
+                .unwrap_or_default()
+        };
         let mut matches = Vec::new();
         for provider in &self.providers {
             let id = provider["id"].as_str().unwrap_or_default();
-            if provider["installed"] == false && id != current {
+            if (provider["installed"] == false || provider["enabled"] == false)
+                && (self.model_picker_default || self.selected.is_none() || id != current)
+            {
                 continue;
             }
             if self
@@ -801,7 +844,7 @@ impl WorkspaceView {
                                                 .inset_0()
                                                 .right(relative(1. - percentage))
                                                 .rounded_full()
-                                                .bg(rgb(0xb4f327)),
+                                                .bg(rgb(0x89ca21)),
                                         ),
                                 )
                                 .children((1..steps).map(|step| {
@@ -829,7 +872,7 @@ impl WorkspaceView {
                                         .size(px(24.))
                                         .rounded_full()
                                         .border_2()
-                                        .border_color(rgb(0xb4f327))
+                                        .border_color(rgb(0x89ca21))
                                         .bg(rgb(0xffffff)),
                                 ),
                         ),

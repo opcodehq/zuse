@@ -5,11 +5,11 @@ use crate::{
     settings_style as s,
     shell::{BG, BORDER, MUTED, TEXT, column, provider_icon, row},
 };
-use zuse_protocol::presentation::SidebarView;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Section {
     General,
     Providers,
+    Defaults,
     Devices,
     Plugins,
     Usage,
@@ -19,8 +19,9 @@ impl Section {
         match self {
             Self::General => "General",
             Self::Providers => "Providers",
-            Self::Devices => "Devices",
-            Self::Plugins => "Account & plugins",
+            Self::Defaults => "Default models",
+            Self::Devices => "Remote access",
+            Self::Plugins => "Plugins",
             Self::Usage => "Accounts & usage",
         }
     }
@@ -28,6 +29,7 @@ impl Section {
         match self {
             Self::General => "settings-minimalistic",
             Self::Providers => "terminal",
+            Self::Defaults => "check",
             Self::Devices => "globe",
             Self::Plugins => "split-columns",
             Self::Usage => "clock-circle",
@@ -35,9 +37,12 @@ impl Section {
     }
     fn description(self) -> &'static str {
         match self {
-            Self::General => "Make Zuse feel at home in your workflow.",
-            Self::Providers => "Manage your model connections and coding agents.",
-            Self::Devices => "Connect trusted devices to this workspace.",
+            Self::General => "Workspace defaults and your personal app preferences.",
+            Self::Providers => {
+                "Verify what’s installed, signed in, and which subscription each provider runs on."
+            }
+            Self::Defaults => "Choose how new chats start.",
+            Self::Devices => "Use this computer from your phone, a browser, or another computer.",
             Self::Plugins => "Your Zuse account and the tools shared across your agents.",
             Self::Usage => "Provider accounts, plans and current usage.",
         }
@@ -51,9 +56,9 @@ impl WorkspaceView {
             .w(px(if compact { 48. } else { 208. }))
             .h_full()
             .flex_none()
-            .bg(rgb(0x151515))
+            .bg(s::sidebar_bg())
             .border_r_1()
-            .border_color(rgb(BORDER))
+            .border_color(s::sidebar_border())
             .px(px(if compact { 6. } else { 10. }))
             .py_3()
             .gap(px(2.))
@@ -61,8 +66,9 @@ impl WorkspaceView {
                 [
                     Section::General,
                     Section::Providers,
-                    Section::Devices,
+                    Section::Defaults,
                     Section::Plugins,
+                    Section::Devices,
                     Section::Usage,
                 ]
                 .into_iter()
@@ -73,16 +79,17 @@ impl WorkspaceView {
                         .role(Role::Button)
                         .aria_label(item.title())
                         .cursor_pointer()
-                        .h(px(32.))
-                        .px_2()
+                        .min_h(px(28.))
+                        .px(px(10.))
+                        .py(px(4.))
                         .gap_2()
-                        .rounded(px(6.))
-                        .when(item == section, |row| row.bg(rgb(0x292929)))
+                        .rounded(px(7.))
+                        .when(item == section, |row| row.bg(s::sidebar_active()))
                         .text_color(rgb(if item == section { TEXT } else { MUTED }))
-                        .hover(|row| row.bg(rgb(0x232323)))
+                        .hover(|row| row.bg(s::sidebar_active().opacity(0.6)))
                         .child(
                             icon(item.icon())
-                                .size(px(15.))
+                                .size(px(16.))
                                 .text_color(rgb(if item == section { TEXT } else { MUTED })),
                         )
                         .when(!compact, |row| {
@@ -104,11 +111,16 @@ impl WorkspaceView {
                 }),
             );
         let content = match section {
-            Section::General => self.general_settings(cx),
+            Section::General => column()
+                .gap_4()
+                .child(self.account_settings(cx))
+                .child(self.appearance_settings(cx))
+                .into_any_element(),
+            Section::Defaults => self.default_model_settings(cx),
             Section::Providers => column()
                 .gap_5()
-                .child(self.model_accounts_settings(cx))
                 .child(self.providers_settings(cx))
+                .child(self.model_accounts_settings(cx))
                 .into_any_element(),
             Section::Devices => self.pairing_settings(cx),
             Section::Plugins => self.cloud_settings(cx),
@@ -126,22 +138,28 @@ impl WorkspaceView {
                     .px_3()
                     .border_b_1()
                     .border_color(rgb(BORDER))
+                    .child(div().w(px(64.)).flex_none())
                     .child(
-                        s::button("settings-back", "Back to Zuse")
-                            .border_0()
-                            .bg(gpui::transparent_black())
+                        row()
+                            .id("settings-back")
+                            .role(Role::Button)
+                            .aria_label("Back to app")
+                            .cursor_pointer()
+                            .rounded(px(4.))
+                            .p(px(4.))
+                            .gap_1()
+                            .text_size(px(12.))
+                            .text_color(rgb(MUTED))
+                            .hover(|view| view.bg(s::frame_bg().opacity(0.4)).text_color(rgb(TEXT)))
+                            .child(icon("alt-arrow-left").size(px(14.)).text_color(rgb(MUTED)))
+                            .child("Back to app")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.settings = false;
                                 window.focus(&this.input.focus_handle(cx), cx);
                                 cx.notify();
                             })),
                     )
-                    .child(div().flex_1())
-                    .child(s::description_text(if self.paired {
-                        "Paired workspace"
-                    } else {
-                        "Local workspace"
-                    })),
+                    .child(div().flex_1()),
             )
             .child(
                 row()
@@ -156,7 +174,7 @@ impl WorkspaceView {
                             .min_w_0()
                             .h_full()
                             .overflow_y_scroll()
-                            .p(px(24.))
+                            .p(px(if compact { 16. } else { 24. }))
                             .child(
                                 column()
                                     .w_full()
@@ -166,13 +184,21 @@ impl WorkspaceView {
                                     .child(
                                         column()
                                             .gap_1()
+                                            .border_b_1()
+                                            .border_color(rgb(BORDER))
+                                            .pb(px(16.))
                                             .child(
                                                 div()
                                                     .text_size(px(20.))
+                                                    .line_height(px(28.))
                                                     .font_weight(FontWeight::MEDIUM)
                                                     .child(section.title()),
                                             )
-                                            .child(s::description_text(section.description())),
+                                            .child(
+                                                s::description_text(section.description())
+                                                    .text_size(px(12.))
+                                                    .line_height(px(20.)),
+                                            ),
                                     )
                                     .child(content),
                             ),
@@ -180,128 +206,121 @@ impl WorkspaceView {
             )
             .into_any_element()
     }
-    fn general_settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        let selected = self.preferences.sidebar_view;
-        let default = self
-            .preferences
-            .default_provider
-            .as_deref()
-            .and_then(|id| self.providers.iter().find(|provider| provider["id"] == id));
-        let default_title = default
-            .and_then(|provider| provider["name"].as_str())
-            .unwrap_or("No default agent");
-        let default_model = self
-            .preferences
-            .default_provider
-            .as_ref()
-            .and_then(|id| self.preferences.default_models.get(id))
-            .cloned()
-            .unwrap_or_else(|| "Choose a default using the star in the model picker.".into());
-        column()
-            .gap_5()
+    fn account_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let user = &self.cloud_account["user"];
+        let signed_in = user.is_object();
+        let name = user["name"]
+            .as_str()
+            .or_else(|| user["email"].as_str())
+            .unwrap_or("Not signed in");
+        let action = s::button(
+            "general-account-sign-in",
+            if signed_in { "Sign out" } else { "Sign in" },
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.call(
+                if signed_in {
+                    methods::CLOUD_ACCOUNT_SIGN_OUT
+                } else {
+                    methods::CLOUD_ACCOUNT_SIGN_IN
+                },
+                json!({}),
+            );
+            cx.notify();
+        }));
+        let account = s::setting_row(true)
+            .child(s::details(name.to_owned(), if signed_in {user["email"].as_str().unwrap_or("")}else{"You're using Zuse (Beta) locally without an account. Sign in to sync and unlock remote agents."}))
+            .child(action);
+        s::frame()
+            .child(s::header("Account", "Sign in to sync your account across devices and (soon) drive remote agents from your phone."))
+            .child(s::card().child(account))
+            .when_some(self.cloud_account["error"].as_str().map(str::to_owned), |view,error| view.child(s::description_text(error).px_3().py_2()))
+            .when_some(self.cloud_account["login"]["url"].as_str().filter(|url|url.starts_with("https://")).map(str::to_owned), |view,url| {
+                view.child(s::button("general-authorize-account","Open sign-in").on_click(move|_,_,cx|cx.open_url(&url)))
+            }).into_any_element()
+    }
+    fn appearance_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        use zuse_protocol::presentation::AppearanceMode;
+        let selected = self.preferences.appearance;
+        let choices = row()
+            .p(px(2.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(rgb(BORDER).opacity(0.6))
+            .bg(s::frame_bg())
+            .children(
+                AppearanceMode::ALL
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, mode)| {
+                        row()
+                            .id(("general-theme", index))
+                            .role(Role::Button)
+                            .aria_label(mode.label())
+                            .aria_selected(selected == mode)
+                            .cursor_pointer()
+                            .h(px(28.))
+                            .px(px(10.))
+                            .rounded(px(7.))
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(if selected == mode { TEXT } else { MUTED }))
+                            .when(selected == mode, |view| view.bg(rgb(BG)))
+                            .child(mode.label())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.preferences.appearance = mode;
+                                this.save_preferences();
+                                cx.notify();
+                            }))
+                    }),
+            );
+        s::frame()
+            .child(s::header(
+                "Appearance",
+                "Choose the app theme or follow your system setting.",
+            ))
             .child(
-                s::frame()
-                    .child(s::header(
-                        "Workspace",
-                        "How conversations are organized in your sidebar.",
-                    ))
-                    .child(
-                        s::card().child(
-                            s::setting_row(true)
-                                .child(s::details(
-                                    "Sidebar view",
-                                    "Switch between recent threads and projects.",
-                                ))
-                                .children(
-                                    [
-                                        (SidebarView::Threads, "Threads"),
-                                        (SidebarView::Projects, "Projects"),
-                                    ]
-                                    .into_iter()
-                                    .enumerate()
-                                    .map(
-                                        |(index, (view, name))| {
-                                            s::button(("default-sidebar-view", index), name)
-                                                .when(selected == view, |button| {
-                                                    button
-                                                        .bg(rgb(0x373737))
-                                                        .border_color(rgb(0x505050))
-                                                })
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.preferences.sidebar_view = view;
-                                                    this.save_preferences();
-                                                    cx.notify();
-                                                }))
-                                        },
-                                    ),
-                                ),
-                        ),
-                    ),
-            )
-            .child(
-                s::frame()
-                    .child(s::header(
-                        "Conversation defaults",
-                        "Defaults apply when you start a new conversation.",
-                    ))
-                    .child(
-                        s::card().child(
-                            s::setting_row(true)
-                                .child(s::details(default_title.to_owned(), default_model))
-                                .when(self.preferences.default_provider.is_some(), |row| {
-                                    row.child(
-                                        s::button("clear-model-default", "Clear default").on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.preferences.default_provider = None;
-                                                this.preferences.default_models.clear();
-                                                this.save_preferences();
-                                                cx.notify();
-                                            }),
-                                        ),
-                                    )
-                                }),
-                        ),
-                    ),
+                s::card().child(
+                    s::setting_row(true)
+                        .child(s::details(
+                            "Theme",
+                            "Choose the app theme or follow your system setting.",
+                        ))
+                        .child(choices),
+                ),
             )
             .into_any_element()
     }
-    fn providers_settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        s::frame()
-            .child(s::header(
-                "Coding agents",
-                "Choose the agent used for new work. Model accounts are managed above.",
-            ))
-            .child(s::card().children(self.providers.iter().enumerate().map(
-                |(index, provider)| {
-                    let installed = provider["installed"] == true;
-                    s::setting_row(index == 0)
-                        .id(("settings-provider", index))
-                        .cursor_pointer()
-                        .hover(|row| row.bg(rgb(0x181818)))
-                        .child(
-                            icon(provider_icon(provider["id"].as_str().unwrap_or_default()))
-                                .size(px(18.)),
-                        )
-                        .child(s::details(
-                            provider["name"].as_str().unwrap_or("Agent").to_owned(),
-                            if installed {
-                                if self.paired {
-                                    "Installed on your paired engine"
-                                } else {
-                                    "Installed on this machine"
-                                }
-                            } else {
-                                "CLI installation required"
-                            },
-                        ))
-                        .when(index == self.provider_index, |row| {
-                            row.child(icon("check").size(px(16.)).text_color(rgb(TEXT)))
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.choose_provider(index, cx);
-                        }))
-                },
-            )))
+    fn default_model_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let provider = self.preferences.default_provider.as_deref();
+        let model = provider.and_then(|provider| self.preferences.default_models.get(provider));
+        let label = model
+            .and_then(|id| {
+                provider
+                    .and_then(|provider| self.picker_catalog.providers.get(provider))
+                    .and_then(|catalog| catalog.models.iter().find(|model| model.id == *id))
+            })
+            .map(|model| model.label.as_str())
+            .or_else(|| model.map(String::as_str))
+            .unwrap_or("Agent default")
+            .to_owned();
+        let trigger = s::button("settings-default-model", label)
+            .w(px(256.))
+            .justify_between()
+            .child(icon("alt-arrow-down").size(px(14.)))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_model_picker(window, cx);
+                this.model_picker_default = true;
+                cx.notify();
+            }));
+        let card = s::card().child(
+            s::setting_row(true)
+                .child(s::details("Default model", "Model for new chats."))
+                .child(trigger),
+        );
+        column().relative()
+            .child(s::frame().child(s::header("Chat defaults", "These choices apply when you start a new chat. You can still change either one from the composer.")).child(card))
+            .when(self.model_picker,|view|view.child(self.composer_picker(cx)))
             .into_any_element()
     }
     fn usage_settings(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -393,7 +412,7 @@ impl WorkspaceView {
                                                                 .h_full()
                                                                 .w(relative(fraction))
                                                                 .rounded_full()
-                                                                .bg(rgb(0xb4f327)),
+                                                                .bg(rgb(0x89ca21)),
                                                         ),
                                                 )
                                         }),

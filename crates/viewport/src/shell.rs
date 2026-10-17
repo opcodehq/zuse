@@ -3,13 +3,13 @@ use super::*;
 use crate::assets::icon;
 use zuse_markdown::{Block, InlineRun, parse_full};
 
-pub(super) const BG: u32 = 0x0b0b0b;
-pub(super) const SURFACE: u32 = 0x171717;
-pub(super) const RAISED: u32 = 0x181818;
-pub(super) const BORDER: u32 = 0x242424;
-pub(super) const TEXT: u32 = 0xebebeb;
-pub(super) const MUTED: u32 = 0xa3a3a3;
-pub(super) const FAINT: u32 = 0x777777;
+pub(super) const BG: u32 = 0x0b0c0b;
+pub(super) const SURFACE: u32 = 0x0e0f0e;
+pub(super) const RAISED: u32 = 0x191c1a;
+pub(super) const BORDER: u32 = 0x1f211f;
+pub(super) const TEXT: u32 = 0xe8e9e7;
+pub(super) const MUTED: u32 = 0xa4a8a3;
+pub(super) const FAINT: u32 = 0x6b716a;
 
 pub(super) fn row() -> Div {
     div().flex().items_center()
@@ -1108,6 +1108,15 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let light = match self.preferences.appearance {
+            zuse_protocol::presentation::AppearanceMode::Light => true,
+            zuse_protocol::presentation::AppearanceMode::Dark => false,
+            zuse_protocol::presentation::AppearanceMode::System => matches!(
+                window.appearance(),
+                WindowAppearance::Light | WindowAppearance::VibrantLight
+            ),
+        };
+        crate::palette::set_light(light);
         let panel_width = if !self.right_open || self.settings || self.project_picker {
             0.
         } else if self.open_file.is_some() {

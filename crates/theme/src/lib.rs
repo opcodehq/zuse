@@ -310,7 +310,7 @@ impl AccentPreset {
 
     pub fn color(self, appearance: Appearance) -> Color {
         let (dark, light) = match self {
-            Self::Zuse => ("#8b7cf6", "#5b43e8"),
+            Self::Zuse => ("#89ca21", "#81bf1d"),
             Self::Orange => ("#fb923c", "#c2410c"),
             Self::Amber => ("#fbbf24", "#a16207"),
             Self::Green => ("#4ade80", "#15803d"),
@@ -809,9 +809,9 @@ mod tests {
     }
 
     #[test]
-    fn builtins_have_complete_provenance_and_no_validation_errors() {
+    fn builtins_have_complete_provenance_and_report_authored_contrast() {
         let registry = ThemeRegistry::builtin();
-        assert_eq!(registry.families.len(), 19);
+        assert_eq!(registry.families.len(), 18);
         assert!(registry.variant("zuse-light").is_some());
         assert!(registry.variant("zuse-dark").is_some());
         let errors: Vec<_> = registry
@@ -819,7 +819,12 @@ mod tests {
             .into_iter()
             .filter(|issue| issue.severity == ValidationSeverity::Error)
             .collect();
-        assert!(errors.is_empty(), "{errors:#?}");
+        // Keep the app's authored light primary. Validation must continue to
+        // report its lower non-text contrast rather than silently recolor it.
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        assert_eq!(errors[0].variant_id, "zuse-light");
+        assert_eq!(errors[0].category, ValidationCategory::Contrast);
+        assert!(errors[0].message.starts_with("accent contrast is 2.11:1"));
     }
 
     #[test]
@@ -830,7 +835,7 @@ mod tests {
             .iter()
             .map(|family| family.variants.len())
             .sum::<usize>();
-        assert_eq!(variants, 30);
-        assert_eq!(variants * VisualFixture::ALL.len(), 300);
+        assert_eq!(variants, 29);
+        assert_eq!(variants * VisualFixture::ALL.len(), 290);
     }
 }

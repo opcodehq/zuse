@@ -13,6 +13,8 @@ use crate::popover::{self, ScrollRailHost};
 
 #[path = "appshots.rs"]
 mod appshots_page;
+#[path = "general.rs"]
+mod general_page;
 use crate::settings::widgets;
 use crate::settings::{
     ComposerSendBehavior, KeymapConfig, PullRequestDestination, SavePolicy, ShortcutId,
@@ -60,6 +62,7 @@ pub enum ShortcutsEvent {
 pub struct ShortcutsPage {
     appshots_page: bool,
     general_page: bool,
+    general_account: Entity<crate::settings::plugins::PluginsCard>,
     appshots_focus_pending: bool,
     scroll: crate::settings::widgets::PageScroll,
     /// Working copy (kept in sync with the shell via change events).
@@ -130,6 +133,8 @@ impl ShortcutsPage {
                 cx.new(|cx| crate::settings::thread_naming::ThreadNamingCard::new(state, cx))
             },
             worktrees: cx.new(|cx| super::worktrees::WorktreeSettingsCard::new(state.clone(), cx)),
+            general_account: cx
+                .new(|cx| crate::settings::plugins::PluginsCard::account(state.clone(), cx)),
             _state: state,
         }
     }
@@ -942,7 +947,9 @@ impl Render for ShortcutsPage {
                             .track_scroll(&self.scroll.scroll)
                             .child(
                                 widgets::page_column()
-                                    .child(widgets::page_header(&theme, "General", None))
+                                    .child(self.original_general_header(&theme))
+                                    .child(div().mt(px(20.)).child(self.general_account.clone()))
+                                    .child(self.original_general_preferences(&theme, cx))
                                     .child(
                                         widgets::section_card(&theme)
                                             .child(send_behavior_row)

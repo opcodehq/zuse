@@ -1,4 +1,5 @@
 //! Zuse presentation over Zkit's mature shared text-editing engine.
+use crate::palette::rgb;
 use gpui::{prelude::*, *};
 use gpui_base::input::{EditorState, InputEditorStyle, InputEvent, InputState, TextareaState};
 
@@ -15,6 +16,7 @@ enum Editor {
 pub struct TextInput {
     editor: Editor,
     window: AnyWindowHandle,
+    light_style: bool,
     _events: Subscription,
 }
 
@@ -34,6 +36,7 @@ impl TextInput {
         Self {
             editor: Editor::Single(editor),
             window: window.window_handle(),
+            light_style: crate::palette::is_light(),
             _events: events,
         }
     }
@@ -56,6 +59,7 @@ impl TextInput {
         Self {
             editor: Editor::Multi(editor),
             window: window.window_handle(),
+            light_style: crate::palette::is_light(),
             _events: events,
         }
     }
@@ -73,6 +77,7 @@ impl TextInput {
         Self {
             editor: Editor::Code(editor),
             window: window.window_handle(),
+            light_style: crate::palette::is_light(),
             _events: events,
         }
     }
@@ -122,13 +127,36 @@ impl Focusable for TextInput {
 }
 
 impl Render for TextInput {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let light = crate::palette::is_light();
+        if self.light_style != light {
+            self.light_style = light;
+            match &self.editor {
+                Editor::Single(state) => state.update(cx, |state, _| {
+                    state.set_editor_style(editor_style());
+                }),
+                Editor::Multi(state) => state.update(cx, |state, _| {
+                    state.set_editor_style(editor_style());
+                }),
+                Editor::Code(state) => state.update(cx, |state, _| {
+                    state.set_editor_style(editor_style());
+                }),
+            }
+        }
         div()
             .w_full()
             .when(matches!(self.editor, Editor::Code(_)), |d| d.h_full())
-            .text_size(px(13.))
-            .line_height(px(22.))
-            .text_color(rgb(0xebebeb))
+            .text_size(px(if matches!(self.editor, Editor::Single(_)) {
+                12.
+            } else {
+                13.
+            }))
+            .line_height(px(if matches!(self.editor, Editor::Single(_)) {
+                16.
+            } else {
+                22.
+            }))
+            .text_color(rgb(crate::shell::TEXT))
             .child(match &self.editor {
                 Editor::Single(state) => state.clone().into_any_element(),
                 Editor::Multi(state) => state.clone().into_any_element(),
@@ -143,11 +171,11 @@ pub fn bind_keys(cx: &mut App) {
 
 fn editor_style() -> InputEditorStyle {
     InputEditorStyle {
-        foreground: rgb(0xebebeb).into(),
-        muted_foreground: rgb(0x737373).into(),
-        background: rgb(0x141414).into(),
-        border: rgb(0x292929).into(),
-        caret: rgb(0xeeeeee).into(),
+        foreground: rgb(crate::shell::TEXT).into(),
+        muted_foreground: rgb(crate::shell::MUTED).into(),
+        background: rgb(0x121413).into(),
+        border: rgb(crate::shell::BORDER).into(),
+        caret: rgb(crate::shell::TEXT).into(),
         selection: rgba(0xaabbee44).into(),
         editor_active_line: Some(rgba(0xffffff08).into()),
         editor_gutter_background: Some(rgb(0x101010).into()),

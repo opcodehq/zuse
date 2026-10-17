@@ -275,7 +275,7 @@ impl WorkspaceView {
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .child(div().size(px(5.)).rounded_full().bg(rgb(0xb4f327)))
+                    .child(div().size(px(5.)).rounded_full().bg(rgb(0x89ca21)))
                     .child(label("Working").text_color(rgb(TEXT)).text_size(px(11.)))
                     .child(label("New messages join the queue").text_size(px(10.)))
                     .child(div().flex_1()),
@@ -334,7 +334,7 @@ impl WorkspaceView {
                                 .gap_2()
                                 .child(div().flex_1().text_size(px(12.)).child(name))
                                 .when(self.sandbox == mode, |d| {
-                                    d.child(icon("check").size(px(14.)).text_color(rgb(0xb4f327)))
+                                    d.child(icon("check").size(px(14.)).text_color(rgb(0x89ca21)))
                                 }),
                         )
                         .child(label(detail).text_size(px(10.)))

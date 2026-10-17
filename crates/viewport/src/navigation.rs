@@ -586,7 +586,7 @@ impl WorkspaceView {
                             if status == "awaitingInput" {
                                 0xe8b36e
                             } else {
-                                0xb4f327
+                                0x89ca21
                             },
                         )))
                     })

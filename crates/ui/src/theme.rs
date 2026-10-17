@@ -48,7 +48,7 @@ use zuse_theme::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AccentColor {
-    /// The exact upstream Zuse indigo.
+    /// Zuse’s app-palette lime.
     #[default]
     #[serde(alias = "violet", alias = "indigo", alias = "red", alias = "purple")]
     Zuse,
@@ -89,12 +89,14 @@ impl AccentColor {
         // used to gamut-clip OKLCH into sRGB and then mutate HSL lightness,
         // producing different chroma and apparent hues across light/dark.
         let (primary, strong) = match (self, appearance) {
-            (Self::Zuse, Appearance::Dark) => {
-                (oklch(0.673, 0.182, 276.935), oklch(0.585, 0.233, 277.117))
-            }
-            (Self::Zuse, Appearance::Light) => {
-                (oklch(0.511, 0.262, 276.966), oklch(0.511, 0.262, 276.966))
-            }
+            (Self::Zuse, Appearance::Dark) => (
+                hsla(83. / 360., 0.72, 0.46, 1.),
+                hsla(83. / 360., 0.72, 0.46, 1.),
+            ),
+            (Self::Zuse, Appearance::Light) => (
+                hsla(83. / 360., 0.74, 0.43, 1.),
+                hsla(83. / 360., 0.74, 0.43, 1.),
+            ),
             (Self::Orange, Appearance::Dark) => (oklch(0.75, 0.18, 55.0), oklch(0.54, 0.19, 55.0)),
             (Self::Orange, Appearance::Light) => (oklch(0.50, 0.19, 55.0), oklch(0.50, 0.19, 55.0)),
             (Self::Amber, Appearance::Dark) => (oklch(0.80, 0.17, 84.0), oklch(0.52, 0.14, 84.0)),
@@ -491,7 +493,7 @@ impl SyntaxPalette {
 
     fn dark(text: Hsla, comment: Hsla, danger: Hsla) -> Self {
         // Same sources and 72% saturation treatment as history::graph_color.
-        let indigo = git_graph_tone(oklch(0.673, 0.182, 276.935));
+        let indigo = git_graph_tone(hsla(83. / 360., 0.72, 0.46, 1.));
         let pink = git_graph_tone(oklch(0.718, 0.202, 349.761));
         let emerald = git_graph_tone(oklch(0.765, 0.177, 163.223));
         let amber = git_graph_tone(oklch(0.828, 0.189, 84.429));
@@ -986,13 +988,16 @@ impl Theme {
         popup
     }
 
-    /// Settings pages used the authored dark theme before the shared frost
-    /// change. Keep that foreground palette while light pages use popup text.
+    /// Settings uses the app palette, including its authored light background.
     pub fn for_settings_surface(&self) -> Self {
-        if matches!(self.appearance, Appearance::Dark) {
-            self.clone()
-        } else {
-            self.for_popup()
+        self.clone()
+    }
+
+    pub fn settings_frame_bg(&self) -> Hsla {
+        match self.variant_id.as_ref() {
+            "zuse-dark" => zuse_viewport::settings_style::FRAME_BG,
+            "zuse-light" => hsla(105. / 360., 0.18, 0.94, 1.),
+            _ => self.surface_raised,
         }
     }
 
@@ -1137,9 +1142,7 @@ impl Theme {
         }
     }
 
-    /// Build the dark theme. The surface tones are sampled straight from the
-    /// reference screenshots of the original app (docs/reference): main panel
-    /// `#060606`, shell/sidebar `#0d0d0d`.
+    /// Build the authored Zuse dark app palette.
     pub fn dark() -> Self {
         Self::dark_with_accent(AccentColor::default())
     }
@@ -1153,28 +1156,32 @@ impl Theme {
             accent_selection: AccentSelection::Preset(accent_color.into()),
             wallpaper_color: None,
             surface_preference: SurfacePreference::ThemeDefault,
-            surface_treatment: SurfaceTreatment::Frosted,
+            surface_treatment: SurfaceTreatment::Opaque,
             accent_color,
-            bg: grey(6),       // main panel — sampled #060606
-            surface: grey(13), // shell / sidebar — sampled #0d0d0d
-            surface_raised: neutral(0.235),
-            surface_card: grey(0x0e),
-            surface_dialog: grey(0x10),
-            surface_overlay: grey(0x16),
+            bg: hsla(140. / 360., 0.05, 0.045, 1.), // app-palette.css background
+            surface: hsla(138. / 360., 0.05, 0.0575, 1.), // app-palette.css sidebar
+            surface_raised: hsla(132. / 360., 0.05, 0.105, 1.),
+            surface_card: hsla(136. / 360., 0.05, 0.075, 1.),
+            surface_dialog: hsla(132. / 360., 0.05, 0.105, 1.),
+            surface_overlay: hsla(128. / 360., 0.05, 0.15, 1.),
             element_hover: hsla(0.0, 0.0, 0.92, 0.11),
             element_active: hsla(0.0, 0.0, 0.92, 0.16),
-            border: hsla(0.0, 0.0, 1.0, 0.08),
-            border_strong: hsla(0.0, 0.0, 1.0, 0.14),
-            text: neutral(0.922),       // ~neutral-200
-            text_muted: neutral(0.708), // ~neutral-400
-            text_faint: neutral(0.556), // ~neutral-500
+            border: hsla(132. / 360., 0.04, 0.125, 1.),
+            border_strong: hsla(128. / 360., 0.05, 0.17, 1.),
+            text: hsla(100. / 360., 0.04, 0.91, 1.),
+            text_muted: hsla(105. / 360., 0.03, 0.65, 1.),
+            text_faint: hsla(110. / 360., 0.03, 0.43, 1.),
             text_dim: grey(0x98),
             solid: neutral(0.922), // near-white plate
             on_solid: grey(0x0e),  // near-black label
             accent: accent.primary,
             accent_strong: accent.strong,
             accent_wash: accent.wash,
-            on_accent: neutral(0.985),
+            on_accent: if accent_color == AccentColor::Zuse {
+                hsla(132. / 360., 0.30, 0.07, 1.)
+            } else {
+                neutral(0.985)
+            },
             danger: oklch(0.704, 0.191, 22.216),       // red-400
             danger_muted: oklch(0.808, 0.114, 19.571), // red-300
             warning: oklch(0.828, 0.189, 84.429),      // amber-400
@@ -1234,43 +1241,32 @@ impl Theme {
             accent_selection: AccentSelection::Preset(accent_color.into()),
             wallpaper_color: None,
             surface_preference: SurfacePreference::ThemeDefault,
-            surface_treatment: SurfaceTreatment::Frosted,
+            surface_treatment: SurfaceTreatment::Opaque,
             accent_color,
-            bg: grey(0xff), // main panel — clean white
-            // Deeper than ~neutral-100 looks on paper: the content card is pure
-            // white and sits *inside* this surface, so too small a step leaves the
-            // whole window one flat sheet with a hairline drawn on it.
-            surface: neutral(0.968),
-            // A real grey, NOT white. This is the opaque-plate tone — user
-            // message bubbles, the jump-to-bottom pill — and those sit directly
-            // on the white content plane with no border or shadow to save them.
-            // White here made the user's own messages vanish into the page.
-            // Popovers do not use this; they have their own ladder below.
-            surface_raised: neutral(0.940),
+            bg: hsla(90. / 360., 0.20, 0.97, 1.),
+            surface: hsla(105. / 360., 0.22, 0.95, 1.),
+            surface_raised: hsla(110. / 360., 0.14, 0.90, 1.),
             surface_card: grey(0xff),
             surface_dialog: grey(0xff),
-            surface_overlay: grey(0xff),
-            element_hover: hsla(0.0, 0.0, 0.10, 0.06),
-            element_active: hsla(0.0, 0.0, 0.10, 0.10),
-            border: hsla(0.0, 0.0, 0.0, 0.10),
-            border_strong: hsla(0.0, 0.0, 0.0, 0.17),
-            // ~neutral-850. Pure neutral-900 measures 17.9:1 on white — *more*
-            // contrast than dark mode's 16.1:1, which reads as harsh rather than
-            // crisp. Backing off to 0.25 lands at ~16:1: the same perceived
-            // weight as the dark theme, not the maximum available.
-            text: neutral(0.25),
-            text_muted: neutral(0.439), // ~neutral-600 → ~7.7:1
-            // A touch darker than dark mode's neutral-500 counterpart: the light
-            // sidebar is a real grey, and faint text has to clear its floor there
-            // too, not just on the white content plane.
-            text_faint: neutral(0.535),
-            text_dim: neutral(0.50),
+            surface_overlay: hsla(112. / 360., 0.12, 0.84, 1.),
+            element_hover: hsla(106. / 360., 0.18, 0.89, 1.),
+            element_active: hsla(106. / 360., 0.18, 0.89, 1.),
+            border: hsla(110. / 360., 0.13, 0.89, 1.),
+            border_strong: hsla(112. / 360., 0.12, 0.82, 1.),
+            text: hsla(132. / 360., 0.14, 0.13, 1.),
+            text_muted: hsla(125. / 360., 0.07, 0.38, 1.),
+            text_faint: hsla(125. / 360., 0.05, 0.48, 1.),
+            text_dim: hsla(125. / 360., 0.05, 0.48, 1.),
             solid: neutral(0.205),    // near-black plate, deeper than body text
             on_solid: neutral(0.985), // near-white label
             accent: accent.primary,
             accent_strong: accent.strong,
             accent_wash: accent.wash,
-            on_accent: neutral(0.985),
+            on_accent: if accent_color == AccentColor::Zuse {
+                hsla(132. / 360., 0.30, 0.07, 1.)
+            } else {
+                neutral(0.985)
+            },
             danger: oklch(0.577, 0.245, 27.325),        // red-600
             danger_muted: oklch(0.505, 0.213, 27.518),  // red-700
             warning: oklch(0.555, 0.163, 48.998),       // amber-700 — carries 12px text
@@ -2087,18 +2083,18 @@ mod tests {
     }
 
     #[test]
-    fn zuse_accent_is_the_exact_upstream_default() {
+    fn zuse_accent_matches_the_app_palette() {
         let dark = Theme::dark();
         let light = Theme::light();
         assert_eq!(dark.accent_color, AccentColor::Zuse);
-        assert_eq!(dark.accent, oklch(0.673, 0.182, 276.935));
-        assert_eq!(dark.accent_strong, oklch(0.585, 0.233, 277.117));
+        assert_eq!(dark.accent, hsla(83. / 360., 0.72, 0.46, 1.));
+        assert_eq!(dark.accent_strong, hsla(83. / 360., 0.72, 0.46, 1.));
         assert_eq!(dark.code_text, dark.accent);
         assert_eq!(dark.busy, dark.accent);
         assert_eq!(dark.glyph.mid, dark.accent);
         assert_eq!(dark.caret, dark.accent);
-        assert_eq!(light.accent, oklch(0.511, 0.262, 276.966));
-        assert_eq!(light.accent_strong, oklch(0.511, 0.262, 276.966));
+        assert_eq!(light.accent, hsla(83. / 360., 0.74, 0.43, 1.));
+        assert_eq!(light.accent_strong, hsla(83. / 360., 0.74, 0.43, 1.));
         assert_eq!(light.code_text, light.accent);
         assert_eq!(light.busy, light.accent);
         assert_eq!(light.glyph.mid, light.accent);
@@ -2327,13 +2323,21 @@ mod tests {
                 (Theme::light_with_accent(accent), &default_light),
             ] {
                 assert_eq!(theme.accent_color, accent);
+                // The authored light lime is retained, including its reported
+                // contrast tradeoff; other accent presets keep their AA floor.
+                let minimum =
+                    if accent == AccentColor::Zuse && theme.appearance == Appearance::Light {
+                        2.0
+                    } else {
+                        4.5
+                    };
                 for (surface_name, surface) in [
                     ("content", theme.bg),
                     ("shell", theme.surface),
                     ("card", theme.surface_card),
                 ] {
                     assert!(
-                        contrast_ratio(theme.accent, surface) >= 4.5,
+                        contrast_ratio(theme.accent, surface) >= minimum,
                         "{} {:?} accent is only {:.2}:1 on the {surface_name} surface",
                         accent.label(),
                         theme.appearance,
@@ -2347,8 +2351,8 @@ mod tests {
                     theme.appearance,
                     contrast_ratio(theme.on_accent, theme.accent_strong)
                 );
-                assert!(contrast_ratio(theme.code_text, theme.bg) >= 4.5);
-                assert!(contrast_ratio(theme.busy, theme.bg) >= 3.0);
+                assert!(contrast_ratio(theme.code_text, theme.bg) >= minimum);
+                assert!(contrast_ratio(theme.busy, theme.bg) >= minimum.min(3.0));
                 assert_eq!(theme.code_text, theme.accent);
                 assert_eq!(theme.busy, theme.accent);
                 assert_eq!(theme.glyph.mid, theme.accent);

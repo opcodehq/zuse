@@ -7,6 +7,7 @@ use zuse_rpc::methods;
 
 pub struct PluginsCard {
     state: Entity<AppState>,
+    account_only: bool,
     account: AccountStatus,
     snapshot: Value,
     attempt: Value,
@@ -34,6 +35,7 @@ impl PluginsCard {
         });
         let mut card = Self {
             state,
+            account_only: false,
             account: AccountStatus::default(),
             snapshot: Value::Null,
             attempt: Value::Null,
@@ -45,6 +47,11 @@ impl PluginsCard {
             _state: subscription,
         };
         card.attach(cx);
+        card
+    }
+    pub fn account(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let mut card = Self::new(state, cx);
+        card.account_only = true;
         card
     }
     fn attach(&mut self, cx: &mut Context<Self>) {
@@ -143,6 +150,56 @@ impl Render for PluginsCard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
         let signed_in = self.account.user.is_some();
+        if self.account_only {
+            let title = self
+                .account
+                .user
+                .as_ref()
+                .map(|user| user.name.clone().unwrap_or_else(|| user.email.clone()))
+                .unwrap_or_else(|| "Not signed in".into());
+            let description = self.account.user.as_ref().map(|user|user.email.clone()).unwrap_or_else(||"You're using Zuse (Beta) locally without an account. Sign in to sync and unlock remote agents.".into());
+            let account = widgets::card_row(&theme, true)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(widgets::row_title(&theme, title))
+                        .child(
+                            div()
+                                .text_size(crate::typography::ui_rems(11.))
+                                .line_height(crate::typography::ui_rems(16.))
+                                .text_color(theme.text_muted)
+                                .child(description),
+                        ),
+                )
+                .child(
+                    widgets::text_action(
+                        &theme,
+                        widgets::ActionTone::Outlined,
+                        if signed_in { "Sign out" } else { "Sign in" },
+                    )
+                    .id("general-account-sign-in")
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.request(
+                            if signed_in {
+                                methods::CLOUD_ACCOUNT_SIGN_OUT
+                            } else {
+                                methods::CLOUD_ACCOUNT_SIGN_IN
+                            },
+                            json!({}),
+                            cx,
+                        )
+                    })),
+                );
+            return widgets::group(&theme,"Account","Sign in to sync your account across devices and (soon) drive remote agents from your phone.")
+                .child(widgets::section_card(&theme).mt_0().child(account))
+                .when_some(self.account.login.clone(),|view,login|view.child(widgets::text_action(&theme,widgets::ActionTone::Outlined,"Open sign-in").id("general-open-login")
+                    .on_click(move|_,_,cx|{if login.url.starts_with("https://"){cx.open_url(&login.url);}})))
+                .when_some(self.error.clone().or_else(||self.account.error.clone()),|view,error|view.child(widgets::error_strip(&theme,error)))
+                .into_any_element();
+        }
         let tenant = self.snapshot["tenantId"]
             .as_str()
             .unwrap_or_default()
@@ -182,6 +239,6 @@ impl Render for PluginsCard {
             .when(self.attempt["id"].is_string(),|d|{
                 let id=self.attempt["id"].clone();let tenant=tenant.clone();
                 d.child(action("poll-hosted-plugin","Check connection").on_click(cx.listener(move |this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"poll","tenantId":tenant,"attemptId":id}),cx))))
-            })
+            }).into_any_element()
     }
 }

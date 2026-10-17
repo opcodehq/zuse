@@ -9,7 +9,9 @@ mod model_accounts;
 mod model_picker;
 mod navigation;
 mod pairing;
+pub mod palette;
 mod previews;
+mod provider_settings;
 mod questions;
 mod recovery;
 pub mod settings_style;
@@ -25,6 +27,7 @@ use futures::{
     channel::mpsc::{UnboundedReceiver, UnboundedSender},
 };
 use gpui::{prelude::*, *};
+use palette::rgb;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use zuse_model::{SessionMessageEntry, TranscriptUpdate, apply_transcript_frame};
@@ -89,6 +92,11 @@ pub struct WorkspaceView {
     error: Option<String>,
     show_archive: bool,
     settings: bool,
+    provider_expanded: Option<String>,
+    provider_actions: HashMap<u64, String>,
+    provider_logins: HashMap<String, Value>,
+    provider_codes: HashMap<String, Entity<input::TextInput>>,
+    provider_error: Option<String>,
     settings_section: settings_view::Section,
     paired: bool,
     pairing_origin: String,
@@ -168,6 +176,7 @@ pub struct WorkspaceView {
     model_error: Option<String>,
     model: Option<String>,
     model_picker: bool,
+    model_picker_default: bool,
     terminal_id: Option<String>,
     terminal_watch: Option<u64>,
     terminal_text: String,
@@ -313,6 +322,11 @@ impl WorkspaceView {
             error: None,
             show_archive: false,
             settings: false,
+            provider_expanded: None,
+            provider_actions: HashMap::new(),
+            provider_logins: HashMap::new(),
+            provider_codes: HashMap::new(),
+            provider_error: None,
             settings_section: settings_view::Section::General,
             paired: false,
             pairing_origin: String::new(),
@@ -392,6 +406,7 @@ impl WorkspaceView {
             model_error: None,
             model: None,
             model_picker: false,
+            model_picker_default: false,
             terminal_id: None,
             terminal_watch: None,
             terminal_text: String::new(),
@@ -506,6 +521,9 @@ impl WorkspaceView {
         if self.receive_pairing(id, &frame, cx) {
             return;
         }
+        if self.receive_provider_action(id, &frame, cx) {
+            return;
+        }
         if self.receive_model_accounts(id, &frame, cx) {
             return;
         }
@@ -609,7 +627,9 @@ impl WorkspaceView {
                     }
                 }
                 methods::LOCAL_DEVICE => self.verify_engine(value, cx),
-                methods::LIST_HARNESSES => {
+                methods::LIST_HARNESSES
+                | methods::SET_HARNESS_ENABLED
+                | methods::INSTALL_HARNESS => {
                     let previous = self
                         .providers
                         .get(self.provider_index)

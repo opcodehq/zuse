@@ -51,3 +51,5 @@ pub fn version_triple(version: &str) -> Option<(u64, u64, u64)> {
 pub mod message_attachments;
 
 pub mod browser_link;
+
+pub mod provider_setup;

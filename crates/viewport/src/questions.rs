@@ -101,7 +101,7 @@ impl WorkspaceView {
                         SharedString::from(option.clone()),
                     )
                     .when(selected, |button| {
-                        button.bg(rgb(0x343d22)).text_color(rgb(0xb4f327))
+                        button.bg(rgb(0x343d22)).text_color(rgb(0x89ca21))
                     })
                     .when(busy, |button| button.opacity(0.5))
                     .on_click(cx.listener(move |this, _, _, cx| {

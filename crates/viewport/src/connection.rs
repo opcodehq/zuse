@@ -68,6 +68,10 @@ impl WorkspaceView {
         }
         self.creating = None;
         self.picker_catalog.interrupted();
+        if !self.provider_actions.is_empty() {
+            self.provider_error=Some("Connection interrupted. Refresh provider status and check linked accounts before trying the action again.".into());
+            self.provider_actions.clear();
+        }
         self.pending.clear();
         self.transcript_watch = None;
         self.queue_watch = None;

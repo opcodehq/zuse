@@ -30,6 +30,7 @@ assets!(
     "terminal",
     "arrow-up",
     "alt-arrow-down",
+    "alt-arrow-left",
     "alt-arrow-right",
     "arrow-left",
     "close",
@@ -62,7 +63,7 @@ assets!(
 pub(super) fn icon(name: &str) -> Svg {
     svg()
         .path(SharedString::from(format!("icons/{name}.svg")))
-        .text_color(gpui::rgb(0x929292))
+        .text_color(crate::palette::rgb(0xa4a8a3))
         .size(gpui::px(16.))
         .flex_none()
 }

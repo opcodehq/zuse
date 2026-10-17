@@ -200,7 +200,7 @@ fn frame(theme: &Theme) -> Div {
         .flex_col()
         .p(px(4.))
         .rounded(px(zuse_viewport::settings_style::FRAME_RADIUS))
-        .bg(theme.wash(0.045))
+        .bg(theme.settings_frame_bg())
 }
 fn field(theme: &Theme, input: Entity<ComposerInput>) -> Div {
     div()

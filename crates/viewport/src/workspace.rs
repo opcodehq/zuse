@@ -249,21 +249,6 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    pub(super) fn choose_provider(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.provider_index = index;
-        self.model = None;
-        self.reasoning = None;
-        self.model_options.clear();
-        self.settings = false;
-        if let Some(provider) = self.providers.get(index) {
-            let provider = provider["id"].as_str().unwrap_or_default().to_owned();
-            self.model = self.preferences.default_models.get(&provider).cloned();
-            let request = self.call(methods::LIST_MODELS, json!({"harness":provider}));
-            self.picker_catalog.begin(&provider, request);
-        }
-        cx.notify();
-    }
-
     pub(super) fn attachment_paths(&self) -> Vec<&str> {
         self.attachments
             .iter()

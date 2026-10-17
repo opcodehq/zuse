@@ -232,20 +232,20 @@ const ANSI_LIGHT: [&str; 16] = [
 ];
 
 fn zuse_dark() -> ThemeVariant {
-    variant(Seeds {
+    let mut palette = variant(Seeds {
         id: "zuse-dark",
         family_id: "zuse",
         name: "Zuse Dark",
         appearance: Appearance::Dark,
-        treatment: SurfaceTreatment::Frosted,
-        background: "#060606",
-        shell: "#0d0d0d",
-        raised: "#343438",
-        card: "#0e0e0e",
-        text: "#e8e8ea",
-        muted: "#a9a9ae",
-        faint: "#85858a",
-        accent: "#8b7cf6",
+        treatment: SurfaceTreatment::Opaque,
+        background: "#0b0c0b",
+        shell: "#0e0f0e",
+        raised: "#191c1a",
+        card: "#121413",
+        text: "#e8e9e7",
+        muted: "#a4a8a3",
+        faint: "#6b716a",
+        accent: "#89ca21",
         danger: "#f87171",
         warning: "#facc15",
         success: "#34d399",
@@ -262,24 +262,31 @@ fn zuse_dark() -> ThemeVariant {
             "d138049",
             "MIT",
         ),
-    })
+    });
+    palette.colors.border = c("#1f211f");
+    palette.colors.border_strong = c("#292e2a");
+    palette.colors.input = c("#292e2a");
+    palette.accent.primary = c("#89ca21");
+    palette.accent.strong = c("#89ca21");
+    palette.accent.on = c("#0c170f");
+    palette
 }
 
 fn zuse_light() -> ThemeVariant {
-    variant(Seeds {
+    let mut palette = variant(Seeds {
         id: "zuse-light",
         family_id: "zuse",
         name: "Zuse Light",
         appearance: Appearance::Light,
-        treatment: SurfaceTreatment::Frosted,
-        background: "#ffffff",
-        shell: "#f3f3f5",
-        raised: "#ededf0",
+        treatment: SurfaceTreatment::Opaque,
+        background: "#f7f9f6",
+        shell: "#f1f5ef",
+        raised: "#e3e9e2",
         card: "#ffffff",
-        text: "#303035",
-        muted: "#62626a",
-        faint: "#797981",
-        accent: "#5b43e8",
+        text: "#1d261e",
+        muted: "#5a685b",
+        faint: "#748175",
+        accent: "#81bf1d",
         danger: "#dc2626",
         warning: "#a16207",
         success: "#15803d",
@@ -296,7 +303,14 @@ fn zuse_light() -> ThemeVariant {
             "d138049",
             "MIT",
         ),
-    })
+    });
+    palette.colors.border = c("#e1e7df");
+    palette.colors.border_strong = c("#cdd7cc");
+    palette.colors.input = c("#cdd7cc");
+    palette.accent.primary = c("#81bf1d");
+    palette.accent.strong = c("#81bf1d");
+    palette.accent.on = c("#0c170f");
+    palette
 }
 
 fn vscode_dark() -> ThemeVariant {
