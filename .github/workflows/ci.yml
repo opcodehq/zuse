@@ -31,6 +31,7 @@ jobs:
       - run: cargo check -p zuse-cli
       - run: cargo test -p zuse-cli --test startup
       - run: cargo test -p zuse-remote
+      - run: cargo test -p zuse-engine --test pairing
       - run: cargo test -p zuse-client --test live
       - run: cargo test -p zuse-protocol --lib methods::retry_tests
       - run: cargo test -p zuse-protocol --lib browser_link
@@ -86,7 +87,9 @@ jobs:
         with:
           tool: trunk@0.21.14
       - run: bash scripts/build-web.sh
-      - run: cargo check -p zuse-remote --target wasm32-unknown-unknown
+      - run: cargo +nightly check -p zuse-remote --target wasm32-unknown-unknown
+        env:
+          CARGO_TARGET_DIR: target/browser
       - uses: actions/upload-artifact@v4
         with:
           name: zuse-browser

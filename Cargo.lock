@@ -13777,6 +13777,7 @@ dependencies = [
  "zuse-preview",
  "zuse-protocol",
  "zuse-providers",
+ "zuse-remote",
  "zuse-rpc",
  "zuse-sync",
  "zuse-update",
@@ -13959,7 +13960,10 @@ dependencies = [
  "serde",
  "serde_json",
  "snow",
+ "subtle",
+ "tempfile",
  "thiserror 2.0.20",
+ "tokio-util",
  "zeroize",
 ]
 
@@ -13999,11 +14003,13 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite 0.24.0",
  "tokio-util",
  "tower",
  "tower-http",
  "uuid",
  "zuse-protocol",
+ "zuse-remote",
  "zuse-rpc",
 ]
 

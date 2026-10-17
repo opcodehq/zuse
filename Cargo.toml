@@ -44,6 +44,7 @@ license = "AGPL-3.0-only"
 publish = false
 
 [workspace.dependencies]
+zuse-remote = { path = "crates/remote" }
 zuse-harness = { path = "crates/harness" }
 zuse-model-accounts = { path = "crates/model-accounts" }
 zuse-voice-session = { path = "crates/voice-session" }

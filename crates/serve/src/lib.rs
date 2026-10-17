@@ -20,12 +20,15 @@ use tower_http::{
 };
 use zuse_rpc::RpcService;
 mod access_token;
+mod paired;
 mod tls;
 pub use tls::TlsConfig;
 
 #[derive(Clone)]
 pub struct BrowserServer {
     service: Arc<dyn RpcService>,
+    pairings: Option<(zuse_remote::authority::Authority, String)>,
+    paired_slots: Arc<tokio::sync::Semaphore>,
     token: Arc<str>,
     public_origin: Option<String>,
     secure_transport: bool,
@@ -58,12 +61,23 @@ impl BrowserServer {
         }
         Ok(Self {
             service,
+            pairings: None,
+            paired_slots: Arc::new(tokio::sync::Semaphore::new(64)),
             token: token.into(),
             secure_transport: public_origin.is_some(),
             public_origin,
             shutdown: tokio_util::sync::CancellationToken::new(),
             connections: tokio_util::task::TaskTracker::new(),
         })
+    }
+
+    pub fn with_pairings(
+        mut self,
+        authority: zuse_remote::authority::Authority,
+        device_id: impl Into<String>,
+    ) -> Self {
+        self.pairings = Some((authority, device_id.into()));
+        self
     }
 
     pub fn load_or_create_token(directory: &std::path::Path) -> anyhow::Result<String> {
@@ -87,6 +101,7 @@ impl BrowserServer {
             .route("/api/session", post(unlock).delete(lock))
             .route("/api/session/check", post(session_status))
             .route("/api/rpc", get(socket))
+            .route("/api/paired-rpc/{pair_id}", get(paired::upgrade))
             .route("/api/attachments", post(upload))
             .fallback_service(
                 ServeDir::new(&assets).not_found_service(ServeFile::new(assets.join("index.html"))),

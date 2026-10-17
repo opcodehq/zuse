@@ -687,6 +687,7 @@ enum MutateParams {
 
 #[derive(Clone)]
 pub struct EngineRpc {
+    pairings: Option<zuse_remote::authority::Authority>,
     model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
     plugins: Option<crate::plugins::Plugins>,
@@ -738,6 +739,7 @@ impl EngineRpc {
         };
         let github = GitHubCli::new().with_store(repos.data_dir());
         Self {
+            pairings: None,
             model_connections: None,
             account: None,
             plugins: None,
@@ -791,6 +793,11 @@ impl EngineRpc {
     /// Attach the auth service (AuthStatus + AuthRpc mutations).
     pub fn with_auth(mut self, auth: Auth) -> Self {
         self.auth = Some(auth);
+        self
+    }
+
+    pub fn with_pairings(mut self, pairings: zuse_remote::authority::Authority) -> Self {
+        self.pairings = Some(pairings);
         self
     }
 
@@ -1886,6 +1893,53 @@ impl RpcService for AuthRpc {
 #[async_trait]
 impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if matches!(
+            method,
+            methods::LIST_PAIRINGS | methods::CREATE_PAIRING | methods::REVOKE_PAIRING
+        ) {
+            if params
+                .get("targetDeviceId")
+                .filter(|value| !value.is_null())
+                .is_some_and(|target| target.as_str() != Some(self.doc_host.device_id()))
+            {
+                return Err(RpcError::BadParams(
+                    "Pairing controls belong to the connected profile".into(),
+                ));
+            }
+            let authority = self
+                .pairings
+                .as_ref()
+                .ok_or_else(|| RpcError::Failed("Pairing is unavailable".into()))?;
+            let failed = |error: zuse_remote::authority::Error| RpcError::Failed(error.to_string());
+            return match method {
+                methods::LIST_PAIRINGS => RpcReply::value(&authority.list().map_err(failed)?),
+                methods::CREATE_PAIRING => {
+                    #[derive(Deserialize)]
+                    struct Create {
+                        label: String,
+                    }
+                    let create: Create = parse_params(params)?;
+                    let (peer, invitation) = authority.create(&create.label).map_err(failed)?;
+                    let fragment = invitation.fragment().map_err(|_| {
+                        RpcError::Failed("Could not encode pairing invitation".into())
+                    })?;
+                    RpcReply::value(&serde_json::json!({"peer":peer,"fragment":fragment}))
+                }
+                _ => {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Revoke {
+                        pair_id: String,
+                    }
+                    let revoke: Revoke = parse_params(params)?;
+                    let id = zuse_remote::PairId::parse(&revoke.pair_id)
+                        .map_err(|_| RpcError::BadParams("Invalid pairing id".into()))?;
+                    authority.revoke(&id).map_err(failed)?;
+                    RpcReply::value(&serde_json::json!({}))
+                }
+            };
+        }
+
         // Device-addressed routing: forward calls that target another device over its
         // relay. The target compares the id to its own, so forwards cannot loop.
         if forwardable(method)

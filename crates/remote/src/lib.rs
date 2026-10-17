@@ -24,3 +24,16 @@ pub enum Error {
     #[error("Paired connection is closed")]
     Closed,
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod authority;
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerMetadata {
+    pub id: String,
+    pub label: String,
+    pub created_at: u64,
+    pub expires_at: Option<u64>,
+    pub paired_at: Option<u64>,
+}

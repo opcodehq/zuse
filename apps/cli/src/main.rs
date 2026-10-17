@@ -105,7 +105,10 @@ async fn run() -> anyhow::Result<()> {
         token.clone(),
         args.public_origin.clone(),
     ) {
-        Ok(browser) => browser,
+        Ok(browser) => browser.with_pairings(
+            runtime.core().pairings.clone(),
+            runtime.core().device_id.clone(),
+        ),
         Err(error) => {
             runtime.shutdown().await;
             return Err(error);

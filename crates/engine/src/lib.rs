@@ -142,6 +142,7 @@ pub struct EngineConfig {
 /// The assembled engine core — also constructible without the IPC server for tests
 /// and the in-process (headed) mode.
 pub struct EngineCore {
+    pub pairings: zuse_remote::authority::Authority,
     pub account: account::Account,
     pub model_connections: model_connections::ModelConnections,
     pub harness_models: harness_models::HarnessModels,
@@ -240,6 +241,8 @@ impl EngineCore {
         // This device's harness enablement (Settings → Providers) rides the
         // engine data dir — per-device, like the CLI installs it gates.
         registry.load_prefs(data_dir);
+        let pairings = zuse_remote::authority::Authority::open(profile.store_root())
+            .map_err(|error| EngineError::Other(error.to_string()))?;
         let store = Arc::new(DocsStore::open(profile.store_root())?);
         let store_for_import = store.clone();
         let journal = Arc::new(RunJournal::open(profile.store_root().join("journals"))?);
@@ -362,6 +365,7 @@ impl EngineCore {
         let plugins = plugins::Plugins::open(data_dir, account.clone(), workspace.clone())
             .map_err(|e| EngineError::Other(e.to_string()))?;
         Ok(Self {
+            pairings,
             harness_models,
             model_connections,
             account,
@@ -513,6 +517,7 @@ impl EngineCore {
             self.agent_accounts.clone(),
             self.workspace_scope,
         )
+        .with_pairings(self.pairings.clone())
         .with_model_connections(self.model_connections.clone())
         .with_account(self.account.clone(), self.plugins.clone())
         .with_auth(self.auth())
@@ -546,6 +551,7 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) {
+        self.pairings.close();
         // Freeze admission before any awaited cleanup: an Idle transition must
         // not release another queued command while credentials are draining.
         self.doc_host.pause_all_queues();

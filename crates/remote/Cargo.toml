@@ -16,3 +16,10 @@ thiserror.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio-util = { workspace = true, features = ["rt"] }
+subtle.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

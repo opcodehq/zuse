@@ -242,7 +242,8 @@ pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";
 /// Unknown methods and all actions keep their original delivery uncertainty.
 pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
     match method {
-        CLOUD_ACCOUNT_STATUS
+        LIST_PAIRINGS
+        | CLOUD_ACCOUNT_STATUS
         | LOCAL_DEVICE
         | LIST_HARNESSES
         | WATCH_CHATS
@@ -276,6 +277,8 @@ mod retry_tests {
     #[test]
     fn privileged_actions_and_unknown_methods_keep_uncertain_delivery() {
         for method in [
+            CREATE_PAIRING,
+            REVOKE_PAIRING,
             QUEUE_COMMAND,
             WRITE_WORKSPACE_FILE,
             SWITCH_REF,
@@ -285,6 +288,7 @@ mod retry_tests {
         ] {
             assert!(!retryable_read(method, &serde_json::json!({})));
         }
+        assert!(retryable_read(LIST_PAIRINGS, &serde_json::Value::Null));
         assert!(retryable_read(LIST_FOLDERS, &serde_json::Value::Null));
         assert!(retryable_read(
             PLUGINS,
@@ -296,3 +300,8 @@ mod retry_tests {
         ));
     }
 }
+
+/// Profile-owned pairing grants; only creation returns a private invitation.
+pub const LIST_PAIRINGS: &str = "ListPairings";
+pub const CREATE_PAIRING: &str = "CreatePairing";
+pub const REVOKE_PAIRING: &str = "RevokePairing";
