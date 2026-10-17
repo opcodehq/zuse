@@ -39,6 +39,10 @@ assets!(
     "cursor-mark",
     "opencode-mark",
     "pi-mark",
+    "devin-mark",
+    "grok-mark",
+    "hermes-mark",
+    "antigravity-mark",
     "check",
     "stop",
     "refresh",
@@ -49,7 +53,8 @@ assets!(
     "file-tree",
     "globe",
     "clock-circle",
-    "copy"
+    "copy",
+    "magnifer"
 );
 
 pub(super) fn icon(name: &str) -> Svg {

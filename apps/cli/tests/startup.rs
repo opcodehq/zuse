@@ -27,10 +27,7 @@ impl Server {
             .env("CLAUDE_CODE_EXECUTABLE", bin.join("claude"))
             .env("ZUSE_STARTUP_CAPTURE", capture)
             .env("ZUSE_STARTUP_TOOL_FRAME", bin.join("tool-result.json"))
-            .env(
-                "ZUSE_BROWSER_TOKEN",
-                "local-startup-fixture-token-with-32-characters",
-            )
+            .env_remove("ZUSE_BROWSER_TOKEN")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -212,9 +209,14 @@ printf '%s\n' '{"type":"result","subtype":"success","session_id":"startup-fixtur
             .is_err(),
         "tool results must stay profile-local"
     );
+    let token = std::fs::read(root.path().join("one/browser-access-token")).unwrap();
     first.stop().await;
     second.stop().await;
     let mut reopened = Server::start(&root.path().join("one"), &bin, &capture).await;
+    assert_eq!(
+        std::fs::read(root.path().join("one/browser-access-token")).unwrap(),
+        token
+    );
     let client = reopened.client().await;
     let mut text = String::new();
     let mut offset = 0;

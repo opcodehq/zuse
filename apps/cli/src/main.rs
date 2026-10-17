@@ -67,6 +67,11 @@ async fn run() -> anyhow::Result<()> {
     let ipc_port = ipc.local_addr()?.port();
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     let address = listener.local_addr()?;
+    let token = match args.token {
+        Some(token) => token,
+        None => BrowserServer::load_or_create_token(&data_dir)?,
+    };
+
     let config = EngineConfig {
         data_dir: data_dir.clone(),
         edge_url: "http://127.0.0.1:27655".into(),
@@ -80,7 +85,6 @@ async fn run() -> anyhow::Result<()> {
     let runtime = Engine::assemble_runtime(&config, auth, EngineProfile::local(&data_dir)?).await?;
     // Agent-origin attribution and plugin tools must dial this engine's real port.
     runtime.core().sessions.set_ipc_port(ipc_port);
-    let token = args.token.unwrap_or_else(BrowserServer::random_token);
     let browser = match BrowserServer::new(
         runtime.core().rpc_service(),
         token.clone(),

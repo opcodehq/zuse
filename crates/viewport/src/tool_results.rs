@@ -58,6 +58,15 @@ fn result_lines(text: &str, diff: bool) -> (Vec<ResultLine>, Option<String>) {
     )
 }
 impl WorkspaceView {
+    pub(super) fn interrupt_tool_results(&mut self) {
+        self.tool_result_requests.clear();
+        for view in self.tool_results.values_mut() {
+            if view.busy {
+                view.busy = false;
+                view.error = Some("Read interrupted. Retry when connected.".into());
+            }
+        }
+    }
     pub(super) fn reset_tool_results(&mut self) {
         for id in std::mem::take(&mut self.tool_result_requests).into_keys() {
             self.cancel(id);
