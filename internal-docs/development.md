@@ -26,6 +26,12 @@ The HTTP connection pool and refresh authority are shared across concurrent agen
 
 `cargo run -p zuse-cli -- --listen 127.0.0.1:27656 --ipc-port 0 --data-dir .context/local-profile` starts an isolated profile with an available agent-tool RPC port. Relative profile paths are resolved before workspace creation. Each launched agent receives this engine's actual RPC endpoint. SIGTERM and Ctrl+C both drain the runtime. Keep the printed browser access link private.
 
+Direct HTTPS accepts `--tls-cert` / `--tls-key` (or `ZUSE_TLS_CERT` / `ZUSE_TLS_KEY`) for a PEM certificate chain and matching PKCS#8, RSA or SEC1 key. The certificate must cover the hostname/IP used by the browser, and its issuing CA must be trusted on that device. Certificate changes take effect after restarting the server. With a wildcard listener, set `--public-origin https://<LAN-host>:<port>` to print the intended client URL and restrict browser origins to it. The origin has no trailing slash.
+
+Without direct TLS, `--public-origin` remains available for an HTTPS reverse proxy. The proxy terminates HTTPS and forwards the browser HTTP/WebSocket routes to the private backend. Non-loopback HTTP listening requires this explicit reverse-proxy configuration; an unconfigured LAN HTTP listener fails before starting engine workers. Agent-tool IPC always binds loopback, independently of the browser listener.
+
+HTTPS uses Secure, HttpOnly, SameSite=Strict cookies. TLS handshakes run concurrently with a bounded pending set and deadline, so a stalled handshake does not block ordinary clients. Browser subscriptions close when the server receives SIGTERM/Ctrl+C, including when the remote client is not reading; RPC input closes and its request tasks are cancelled before engine shutdown. Interrupted mutation delivery retains the existing no-automatic-replay behavior.
+
 For an interrupted-write UI fixture, build and run `cargo run -p zuse-engine --example recovery-fixture -- <new-profile-directory>`, then serve that profile. The fixture refuses existing directories, writes an evidence file, and deliberately leaves one durable tool receipt requiring inspection. It uses a scripted model and requires no provider credentials.
 
 ## Local tool results

@@ -20,12 +20,17 @@ use tower_http::{
 };
 use zuse_rpc::RpcService;
 mod access_token;
+mod tls;
+pub use tls::TlsConfig;
 
 #[derive(Clone)]
 pub struct BrowserServer {
     service: Arc<dyn RpcService>,
     token: Arc<str>,
     public_origin: Option<String>,
+    secure_transport: bool,
+    shutdown: tokio_util::sync::CancellationToken,
+    connections: tokio_util::task::TaskTracker,
 }
 
 impl BrowserServer {
@@ -54,7 +59,10 @@ impl BrowserServer {
         Ok(Self {
             service,
             token: token.into(),
+            secure_transport: public_origin.is_some(),
             public_origin,
+            shutdown: tokio_util::sync::CancellationToken::new(),
+            connections: tokio_util::task::TaskTracker::new(),
         })
     }
 
@@ -103,11 +111,59 @@ impl BrowserServer {
     }
 
     pub async fn serve(self, listener: TcpListener, assets: PathBuf) -> anyhow::Result<()> {
-        axum::serve(listener, self.router(assets))
-            .with_graceful_shutdown(async {
-                let _ = shutdown_signal().await;
-            })
-            .await?;
+        self.serve_with_shutdown(listener, assets, None, async {
+            let _ = shutdown_signal().await;
+        })
+        .await
+    }
+
+    pub async fn serve_tls(
+        self,
+        listener: TcpListener,
+        assets: PathBuf,
+        tls: TlsConfig,
+    ) -> anyhow::Result<()> {
+        self.serve_with_shutdown(listener, assets, Some(tls), async {
+            let _ = shutdown_signal().await;
+        })
+        .await
+    }
+
+    /// Embed the browser server with the host's shutdown authority. Cancelling
+    /// the host also closes upgraded sockets and their RPC subscriptions.
+    pub async fn serve_with_shutdown<F>(
+        mut self,
+        listener: TcpListener,
+        assets: PathBuf,
+        tls: Option<TlsConfig>,
+        signal: F,
+    ) -> anyhow::Result<()>
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.secure_transport |= tls.is_some();
+        let shutdown = self.shutdown.clone();
+        let _guard = shutdown.clone().drop_guard();
+        let connections = self.connections.clone();
+        let signal = async move {
+            signal.await;
+            shutdown.cancel();
+        };
+        let router = self.router(assets);
+        match tls {
+            Some(tls) => {
+                axum::serve(tls::Listener::new(listener, tls), router)
+                    .with_graceful_shutdown(signal)
+                    .await?
+            }
+            None => {
+                axum::serve(listener, router)
+                    .with_graceful_shutdown(signal)
+                    .await?
+            }
+        }
+        connections.close();
+        connections.wait().await;
         Ok(())
     }
 
@@ -144,11 +200,16 @@ impl BrowserServer {
         let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
             return false;
         };
-        origin == format!("http://{host}") || origin == format!("https://{host}")
+        let scheme = if self.secure_transport {
+            "https"
+        } else {
+            "http"
+        };
+        origin == format!("{scheme}://{host}")
     }
 
     fn cookie(&self, value: &str) -> String {
-        let secure = if self.public_origin.is_some() {
+        let secure = if self.secure_transport {
             "; Secure"
         } else {
             ""
@@ -208,28 +269,42 @@ async fn socket(
     if !server.authorized(&headers) || !server.valid_origin(&headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    ws.max_message_size(2 * 1024 * 1024).on_upgrade(move |socket| async move {
-        let (mut writer, mut reader) = socket.split();
-        let (out_tx, mut out_rx) = mpsc::channel::<String>(128);
-        let (in_tx, in_rx) = mpsc::channel::<String>(128);
-        let dispatch = tokio::spawn(zuse_rpc::serve_connection(server.service, out_tx, in_rx));
-        loop {
-            tokio::select! {
-                payload = out_rx.recv() => match payload {
-                    Some(payload) => if writer.send(Message::Text(payload.into())).await.is_err() { break; },
-                    None => break,
-                },
-                message = reader.next() => match message {
-                    Some(Ok(Message::Text(payload))) => if in_tx.send(payload.to_string()).await.is_err() { break; },
-                    Some(Ok(Message::Ping(data))) => if writer.send(Message::Pong(data)).await.is_err() { break; },
-                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                    _ => {},
+    let connections = server.connections.clone();
+    ws.max_message_size(2 * 1024 * 1024)
+        .on_upgrade(move |socket| connections.track_future(browser_socket(server, socket)))
+}
+
+async fn browser_socket(server: BrowserServer, socket: axum::extract::ws::WebSocket) {
+    // An upgrade completing after listener shutdown must not start RPC work.
+    if server.shutdown.is_cancelled() {
+        return;
+    }
+    let (mut writer, mut reader) = socket.split();
+    let (out_tx, mut out_rx) = mpsc::channel::<String>(128);
+    let (in_tx, in_rx) = mpsc::channel::<String>(128);
+    let dispatch = tokio::spawn(zuse_rpc::serve_connection(server.service, out_tx, in_rx));
+    let shutdown = server.shutdown;
+    {
+        let exchange = async {
+            loop {
+                tokio::select! {
+                    payload = out_rx.recv() => match payload {
+                        Some(payload) => if writer.send(Message::Text(payload.into())).await.is_err() { break; },
+                        None => break,
+                    },
+                    message = reader.next() => match message {
+                        Some(Ok(Message::Text(payload))) => if in_tx.send(payload.to_string()).await.is_err() { break; },
+                        Some(Ok(Message::Ping(data))) => if writer.send(Message::Pong(data)).await.is_err() { break; },
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                        _ => {},
+                    }
                 }
             }
-        }
-        drop(in_tx);
-        let _ = dispatch.await;
-    })
+        };
+        tokio::select! { biased; _ = shutdown.cancelled() => {}, _ = exchange => {} }
+    }
+    drop(in_tx);
+    let _ = dispatch.await;
 }
 
 #[cfg(test)]

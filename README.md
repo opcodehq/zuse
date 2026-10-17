@@ -24,7 +24,24 @@ cargo check -p zuse-engine
 cargo run -p zuse
 ```
 
-Native/browser startup, packaging and integration commands will be documented as they become verified. Local development must not require a hosted account.
+For the browser target, install nightly Rust with `rust-src` and the `wasm32-unknown-unknown` target, plus Trunk 0.21.14. Then build and serve the same local engine:
+
+```sh
+bash scripts/build-web.sh
+cargo run -p zuse-cli -- --ipc-port 0 --data-dir .context/local-profile
+```
+
+Open the printed private link in a WebGPU-capable browser. Local development does not require a hosted Zuse account; the selected agent still needs its provider credentials.
+
+For LAN access, supply a certificate trusted by the connecting device and a matching private key. Replace the example hostname with your certificate's LAN hostname or IP:
+
+```sh
+cargo run -p zuse-cli -- --listen 0.0.0.0:27656 --ipc-port 0 \
+  --tls-cert certs/lan-cert.pem --tls-key certs/lan-key.pem \
+  --public-origin https://zuse.local:27656 --data-dir .context/lan-profile
+```
+
+Direct HTTPS uses Secure browser cookies and WSS for agent RPC. See [development setup](internal-docs/development.md) for reverse-proxy configuration and platform requirements. Packaging and full cross-device runtime acceptance remain in progress.
 
 ## License
 

@@ -28,6 +28,9 @@ impl Server {
             .env("ZUSE_STARTUP_CAPTURE", capture)
             .env("ZUSE_STARTUP_TOOL_FRAME", bin.join("tool-result.json"))
             .env_remove("ZUSE_BROWSER_TOKEN")
+            .env_remove("ZUSE_PUBLIC_ORIGIN")
+            .env_remove("ZUSE_TLS_CERT")
+            .env_remove("ZUSE_TLS_KEY")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -329,4 +332,193 @@ async fn scratch_checkout_review_and_editing_reject_stale_disk_state() {
         "external edit\n"
     );
     server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_https_authenticates_browser_rpc_and_drains_open_websockets_on_sigterm() {
+    use futures::{SinkExt, StreamExt};
+    use std::sync::Arc;
+    use tokio_rustls::rustls;
+    use tokio_tungstenite::{
+        Connector,
+        tungstenite::{Message, client::IntoClientRequest},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let rcgen::CertifiedKey { cert, signing_key } =
+        rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let certificate = root.path().join("certificate.pem");
+    let key = root.path().join("key.pem");
+    std::fs::write(&certificate, cert.pem()).unwrap();
+    std::fs::write(&key, signing_key.serialize_pem()).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_zuse-server"))
+        .args(["--listen", "127.0.0.1:0", "--ipc-port", "0", "--data-dir"])
+        .arg(root.path().join("profile"))
+        .arg("--tls-cert")
+        .arg(&certificate)
+        .arg("--tls-key")
+        .arg(&key)
+        .env("ZUSE_BROWSER_TOKEN", "b".repeat(64))
+        .env_remove("ZUSE_PUBLIC_ORIGIN")
+        .env_remove("ZUSE_TLS_CERT")
+        .env_remove("ZUSE_TLS_KEY")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let origin = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let mut line = String::new();
+            assert!(
+                output.read_line(&mut line).await.unwrap() > 0,
+                "HTTPS server ended before readiness"
+            );
+            if let Some(link) = line.trim().strip_prefix("Open ") {
+                break link.split("/#token=").next().unwrap().to_owned();
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(origin.starts_with("https://127.0.0.1:"));
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .add_root_certificate(reqwest::Certificate::from_der(cert.der()).unwrap())
+        .build()
+        .unwrap();
+    // A valid certificate is required; no certificate-verification bypass is used.
+    assert_eq!(
+        client
+            .get(format!("{origin}/health"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    let denied = client
+        .post(format!("{origin}/api/session"))
+        .header("Origin", "https://foreign.example")
+        .json(&json!({"token":"b".repeat(64)}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let unlocked = client
+        .post(format!("{origin}/api/session"))
+        .header("Origin", &origin)
+        .json(&json!({"token":"b".repeat(64)}))
+        .send()
+        .await
+        .unwrap();
+    assert!(unlocked.status().is_success());
+    let cookie = unlocked
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        cookie.contains("; Secure")
+            && cookie.contains("HttpOnly")
+            && cookie.contains("SameSite=Strict")
+    );
+    let cookie = cookie.split(';').next().unwrap().to_owned();
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(cert.der().clone()).unwrap();
+    let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    let mut request = format!("{}/api/rpc", origin.replacen("https://", "wss://", 1))
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("Origin", origin.parse().unwrap());
+    request
+        .headers_mut()
+        .insert("Cookie", cookie.parse().unwrap());
+    let (mut socket, _) = tokio_tungstenite::connect_async_tls_with_config(
+        request,
+        None,
+        false,
+        Some(Connector::Rustls(Arc::new(tls))),
+    )
+    .await
+    .unwrap();
+    socket
+        .send(Message::Text(
+            json!({"id":1,"method":"WatchSessions","params":{}}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let frame = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let response: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+    assert_eq!(response["id"], 1);
+    assert!(response["item"].is_array());
+    // Keep the browser subscription open while the actual process drains.
+    let pid = child.id().unwrap();
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .await
+            .unwrap()
+            .success()
+    );
+    let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(status.success());
+    let closed = tokio::time::timeout(Duration::from_secs(3), socket.next())
+        .await
+        .unwrap();
+    assert!(!matches!(closed, Some(Ok(Message::Text(_)))));
+}
+
+#[tokio::test]
+async fn invalid_network_configuration_fails_before_starting_the_engine() {
+    let root = tempfile::tempdir().unwrap();
+    for (name, arguments, expected) in [
+        (
+            "unencrypted-lan",
+            vec!["--listen", "0.0.0.0:0"],
+            "Non-loopback listening requires",
+        ),
+        (
+            "incomplete-tls",
+            vec!["--tls-cert", "missing-certificate.pem"],
+            "--tls-key",
+        ),
+    ] {
+        let profile = root.path().join(name);
+        let output = tokio::time::timeout(
+            Duration::from_secs(5),
+            Command::new(env!("CARGO_BIN_EXE_zuse-server"))
+                .args(arguments)
+                .arg("--data-dir")
+                .arg(&profile)
+                .env_remove("ZUSE_TLS_CERT")
+                .env_remove("ZUSE_TLS_KEY")
+                .env_remove("ZUSE_PUBLIC_ORIGIN")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+        assert!(!profile.exists());
+    }
 }

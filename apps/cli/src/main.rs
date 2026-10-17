@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use std::{net::SocketAddr, path::PathBuf};
 use zuse_engine::{Engine, EngineConfig, EngineProfile};
 use zuse_protocol::HarnessId;
-use zuse_serve::BrowserServer;
+use zuse_serve::{BrowserServer, TlsConfig};
 
 #[derive(Parser)]
 #[command(
@@ -26,6 +26,12 @@ struct Args {
     token: Option<String>,
     #[arg(long, env = "ZUSE_PUBLIC_ORIGIN")]
     public_origin: Option<String>,
+    /// PEM certificate chain for direct HTTPS, trusted by connecting browsers.
+    #[arg(long, env = "ZUSE_TLS_CERT", requires = "tls_key")]
+    tls_cert: Option<PathBuf>,
+    /// Matching PEM private key for direct HTTPS.
+    #[arg(long, env = "ZUSE_TLS_KEY", requires = "tls_cert")]
+    tls_key: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -53,6 +59,15 @@ async fn run() -> anyhow::Result<()> {
         zuse_mcp::run(zuse_mcp::McpConfig::from_env()).await?;
         return Ok(());
     }
+    let tls = match (&args.tls_cert, &args.tls_key) {
+        (Some(certificate), Some(key)) => Some(TlsConfig::from_pem_files(certificate, key)?),
+        (None, None) => None,
+        _ => anyhow::bail!("Direct HTTPS requires both --tls-cert and --tls-key"),
+    };
+    anyhow::ensure!(
+        args.listen.ip().is_loopback() || tls.is_some() || args.public_origin.is_some(),
+        "Non-loopback listening requires --tls-cert/--tls-key or --public-origin for an HTTPS reverse proxy"
+    );
     let data_dir = args.data_dir.unwrap_or_else(|| {
         PathBuf::from(std::env::var_os("HOME").expect("HOME or --data-dir is required"))
             .join(".zuse-native")
@@ -100,12 +115,18 @@ async fn run() -> anyhow::Result<()> {
         ipc,
         runtime.core().rpc_service(),
     ));
-    let origin = args
-        .public_origin
-        .unwrap_or_else(|| format!("http://{address}"));
+    let origin = args.public_origin.unwrap_or_else(|| {
+        format!(
+            "{}://{address}",
+            if tls.is_some() { "https" } else { "http" }
+        )
+    });
     println!("Agent tools listen on 127.0.0.1:{ipc_port}");
     println!("Open {origin}/#token={token}");
-    let result = browser.serve(listener, args.assets).await;
+    let result = match tls {
+        Some(tls) => browser.serve_tls(listener, args.assets, tls).await,
+        None => browser.serve(listener, args.assets).await,
+    };
     ipc_task.abort();
     runtime.shutdown().await;
     result
