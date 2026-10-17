@@ -1,6 +1,6 @@
 # Rust harness
 
-`crates/harness` ports the Zuse agent kernel into Rust. It is currently a compiled and fixture-tested runtime component. It is not registered in the application's provider picker yet. Native filesystem/process tools, model-connection OAuth and vault integration, provider event adaptation, and recovery controls still need application integration before this is an accepted Zuse session provider.
+`crates/harness` ports the Zuse agent kernel into Rust. It is currently a compiled and fixture-tested runtime component. It is not registered in the application's provider picker yet. Native file/process tools are implemented and tested through the kernel; model-connection consumption, provider event adaptation, and recovery controls still need application integration before this is an accepted Zuse session provider.
 
 ## Runtime authority
 
@@ -66,3 +66,41 @@ limits/deadlines, descendant cleanup, output backpressure, launch acknowledgemen
 lease ordering, shutdown races, and notification restart without command replay.
 Native tool dispatch, application provider registration, and live conversation
 acceptance remain pending.
+
+## Native coding tools
+
+`native_tools::NativeTools` supplies file/image reads, directory listing, ripgrep
+search, hash-checked create/write/edit/multi-edit, supervised command controls,
+and optional user-question and plan callbacks. One field description generates
+the model schemas and validates execution arguments, including defaults and bounds.
+Missing `expected_hash` is rejected; explicit null means exclusive file creation.
+
+Checkout resolution permits internal symlinks and rejects paths escaping the
+checkout. Directory descriptors and no-follow opens remain held through file
+reads and atomic commits. Edits share OS locks across conversation roots, require
+a fresh SHA-256, validate every replacement before writing, and preserve executable
+modes. Conflicts retain the existing file. Large text results go into private
+artifacts while retaining the path/hash metadata needed for subsequent edits.
+File reads are bounded to 2 MiB; line selection avoids allocating an entry for
+every line in the file.
+
+The permission policy preserves runtime modes, plan mode, accept-edits behavior,
+and forced approval for sensitive paths. Read-only children cannot override that
+authority with tool arguments. Cancellation and dropped futures cancel pending
+file work; close waits for blocking file jobs before releasing root ownership.
+Successful background commands retain their agent's interruption lineage instead
+of being cancelled when the initial tool invocation returns.
+
+`NativeTools::attach` combines these tools with application model transport,
+instructions, events and orchestration tools. Name collisions fail explicitly.
+Create this composition inside `Engine::open_native_with` so recovery and tool
+initialization occur under the root lease. Application callbacks must preserve
+session ownership and permission-generation checks.
+
+The complete harness suite now passes 32 tests. Eight native-tool scenarios
+cover file conflicts and atomic edits, cross-root writes, symlink containment,
+permissions, image/binary/large reads, process/search dispatch, questions/plans,
+abort cleanup, and a durable-kernel coding workflow with real filesystem and
+command execution. That workflow uses a scripted model; selectable application
+provider registration, live model sessions, UI acceptance and packaged ripgrep
+resolution remain pending.

@@ -4,6 +4,8 @@ pub mod bridge;
 pub mod broker;
 mod engine;
 pub mod native;
+#[cfg(unix)]
+pub mod native_tools;
 pub mod processes;
 pub mod prompt;
 pub mod state;
