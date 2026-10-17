@@ -1106,3 +1106,82 @@ async fn stalled_wakes_yield_delivery_capacity_to_later_chats() {
     );
     client.shutdown();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lost_relay_ack_never_repeats_an_action_but_read_queries_can_redial() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct LostAckService {
+        base: HostService,
+        writes: AtomicUsize,
+        reads: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl zuse_rpc::RpcService for LostAckService {
+        async fn handle(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+            match method {
+                zuse_rpc::methods::SWITCH_REF => {
+                    self.writes.fetch_add(1, Ordering::SeqCst);
+                    zuse_rpc::RpcReply::value(&serde_json::json!({"lostMutationReply":true}))
+                }
+                zuse_rpc::methods::LIST_FOLDERS => {
+                    self.reads.fetch_add(1, Ordering::SeqCst);
+                    zuse_rpc::RpcReply::value(
+                        &serde_json::json!({"path":"/Users/dev","entries":[],"truncated":false,"lostReadReply":true}),
+                    )
+                }
+                _ => zuse_rpc::RpcService::handle(&self.base, method, params).await,
+            }
+        }
+    }
+    let edge = MockEdge::start().await;
+    let _registry = HostRegistry::start(&edge).await;
+    let service = Arc::new(LostAckService {
+        base: HostService::default(),
+        writes: AtomicUsize::new(0),
+        reads: AtomicUsize::new(0),
+    });
+    let _relay = zuse_rpc::HostRelay::spawn(
+        zuse_rpc::HostRelayConfig::new(
+            edge.edge_url(),
+            HOST,
+            Arc::new(zuse_rpc::StaticToken("t".into())),
+        ),
+        service.clone(),
+        Arc::new(|_| true),
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let client = phone(&edge, directory.path());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !(edge.relay_host_connected(HOST)
+            && client.workspace().device(HOST).is_some_and(|d| d.online))
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // The real host handles the action, then the edge drops its successful ACK.
+    edge.drop_next_reply_containing("lostMutationReply");
+    let c = client.clone();
+    let result =
+        zuse_client::runtime::run(
+            async move { c.switch_ref(HOST, "/Users/dev/live", "main").await },
+        )
+        .await;
+    assert!(result.is_err(), "delivery must remain unconfirmed");
+    assert_eq!(service.writes.load(Ordering::SeqCst), 1);
+    // A fresh caller may still recover a read query through a new connection.
+    edge.drop_next_reply_containing("lostReadReply");
+    let c = client.clone();
+    let folders = zuse_client::runtime::run(async move { c.list_folders(HOST, None).await })
+        .await
+        .unwrap();
+    assert_eq!(folders.path, "/Users/dev");
+    assert_eq!(service.reads.load(Ordering::SeqCst), 2);
+    assert_eq!(service.writes.load(Ordering::SeqCst), 1);
+    client.shutdown();
+}

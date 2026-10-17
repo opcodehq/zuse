@@ -128,8 +128,7 @@ impl Relay {
         self.links.reset_cooldown(device_id);
     }
 
-    /// One unary call with a deadline; a stale cached link is retried once
-    /// on a fresh dial.
+    /// Read queries may redial once. An unacknowledged action is never replayed.
     pub(crate) async fn call(&self, device_id: &str, method: &str, params: Value) -> Result<Value> {
         let timeout = deadline(method);
         for attempt in 0..2 {
@@ -142,6 +141,11 @@ impl Relay {
                 Ok(Ok(value)) => return Ok(value),
                 Ok(Err(err @ (RpcError::Closed | RpcError::Transport(_)))) => {
                     self.links.invalidate(device_id);
+                    if !methods::retryable_read(method, &params) {
+                        return Err(ClientError::HostUnavailable(
+                            "Connection lost. This action may have completed. Check the host before trying again.".into(),
+                        ));
+                    }
                     if attempt == 1 {
                         return Err(map_rpc(device_id, method, err));
                     }

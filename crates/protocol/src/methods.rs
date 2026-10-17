@@ -237,3 +237,62 @@ pub const MODEL_COMPLETE_LOGIN: &str = "ModelConnectionCompleteLogin";
 /// Authenticated user controls; these methods must never be model tools.
 pub const INSPECT_RECOVERY: &str = "InspectRecovery";
 pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";
+
+/// Only explicit read operations may be retried after an uncertain disconnect.
+/// Unknown methods and all actions keep their original delivery uncertainty.
+pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
+    match method {
+        CLOUD_ACCOUNT_STATUS
+        | LOCAL_DEVICE
+        | LIST_HARNESSES
+        | WATCH_CHATS
+        | WATCH_SESSIONS
+        | WATCH_SPACES
+        | LIST_REPOS
+        | MODEL_CONNECTIONS
+        | LIST_MODELS
+        | LIST_AGENT_ACCOUNTS
+        | WATCH_DOC_MESSAGES
+        | WATCH_QUEUE
+        | LIST_WORKSPACE_DIRECTORY
+        | READ_WORKSPACE_FILE
+        | READ_ATTACHMENT_CHUNK
+        | GET_CHECKOUT_DIFF
+        | GET_CHECKOUT_FILE_DIFF_TEXT
+        | FETCH_TOOL_BLOB
+        | SUBSCRIBE_TERMINAL
+        | INSPECT_RECOVERY
+        | LIST_REFS
+        | LIST_FOLDERS
+        | SEARCH_FILES => true,
+        PLUGINS => params["action"] == "list",
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    #[test]
+    fn privileged_actions_and_unknown_methods_keep_uncertain_delivery() {
+        for method in [
+            QUEUE_COMMAND,
+            WRITE_WORKSPACE_FILE,
+            SWITCH_REF,
+            PLUGINS,
+            MODEL_CONNECT,
+            "FutureMethod",
+        ] {
+            assert!(!retryable_read(method, &serde_json::json!({})));
+        }
+        assert!(retryable_read(LIST_FOLDERS, &serde_json::Value::Null));
+        assert!(retryable_read(
+            PLUGINS,
+            &serde_json::json!({"action":"list"})
+        ));
+        assert!(!retryable_read(
+            PLUGINS,
+            &serde_json::json!({"action":"call"})
+        ));
+    }
+}

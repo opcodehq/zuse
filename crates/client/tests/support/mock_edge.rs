@@ -57,6 +57,7 @@ struct Shared {
     nudge_status_by_chat: Mutex<HashMap<String, u16>>,
     nudges: Mutex<Vec<(String, usize)>>,
     host_hints: Mutex<HashMap<String, String>>,
+    drop_reply: Mutex<Option<String>>,
 }
 
 enum Out {
@@ -94,6 +95,7 @@ impl MockEdge {
             nudge_status_by_chat: Mutex::new(HashMap::new()),
             nudges: Mutex::new(Vec::new()),
             host_hints: Mutex::new(HashMap::new()),
+            drop_reply: Mutex::new(None),
         });
         let accept_shared = shared.clone();
         let task = tokio::spawn(async move {
@@ -299,6 +301,11 @@ impl MockEdge {
             .get(chat)
             .copied()
             .unwrap_or(0)
+    }
+
+    pub fn drop_next_reply_containing(&self, marker: &str) {
+        assert!(!marker.is_empty());
+        *self.shared.drop_reply.lock().unwrap() = Some(marker.into());
     }
 
     pub fn relay_host_connected(&self, device: &str) -> bool {
@@ -566,6 +573,23 @@ async fn serve_relay(ws: Ws, device: String, query: HashMap<String, String>, sha
         let Some(to) = header.to else { continue };
         match st.clients.get(&to) {
             Some(client) => {
+                let drop_reply = {
+                    let mut marker = shared.drop_reply.lock().unwrap();
+                    if marker.as_ref().is_some_and(|value| {
+                        payload
+                            .windows(value.len())
+                            .any(|part| part == value.as_bytes())
+                    }) {
+                        marker.take();
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if drop_reply {
+                    let _ = client.send(Out::Close);
+                    continue;
+                }
                 let stripped = DeviceFrameHeader::new(header.s, header.k);
                 let _ = client.send(Out::Frame(
                     encode_device_frame(&stripped, &payload).unwrap(),

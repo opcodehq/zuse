@@ -88,31 +88,12 @@ async fn wait_offline(
     }
 }
 fn mutation(frame: &Value) -> bool {
-    match frame["method"].as_str().unwrap_or_default() {
-        methods::CLOUD_ACCOUNT_STATUS
-        | methods::LOCAL_DEVICE
-        | methods::LIST_HARNESSES
-        | methods::WATCH_CHATS
-        | methods::WATCH_SESSIONS
-        | methods::WATCH_SPACES
-        | methods::LIST_REPOS
-        | methods::MODEL_CONNECTIONS
-        | methods::LIST_MODELS
-        | methods::LIST_AGENT_ACCOUNTS
-        | methods::WATCH_DOC_MESSAGES
-        | methods::WATCH_QUEUE
-        | methods::LIST_WORKSPACE_DIRECTORY
-        | methods::READ_WORKSPACE_FILE
-        | methods::READ_ATTACHMENT_CHUNK
-        | methods::GET_CHECKOUT_DIFF
-        | methods::GET_CHECKOUT_FILE_DIFF_TEXT
-        | methods::FETCH_TOOL_BLOB
-        | methods::SUBSCRIBE_TERMINAL
-        | methods::INSPECT_RECOVERY => false,
-        methods::PLUGINS if frame["params"]["action"] == "list" => false,
-        _ => true,
-    }
+    !methods::retryable_read(
+        frame["method"].as_str().unwrap_or_default(),
+        &frame["params"],
+    )
 }
+
 pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Sender) {
     if let Err(error) = super::browser::unlock().await {
         let _=events.unbounded_send(json!({"connection":"authRequired","message":error.as_string().unwrap_or_else(||"Authentication required".into())}));
