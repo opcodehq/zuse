@@ -211,9 +211,11 @@ async fn publish_steer(
     turn: &TurnControl,
     message: SteerMessage,
     row: RoutedSteer,
+    on_admitted: impl FnOnce(),
 ) -> Result<(), SteerOutcome> {
     let mut message = Some(message);
     let mut row = Some(row);
+    let mut on_admitted = Some(on_admitted);
     loop {
         let permit = tx.reserve().await.map_err(|_| SteerOutcome::NotSteerable)?;
         let admitted = registry.while_update_clear(harness, || {
@@ -225,6 +227,9 @@ async fn publish_steer(
             row.epoch = epoch;
             row.after_stop = retiring.load(std::sync::atomic::Ordering::Acquire);
             ledger.push_back(row);
+            // Publish Working before the driver can consume and acknowledge
+            // a receipt, including a replay that immediately remains idle.
+            on_admitted.take().unwrap()();
             permit.send(message.take().unwrap());
             true
         });
@@ -682,9 +687,11 @@ impl SessionsEngine {
                     // Images ride the mailbox too: replacing the runtime just
                     // to inline them killed its background work.
                     attachments: request.attachments.clone(),
-                    // A changed model/effort/option the live process adopts
-                    // in place: replacing it killed its background work.
-                    config: reconfigure.then(|| Box::new(request.clone())),
+                    // Native deliveries carry their complete selection until
+                    // consumption confirms it; multiple pending selections
+                    // must not rely on a speculative live configuration.
+                    config: (reconfigure || harness_id == HarnessId::Zuse)
+                        .then(|| Box::new(request.clone())),
                 };
                 publish_steer(
                     &self.inner.registry,
@@ -702,6 +709,11 @@ impl SessionsEngine {
                         after_stop: false,
                         request: Some(Box::new(request.clone())),
                     },
+                    || {
+                        if harness_id == HarnessId::Zuse {
+                            self.set_status(chat_id, SessionStatus::Working, false);
+                        }
+                    },
                 )
                 .await
                 .is_ok()
@@ -709,7 +721,7 @@ impl SessionsEngine {
                 false
             };
             if accepted {
-                if reconfigure {
+                if reconfigure && harness_id != HarnessId::Zuse {
                     // The runtime runs this configuration from now on: later
                     // sends compare against it, and a re-dispatch of an
                     // orphaned steer starts from it.
@@ -733,7 +745,9 @@ impl SessionsEngine {
                     // impossible for an observer to hold [new message, old status]
                     // — that gap read as unseen-with-no-live-run = a phantom
                     // "completed" flash on every remote send (2026-07-31).
-                    self.set_status(chat_id, SessionStatus::Working, false);
+                    if harness_id != HarnessId::Zuse {
+                        self.set_status(chat_id, SessionStatus::Working, false);
+                    }
                     self.inner.note_message(chat_id, &request.prompt);
                     return Ok(run_id);
                 }
@@ -1003,7 +1017,9 @@ impl SessionsEngine {
             },
             message_id: Some(user_id.clone()),
             attachments: Vec::new(),
-            config: None,
+            config: (harness_id == HarnessId::Zuse)
+                .then(|| sent_with.clone())
+                .flatten(),
         };
         // Saturation is backpressure, not a dead runtime. Waiting for room
         // preserves the live process and every accepted message in a burst.
@@ -1023,6 +1039,11 @@ impl SessionsEngine {
                 after_stop: false,
                 request: sent_with,
             },
+            || {
+                if harness_id == HarnessId::Zuse {
+                    self.set_status(chat_id, SessionStatus::Working, false);
+                }
+            },
         )
         .await
         {
@@ -1039,7 +1060,9 @@ impl SessionsEngine {
             if bootstrap.is_some() {
                 history_sent.store(true, std::sync::atomic::Ordering::Release);
             }
-            self.set_status(chat_id, SessionStatus::Working, false);
+            if harness_id != HarnessId::Zuse {
+                self.set_status(chat_id, SessionStatus::Working, false);
+            }
             self.inner.note_message(chat_id, prompt);
             return Ok(SteerOutcome::Accepted);
         }
@@ -2943,6 +2966,37 @@ async fn drive_run(
             event
         };
 
+        // Replayed consumption is a receipt, never an assistant boundary.
+        if let AgentEvent::DeliveryAcknowledged { message_id } = &event {
+            let (confirmed, pending) = lock(&inner.runs)
+                .get(&chat_id)
+                .filter(|h| h.run_id == run_id)
+                .map(|h| {
+                    let mut ledger = lock(&h.routed_steers);
+                    let confirmed = ledger
+                        .iter()
+                        .position(|s| &s.message_id == message_id)
+                        .and_then(|index| ledger.remove(index));
+                    (confirmed, !ledger.is_empty())
+                })
+                .unwrap_or((None, false));
+            if let Some(confirmed) = confirmed {
+                turn.forget_steer(message_id);
+                if confirmed.fork_history
+                    && let Some(session) = lock(&inner.harness_sessions)
+                        .get(&chat_id)
+                        .map(|known| known.session_id.clone())
+                        .filter(|id| !id.is_empty())
+                {
+                    let _ = doc.set_fork_history_session(&session);
+                }
+                if idle_since.is_some() && !pending {
+                    inner.set_status(&chat_id, SessionStatus::Idle, false);
+                }
+            }
+            continue;
+        }
+
         // ── subagent routing ───────────────────────────────────────────
         // Tagged events NEVER fold into the parent transcript: they stream
         // into the subagent's own doc, and the parent keeps only the spawn
@@ -3375,6 +3429,19 @@ async fn drive_run(
                 .get(&chat_id)
                 .filter(|h| h.run_id == run_id)
                 .and_then(|h| lock(&h.routed_steers).pop_front());
+            // Native configuration is acknowledged at consumption, not mailbox
+            // publication: a duplicate receipt cannot change the live route.
+            if harness_id == HarnessId::Zuse
+                && let Some(request) = confirmed.as_ref().and_then(|s| s.request.as_ref())
+            {
+                if let Some(handle) = lock(&inner.runs)
+                    .get_mut(&chat_id)
+                    .filter(|h| h.run_id == run_id)
+                {
+                    handle.runtime_config.request = (**request).clone();
+                }
+                lock(&inner.last_requests).insert(chat_id.clone(), (**request).clone());
+            }
             // Consumed: a steer carrying the fork history delivered it to
             // this runtime's provider session.
             if let Some(steer) = &confirmed {
@@ -3698,6 +3765,7 @@ mod tests {
                         after_stop: false,
                         request: None,
                     },
+                    || {},
                 )
                 .await
             })

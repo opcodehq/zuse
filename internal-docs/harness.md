@@ -287,3 +287,12 @@ the server compile and formatting checks. Live cross-provider conversations,
 prior-image vision, bounded import of very large histories, deferred context
 transfer for command-only provider switches, and crash/consumed-delivery replay
 still require implementation or acceptance.
+
+
+## Consumed steering replay
+
+The application adapter checks the durable consumed-delivery receipt before loading attachments or applying a replay's configuration. Replays produce `DeliveryAcknowledged` with the exact message ID. The host retires that ledger entry without treating it as a new assistant boundary; current output and idle state survive. A failed checkpoint save emits no receipt.
+
+Native warm deliveries carry their complete run selection. The host adopts that selection when consumption is confirmed, rather than when the mailbox accepts it. This keeps duplicate or still-pending messages from speculatively changing the live route. Working status is published before the native mailbox receives the delivery, so an immediate receipt can safely leave an idle session settled.
+
+This covers consumed steering in live and reopened runtimes. Initial prompt admission IDs, provider-switch recovery gates and full crash/replay acceptance remain separate work.

@@ -874,3 +874,253 @@ async fn switching_from_an_opaque_provider_cursor_starts_a_native_session_with_t
     );
     core.shutdown().await;
 }
+
+#[tokio::test]
+async fn consumed_delivery_replay_only_acknowledges_in_live_and_reopened_runtimes() {
+    for reopen in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let fixture = ModelFixture::new(vec![]);
+        let harness = harness(root.path(), fixture.clone());
+        let initial = request(root.path());
+        let (controls, mut steering, _) = run_controls();
+        let mut stream = harness.run(initial.clone(), controls).await.unwrap();
+        let events = turn(&mut stream).await;
+        let session = events
+            .iter()
+            .find_map(|event| match event {
+                AgentEvent::SessionStarted { session_id, .. } => Some(session_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        steering
+            .send(SteerMessage {
+                prompt: "durable constraint".into(),
+                message_id: Some("durable-delivery".into()),
+                attachments: vec![],
+                config: None,
+            })
+            .await
+            .unwrap();
+        let consumed = turn(&mut stream).await;
+        assert!(
+            consumed
+                .iter()
+                .any(|event| matches!(event, AgentEvent::Steered { .. }))
+        );
+        if reopen {
+            drop(stream);
+            retired(&fixture).await;
+            let (controls, sender, _) = run_controls();
+            steering = sender;
+            stream = harness
+                .run(
+                    RunRequest {
+                        resume: Some(session),
+                        prompt: "Resume deliberately".into(),
+                        ..initial.clone()
+                    },
+                    controls,
+                )
+                .await
+                .unwrap();
+            turn(&mut stream).await;
+        }
+        let requests_before = lock(&fixture.seen).len();
+        // A replay must not even resolve stale attachments or apply its old
+        // configuration. Only the persisted consumption acknowledgement repeats.
+        steering
+            .send(SteerMessage {
+                prompt: "must never enter history".into(),
+                message_id: Some("durable-delivery".into()),
+                attachments: vec![
+                    root.path()
+                        .join("removed-image.png")
+                        .to_string_lossy()
+                        .into(),
+                ],
+                config: Some(Box::new(RunRequest {
+                    model: Some("chatgpt/next".into()),
+                    ..initial
+                })),
+            })
+            .await
+            .unwrap();
+        let acknowledged = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(acknowledged, AgentEvent::DeliveryAcknowledged { ref message_id } if message_id == "durable-delivery"),
+            "{acknowledged:?}"
+        );
+        assert_eq!(lock(&fixture.seen).len(), requests_before);
+        steering
+            .send(SteerMessage::text("A new deliberate turn"))
+            .await
+            .unwrap();
+        let next = turn(&mut stream).await;
+        assert!(matches!(
+            next.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            })
+        ));
+        {
+            let seen = lock(&fixture.seen);
+            assert_eq!(seen.len(), requests_before + 1);
+            assert_eq!(seen.last().unwrap().model, "chatgpt/fixture");
+            let messages = serde_json::to_string(&seen.last().unwrap().messages).unwrap();
+            assert_eq!(messages.matches("durable constraint").count(), 1);
+            assert!(!messages.contains("must never enter history"));
+            assert!(messages.contains("A new deliberate turn"));
+        }
+        drop(stream);
+        retired(&fixture).await;
+    }
+}
+
+#[test]
+fn replay_receipt_preserves_the_streamed_assistant_segment() {
+    use events::Mapper;
+    let mut mapper = Mapper::new("root".into(), "/workspace".into(), "session".into());
+    let route = zuse_harness::AgentRoute {
+        parents: vec![],
+        model: "model".into(),
+    };
+    mapper.translate(
+        zuse_harness::Event::Text {
+            agent_id: "root".into(),
+            item_id: "streaming-item".into(),
+            text: "In progress".into(),
+        },
+        &route,
+        false,
+    );
+    mapper.replays.insert("old".into());
+    let receipt = mapper.translate(
+        zuse_harness::Event::MailConsumed {
+            agent_id: "root".into(),
+            delivery_id: "old".into(),
+        },
+        &route,
+        false,
+    );
+    assert!(
+        matches!(&receipt[..], [AgentEvent::DeliveryAcknowledged { message_id }] if message_id == "old")
+    );
+    mapper.steers.insert("new".into());
+    let boundary = mapper.translate(
+        zuse_harness::Event::MailConsumed {
+            agent_id: "root".into(),
+            delivery_id: "new".into(),
+        },
+        &route,
+        false,
+    );
+    assert!(
+        matches!(&boundary[..], [AgentEvent::Steered { assistant_message_id: Some(id), .. }] if id == "streaming-item")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_receipt_retires_the_host_ledger_without_changing_its_idle_route() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = ModelFixture::new(vec![]);
+    let mut native = harness(root.path(), fixture.clone());
+    let registry = Arc::new(crate::HarnessRegistry::new());
+    let core = crate::EngineCore::assemble_with_profile(
+        crate::EngineProfile::local(&root.path().join("engine")).unwrap(),
+        registry.clone(),
+        HarnessId::Zuse,
+        None,
+    )
+    .unwrap();
+    native.device_id = core.device_id.clone();
+    registry.register(Arc::new(native));
+    core.workspace
+        .create_chat(
+            "chat",
+            None,
+            Some(&core.device_id),
+            None,
+            Some(root.path().to_string_lossy().into_owned()),
+        )
+        .unwrap();
+    let initial = request(root.path());
+    core.sessions
+        .dispatch(
+            "chat",
+            HarnessId::Zuse,
+            initial.clone(),
+            Some("first".into()),
+        )
+        .await
+        .unwrap();
+    async fn idle(core: &crate::EngineCore, fixture: &ModelFixture, count: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if lock(&fixture.seen).len() == count
+                    && core
+                        .sessions
+                        .session_status("chat")
+                        .is_some_and(|s| s.status == zuse_protocol::SessionStatus::Idle)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    idle(&core, &fixture, 1).await;
+    let next = RunRequest {
+        prompt: "durable constraint".into(),
+        ..initial.clone()
+    };
+    core.sessions
+        .dispatch(
+            "chat",
+            HarnessId::Zuse,
+            next.clone(),
+            Some("durable-delivery".into()),
+        )
+        .await
+        .unwrap();
+    idle(&core, &fixture, 2).await;
+    core.sessions
+        .dispatch(
+            "chat",
+            HarnessId::Zuse,
+            RunRequest {
+                model: Some("chatgpt/next".into()),
+                attachments: vec![root.path().join("removed.png").to_string_lossy().into()],
+                ..next
+            },
+            Some("durable-delivery".into()),
+        )
+        .await
+        .unwrap();
+    idle(&core, &fixture, 2).await;
+    assert_eq!(
+        core.sessions.last_request("chat").unwrap().model,
+        initial.model
+    );
+    core.sessions
+        .dispatch(
+            "chat",
+            HarnessId::Zuse,
+            RunRequest {
+                prompt: "A new deliberate turn".into(),
+                ..initial
+            },
+            Some("next".into()),
+        )
+        .await
+        .unwrap();
+    idle(&core, &fixture, 3).await;
+    assert_eq!(lock(&fixture.seen).last().unwrap().model, "chatgpt/fixture");
+    core.shutdown().await;
+}

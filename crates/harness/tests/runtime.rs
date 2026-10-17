@@ -329,8 +329,20 @@ async fn steering_is_durable_and_delivery_ids_are_deduplicated() {
         Some("root")
     );
     assert_eq!(lock(&f.events).iter().filter(|event| matches!(event, Event::MailConsumed { delivery_id, .. } if delivery_id == "delivery-1")).count(), 1);
+    assert!(!e.acknowledge_consumed_delivery("unknown").await.unwrap());
+    let event_count = lock(&f.events).len();
+    f.mode.store(9, Ordering::Relaxed);
+    assert!(e.acknowledge_consumed_delivery("delivery-1").await.is_err());
+    assert_eq!(lock(&f.events).len(), event_count);
+    f.mode.store(0, Ordering::Relaxed);
     // Losing the session acknowledgement across restart must not replay mail.
     let recovered = engine(f.clone()).await;
+    assert!(
+        recovered
+            .acknowledge_consumed_delivery("delivery-1")
+            .await
+            .unwrap()
+    );
     recovered
         .enqueue(
             "delivery-1".into(),
@@ -350,7 +362,7 @@ async fn steering_is_durable_and_delivery_ids_are_deduplicated() {
             .mailbox
             .is_empty()
     );
-    assert_eq!(lock(&f.events).iter().filter(|event| matches!(event, Event::MailConsumed { delivery_id, .. } if delivery_id == "delivery-1")).count(), 2);
+    assert_eq!(lock(&f.events).iter().filter(|event| matches!(event, Event::MailConsumed { delivery_id, .. } if delivery_id == "delivery-1")).count(), 3);
 }
 
 #[tokio::test]

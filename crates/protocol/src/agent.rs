@@ -669,6 +669,12 @@ pub enum AgentEvent {
     InputResolved {
         request_id: String,
     },
+    /// A saved host delivery was already consumed. Retire its exact delivery
+    /// ledger entry without starting a turn or resetting streamed content.
+    #[serde(rename_all = "camelCase")]
+    DeliveryAcknowledged {
+        message_id: String,
+    },
     /// A confirmed new assignment. When tagged as Subagent, this reopens the
     /// same child transcript even if the provider does not echo the user text.
     #[serde(rename_all = "camelCase")]

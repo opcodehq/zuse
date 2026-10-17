@@ -517,6 +517,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         | AgentEvent::Usage { .. }
         | AgentEvent::ContextUsage { .. }
         | AgentEvent::AvailableCommands { .. }
+        | AgentEvent::DeliveryAcknowledged { .. }
         | AgentEvent::UserMessage { .. } => {}
     }
 }
@@ -718,6 +719,25 @@ pub fn join_continuations(entries: Vec<Vec<MessagePart>>) -> Vec<MessagePart> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn delivery_receipt_preserves_in_progress_content() {
+        let mut parts = vec![];
+        super::fold_event_into_parts(
+            &mut parts,
+            &zuse_protocol::AgentEvent::TextDelta {
+                text: "In progress".into(),
+            },
+        );
+        super::fold_event_into_parts(
+            &mut parts,
+            &zuse_protocol::AgentEvent::DeliveryAcknowledged {
+                message_id: "saved-delivery".into(),
+            },
+        );
+        assert!(
+            matches!(&parts[..], [super::MessagePart::Text { text, .. }] if text == "In progress")
+        );
+    }
     use super::*;
 
     fn text_delta(s: &str) -> AgentEvent {

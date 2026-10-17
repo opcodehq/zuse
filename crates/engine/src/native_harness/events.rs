@@ -7,6 +7,7 @@ pub(super) struct Mapper {
     pub cwd: String,
     pub session: String,
     pub steers: HashSet<String>,
+    pub replays: HashSet<String>,
     children: HashSet<String>,
     items: HashMap<String, String>,
 }
@@ -17,6 +18,7 @@ impl Mapper {
             cwd,
             session,
             steers: HashSet::new(),
+            replays: HashSet::new(),
             children: HashSet::new(),
             items: HashMap::new(),
         }
@@ -76,7 +78,11 @@ impl Mapper {
                 });
             }
             Event::MailConsumed { delivery_id, .. } => {
-                if self.steers.remove(&delivery_id) {
+                if self.replays.remove(&delivery_id) {
+                    result.push(AgentEvent::DeliveryAcknowledged {
+                        message_id: delivery_id,
+                    });
+                } else if self.steers.remove(&delivery_id) {
                     result.push(AgentEvent::Steered {
                         assistant_message_id: self.items.remove(&agent),
                         next_assistant_message_id: Some(uuid::Uuid::new_v4().to_string()),

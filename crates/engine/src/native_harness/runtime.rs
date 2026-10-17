@@ -309,6 +309,10 @@ pub(super) async fn start(
                             controls.turn.forget_steer(&id);
                             return Ok(());
                         }
+                        if engine.acknowledge_consumed_delivery(&id).await.map_err(failure)? {
+                            mapper.replays.insert(id);
+                            return Ok(());
+                        }
                         if let Some(config) = steer.config {
                             if tokio::fs::canonicalize(&config.cwd).await? != PathBuf::from(&request.cwd) || (config.mcp.is_some() && config.mcp != request.mcp) { return Err(failure("The next prompt needs a different native runtime")); }
                             engine.reconfigure(harness.options(&config, &stop).await?).await.map_err(failure)?;

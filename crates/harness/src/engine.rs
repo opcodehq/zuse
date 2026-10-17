@@ -361,6 +361,24 @@ impl Engine {
         }
         Ok(())
     }
+    /// A replay of consumed host mail only acknowledges its saved receipt. It
+    /// must not change configuration, reload attachments, or launch a runner.
+    /// Persist first: in-memory consumption can outlive a failed checkpoint.
+    pub async fn acknowledge_consumed_delivery(&self, delivery_id: &str) -> Result<bool, Error> {
+        if self.0.closed.load(Ordering::Acquire) {
+            return Err(Error::paused("Harness is closed"));
+        }
+        let state = self.0.state.lock().await;
+        let Some(agent_id) = state.consumed_notifications.get(delivery_id) else {
+            return Ok(false);
+        };
+        self.persist(&state).await?;
+        self.0.host.notify(Event::MailConsumed {
+            agent_id: agent_id.clone(),
+            delivery_id: delivery_id.to_owned(),
+        });
+        Ok(true)
+    }
     /// Withdraw unconsumed host deliveries durably. Consumed history is never
     /// rewritten; its acknowledgement must settle before the stopped turn.
     pub async fn delivery_cancelled(&self, id: &str) -> bool {
