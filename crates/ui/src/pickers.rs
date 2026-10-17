@@ -901,7 +901,6 @@ pub struct Pickers {
     switch_task: Option<Task<()>>,
     /// Last mid-session switch failure (shown in the ref popover).
     switch_error: Option<String>,
-    mutate_task: Option<Task<()>>,
     _search_events: Subscription,
     _state_observe: Subscription,
     _catalog_observe: Subscription,
@@ -1137,7 +1136,6 @@ impl Pickers {
             switching: None,
             switch_task: None,
             switch_error: None,
-            mutate_task: None,
             _search_events: search_events,
             _state_observe: state_observe,
             _catalog_observe: catalog_observe,
@@ -2235,15 +2233,12 @@ impl Pickers {
         cx.notify();
     }
 
-    /// Apply `change` to the selected chat's effective config and persist it:
-    /// optimistic row stamp (chips update on click) + `Mutate setChatConfig`
-    /// (LWW workspace write — restarts and other devices see it). The written
-    /// row always carries the CONCRETE resolved model/reasoning, with the
-    /// reasoning re-clamped to the (possibly just-changed) model's ladder.
+    /// Stage model, reasoning and option fields with the shared coordinator.
+    /// Reasoning and options are clamped to the chosen model's catalog.
     fn update_chat_config(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut ChatConfig)) {
-        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
+        if self.state.read(cx).selected_chat.is_none() {
             return;
-        };
+        }
         let resolved = self.resolved(cx);
         let Some(mut config) = resolved.chat_config() else {
             return; // harness unknown (catalog + chat row both missing) — nothing safe to write
@@ -2291,26 +2286,12 @@ impl Pickers {
             }
         }
         self.state.update(cx, |state, cx| {
-            state.apply_chat_config(&chat_id, config.clone());
-            cx.notify();
+            state.stage_chat_configuration(
+                zuse_protocol::ChatConfigPatch::model(config.clone()),
+                config,
+                cx,
+            );
         });
-        // The first send creates this row. Until then all choices stay local.
-        if self.state.read(cx).side_chat_unsaved() {
-            return;
-        }
-        let Some(engine) = self.engine(cx) else {
-            return;
-        };
-        self.mutate_task = Some(cx.spawn(async move |_, _| {
-            let params = serde_json::json!({
-                "op": "setChatConfig",
-                "chatId": chat_id,
-                "config": config,
-            });
-            if let Err(err) = engine.client().call(methods::MUTATE, params).await {
-                tracing::warn!(error = %err, "setChatConfig mutate failed");
-            }
-        }));
     }
 
     // ---- keyboard ----
@@ -6839,7 +6820,7 @@ mod tests {
                 assert_eq!(create["config"]["model"], "codex-model");
                 assert_eq!(create["config"]["reasoning"], "low");
                 assert_eq!(create["config"]["modelOptions"], serde_json::json!({}));
-                assert!(pickers.mutate_task.is_none());
+                assert!(!state.read(cx).configuration_saving());
             });
         });
         cx.run_until_parked();

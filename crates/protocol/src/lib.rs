@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod attachment_mentions;
 pub mod change_request_assessment;
+pub mod chat_config;
 pub mod chat_mentions;
 pub mod device_paths;
 pub mod entities;
@@ -25,6 +26,7 @@ pub mod voice;
 pub mod workspace;
 
 pub use agent::*;
+pub use chat_config::ChatConfigPatch;
 pub use entities::*;
 pub use preview::*;
 pub use sidebar_pins::*;

@@ -6,7 +6,7 @@ Use stable Rust, rustfmt and Clippy. Keep versions in the workspace and lockfile
 
 The native platform needs a C/C++ compiler, pkg-config, CMake, OpenSSL, Fontconfig, FreeType, XCB, XKBCommon/X11, Wayland, Vulkan loader, ALSA and Clang development files. Embedded browser previews additionally require WebKitGTK 4.1 and JSON-GLib development files. Package names vary by distribution.
 
-The cloud development VM runs Amazon Linux 2023. WebKitGTK availability must be resolved for its native preview build; lack of a package must not silently produce a nonfunctional preview feature.
+The cloud development VM runs Amazon Linux 2023, whose configured package repositories lack WebKitGTK 4.1. Native builds were verified in an Ubuntu 24.04 userspace with the real WebKitGTK and JSON-GLib development packages. Use a distribution providing these packages for native development; a missing package must not silently disable previews. Compilation alone does not verify a rendered desktop or embedded browser.
 
 ## Validation policy
 
@@ -73,3 +73,9 @@ Threads shows conversations by recency; Projects groups them by stable repositor
 The combined browser picker includes a provider rail, search, recent models, default stars, keyboard selection and provider-specific catalog errors. Catalog request ownership prevents superseded or disconnected replies from replacing another provider's models. Reasoning uses the Zkit stepped slider with pointer and arrow/Home/End controls; model options come from the selected provider's actual catalog. A run carries its selected model, reasoning, options and access mode. Existing chat metadata stores its initial configuration, so it is not an oracle for later per-run overrides.
 
 Composer notices attach above the input and expose expansion, copy, dismissal and explicit message restoration. Restoring an errored message preserves durable attachment references and refuses to overwrite a draft. Native and browser send controls share the ordered dither GPU painter; browser restoration and question submission use the same action treatment. It allocates no bitmap and schedules no continuous animation. Full platform interaction and visual parity remain tracked separately.
+
+## Native chat configuration
+
+Model, reasoning, Context, Fast and access changes share one per-chat save coordinator. An execution-host configuration watch supplies canonical values; replicated conversation lists cannot overwrite the selected host snapshot or a pending choice. Model changes own only model-related fields, and permission changes own only the sandbox field. Conditional writes compare the current host configuration, coalesce later choices, and survive navigation. Sending and explicit queue delivery wait for confirmed configuration.
+
+An interrupted or malformed acknowledgement triggers a fresh read and discards queued choices rather than replaying a possibly committed mutation. The access menu can refresh saved choices without writing. Attaching a replacement engine clears previous transport proof and pending intents before opening a new owner watch. This does not establish complete native transport reconnection or physical paired-device acceptance.

@@ -814,6 +814,7 @@ pub struct AppState {
     pub spaces: Vec<Space>,
     /// Sorted (see [`sort_chats`]); includes archived rows — views filter.
     pub chats: Vec<Chat>,
+    pub(crate) chat_configuration: crate::chat_configuration::ChatConfiguration,
     /// Fork RPC may arrive ahead of its registry row on a remote device.
     pending_side_chat: Option<Chat>,
     /// `pending_side_chat` was started by hand and nothing has minted it:
@@ -977,6 +978,7 @@ impl AppState {
             connectivity_observed: false,
             spaces: Vec::new(),
             chats: Vec::new(),
+            chat_configuration: Default::default(),
             pending_side_chat: None,
             unsaved_side_chat: false,
             sessions: Vec::new(),
@@ -1206,6 +1208,7 @@ impl AppState {
                 chats.push(pending.clone());
             }
         }
+        self.overlay_chat_configuration(&mut chats);
         sort_chats(&mut chats);
         if !self.chats_synced || self.chats != chats {
             changed = true;
@@ -2429,6 +2432,7 @@ impl AppState {
     /// account while the local profile is opening.
     pub fn prepare_runtime_replacement(&mut self, cx: &mut Context<Self>) {
         self.engine = None;
+        self.chat_configuration = Default::default();
         self.watch_tasks.clear();
         self.transcript_task = None;
         self.change_request_tasks.clear();
@@ -2607,6 +2611,7 @@ impl AppState {
     /// Methods the engine doesn't serve yet (chats/devices/auth land with the
     /// workspace doc in M4) fail their subscribe and are skipped gracefully.
     fn attach_engine(&mut self, handle: EngineHandle, cx: &mut Context<Self>) {
+        self.reset_configuration_transport();
         // The attachment notification precedes the first connectivity frame.
         // Make that bootstrap gap explicit so the shell resets its alert
         // baseline instead of comparing the new runtime with the old one.
@@ -2685,6 +2690,7 @@ impl AppState {
         // EngineInfo is part of the attachment boundary: views must know which
         // data profile they reached before they are allowed to render Ready.
         self.connection = ConnectionStatus::Ready;
+        self.reconcile_configuration_watch(cx);
         // Re-subscribe the transcript if a chat was already selected (reconnect path).
         if let Some(chat_id) = self.selected_chat.clone() {
             self.transcript_task =
@@ -2795,6 +2801,7 @@ impl AppState {
             self.focus_chat_sync(id, cx);
         }
         if self.selected_chat == chat_id {
+            self.reconcile_configuration_watch(cx);
             // Re-selecting still clears a fresh "completed" badge.
             if let Some(id) = chat_id {
                 self.mark_chat_seen(&id, cx);
@@ -2920,6 +2927,7 @@ impl AppState {
                 self.start_chat_watches(chat_id, cx);
             }
         }
+        self.reconcile_configuration_watch(cx);
         cx.notify();
     }
 
@@ -3101,6 +3109,7 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                     // Identical re-published lists skip the re-sort fan-out:
                     // watch reconciliation and a whole-shell re-render.
                     let changed = state.apply_chats(parsed);
+                    state.reconcile_configuration_watch(cx);
                     let linked = state.apply_pending_deep_link(cx);
                     if changed {
                         state.reconcile_change_request_watches(cx);

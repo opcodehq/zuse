@@ -5996,9 +5996,7 @@ pub struct Composer {
     permission_open: bool,
     permission_active: usize,
     permission_focus: FocusHandle,
-    permission_saving: Option<String>,
-    permission_unconfirmed: Option<String>,
-    permission_task: Option<Task<()>>,
+    configuration_notice_seen: Option<(String, String)>,
     /// Draft text per chat key ("" = new-chat canvas), surviving navigation.
     drafts: HashMap<String, String>,
     /// Staged-but-unsent attachments per chat key (use-attachments.ts `stash`):
@@ -6332,9 +6330,7 @@ impl Composer {
             permission_open: false,
             permission_active: 0,
             permission_focus: cx.focus_handle(),
-            permission_saving: None,
-            permission_unconfirmed: None,
-            permission_task: None,
+            configuration_notice_seen: None,
             drafts: HashMap::new(),
             attachments: HashMap::new(),
             attachment_drafts: HashMap::new(),
@@ -8437,6 +8433,26 @@ impl Composer {
     }
 
     fn on_state_changed(&mut self, cx: &mut Context<Self>) {
+        let notice = self.state.read(cx).configuration_notice();
+        if notice != self.configuration_notice_seen {
+            if notice.is_none()
+                && self
+                    .configuration_notice_seen
+                    .as_ref()
+                    .is_some_and(|(chat, message)| {
+                        self.failure_key.as_ref() == Some(chat)
+                            && self.failure.as_deref() == Some(message.as_str())
+                    })
+            {
+                self.failure = None;
+                self.failure_key = None;
+            }
+            if let Some((chat, message)) = &notice {
+                self.failure = Some(message.clone().into());
+                self.failure_key = Some(chat.clone());
+            }
+            self.configuration_notice_seen = notice;
+        }
         {
             let state = self.state.read(cx);
             // AppState also notifies at clock-only transitions, so a run that
@@ -8687,6 +8703,9 @@ impl Composer {
             return true;
         }
         let state = self.state.read(cx);
+        if state.configuration_blocked() {
+            return true;
+        }
         if state.review_comment_flush_pending(&self.current_key) {
             return true;
         }
@@ -8811,7 +8830,7 @@ impl Composer {
     /// reasoning / options on the Run request itself (§1.7).
     fn send(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
         if self.permission_blocked(cx) {
-            self.failure = Some("Confirm the saved permission mode before sending. Open the access menu to refresh it.".into());
+            self.failure = Some("Confirm this chat’s saved choices before sending. Open the access menu to refresh them.".into());
             self.failure_key = self.state.read(cx).selected_chat.clone();
             cx.notify();
             return;

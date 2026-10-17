@@ -40,7 +40,7 @@ fn main() {
         flags.status.success(),
         "The Linux browser requires WebKitGTK 4.1 and JSON-GLib development files \
          discoverable by pkg-config (webkit2gtk-4.1 and json-glib-1.0). \
-         See docs/reference/linux-browser.md for distribution-specific installation commands.\n{}",
+         See internal-docs/development.md for distribution-specific installation commands.\n{}",
         String::from_utf8_lossy(&flags.stderr)
     );
     let status = Command::new(env::var("CC").unwrap_or_else(|_| "cc".into()))

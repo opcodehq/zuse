@@ -1920,6 +1920,17 @@ impl Composer {
         failure: &'static str,
         cx: &mut Context<Self>,
     ) {
+        if matches!(
+            method,
+            methods::SEND_QUEUED_MESSAGE_NOW | methods::STEER_QUEUED_MESSAGE_NOW
+        ) && self.state.read(cx).configuration_blocked()
+        {
+            self.failure = Some(
+                "Confirm this chat's saved choices before delivering a queued message.".into(),
+            );
+            cx.notify();
+            return;
+        }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };

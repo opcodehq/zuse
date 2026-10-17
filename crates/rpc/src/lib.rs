@@ -18,7 +18,9 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
+mod chat_config;
 mod client;
+pub use chat_config::ChatConfigTarget;
 mod paired;
 pub use paired::connect_paired;
 pub mod device_room;

@@ -16,14 +16,6 @@ impl Composer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.permission_saving.is_some()
-            || self
-                .permission_unconfirmed
-                .as_ref()
-                .is_some_and(|chat| self.state.read(cx).selected_chat.as_ref() == Some(chat))
-        {
-            return;
-        }
         self.permission_open = false;
         window.focus(&self.input.focus_handle(cx), cx);
         let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
@@ -32,154 +24,41 @@ impl Composer {
             cx.notify();
             return;
         };
-        let Some(mut config) = self.pickers.read(cx).resolved(cx).chat_config() else {
+        let Some(config) = self.pickers.read(cx).resolved(cx).chat_config() else {
             self.failure = Some("Choose an agent before changing this chat's permissions.".into());
             self.failure_key = Some(chat_id);
             cx.notify();
             return;
         };
-        let previous = self
-            .state
-            .read(cx)
-            .selected_chat_row()
-            .and_then(|chat| chat.config.clone());
-        config.sandbox = level;
-        if self.state.read(cx).side_chat_unsaved() {
-            self.state.update(cx, |state, cx| {
-                state.apply_chat_config(&chat_id, config);
-                cx.notify();
-            });
-            return;
-        }
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
-            self.failure =
-                Some("Connect to the execution host to change this chat's permissions.".into());
+        let accepted = self.state.update(cx, |state, cx| {
+            state.stage_chat_configuration(
+                zuse_protocol::ChatConfigPatch::sandbox(level),
+                config,
+                cx,
+            )
+        });
+        if !accepted {
+            self.failure = Some(
+                self.state
+                    .read(cx)
+                    .configuration_notice()
+                    .map(|(_, notice)| notice)
+                    .unwrap_or_else(|| {
+                        "Refresh this chat's saved choices before changing access.".into()
+                    })
+                    .into(),
+            );
             self.failure_key = Some(chat_id);
-            cx.notify();
-            return;
-        };
-        self.permission_saving = Some(chat_id.clone());
-        self.permission_task = Some(cx.spawn(async move |this, cx| {
-            let result = engine
-                .client()
-                .call(
-                    methods::MUTATE,
-                    serde_json::json!({"op":"setChatConfig","chatId":chat_id,"config":config}),
-                )
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.permission_saving = None;
-                match result {
-                    Ok(_) => {
-                        this.state.update(cx, |state, cx| {
-                            // A newer replicated config must win over this acknowledgement.
-                            if state.selected_chat.as_deref() == Some(chat_id.as_str())
-                                && state
-                                    .selected_chat_row()
-                                    .and_then(|chat| chat.config.as_ref())
-                                    == previous.as_ref()
-                            {
-                                state.apply_chat_config(&chat_id, config);
-                                cx.notify();
-                            }
-                        });
-                    }
-                    Err(error) => {
-                        this.permission_unconfirmed = Some(chat_id.clone());
-                        this.failure = Some(format!("Could not confirm the permission change: {error}. Open the access menu and refresh the saved mode before sending.").into());
-                        this.failure_key = Some(chat_id);
-                    }
-                }
-                cx.notify();
-            });
-        }));
+        }
         cx.notify();
     }
     pub(super) fn permission_blocked(&self, cx: &App) -> bool {
-        self.state
-            .read(cx)
-            .selected_chat
-            .as_ref()
-            .is_some_and(|chat| {
-                self.permission_saving.as_ref() == Some(chat)
-                    || self.permission_unconfirmed.as_ref() == Some(chat)
-            })
+        self.state.read(cx).configuration_blocked()
     }
     fn refresh_permission(&mut self, cx: &mut Context<Self>) {
-        if self.permission_saving.is_some() {
-            return;
-        }
-        let Some(chat_id) = self.permission_unconfirmed.clone() else {
-            return;
-        };
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
-            return;
-        };
-        let previous = self
-            .state
-            .read(cx)
-            .selected_chat_row()
-            .and_then(|chat| chat.config.clone());
-        self.permission_saving = Some(chat_id.clone());
-        self.permission_task = Some(cx.spawn(async move |this, cx| {
-            let read = async {
-                let mut subscription = engine
-                    .client()
-                    .subscribe_scoped(methods::WATCH_CHATS, serde_json::json!({}))
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let snapshot = subscription
-                    .recv()
-                    .await
-                    .ok_or_else(|| "The host closed the permission read.".to_owned())?;
-                let chats: Vec<zuse_protocol::Chat> =
-                    serde_json::from_value(snapshot).map_err(|error| error.to_string())?;
-                chats
-                    .into_iter()
-                    .find(|chat| chat.id == chat_id)
-                    .and_then(|chat| chat.config)
-                    .ok_or_else(|| "This chat's configuration is unavailable.".to_owned())
-            };
-            let result = match futures::future::select(
-                Box::pin(read),
-                Box::pin(cx.background_executor().timer(Duration::from_secs(10))),
-            )
-            .await
-            {
-                futures::future::Either::Left((result, _)) => result,
-                futures::future::Either::Right(_) => {
-                    Err("Timed out reading saved permissions.".to_owned())
-                }
-            };
-            let _ = this.update(cx, |this, cx| {
-                this.permission_saving = None;
-                match result {
-                    Ok(config) if this.state.read(cx).selected_chat.as_ref() == Some(&chat_id) => {
-                        this.state.update(cx, |state, cx| {
-                            if state
-                                .selected_chat_row()
-                                .and_then(|chat| chat.config.as_ref())
-                                == previous.as_ref()
-                            {
-                                state.apply_chat_config(&chat_id, config);
-                                cx.notify();
-                            }
-                        });
-                        this.permission_unconfirmed = None;
-                        this.permission_open = false;
-                        this.failure = None;
-                        this.failure_key = None;
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        this.failure =
-                            Some(format!("Could not refresh saved permissions: {error}").into());
-                        this.failure_key = Some(chat_id);
-                    }
-                }
-                cx.notify();
-            });
-        }));
+        self.state
+            .update(cx, |state, cx| state.refresh_selected_configuration(cx));
+        self.permission_open = false;
         cx.notify();
     }
     fn on_permission_key(
@@ -188,7 +67,7 @@ impl Composer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.permission_saving.is_some() && event.keystroke.key != "escape" {
+        if self.state.read(cx).configuration_saving() && event.keystroke.key != "escape" {
             return;
         }
         match event.keystroke.key.as_str() {
@@ -197,11 +76,7 @@ impl Composer {
                 window.focus(&self.input.focus_handle(cx), cx);
             }
             "enter" | "space" if !event.is_held => {
-                if self.permission_open
-                    && self.permission_unconfirmed.as_ref().is_some_and(|chat| {
-                        self.state.read(cx).selected_chat.as_ref() == Some(chat)
-                    })
-                {
+                if self.permission_open && self.state.read(cx).configuration_blocked() {
                     self.refresh_permission(cx);
                 } else if self.permission_open {
                     self.choose_permission(LEVELS[self.permission_active], window, cx);
@@ -235,11 +110,8 @@ impl Composer {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let selected = self.pickers.read(cx).resolved(cx).sandbox;
-        let pending = self.permission_saving.is_some();
-        let unconfirmed = self
-            .permission_unconfirmed
-            .as_ref()
-            .is_some_and(|chat| self.state.read(cx).selected_chat.as_ref() == Some(chat));
+        let pending = self.state.read(cx).configuration_saving();
+        let unconfirmed = !pending && self.state.read(cx).configuration_blocked();
         let tint = if selected == SandboxLevel::DangerFullAccess {
             theme.warning
         } else {
@@ -374,16 +246,16 @@ impl Composer {
                         div()
                             .id("refresh-saved-permissions")
                             .role(Role::Button)
-                            .aria_label("Refresh saved permission mode")
+                            .aria_label("Refresh saved chat choices")
                             .cursor_pointer()
                             .px(px(8.))
                             .py(px(8.))
                             .text_size(crate::typography::ui_rems(12.))
                             .text_color(popup_theme.accent)
                             .child(if pending {
-                                "Reading saved permissions…"
+                                "Reading saved chat choices…"
                             } else {
-                                "Refresh saved permission mode"
+                                "Refresh saved chat choices"
                             })
                             .on_click(cx.listener(|this, _, _, cx| this.refresh_permission(cx))),
                     )
@@ -414,7 +286,7 @@ mod tests {
                     composer.pickers.read(cx).resolved(cx).sandbox,
                     SandboxLevel::DangerFullAccess
                 );
-                assert!(composer.permission_saving.is_none());
+                assert!(!composer.state.read(cx).configuration_saving());
                 assert!(composer.failure.is_none());
                 composer.state.update(cx, |state, cx| {
                     state.chats = vec![

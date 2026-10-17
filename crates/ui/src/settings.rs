@@ -2729,6 +2729,13 @@ mod tests {
     fn round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let settings = UiSettings {
+            default_model: Some(zuse_protocol::presentation::DefaultModelSelection {
+                provider: zuse_protocol::HarnessId::Codex,
+                model: "catalog-model".into(),
+                label: "Configured model".into(),
+            }),
+            default_permission_mode: zuse_protocol::presentation::PermissionMode::FullAccess,
+            completion_sound_preset: zuse_protocol::completion_sound::CompletionSoundPreset::Pop,
             dictation_enabled: false,
             dictation_input: Some("coreaudio:usb-mic".into()),
             window_geometry: None,
