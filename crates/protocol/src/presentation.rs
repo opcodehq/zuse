@@ -2,7 +2,10 @@
 mod effort;
 mod queue;
 pub use effort::{EffortSetting, EffortStop, ModelEffort, model_effort, model_effort_option};
-pub use queue::{QueueAction, QueueRowDetails, chat_request, queue_row_details};
+pub use queue::{
+    QueueAction, QueueEditLease, QueueRowDetails, chat_request, queue_edit_lease,
+    queue_edit_review_matches, queue_row_details,
+};
 
 use crate::Model;
 use serde::{Deserialize, Serialize};

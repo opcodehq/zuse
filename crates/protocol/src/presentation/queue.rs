@@ -103,6 +103,46 @@ pub fn queue_row_details(row: &Value) -> QueueRowDetails {
     }
 }
 
+/// The host's acquisition receipt is the only authority to replace a draft.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueueEditLease {
+    pub id: String,
+    pub text: String,
+    pub attachments: Vec<String>,
+    pub base_text_hash: String,
+}
+pub fn queue_edit_lease(reply: &Value) -> Option<QueueEditLease> {
+    if reply["outcome"] != "acquired" || reply["expiresAtMs"].as_i64()? <= 0 {
+        return None;
+    }
+    let id = reply["leaseId"]
+        .as_str()
+        .filter(|value| !value.is_empty())?;
+    let hash = reply["baseTextHash"]
+        .as_str()
+        .filter(|value| !value.is_empty())?;
+    let attachments = reply["attachments"]
+        .as_array()?
+        .iter()
+        .map(|path| {
+            path.as_str()
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(QueueEditLease {
+        id: id.into(),
+        text: reply["text"].as_str()?.into(),
+        attachments,
+        base_text_hash: hash.into(),
+    })
+}
+pub fn queue_edit_review_matches(row: &Value, lease: &str) -> bool {
+    !lease.is_empty()
+        && row["deliveryGate"]["kind"] == "reviewRequired"
+        && row["deliveryGate"]["previousLeaseId"].as_str() == Some(lease)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +206,38 @@ mod tests {
             assert_eq!(action.confirmed(&json!({field:"true"})), None);
             assert_eq!(action.confirmed(&json!({"ok":true})), None);
         }
+    }
+    #[test]
+    fn edit_acquisition_requires_a_complete_host_receipt() {
+        let valid = json!({"outcome":"acquired","leaseId":"lease","baseTextHash":"hash","text":"queued text","attachments":["/host/file.txt"],"expiresAtMs":1234});
+        let lease = queue_edit_lease(&valid).unwrap();
+        assert_eq!(lease.text, "queued text");
+        assert_eq!(lease.attachments, vec!["/host/file.txt"]);
+        for (field, value) in [
+            ("outcome", json!("locked")),
+            ("leaseId", json!("")),
+            ("baseTextHash", json!(null)),
+            ("text", json!(null)),
+            ("attachments", json!([null])),
+            ("expiresAtMs", json!(0)),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            assert!(queue_edit_lease(&invalid).is_none(), "{field}");
+        }
+    }
+    #[test]
+    fn expired_edit_review_accepts_only_its_previous_lease_generation() {
+        let row = json!({"deliveryGate":{"kind":"reviewRequired","previousLeaseId":"old"}});
+        assert!(queue_edit_review_matches(&row, "old"));
+        assert!(!queue_edit_review_matches(&row, "new"));
+        assert!(!queue_edit_review_matches(
+            &json!({"deliveryGate":{"kind":"editing","leaseId":"old"}}),
+            "old"
+        ));
+        assert!(!queue_edit_review_matches(
+            &json!({"deliveryGate":{"kind":"reviewRequired","previousLeaseId":""}}),
+            ""
+        ));
     }
 }

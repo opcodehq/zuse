@@ -29,7 +29,10 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.input.read(cx).value(cx).is_empty() || !self.attachments.is_empty() {
+        if self.queue_edit.is_some()
+            || !self.input.read(cx).value(cx).is_empty()
+            || !self.attachments.is_empty()
+        {
             self.error =
                 Some("Keep or clear the current draft before restoring this message.".into());
             cx.notify();

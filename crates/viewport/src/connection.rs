@@ -38,6 +38,7 @@ impl WorkspaceView {
         }) {
             self.connection_notice=Some("An action may have completed before the connection closed. Check its current state before trying it again.".into());
         }
+        self.interrupt_queue_edit(cx);
         self.connected = false;
         self.notification_baselines.clear();
         self.workspace_synced = false;
@@ -251,6 +252,9 @@ impl WorkspaceView {
         });
     }
     fn recover_draft(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.queue_edit_navigation_blocked(cx) {
+            return;
+        }
         if !self.require_connection(cx) {
             return;
         }

@@ -8,7 +8,8 @@ pub(super) struct PendingQueueAction {
 }
 impl WorkspaceView {
     pub(super) fn queue_action_blocked(&self) -> bool {
-        !self.connected
+        self.queue_edit.is_some()
+            || !self.connected
             || !self.workspace_synced
             || self
                 .selected
@@ -89,19 +90,32 @@ impl WorkspaceView {
         if let Some(error) = error {
             self.error = Some(error);
         }
-        self.queue_unconfirmed.insert(pending.chat.clone());
         if let Some(chat) = self
             .selected
             .clone()
             .filter(|chat| chat["id"] == pending.chat)
         {
-            if let Some(watch) = self.queue_watch.take() {
-                self.cancel(watch);
-            }
-            self.queue_watch =
-                Some(self.call(methods::WATCH_QUEUE, chat_request(&chat, json!({}))));
+            self.refresh_queue_snapshot(&chat);
+        } else {
+            self.queue_unconfirmed.insert(pending.chat);
         }
         cx.notify();
         true
+    }
+    pub(super) fn refresh_queue_snapshot(&mut self, chat: &Value) {
+        if let Some(id) = chat["id"].as_str() {
+            self.queue_unconfirmed.insert(id.to_owned());
+        }
+        if !self.connected
+            || !self.selected.as_ref().is_some_and(|selected| {
+                selected["id"] == chat["id"] && selected["deviceId"] == chat["deviceId"]
+            })
+        {
+            return;
+        }
+        if let Some(watch) = self.queue_watch.take() {
+            self.cancel(watch);
+        }
+        self.queue_watch = Some(self.call(methods::WATCH_QUEUE, chat_request(chat, json!({}))));
     }
 }

@@ -96,6 +96,13 @@ impl TextInput {
         }
     }
 
+    pub fn focus(&mut self, cx: &mut Context<Self>) {
+        let focus = self.focus_handle(cx);
+        let window = self.window;
+        cx.defer(move |cx| {
+            let _ = cx.update_window(window, move |_, window, cx| window.focus(&focus, cx));
+        });
+    }
     pub fn set_value(&mut self, value: String, cx: &mut Context<Self>) {
         let editor = self.editor.clone();
         let window = self.window;

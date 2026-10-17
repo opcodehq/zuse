@@ -22,7 +22,10 @@ impl WorkspaceView {
         cx.notify();
     }
     pub(super) fn start_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.require_connection(cx) || self.file_navigation_blocked(cx) {
+        if !self.require_connection(cx)
+            || self.file_navigation_blocked(cx)
+            || self.queue_edit_navigation_blocked(cx)
+        {
             return;
         }
         self.new_chat(cx);
@@ -32,7 +35,10 @@ impl WorkspaceView {
         window.focus(&self.input.focus_handle(cx), cx);
     }
     fn start_project_session(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.require_connection(cx) || self.file_navigation_blocked(cx) {
+        if !self.require_connection(cx)
+            || self.file_navigation_blocked(cx)
+            || self.queue_edit_navigation_blocked(cx)
+        {
             return;
         }
         self.new_chat(cx);

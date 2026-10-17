@@ -208,6 +208,9 @@ impl WorkspaceView {
                         ),
                 )
             })
+            .when(self.queue_edit.is_some(), |view| {
+                view.child(self.queue_edit_bar(cx))
+            })
             .child(
                 column()
                     .relative()
@@ -428,7 +431,7 @@ impl WorkspaceView {
                                         this.open_model_picker(window, cx)
                                     })),
                             )
-                            .when(working, |d| {
+                            .when(working && self.queue_edit.is_none(), |d| {
                                 d.child(
                                     icon_button("stop", "stop", "Stop agent")
                                         .size(px(28.))
@@ -437,7 +440,7 @@ impl WorkspaceView {
                                         .on_click(cx.listener(|this, _, _, cx| this.interrupt(cx))),
                                 )
                             })
-                            .when(!working || has_draft, |d| {
+                            .when((!working || has_draft) && self.queue_edit.is_none(), |d| {
                                 d.child(
                                     crate::styling::dither_icon_action(
                                         "send",
@@ -469,7 +472,7 @@ impl WorkspaceView {
             .border_color(rgb(BORDER))
             .child(row().min_h(px(28.)).px_3().gap_2()
                 .child(label(if !self.connected { "Waiting for connection" }
-                    else if blocked { "Checking queue…" } else { "Queued" })
+                    else if self.queue_edit.is_some() { "Editing queued message" } else if blocked { "Checking queue…" } else { "Queued" })
                     .text_size(px(11.)).font_weight(FontWeight::MEDIUM))
                 .child(label(format!("{}", self.queue.len())).text_size(px(10.)))
                 .child(div().flex_1())
@@ -477,6 +480,8 @@ impl WorkspaceView {
             .child(column().id("composer-queue-items").max_h(px(208.)).overflow_y_scroll()
                 .children(self.queue.iter().enumerate().map(|(i, item)| {
                     let details = queue_row_details(item);
+                    let edit_enabled = !blocked && details.valid_id && matches!(details.blocked, None | Some("Review required"));
+                    let edit = item.clone();
                     let move_enabled = !blocked && details.allows(QueueAction::Move);
                     let steer_enabled = !blocked && details.allows(QueueAction::Steer);
                     let send_enabled = !blocked && details.allows(QueueAction::SendNow);
@@ -493,6 +498,9 @@ impl WorkspaceView {
                             .child(icon("paperclip").size(px(12.)))
                             .child(label(format!("{} file{}", details.attachment_count, if details.attachment_count == 1 { "" } else { "s" })).text_size(px(10.)))))
                         .child(row().gap(px(2.))
+                            .child(icon_button(("edit-queued", i), "pen", "Edit queued message")
+                                .size(px(20.)).when(!edit_enabled, |view| view.opacity(0.35))
+                                .when(edit_enabled, |view| view.on_click(cx.listener(move |this, _, _, cx| this.begin_queue_edit(edit.clone(), cx)))))
                             .when(i > 0, |view| view.child(icon_button(("queue-up", i), "arrow-up", "Move queued message earlier")
                                 .size(px(20.)).when(!move_enabled, |view| view.opacity(0.35))
                                 .when(move_enabled, |view| view.on_click(cx.listener(move |this, _, _, cx| this.queue_action(QueueAction::Move, &earlier, Some(i - 1), cx))))))
@@ -1185,6 +1193,18 @@ impl Render for WorkspaceView {
                     this.settings = false;
                     window.focus(&this.input.focus_handle(cx), cx);
                     cx.notify();
+                    return;
+                }
+                if this.queue_edit.is_some()
+                    && this.input.focus_handle(cx).is_focused(window)
+                    && !this.model_picker
+                    && !this.agent_picker
+                    && !this.access_picker
+                    && !this.add_menu
+                    && !this.search_open
+                    && this.preview_open.is_none()
+                {
+                    this.cancel_queue_edit(cx);
                     return;
                 }
                 this.preview_open = None;

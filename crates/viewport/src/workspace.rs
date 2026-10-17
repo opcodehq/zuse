@@ -218,6 +218,9 @@ impl WorkspaceView {
     }
 
     pub(super) fn archive(&mut self, cx: &mut Context<Self>) {
+        if self.queue_edit_navigation_blocked(cx) {
+            return;
+        }
         if let Some(chat) = &self.selected {
             self.call(
                 methods::MUTATE,
@@ -407,6 +410,13 @@ impl WorkspaceView {
     }
 
     pub(super) fn restore_failed_draft(&mut self, draft: Draft, cx: &mut Context<Self>) {
+        if self.queue_edit.is_some() {
+            self.uncertain_drafts.push(draft);
+            self.error =
+                Some("Finish the queued-message edit before restoring another draft.".into());
+            cx.notify();
+            return;
+        }
         if self.draft_key() == draft.key && self.input.read(cx).value(cx).is_empty() {
             self.attachments = draft.attachments;
             self.input

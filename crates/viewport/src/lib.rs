@@ -16,6 +16,7 @@ mod previews;
 mod provider_settings;
 mod questions;
 mod queue;
+mod queue_edit;
 mod recovery;
 pub mod settings_style;
 mod settings_view;
@@ -114,6 +115,7 @@ pub struct WorkspaceView {
     creating: Option<(u64, Value, Value)>,
     queue: Vec<Value>,
     queue_watch: Option<u64>,
+    queue_edit: Option<queue_edit::QueueEdit>,
     queue_actions: HashMap<u64, queue::PendingQueueAction>,
     queue_unconfirmed: std::collections::HashSet<String>,
     sessions: Vec<Value>,
@@ -352,6 +354,7 @@ impl WorkspaceView {
             creating: None,
             queue: vec![],
             queue_watch: None,
+            queue_edit: None,
             queue_actions: HashMap::new(),
             queue_unconfirmed: Default::default(),
             sessions: vec![],
@@ -541,6 +544,9 @@ impl WorkspaceView {
             return;
         }
         if self.receive_preview(id, &frame, cx) {
+            return;
+        }
+        if self.receive_queue_edit(id, &frame, cx) {
             return;
         }
         if self.receive_queue_action(id, &frame, cx) {
@@ -749,6 +755,7 @@ impl WorkspaceView {
                 methods::WATCH_QUEUE if self.queue_watch == Some(id) => {
                     if let Some(items) = value["items"].as_array() {
                         self.queue = items.clone();
+                        self.reconcile_queue_edit(cx);
                         if let Some(chat) =
                             self.selected.as_ref().and_then(|chat| chat["id"].as_str())
                         {
@@ -895,7 +902,7 @@ impl WorkspaceView {
         if !self.require_connection(cx) {
             return;
         }
-        if self.file_navigation_blocked(cx) {
+        if self.file_navigation_blocked(cx) || self.queue_edit_navigation_blocked(cx) {
             return;
         }
         self.stash_draft(cx);
@@ -962,7 +969,7 @@ impl WorkspaceView {
         if !self.require_connection(cx) {
             return;
         }
-        if self.file_navigation_blocked(cx) {
+        if self.file_navigation_blocked(cx) || self.queue_edit_navigation_blocked(cx) {
             return;
         }
         self.stash_draft(cx);
@@ -992,6 +999,10 @@ impl WorkspaceView {
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings {
+            return;
+        }
+        if self.queue_edit.is_some() {
+            self.commit_queue_edit(cx);
             return;
         }
         if self.access_change_pending_for_selection() {
