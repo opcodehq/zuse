@@ -98,6 +98,7 @@ impl WorkspaceView {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.settings_section = item;
                             this.completion_preset_menu = false;
+                            this.default_permission_menu = false;
                             if item == Section::Devices {
                                 this.refresh_pairings();
                             }
@@ -158,6 +159,7 @@ impl WorkspaceView {
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.settings = false;
                                 this.completion_preset_menu = false;
+                                this.default_permission_menu = false;
                                 window.focus(&this.input.focus_handle(cx), cx);
                                 cx.notify();
                             })),
@@ -314,17 +316,127 @@ impl WorkspaceView {
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_model_picker(window, cx);
                 this.model_picker_default = true;
+                this.default_permission_menu = false;
                 cx.notify();
             }));
-        let card = s::card().child(
-            s::setting_row(true)
-                .child(s::details("Default model", "Model for new chats."))
-                .child(trigger),
-        );
+        use zuse_protocol::presentation::PermissionMode;
+        let selected = self.preferences.default_permission_mode;
+        let permission = column()
+            .id("default-permission-control")
+            .track_focus(&self.default_permission_focus)
+            .on_key_down(cx.listener(Self::on_default_permission_key))
+            .relative()
+            .child(
+                s::button("settings-default-permission", selected.label())
+                    .w(px(256.))
+                    .justify_between()
+                    .role(Role::ComboBox)
+                    .tab_index(0)
+                    .aria_label("Default permission mode")
+                    .aria_expanded(self.default_permission_menu)
+                    .child(icon("alt-arrow-down").size(px(14.)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        window.focus(&this.default_permission_focus, cx);
+                        this.default_permission_active = PermissionMode::ALL
+                            .iter()
+                            .position(|mode| *mode == selected)
+                            .unwrap_or(0);
+                        this.default_permission_menu = !this.default_permission_menu;
+                        this.model_picker = false;
+                        cx.notify();
+                    })),
+            )
+            .when(self.default_permission_menu, |view| {
+                view.child(
+                    deferred(
+                        column()
+                            .id("default-permission-options")
+                            .role(Role::ListBox)
+                            .absolute()
+                            .top_full()
+                            .right_0()
+                            .mt_1()
+                            .w(px(256.))
+                            .p_1()
+                            .rounded(px(10.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(s::card_bg())
+                            .shadow_lg()
+                            .occlude()
+                            .children(PermissionMode::ALL.into_iter().enumerate().map(
+                                |(index, mode)| {
+                                    row()
+                                        .id(("default-permission-mode", index))
+                                        .role(Role::ListBoxOption)
+                                        .aria_selected(selected == mode)
+                                        .when(self.default_permission_active == index, |view| {
+                                            view.bg(s::frame_bg())
+                                        })
+                                        .cursor_pointer()
+                                        .h(px(28.))
+                                        .px_2()
+                                        .gap_2()
+                                        .rounded(px(7.))
+                                        .text_size(px(12.))
+                                        .hover(|view| view.bg(s::frame_bg()))
+                                        .child(div().flex_1().child(mode.label()))
+                                        .when(selected == mode, |view| {
+                                            view.child(icon("check").size(px(14.)))
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.preferences.default_permission_mode = mode;
+                                            this.default_permission_menu = false;
+                                            this.save_preferences();
+                                            cx.notify();
+                                        }))
+                                },
+                            )),
+                    )
+                    .priority(1),
+                )
+            });
+        let card = s::card()
+            .child(s::setting_row(true).child(s::details("Default model", "Model for new chats.")).child(trigger))
+            .child(s::setting_row(false).child(s::details("Default permission mode", "How new chats handle tool calls. Each chat can override this from the composer.")).child(permission));
         column().relative()
             .child(s::frame().child(s::header("Chat defaults", "These choices apply when you start a new chat. You can still change either one from the composer.")).child(card))
             .when(self.model_picker,|view|view.child(self.composer_picker(cx)))
             .into_any_element()
+    }
+    fn on_default_permission_key(
+        &mut self,
+        event: &KeyDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use zuse_protocol::presentation::PermissionMode;
+        match event.keystroke.key.as_str() {
+            "escape" => self.default_permission_menu = false,
+            "enter" | "space" if !event.is_held => {
+                if self.default_permission_menu {
+                    self.preferences.default_permission_mode =
+                        PermissionMode::ALL[self.default_permission_active];
+                    self.save_preferences();
+                } else {
+                    self.default_permission_active = PermissionMode::ALL
+                        .iter()
+                        .position(|mode| *mode == self.preferences.default_permission_mode)
+                        .unwrap_or(0);
+                }
+                self.default_permission_menu = !self.default_permission_menu;
+            }
+            "up" | "down" if self.default_permission_menu => {
+                self.default_permission_active = 1 - self.default_permission_active
+            }
+            "home" if self.default_permission_menu => self.default_permission_active = 0,
+            "end" if self.default_permission_menu => {
+                self.default_permission_active = PermissionMode::ALL.len() - 1
+            }
+            _ => return,
+        }
+        cx.stop_propagation();
+        cx.notify();
     }
     fn usage_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let accounts = self.accounts["accounts"].as_array();

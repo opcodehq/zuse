@@ -142,6 +142,7 @@ pub struct ResolvedRunConfig {
     pub model: Option<String>,
     pub reasoning: Option<ReasoningLevel>,
     pub model_options: serde_json::Map<String, serde_json::Value>,
+    pub sandbox: SandboxLevel,
 }
 
 impl ResolvedRunConfig {
@@ -152,7 +153,7 @@ impl ResolvedRunConfig {
             model: self.model.clone(),
             reasoning: self.reasoning,
             model_options: self.model_options.clone(),
-            sandbox: SandboxLevel::WorkspaceWrite,
+            sandbox: self.sandbox,
         })
     }
 }
@@ -782,6 +783,7 @@ pub struct Pickers {
     /// Sticky last-used picks (zuse `zuse.composer.defaults:v1`): seeds the
     /// new-chat chips and is rewritten on every new-chat pick.
     defaults: ComposerDefaults,
+    _settings_observe: Subscription,
     /// Where [`Self::defaults`] persists (`{data_dir}/composer-defaults.json`);
     /// `None` before bootstrap stamps the state (writes are skipped).
     data_dir: Option<PathBuf>,
@@ -1061,6 +1063,11 @@ impl Pickers {
         if title.is_none() {
             state.update(cx, |s, _| s.restore_composer_target(&defaults));
         }
+        let settings_observe =
+            cx.observe_global::<crate::settings::SettingsStore>(|this: &mut Self, cx| {
+                this.catalog_rev += 1;
+                cx.notify();
+            });
         let draft_owner = state.read(cx).selected_chat.clone();
         let space_owner = state.read(cx).selected_space.clone();
         let device_owner = state.read(cx).effective_device_id();
@@ -1084,6 +1091,7 @@ impl Pickers {
             config: DraftConfig::default(),
             title,
             defaults,
+            _settings_observe: settings_observe,
             data_dir,
             draft_owner,
             open,
@@ -1227,6 +1235,17 @@ impl Pickers {
         // offer harnesses this device lacks, and what the chip shows must be
         // what a send would carry.
         let fresh = self.harnesses.ready().filter(|_| !self.harnesses_stale);
+        if self.state.read(cx).selected_chat.is_none()
+            && let Some(preferred) = crate::settings::default_model(cx)
+        {
+            if fresh.is_none_or(|list| {
+                offered_harnesses(list)
+                    .iter()
+                    .any(|descriptor| descriptor.id == preferred.provider)
+            }) {
+                return Some(preferred.provider);
+            }
+        }
         if let Some(harness) = self.defaults.harness {
             let offered = match fresh {
                 Some(list) => offered_harnesses(list).iter().any(|d| d.id == harness),
@@ -1259,6 +1278,11 @@ impl Pickers {
             return chat.config.as_ref().and_then(|c| c.model.as_deref());
         }
         let harness = self.effective_harness(cx)?;
+        if let Some(preferred) =
+            crate::settings::default_model(cx).filter(|preferred| preferred.provider == harness)
+        {
+            return Some(&preferred.model);
+        }
         self.defaults.model_for(harness).map(|m| m.id.as_str())
     }
 
@@ -1344,6 +1368,14 @@ impl Pickers {
                         remembered
                             .filter(|m| m.id == id)
                             .map(|m| m.label.clone())
+                            .or_else(|| {
+                                crate::settings::default_model(cx)
+                                    .filter(|model| {
+                                        Some(model.provider) == self.effective_harness(cx)
+                                            && model.model == id
+                                    })
+                                    .map(|model| model.label.clone())
+                            })
                             .or_else(|| self.defaults.label_for(id).map(str::to_owned))
                             .unwrap_or_else(|| id.to_owned()),
                     ),
@@ -1412,6 +1444,8 @@ impl Pickers {
     /// `Mutate createChat`: concrete model + reasoning whenever the catalog is
     /// loaded (no "engine picks a default" passthrough).
     pub fn resolved(&self, cx: &App) -> ResolvedRunConfig {
+        let sandbox = crate::settings::default_permission_mode(cx)
+            .for_chat(self.state.read(cx).selected_chat_row());
         let harness = self.effective_harness(cx);
         // A catalog still from the previous device must not pick for this
         // one (its default model, its effort ladder): send only what was
@@ -1419,6 +1453,7 @@ impl Pickers {
         if harness.is_some_and(|h| self.stale_models.contains(&h)) {
             return ResolvedRunConfig {
                 harness,
+                sandbox,
                 model: self.effective_model_id(cx).map(str::to_string),
                 reasoning: self.explicit_reasoning(cx),
                 model_options: self.explicit_options(cx),
@@ -1426,6 +1461,7 @@ impl Pickers {
         }
         ResolvedRunConfig {
             harness,
+            sandbox,
             model: self
                 .selected_model(cx)
                 .map(|m| m.id.clone())
@@ -6420,6 +6456,14 @@ impl Render for Pickers {
                     .and_then(Loadable::ready)
                     .and_then(|models| models.iter().find(|m| m.id == id))
                     .map(|m| m.label.clone())
+                    .or_else(|| {
+                        crate::settings::default_model(cx)
+                            .filter(|model| {
+                                Some(model.provider) == self.effective_harness(cx)
+                                    && model.model == id
+                            })
+                            .map(|model| model.label.clone())
+                    })
                     .or_else(|| self.defaults.label_for(id).map(str::to_owned))
                     .unwrap_or_else(|| id.to_owned())
                     .into(),
@@ -9831,6 +9875,16 @@ mod tests {
         assert_eq!(config.harness, HarnessId::ClaudeCode);
         assert_eq!(config.model.as_deref(), Some("opus"));
         assert_eq!(config.sandbox, SandboxLevel::WorkspaceWrite);
+        resolved.sandbox = SandboxLevel::ReadOnly;
+        assert_eq!(
+            resolved.chat_config().unwrap().sandbox,
+            SandboxLevel::ReadOnly
+        );
+        resolved.sandbox = SandboxLevel::DangerFullAccess;
+        assert_eq!(
+            resolved.chat_config().unwrap().sandbox,
+            SandboxLevel::DangerFullAccess
+        );
     }
 
     #[test]

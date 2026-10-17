@@ -541,6 +541,7 @@ pub enum SettingsSection {
     /// Which harnesses the composer offers (enable/disable toggles) —
     /// labeled "Providers".
     Harnesses,
+    Defaults,
     Plugins,
     /// Per-provider CLI accounts (login, usage) — labeled "Accounts".
     Agents,
@@ -558,9 +559,10 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 11] = [
+    pub const ALL: [SettingsSection; 12] = [
         SettingsSection::General,
         SettingsSection::Harnesses,
+        SettingsSection::Defaults,
         SettingsSection::Plugins,
         SettingsSection::Devices,
         SettingsSection::Appearance,
@@ -603,6 +605,7 @@ impl SettingsSection {
         match self {
             SettingsSection::Devices => "devices",
             SettingsSection::Harnesses => "providers",
+            SettingsSection::Defaults => "defaults",
             SettingsSection::Plugins => "plugins",
             SettingsSection::Agents => "agents",
             SettingsSection::Appearance => "appearance",
@@ -621,6 +624,7 @@ impl SettingsSection {
         Some(match slug {
             "devices" => SettingsSection::Devices,
             "providers" | "harnesses" => SettingsSection::Harnesses,
+            "defaults" | "default-models" => SettingsSection::Defaults,
             "plugins" => SettingsSection::Plugins,
             "agents" => SettingsSection::Agents,
             "appearance" => SettingsSection::Appearance,
@@ -647,6 +651,7 @@ impl SettingsSection {
         match self {
             SettingsSection::Devices => "Remote access",
             SettingsSection::Harnesses => "Providers",
+            SettingsSection::Defaults => "Default models",
             SettingsSection::Plugins => "Plugins",
             SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
@@ -2078,6 +2083,7 @@ pub struct Shell {
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
     harnesses_page: Option<Entity<HarnessesPage>>,
+    defaults_page: Option<Entity<settings::defaults::DefaultsPage>>,
     shortcuts_sub: Option<Subscription>,
     notifications_sub: Option<Subscription>,
     files_settings_sub: Option<Subscription>,
@@ -2594,6 +2600,7 @@ impl Shell {
             shortcuts_page: None,
             accounts_page: None,
             harnesses_page: None,
+            defaults_page: None,
             shortcuts_sub: None,
             notifications_sub: None,
             files_settings_sub: None,
@@ -5466,6 +5473,10 @@ impl Shell {
             return false;
         };
         match section.canonical() {
+            SettingsSection::Defaults => self
+                .defaults_page
+                .as_ref()
+                .is_some_and(|page| page.update(cx, |page, cx| page.dismiss_on_escape(cx))),
             SettingsSection::Devices => self
                 .devices_page
                 .as_ref()
@@ -5596,6 +5607,19 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match section {
+            SettingsSection::Defaults => {
+                if self.defaults_page.is_none() {
+                    let state = self.state.clone();
+                    self.defaults_page =
+                        Some(cx.new(|cx| settings::defaults::DefaultsPage::new(state, cx)));
+                }
+                self.defaults_page
+                    .as_ref()
+                    .unwrap()
+                    .clone()
+                    .into_any_element()
+            }
+
             SettingsSection::Plugins => {
                 if self.harnesses_page.is_none() {
                     let state = self.state.clone();
@@ -7992,6 +8016,7 @@ impl Shell {
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::Devices => icons::SETTINGS_REMOTE,
             SettingsSection::Harnesses => icons::SETTINGS_PROVIDERS,
+            SettingsSection::Defaults => icons::SETTINGS_DEFAULTS,
             SettingsSection::Plugins => icons::SETTINGS_PLUGINS,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
             SettingsSection::Appearance => icons::TUNING,

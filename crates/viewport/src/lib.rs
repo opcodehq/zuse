@@ -127,6 +127,10 @@ pub struct WorkspaceView {
     session_search: Entity<input::TextInput>,
     agent_picker: bool,
     preferences: zuse_protocol::presentation::WorkspacePreferences,
+    preferences_loaded: bool,
+    default_permission_menu: bool,
+    default_permission_focus: FocusHandle,
+    default_permission_active: usize,
     picker_catalog: zuse_protocol::presentation::PickerCatalog,
     picker_scope: Option<String>,
     model_search: Entity<input::TextInput>,
@@ -361,6 +365,10 @@ impl WorkspaceView {
             session_search,
             agent_picker: false,
             preferences: Default::default(),
+            preferences_loaded: false,
+            default_permission_menu: false,
+            default_permission_focus: cx.focus_handle(),
+            default_permission_active: 0,
             picker_catalog: Default::default(),
             picker_scope: None,
             model_search,
@@ -461,6 +469,10 @@ impl WorkspaceView {
             >(value.clone())
             {
                 preferences.normalize();
+                if !self.preferences_loaded {
+                    self.sandbox = preferences.default_permission_mode.sandbox();
+                    self.preferences_loaded = true;
+                }
                 self.preferences = preferences;
                 cx.notify();
             }
@@ -915,6 +927,7 @@ impl WorkspaceView {
         self.reset_tool_results();
         self.reset_previews(cx);
         self.selected = None;
+        self.sandbox = self.preferences.default_permission_mode.sandbox();
         self.model = None;
         self.reasoning = None;
         self.model_options.clear();

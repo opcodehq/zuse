@@ -20,6 +20,7 @@ pub mod accounts;
 pub mod appearance;
 pub mod archived;
 pub mod composer;
+pub mod defaults;
 pub mod devices;
 pub mod files;
 pub mod harnesses;
@@ -375,6 +376,16 @@ pub fn init(settings: UiSettings, data_dir: impl Into<PathBuf>, cx: &mut App) {
 pub fn current(cx: &App) -> UiSettings {
     cx.try_global::<SettingsStore>()
         .map(|store| store.current.clone())
+        .unwrap_or_default()
+}
+
+pub fn default_model(cx: &App) -> Option<&zuse_protocol::presentation::DefaultModelSelection> {
+    cx.try_global::<SettingsStore>()
+        .and_then(|store| store.current.default_model.as_ref())
+}
+pub fn default_permission_mode(cx: &App) -> zuse_protocol::presentation::PermissionMode {
+    cx.try_global::<SettingsStore>()
+        .map(|store| store.current.default_permission_mode)
         .unwrap_or_default()
 }
 
@@ -824,6 +835,8 @@ pub struct UiSettings {
     pub window_geometry: Option<WindowGeometry>,
     /// Submit using Enter or the platform modifier plus Enter.
     pub composer_send_behavior: ComposerSendBehavior,
+    pub default_model: Option<zuse_protocol::presentation::DefaultModelSelection>,
+    pub default_permission_mode: zuse_protocol::presentation::PermissionMode,
     /// Legacy global opt-in; per-harness preferences take precedence.
     pub skills_in_slash_menu: bool,
     pub skill_completion_by_harness:
@@ -1068,6 +1081,8 @@ impl Default for UiSettings {
             escape_stops_active_agent: false,
             settings_section: crate::shell::SettingsSection::default(),
             composer_send_behavior: ComposerSendBehavior::default(),
+            default_model: None,
+            default_permission_mode: Default::default(),
             skills_in_slash_menu: false,
             skill_completion_by_harness: Default::default(),
             compact_model_picker: true,
@@ -1679,6 +1694,8 @@ impl UiSettings {
             dictation_input,
             window_geometry,
             composer_send_behavior,
+            default_model,
+            default_permission_mode,
             skills_in_slash_menu,
             skill_completion_by_harness,
             compact_model_picker,

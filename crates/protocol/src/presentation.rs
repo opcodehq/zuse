@@ -37,12 +37,57 @@ impl AppearanceMode {
     }
 }
 
+/// Permission postures currently supported by the canonical run contract.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PermissionMode {
+    #[default]
+    ApprovalRequired,
+    FullAccess,
+}
+impl PermissionMode {
+    pub const ALL: [Self; 2] = [Self::ApprovalRequired, Self::FullAccess];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ApprovalRequired => "Ask for approval",
+            Self::FullAccess => "Full access",
+        }
+    }
+    pub fn sandbox(self) -> crate::SandboxLevel {
+        match self {
+            Self::ApprovalRequired => crate::SandboxLevel::WorkspaceWrite,
+            Self::FullAccess => crate::SandboxLevel::DangerFullAccess,
+        }
+    }
+    /// Defaults apply only before a conversation exists. An existing chat
+    /// without stored configuration keeps the conservative legacy posture.
+    pub fn for_chat(self, chat: Option<&crate::Chat>) -> crate::SandboxLevel {
+        match chat {
+            Some(chat) => chat
+                .config
+                .as_ref()
+                .map(|config| config.sandbox)
+                .unwrap_or_default(),
+            None => self.sandbox(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultModelSelection {
+    pub provider: crate::HarnessId,
+    pub model: String,
+    pub label: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WorkspacePreferences {
     pub sidebar_view: SidebarView,
     pub appearance: AppearanceMode,
     pub completion_sound: crate::completion_sound::CompletionSoundPreferences,
+    pub default_permission_mode: PermissionMode,
     pub collapsed_projects: Vec<String>,
     pub default_provider: Option<String>,
     pub default_models: BTreeMap<String, String>,
@@ -363,6 +408,39 @@ mod binary_switch_tests {
         assert_eq!(
             model_option_switch_values("serviceTier", ["default", "fast"]),
             Some(("fast", "default"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+    use crate::SandboxLevel;
+    #[test]
+    fn new_defaults_never_rewrite_existing_or_legacy_chat_permissions() {
+        let mut chat: crate::Chat = serde_json::from_value(serde_json::json!({"id":"c","deviceId":"d","archived":false,"createdAt":"2026-01-01T00:00:00Z","config":{"harness":"codex","sandbox":"read-only"}})).unwrap();
+        assert_eq!(
+            PermissionMode::FullAccess.for_chat(Some(&chat)),
+            SandboxLevel::ReadOnly
+        );
+        chat.config = None;
+        assert_eq!(
+            PermissionMode::FullAccess.for_chat(Some(&chat)),
+            SandboxLevel::WorkspaceWrite
+        );
+        assert_eq!(
+            PermissionMode::FullAccess.for_chat(None),
+            SandboxLevel::DangerFullAccess
+        );
+        assert_eq!(
+            PermissionMode::ApprovalRequired.for_chat(None),
+            SandboxLevel::WorkspaceWrite
+        );
+        let preferences: WorkspacePreferences =
+            serde_json::from_value(serde_json::json!({"sidebarView":"projects"})).unwrap();
+        assert_eq!(
+            preferences.default_permission_mode,
+            PermissionMode::ApprovalRequired
         );
     }
 }
