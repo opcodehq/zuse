@@ -21,13 +21,15 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev
+      - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
       - run: cargo fmt --all --check
       - run: cargo check -p zuse-cli
       - run: cargo test -p zuse-harness -p zuse-model-accounts
       - run: cargo test -p zuse-model -p zuse-serve
       - run: cargo test -p zuse-rpc --lib
       - run: cargo test -p zuse-engine --lib account::tests
+      - run: cargo test -p zuse-engine --lib harness_models::tests
+      - run: cargo test -p zuse-engine --lib model_connections::tests
       - run: cargo test -p zuse-engine -p zuse-mcp --lib plugin
 
   native:

@@ -3,7 +3,7 @@
 `crates/model-accounts` owns model registrations, OAuth, encrypted local records,
 and account-scoped storage leases. `crates/engine/src/model_connections.rs`
 combines the local and hosted stores under the active Zuse identity. CLI logins
-remain independent. The harness broker still needs to consume this service.
+remain independent. The engine model service consumes this account authority; the selectable application provider/session adapter remains pending.
 
 Local storage uses a private profile directory, a 0600 key file, and an SQLite
 WAL database. AES-256-GCM uses a fresh nonce for every write and authenticates the
@@ -39,3 +39,5 @@ rotation across agents, disconnect fencing, metadata privacy, and shared-record
 compatibility. These use a local identity-provider fixture. Live authorization,
 hosted-storage interoperability, UI workflow acceptance, and harness integration
 remain required before calling the complete model-account setup accepted.
+
+Renewal is an owned tracked operation: cancelling a model caller does not cancel the lease/refresh/persist transaction. Local retirement waits for admitted renewal and does not return its credential to a retired caller. Hosted requests continue to enforce identity changes. Public metadata includes a non-secret authorization generation so the model broker can invalidate stale inventory and health after reconnect. The connection-service lifecycle gate also fences lazy initialization and mutations against retirement.

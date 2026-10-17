@@ -87,6 +87,8 @@ pub struct Connection {
     pub authorized: bool,
     pub status: ConnectionState,
     pub plan_notice_seen: bool,
+    #[serde(default)]
+    pub authorization_generation: u64,
 }
 // Token-bearing types intentionally do not implement Debug.
 #[derive(Clone, Serialize, Deserialize)]
@@ -146,6 +148,7 @@ impl Registration {
                 ConnectionState::Disconnected
             },
             plan_notice_seen: self.plan_notice_seen,
+            authorization_generation: self.authorization_generation,
         }
     }
 }

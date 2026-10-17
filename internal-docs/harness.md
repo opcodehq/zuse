@@ -30,6 +30,8 @@ bun run test
 bun run build
 ```
 
+The native-tool integration fixtures require `rg` on PATH in addition to the Node runtime used by bridge fixtures. Packaged ripgrep resolution remains part of application packaging.
+
 Rust scenarios cover unknown-outcome recovery, explicit inspected retry, failed approval persistence, committed-output replay prevention, concurrent child execution and final synthesis, read-only enforcement, steering deduplication, shared budgets, compaction, checkpoint corruption, account fallback and affinity, and a real bundled Node process with concurrent mocked streams and cancellation. The SDK protocol fixtures cover text, tool calls, usage, request validation and incomplete streams. These are component and protocol fixtures; no live paid-model request or complete application harness session is claimed.
 
 Native ownership fixtures exercise same-process and child-process exclusion, independent roots, stale PID stamps, preserved damaged journals, root identity validation, and release only after host cleanup. Application provider registration and live native session acceptance remain pending.
@@ -104,3 +106,34 @@ abort cleanup, and a durable-kernel coding workflow with real filesystem and
 command execution. That workflow uses a scripted model; selectable application
 provider registration, live model sessions, UI acceptance and packaged ripgrep
 resolution remain pending.
+
+## Account-backed model service
+
+`engine::harness_models::HarnessModels` connects the engine's model accounts to
+the shared `AccountBroker` and lazy SDK bridge. It discovers each account's live
+model inventory, keeps provider-qualified model IDs, filters visibility and
+media-only entries, and retains reported context/compaction limits. Eligibility
+is checked per connection rather than inferred from a global model list.
+
+Concurrent discoveries share each account's fetch. Inventory is cached for 15
+minutes, transient failures for 15 seconds, with at most 128 cache slots. Explicit
+refresh bypasses the cache. Requests reject a credential/provider mismatch before
+sending a bearer token to either inventory or SDK transport. Account authorization
+generations invalidate stale inventory and broker health after reconnect. The
+broker retains root/child affinity and emits account-switch notices without using
+an email address as the displayed account name.
+
+Token renewal runs in a tracked owned task. Abandoning a model caller does not
+discard a provider's rotated refresh token. Local shutdown drains an admitted
+renewal and saves it before returning, while withholding credentials from retired
+callers. Hosted storage retains its identity/cancellation fences. The connection
+service gates lazy initialization and mutations against retirement so a late
+initializer cannot escape shutdown. Engine teardown freezes queues and stops
+sessions before draining model-account operations.
+
+Thirteen model-account tests and nine engine model/lifecycle tests pass. The new
+fixtures cover abandoned renewal, retirement drainage, concurrent inventories,
+entitlement/provider checks, account fallback, reconnect recovery, discovery
+cancellation, identity retirement during an active model stream, and lazy-store retirement. Inventory uses a local HTTP fixture and
+model execution uses a wire fixture. The selectable application provider, session
+protocol adapter, live provider authorization and full chat workflows remain pending.

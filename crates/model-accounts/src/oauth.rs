@@ -22,7 +22,7 @@ use tokio::{
     net::TcpListener,
     sync::{Mutex as AsyncMutex, oneshot, watch},
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 const XAI_CLIENT: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 const MAX_RESPONSE: usize = 1024 * 1024;
@@ -38,6 +38,7 @@ struct Inner {
     http: reqwest::Client,
     active: Mutex<HashMap<Key, Active>>,
     stop: CancellationToken,
+    operations: TaskTracker,
     keys: [AsyncMutex<Option<(Instant, Arc<JwkSet>)>>; 2],
     issuers: [String; 2],
     xai_client: String,
@@ -123,6 +124,7 @@ impl ModelAccounts {
             http,
             active: Mutex::new(HashMap::new()),
             stop: CancellationToken::new(),
+            operations: TaskTracker::new(),
             keys: [AsyncMutex::new(None), AsyncMutex::new(None)],
             issuers: [
                 Provider::Chatgpt.issuer().into(),
@@ -143,6 +145,11 @@ impl ModelAccounts {
         for login in lock(&self.0.active).values() {
             login.cancel.cancel();
         }
+    }
+    pub async fn shutdown(&self) {
+        self.retire();
+        self.0.operations.close();
+        self.0.operations.wait().await;
     }
     pub fn cancel(&self, provider: Provider, id: &str) {
         if let Some(login) = lock(&self.0.active).get(&(provider, id.into())) {
@@ -177,6 +184,7 @@ impl ModelAccounts {
                         authorized: false,
                         status: ConnectionState::Pending,
                         plan_notice_seen: false,
+                        authorization_generation: 0,
                     });
                 }
             }
@@ -257,7 +265,7 @@ impl ModelAccounts {
         };
         events.send_replace(Some(event.clone()));
         let manager = self.clone();
-        tokio::spawn(async move {
+        self.0.operations.spawn(async move {
             let result = tokio::select! {biased;_=cancel.cancelled()=>Err(Error::Cancelled),_=account_cancel.cancelled()=>Err(Error::Changed),_=events.closed()=>Err(Error::Cancelled),_=tokio::time::sleep(Duration::from_secs(3600))=>Err(Error::Expired),result=flow=>result};
             match result {
                 Ok(connection) => {
@@ -702,7 +710,21 @@ impl ModelAccounts {
         if self.0.stop.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        let lease = self.0.vault.acquire(provider).await?;
+        let manager = self.clone();
+        let id = id.to_owned();
+        // A caller may abandon a model request after the provider has rotated
+        // its refresh token. Finish renewal and persistence under the lease.
+        self.0
+            .operations
+            .spawn(async move { manager.credential_owned(provider, &id).await })
+            .await
+            .map_err(|_| Error::Unavailable)?
+    }
+    async fn credential_owned(&self, provider: Provider, id: &str) -> Result<Credential, Error> {
+        if self.0.stop.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let lease = tokio::select! {biased;_=self.0.stop.cancelled()=>return Err(Error::Cancelled),lease=self.0.vault.acquire(provider)=>lease?};
         let mut record = lease.registration(id).await?.ok_or(Error::Unknown)?;
         if !record.authorized(provider) {
             return Err(Error::Reauthorization);
@@ -730,7 +752,10 @@ impl ModelAccounts {
             } else {
                 "/oauth2/token"
             };
-            let (status, body) = tokio::select! {biased;_=self.0.stop.cancelled()=>return Err(Error::Cancelled),result=self.post(provider,path,fields)=>result?};
+            if self.0.stop.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let (status, body) = self.post(provider, path, fields).await?;
             if !status.is_success() {
                 return Err(if status.is_server_error() {
                     Error::Unavailable
@@ -1037,7 +1062,7 @@ mod tests {
     use super::*;
     use axum::{Json, routing::post};
     use serde_json::json;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     // This signing key is a public, test-only fixture. It is never used outside tests.
     const SIGNING_KEY: &str = include_str!("../testdata/signing-key.pem");
@@ -1064,6 +1089,9 @@ mod tests {
         root: tempfile::TempDir,
         manager: ModelAccounts,
         refreshes: Arc<AtomicUsize>,
+        refresh_gate: Arc<AtomicBool>,
+        refresh_started: Arc<tokio::sync::Notify>,
+        refresh_release: Arc<tokio::sync::Notify>,
         keys: Arc<AtomicUsize>,
         exchange: Arc<Mutex<Option<(String, String, String)>>>,
         server: tokio::task::JoinHandle<()>,
@@ -1083,6 +1111,12 @@ mod tests {
             let exchange_data = exchange.clone();
             let exchange_issuer = issuer.clone();
             let refreshes = Arc::new(AtomicUsize::new(0));
+            let refresh_gate = Arc::new(AtomicBool::new(false));
+            let refresh_started = Arc::new(tokio::sync::Notify::new());
+            let refresh_release = Arc::new(tokio::sync::Notify::new());
+            let gate = refresh_gate.clone();
+            let started = refresh_started.clone();
+            let release = refresh_release.clone();
             let keys = Arc::new(AtomicUsize::new(0));
             let discovery_issuer = issuer.clone();
             let refresh_count = refreshes.clone();
@@ -1091,7 +1125,7 @@ mod tests {
                 .route("/.well-known/openid-configuration",get(move ||{let issuer=discovery_issuer.clone();async move {Json(json!({"issuer":issuer,"jwks_uri":format!("{issuer}/keys"),"revocation_endpoint":format!("{issuer}/revoke")}))}}))
                 .route("/keys",get(move ||{let count=key_count.clone();async move {count.fetch_add(1,Ordering::SeqCst);Json(serde_json::from_str::<Value>(JWKS).unwrap())}}))
                 .route("/api/accounts/oauth/token",post(move |axum::Form(form):axum::Form<HashMap<String,String>>|{
-                    let count=refresh_count.clone();let expected=exchange_data.clone();let issuer=exchange_issuer.clone();
+                    let count=refresh_count.clone();let expected=exchange_data.clone();let issuer=exchange_issuer.clone();let gate=gate.clone();let started=started.clone();let release=release.clone();
                     async move {
                         assert_eq!(form["client_id"],"fixture-client");
                         assert_eq!(form["resource"],"https://api.openai.com/v1");
@@ -1105,7 +1139,7 @@ mod tests {
                         }
                         assert_eq!(form["grant_type"],"refresh_token");
                         assert_eq!(form["refresh_token"],"fixture-refresh-token");
-                        count.fetch_add(1,Ordering::SeqCst);
+                        count.fetch_add(1,Ordering::SeqCst);started.notify_one();if gate.load(Ordering::Acquire) {release.notified().await;}
                         Json(json!({"access_token":"rotated-access-token","refresh_token":"rotated-refresh-token","token_type":"Bearer","expires_in":3600}))
                     }
                 }))
@@ -1119,6 +1153,9 @@ mod tests {
                 root,
                 manager,
                 refreshes,
+                refresh_gate,
+                refresh_started,
+                refresh_release,
                 keys,
                 exchange,
                 server,
@@ -1530,6 +1567,81 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+    #[tokio::test]
+    async fn abandoning_a_model_request_cannot_discard_a_rotated_refresh_token() {
+        let fixture = Fixture::new().await;
+        fixture.refresh_gate.store(true, Ordering::Release);
+        fixture.save(&fixture.record("account-a")).await;
+        let manager = fixture.manager.clone();
+        let caller =
+            tokio::spawn(async move { manager.credential(Provider::Chatgpt, "account-a").await });
+        tokio::time::timeout(Duration::from_secs(3), fixture.refresh_started.notified())
+            .await
+            .unwrap();
+        caller.abort();
+        assert!(matches!(caller.await,Err(error) if error.is_cancelled()));
+        let manager = fixture.manager.clone();
+        let next =
+            tokio::spawn(async move { manager.credential(Provider::Chatgpt, "account-a").await });
+        fixture.refresh_release.notify_one();
+        assert_eq!(
+            next.await.unwrap().unwrap().access_token,
+            "rotated-access-token"
+        );
+        assert_eq!(fixture.refreshes.load(Ordering::SeqCst), 1);
+        let lease = fixture
+            .manager
+            .vault()
+            .acquire(Provider::Chatgpt)
+            .await
+            .unwrap();
+        assert_eq!(
+            lease
+                .registration("account-a")
+                .await
+                .unwrap()
+                .unwrap()
+                .refresh_token
+                .as_deref(),
+            Some("rotated-refresh-token")
+        );
+        lease.finish().await;
+    }
+    #[tokio::test]
+    async fn local_shutdown_drains_admitted_rotation_without_returning_a_retired_credential() {
+        let fixture = Fixture::new().await;
+        fixture.refresh_gate.store(true, Ordering::Release);
+        fixture.save(&fixture.record("account-a")).await;
+        let manager = fixture.manager.clone();
+        let caller =
+            tokio::spawn(async move { manager.credential(Provider::Chatgpt, "account-a").await });
+        tokio::time::timeout(Duration::from_secs(3), fixture.refresh_started.notified())
+            .await
+            .unwrap();
+        fixture.manager.retire();
+        let manager = fixture.manager.clone();
+        let shutdown = tokio::spawn(async move { manager.shutdown().await });
+        fixture.refresh_release.notify_one();
+        shutdown.await.unwrap();
+        assert!(matches!(caller.await.unwrap(), Err(Error::Cancelled)));
+        let lease = fixture
+            .manager
+            .vault()
+            .acquire(Provider::Chatgpt)
+            .await
+            .unwrap();
+        assert_eq!(
+            lease
+                .registration("account-a")
+                .await
+                .unwrap()
+                .unwrap()
+                .refresh_token
+                .as_deref(),
+            Some("rotated-refresh-token")
+        );
+        lease.finish().await;
     }
     #[tokio::test]
     async fn expired_tokens_wait_for_the_provider_refresh_window() {

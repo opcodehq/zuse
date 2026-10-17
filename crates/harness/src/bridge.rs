@@ -5,7 +5,8 @@ use futures::StreamExt;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
+    ffi::OsString,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -32,23 +33,28 @@ type Pending = Arc<Mutex<HashMap<u64, mpsc::Sender<Value>>>>;
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
+pub type EnvironmentSource = Arc<dyn Fn() -> BTreeMap<OsString, OsString> + Send + Sync>;
 pub struct ModelBridge {
     directory: PathBuf,
     node: PathBuf,
     next: AtomicU64,
     worker: AsyncMutex<Option<Arc<Worker>>>,
+    environment: Option<EnvironmentSource>,
+    retired: AtomicBool,
 }
 struct Worker {
     stdin: Arc<AsyncMutex<ChildStdin>>,
     pending: Pending,
     alive: Arc<AtomicBool>,
-    task: JoinHandle<()>,
+    task: Mutex<Option<JoinHandle<()>>>,
 }
 impl Worker {
     fn shutdown(&self) {
         self.alive.store(false, Ordering::Release);
         lock(&self.pending).clear();
-        self.task.abort();
+        if let Some(task) = lock(&self.task).as_ref() {
+            task.abort();
+        }
     }
 }
 impl Drop for Worker {
@@ -111,6 +117,8 @@ impl ModelBridge {
                 .unwrap_or_else(|| "node".into()),
             next: AtomicU64::new(1),
             worker: AsyncMutex::new(None),
+            environment: None,
+            retired: AtomicBool::new(false),
         }
     }
     /// Select a bundled or explicitly configured Node runtime.
@@ -119,8 +127,17 @@ impl ModelBridge {
         self
     }
 
+    /// Resolve process environment lazily, off the async executor. Application
+    /// adapters use this for login-shell PATH discovery, never model credentials.
+    pub fn with_environment_source(mut self, source: EnvironmentSource) -> Self {
+        self.environment = Some(source);
+        self
+    }
     async fn connect(&self) -> Result<Arc<Worker>, Error> {
         let mut slot = self.worker.lock().await;
+        if self.retired.load(Ordering::Acquire) {
+            return Err(Error::Interrupted);
+        }
         if let Some(worker) = &*slot {
             if worker.alive.load(Ordering::Acquire) {
                 return Ok(worker.clone());
@@ -142,7 +159,20 @@ impl ModelBridge {
                 .await
                 .map_err(|_| Error::Storage)?;
         }
-        let mut child = Command::new(&self.node)
+        let environment = if let Some(source) = &self.environment {
+            let source = source.clone();
+            tokio::task::spawn_blocking(move || source())
+                .await
+                .map_err(|_| failed("model_runtime_environment"))?
+        } else {
+            BTreeMap::new()
+        };
+        if self.retired.load(Ordering::Acquire) {
+            return Err(Error::Interrupted);
+        }
+        let mut command = Command::new(&self.node);
+        command.envs(environment);
+        let mut child = command
             .arg(&path)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -192,7 +222,7 @@ impl ModelBridge {
             stdin,
             pending,
             alive,
-            task,
+            task: Mutex::new(Some(task)),
         });
         *slot = Some(worker.clone());
         Ok(worker)
@@ -210,6 +240,9 @@ impl ModelBridge {
         let (tx, mut rx) = mpsc::channel(64);
         {
             let mut pending = lock(&worker.pending);
+            if self.retired.load(Ordering::Acquire) || !worker.alive.load(Ordering::Acquire) {
+                return Err(Error::Interrupted);
+            }
             if pending.len() >= 128 {
                 return Err(failed("bridge_busy"));
             }
@@ -244,8 +277,14 @@ impl ModelBridge {
         }
     }
     pub async fn close(&self) {
-        if let Some(worker) = self.worker.lock().await.take() {
+        self.retired.store(true, Ordering::Release);
+        let mut slot = self.worker.lock().await;
+        if let Some(worker) = slot.take() {
             worker.shutdown();
+            let task = lock(&worker.task).take();
+            if let Some(task) = task {
+                let _ = task.await;
+            }
         }
     }
 }

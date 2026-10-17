@@ -69,7 +69,20 @@ globalThis.fetch=async(url,init)=>{
     )
     .unwrap();
     std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let bridge = Arc::new(ModelBridge::new(directory.path().join("bridge")).with_node(launcher));
+    let mut paths = vec![directory.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(paths).unwrap();
+    let bridge = Arc::new(
+        ModelBridge::new(directory.path().join("bridge"))
+            .with_node("node-fixture".into())
+            .with_environment_source(Arc::new(move || {
+                [(std::ffi::OsString::from("PATH"), path.clone())]
+                    .into_iter()
+                    .collect()
+            })),
+    );
     let both = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         futures::future::join(
@@ -118,5 +131,35 @@ globalThis.fetch=async(url,init)=>{
             .text,
         "after"
     );
+    let started = Arc::new(tokio::sync::Notify::new());
+    let signal = started.clone();
+    let pending = {
+        let bridge = bridge.clone();
+        tokio::spawn(async move {
+            bridge
+                .request(
+                    input(
+                        "slow",
+                        CancellationToken::new(),
+                        Arc::new(move |_| signal.notify_one()),
+                    ),
+                    credential(),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
     bridge.close().await;
+    assert!(pending.await.unwrap().is_err());
+    assert!(matches!(
+        bridge
+            .request(
+                input("retired", CancellationToken::new(), Arc::new(|_| {})),
+                credential()
+            )
+            .await,
+        Err(Error::Interrupted)
+    ));
 }

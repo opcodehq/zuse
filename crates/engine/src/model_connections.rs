@@ -13,7 +13,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::{Mutex, OnceCell};
+use tokio::sync::{Mutex, OnceCell, RwLock};
 use tokio_util::sync::CancellationToken;
 use zuse_model_accounts::{
     Connection, Credential, Error, ModelAccounts, Provider, SignInEvent,
@@ -28,8 +28,9 @@ struct Inner {
     local: OnceCell<ModelAccounts>,
     account: Mutex<Option<(String, ModelAccounts)>>,
     retired: AtomicBool,
+    lifecycle: RwLock<()>,
 }
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
     pub available: bool,
@@ -58,6 +59,7 @@ impl ModelConnections {
             local: OnceCell::new(),
             account: Mutex::new(None),
             retired: AtomicBool::new(false),
+            lifecycle: RwLock::new(()),
         }))
     }
     async fn local(&self) -> Result<ModelAccounts, Error> {
@@ -104,6 +106,10 @@ impl ModelConnections {
         Ok(Some((subject, manager)))
     }
     pub async fn status(&self) -> Status {
+        let _operation = self.0.lifecycle.read().await;
+        if self.0.retired.load(Ordering::Acquire) {
+            return Status::default();
+        }
         let local = self.local().await;
         let local_available = local.is_ok();
         let mut connections = Vec::new();
@@ -166,9 +172,40 @@ impl ModelConnections {
             Ok((self.local().await?, id.into(), None))
         }
     }
+    /// Shared-account model calls inherit the identity session that admitted
+    /// them; local model accounts remain independent of Zuse cloud sign-in.
+    pub fn lifetime(&self, id: &str) -> CancellationToken {
+        let token = if id.starts_with("account:") {
+            self.0.identity.session_cancellation()
+        } else {
+            CancellationToken::new()
+        };
+        if self.0.retired.load(Ordering::Acquire) {
+            token.cancel();
+        }
+        token
+    }
     pub async fn credential(&self, id: &str) -> Result<Credential, Error> {
-        let (manager, raw, _) = self.owner(id).await?;
+        let _operation = self.0.lifecycle.read().await;
+        if self.0.retired.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+
+        let (manager, raw, subject) = self.owner(id).await?;
         let mut credential = manager.credential(provider(&raw), &raw).await?;
+        if self.0.retired.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+        if subject.as_ref().is_some_and(|subject| {
+            self.0
+                .identity
+                .status()
+                .user
+                .as_ref()
+                .is_none_or(|user| &user.id != subject)
+        }) {
+            return Err(Error::Changed);
+        }
         credential.connection_id = id.into();
         Ok(credential)
     }
@@ -178,6 +215,11 @@ impl ModelConnections {
         selected: Provider,
         storage: &str,
     ) -> Result<BoxStream<'static, Value>, Error> {
+        let _operation = self.0.lifecycle.read().await;
+        if self.0.retired.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+
         let (manager, raw, subject) = if let Some(id) = connection_id {
             let (manager, raw, subject) = self.owner(&id).await?;
             (manager, Some(raw), subject)
@@ -222,38 +264,71 @@ impl ModelConnections {
         Ok(stream.boxed())
     }
     pub async fn complete_login(&self, id: &str, url: &str) -> Result<(), Error> {
+        let _operation = self.0.lifecycle.read().await;
+        if self.0.retired.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+
         let (m, raw, _) = self.owner(id).await?;
         m.complete_login(provider(&raw), &raw, url).await
     }
     pub async fn rename(&self, id: &str, name: &str) -> Result<(), Error> {
+        let _operation = self.0.lifecycle.read().await;
+        if self.0.retired.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+
         let (m, raw, _) = self.owner(id).await?;
         m.rename(provider(&raw), &raw, name).await
     }
     pub async fn preferred(&self, id: &str) -> Result<(), Error> {
+        let _operation = self.0.lifecycle.read().await;
+        if self.0.retired.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+
         let (m, raw, _) = self.owner(id).await?;
         m.preferred(provider(&raw), &raw).await
     }
     pub async fn acknowledge_plan(&self, id: &str) -> Result<(), Error> {
+        let _operation = self.0.lifecycle.read().await;
+        if self.0.retired.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+
         let (m, raw, _) = self.owner(id).await?;
         m.acknowledge_plan(provider(&raw), &raw).await
     }
     pub async fn disconnect(&self, id: &str) -> Result<bool, Error> {
+        let _operation = self.0.lifecycle.read().await;
+        if self.0.retired.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+
         let (m, raw, _) = self.owner(id).await?;
         m.disconnect(provider(&raw), &raw).await
     }
     pub async fn cancel_login(&self, id: &str) -> Result<(), Error> {
+        let _operation = self.0.lifecycle.read().await;
+        if self.0.retired.load(Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+
         let (m, raw, _) = self.owner(id).await?;
         m.cancel(provider(&raw), &raw);
         Ok(())
     }
     pub async fn retire(&self) {
         self.0.retired.store(true, Ordering::Release);
+        let _closing = self.0.lifecycle.write().await;
         if let Some(local) = self.0.local.get() {
-            local.retire();
+            local.shutdown().await;
         }
-        if let Some((_, account)) = self.0.account.lock().await.take() {
-            account.retire();
+        let mut account = self.0.account.lock().await;
+        if let Some((_, manager)) = account.as_ref() {
+            manager.shutdown().await;
         }
+        account.take();
     }
 }
 struct AccountStore {
@@ -320,5 +395,71 @@ impl AccountTransport for AccountStore {
         }
         let value: Value = serde_json::from_slice(&bytes).map_err(|_| Error::Storage)?;
         value.get("value").cloned().ok_or(Error::Storage)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn retirement_waits_for_admitted_local_initialization_and_retires_its_manager() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = Account::open(directory.path()).unwrap();
+        let service = ModelConnections::new(directory.path().to_path_buf(), identity);
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let source = service.clone();
+        let entered = started.clone();
+        let resume = release.clone();
+        let root = directory.path().to_path_buf();
+        let initializer = tokio::spawn(async move {
+            let _operation = source.0.lifecycle.read().await;
+            source
+                .0
+                .local
+                .get_or_try_init(|| async {
+                    entered.notify_one();
+                    resume.notified().await;
+                    Ok::<_, Error>(ModelAccounts::new(Vault::local(&root)?)?)
+                })
+                .await
+                .cloned()
+        });
+        started.notified().await;
+        let source = service.clone();
+        let retirement = tokio::spawn(async move { source.retire().await });
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !service.0.retired.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!retirement.is_finished());
+        release.notify_one();
+        let manager = initializer.await.unwrap().unwrap();
+        retirement.await.unwrap();
+        assert!(matches!(
+            manager.credential(Provider::Chatgpt, "fixture").await,
+            Err(Error::Cancelled)
+        ));
+        assert!(!service.status().await.available);
+    }
+    #[tokio::test]
+    async fn retired_entry_points_do_not_open_a_new_credential_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = Account::open(directory.path()).unwrap();
+        let service = ModelConnections::new(directory.path().to_path_buf(), identity);
+        service.retire().await;
+        assert!(!service.status().await.available);
+        assert!(matches!(
+            service.credential("fixture").await,
+            Err(Error::Cancelled)
+        ));
+        assert!(matches!(
+            service.connect(None, Provider::Chatgpt, "local").await,
+            Err(Error::Cancelled)
+        ));
+        assert!(!directory.path().join("model-accounts").exists());
     }
 }

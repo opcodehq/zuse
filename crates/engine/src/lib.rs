@@ -31,6 +31,7 @@ mod http_error;
 pub mod instance_lock;
 pub mod local_import;
 pub use zuse_harness::processes::supervisor as command_host;
+pub mod harness_models;
 mod model_catalogs;
 pub mod model_connections;
 mod plugin_callback;
@@ -140,6 +141,7 @@ pub struct EngineConfig {
 pub struct EngineCore {
     pub account: account::Account,
     pub model_connections: model_connections::ModelConnections,
+    pub harness_models: harness_models::HarnessModels,
     pub plugins: plugins::Plugins,
     pub sessions: SessionsEngine,
     pub doc_host: DocHost,
@@ -339,9 +341,15 @@ impl EngineCore {
             account::Account::open(data_dir).map_err(|e| EngineError::Other(e.to_string()))?;
         let model_connections =
             model_connections::ModelConnections::new(data_dir.to_path_buf(), account.clone());
+        let harness_models = harness_models::HarnessModels::new(
+            model_connections.clone(),
+            data_dir.join("harness/model-bridge"),
+        )
+        .map_err(|error| EngineError::Other(error.to_string()))?;
         let plugins = plugins::Plugins::open(data_dir, account.clone(), workspace.clone())
             .map_err(|e| EngineError::Other(e.to_string()))?;
         Ok(Self {
+            harness_models,
             model_connections,
             account,
             plugins,
@@ -525,15 +533,15 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) {
+        // Freeze admission before any awaited cleanup: an Idle transition must
+        // not release another queued command while credentials are draining.
+        self.doc_host.pause_all_queues();
         self.account.retire();
+        self.sessions.shutdown().await;
+        self.harness_models.shutdown().await;
         self.model_connections.retire().await;
         self.previews.shutdown().await;
         self.harness_updates.shutdown().await;
-        // A run interruption transitions its chat to Idle, and Idle normally
-        // releases the next queued row. Freeze first so quitting never starts
-        // recovered work while the engine is being torn down.
-        self.doc_host.pause_all_queues();
-        self.sessions.shutdown().await;
         self.terminals.shutdown();
         self.agent_accounts.shutdown();
         self.change_requests.shutdown();
