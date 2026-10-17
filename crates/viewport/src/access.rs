@@ -65,7 +65,20 @@ impl WorkspaceView {
     }
     pub(super) fn choose_access(&mut self, level: SandboxLevel, cx: &mut Context<Self>) {
         self.access_picker = false;
+        if self.model_change_pending_for_selection() {
+            self.error = Some(
+                "Wait for the model choices to finish saving before changing permissions.".into(),
+            );
+            cx.notify();
+            return;
+        }
         if self.access_save.is_some() {
+            return;
+        }
+        if self.creating.is_some() || (self.selected.is_some() && !self.workspace_synced) {
+            self.error =
+                Some("Wait for the conversation to refresh before changing permissions.".into());
+            cx.notify();
             return;
         }
         let Some(chat) = self.selected.as_ref() else {
@@ -76,6 +89,7 @@ impl WorkspaceView {
         let Some(chat_id) = chat["id"].as_str().map(str::to_owned) else {
             return;
         };
+        let target = chat["deviceId"].clone();
         let previous = chat["config"].clone();
         let mut config = previous.clone();
         if !config.is_object() {
@@ -95,7 +109,7 @@ impl WorkspaceView {
         }
         let id = self.call(
             methods::MUTATE,
-            json!({"op":"setChatConfig","chatId":chat_id,"config":config}),
+            json!({"op":"setChatConfig","chatId":chat_id,"targetDeviceId":target,"expectedConfig":{"deviceId":target,"config":previous},"config":config}),
         );
         self.access_save = Some(PendingAccessSave {
             id,
@@ -123,7 +137,7 @@ impl WorkspaceView {
             self.error = Some(format!("Permission change was not confirmed: {error}"));
             self.access_unconfirmed = Some(save.chat);
             self.refresh_access_snapshot();
-        } else if frame.get("ok").is_some() {
+        } else if frame["ok"]["ok"] == true {
             if let Some(chat) = self
                 .selected
                 .as_mut()
@@ -143,7 +157,7 @@ impl WorkspaceView {
         cx.notify();
         true
     }
-    fn refresh_access_snapshot(&mut self) {
+    pub(super) fn refresh_access_snapshot(&mut self) {
         let previous: Vec<_> = self
             .pending
             .iter()
@@ -153,6 +167,7 @@ impl WorkspaceView {
             self.cancel(id);
         }
         self.call(methods::WATCH_CHATS, json!({}));
+        self.refresh_model_config_watch();
     }
     pub(super) fn access_change_pending_for_selection(&self) -> bool {
         self.selected

@@ -77,6 +77,7 @@ pub const WATCH_CONNECTIVITY: &str = "WatchConnectivity";
 /// the sending thumbnail's percent-ring feed. No params; IPC-only.
 pub const WATCH_TRANSFERS: &str = "WatchTransfers";
 pub const WATCH_CHATS: &str = "WatchChats";
+pub const WATCH_CHAT_CONFIG: &str = "WatchChatConfig";
 pub const WATCH_SIDEBAR_PREFERENCES: &str = "WatchSidebarPreferences";
 pub const WATCH_DEVICES: &str = "WatchDevices";
 pub const WATCH_SESSIONS: &str = "WatchSessions";
@@ -248,6 +249,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | LOCAL_DEVICE
         | LIST_HARNESSES
         | WATCH_CHATS
+        | WATCH_CHAT_CONFIG
         | WATCH_SESSIONS
         | WATCH_SPACES
         | LIST_REPOS

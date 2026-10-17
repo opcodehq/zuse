@@ -1,5 +1,7 @@
 //! Client presentation state shared without filesystem or rendering dependencies.
 mod effort;
+mod model_config;
+pub use model_config::RememberedModelConfig;
 mod queue;
 pub use effort::{EffortSetting, EffortStop, ModelEffort, model_effort, model_effort_option};
 pub use queue::{
@@ -129,8 +131,37 @@ pub struct WorkspacePreferences {
     pub default_provider: Option<String>,
     pub default_models: BTreeMap<String, String>,
     pub recent_models: Vec<ModelSelection>,
+    pub model_config_history: Vec<RememberedModelConfig>,
 }
 impl WorkspacePreferences {
+    pub fn starting_model(&self) -> Option<(String, Option<String>)> {
+        if let Some(provider) = &self.default_provider {
+            return Some((provider.clone(), self.default_models.get(provider).cloned()));
+        }
+        if let Some(config) = self.model_config_history.first() {
+            return Some((config.provider.clone(), config.model.clone()));
+        }
+        self.recent_models
+            .first()
+            .map(|choice| (choice.provider.clone(), Some(choice.model.clone())))
+    }
+
+    pub fn model_config(
+        &self,
+        provider: &str,
+        model: Option<&str>,
+    ) -> Option<&RememberedModelConfig> {
+        self.model_config_history
+            .iter()
+            .find(|entry| entry.provider == provider && entry.model.as_deref() == model)
+    }
+    pub fn remember_model_config(&mut self, config: RememberedModelConfig) {
+        self.model_config_history
+            .retain(|entry| entry.provider != config.provider || entry.model != config.model);
+        self.model_config_history.insert(0, config);
+        model_config::normalize_history(&mut self.model_config_history);
+    }
+
     pub fn record_model(&mut self, selection: ModelSelection) {
         self.recent_models.retain(|old| old != &selection);
         self.recent_models.insert(0, selection);
@@ -144,6 +175,7 @@ impl WorkspacePreferences {
     }
     pub fn normalize(&mut self) {
         self.recent_models.truncate(8);
+        model_config::normalize_history(&mut self.model_config_history);
         self.collapsed_projects.truncate(512);
         self.default_models
             .retain(|provider, model| provider.len() <= 128 && model.len() <= 1024);

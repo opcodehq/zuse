@@ -580,6 +580,14 @@ struct FetchToolBlobParams {
     limit: Option<usize>,
 }
 
+/// Snapshot required for an owner-scoped conditional configuration update.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExpectedChatConfig {
+    device_id: String,
+    config: Option<ChatConfig>,
+}
+
 /// The Mutate surface (feature-inventory §2 DataRpc), tagged by `op`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
@@ -669,7 +677,12 @@ enum MutateParams {
     /// composer's mid-session model / reasoning / options changes, LWW-synced
     /// so they survive restarts and reach every device.
     #[serde(rename_all = "camelCase")]
-    SetChatConfig { chat_id: String, config: ChatConfig },
+    SetChatConfig {
+        chat_id: String,
+        config: ChatConfig,
+        #[serde(default)]
+        expected_config: Option<ExpectedChatConfig>,
+    },
     /// Tombstone: removes the chats-map row; the session doc remains.
     #[serde(rename_all = "camelCase")]
     DeleteChat { chat_id: String },
@@ -1159,6 +1172,7 @@ impl EngineRpc {
                     | methods::WATCH_CHECKOUT_CHANGE_REQUEST
                     | methods::WATCH_WORKSPACE_GIT_STATUS
                     | methods::WATCH_HARNESS_UPDATES
+                    | methods::WATCH_CHAT_CONFIG
             ) {
                 let rx = match client.subscribe_checked(method, params).await {
                     Ok(rx) => rx,
@@ -1359,12 +1373,38 @@ impl EngineRpc {
             MutateParams::ChangeSidebarPin { change } => {
                 self.workspace.change_sidebar_pin(&change).map_err(failed)
             }
-            MutateParams::SetChatConfig { chat_id, config } => {
+            MutateParams::SetChatConfig {
+                chat_id,
+                config,
+                expected_config,
+            } => {
+                if let Some(expected) = expected_config {
+                    if expected.device_id != self.doc_host.device_id()
+                        || !self
+                            .workspace
+                            .compare_set_chat_config(
+                                &chat_id,
+                                &expected.device_id,
+                                &expected.config,
+                                &config,
+                            )
+                            .map_err(failed)?
+                    {
+                        return Err(RpcError::Failed(
+                            "Chat configuration or host changed. Refresh before choosing again."
+                                .into(),
+                        ));
+                    }
+                } else {
+                    self.voice.retire_chat(&chat_id);
+                    return self
+                        .workspace
+                        .set_chat_config(&chat_id, &config)
+                        .map_err(failed)
+                        .map(drop);
+                }
                 self.voice.retire_chat(&chat_id);
-                self.workspace
-                    .set_chat_config(&chat_id, &config)
-                    .map_err(failed)
-                    .map(drop)
+                Ok(())
             }
             MutateParams::DeleteChat { chat_id } => {
                 self.voice.retire_chat(&chat_id);
@@ -1528,6 +1568,13 @@ const LOGIN_TUNNEL_TTL: Duration = Duration::from_secs(15 * 60);
 /// ControlRpc methods that honor `targetDeviceId` (feature-inventory §2.1). Extend this
 /// list (plus [`is_stream_method`] for streams) to make more of the surface
 /// device-addressable — the handlers themselves need no changes.
+fn forwardable_request(method: &str, params: &serde_json::Value) -> bool {
+    forwardable(method)
+        || (method == methods::MUTATE
+            && params["op"] == "setChatConfig"
+            && params.get("expectedConfig").is_some())
+}
+
 fn forwardable(method: &str) -> bool {
     if voice_remote::handles(method) {
         return true;
@@ -1549,6 +1596,7 @@ fn forwardable(method: &str) -> bool {
             | methods::QUEUE_COMMAND
             | methods::TAKE_PROJECT_ACTION_SETUP
             | methods::WATCH_DOC_MESSAGES
+            | methods::WATCH_CHAT_CONFIG
             // The queue lives on the chat doc, and only its host may send from
             // it — same addressing as the command ledger next door.
             | methods::WATCH_QUEUE
@@ -1650,6 +1698,7 @@ fn is_stream_method(method: &str) -> bool {
     matches!(
         method,
         methods::WATCH_DOC_MESSAGES
+            | methods::WATCH_CHAT_CONFIG
             | methods::WATCH_QUEUE
             | methods::SUBSCRIBE_TERMINAL
             | methods::WATCH_CHECKOUT_DIFFS
@@ -1676,6 +1725,41 @@ where
         };
         Some((value, (rx, true)))
     })
+    .boxed()
+}
+
+/// A selected chat's host configuration, without cloning/serializing other rows.
+fn chat_config_stream(
+    workspace: crate::workspace_host::WorkspaceHost,
+    chat_id: String,
+) -> BoxStream<'static, serde_json::Value> {
+    let rx = workspace.watch_chats();
+    futures::stream::unfold(
+        (workspace, rx, chat_id, None::<serde_json::Value>, false),
+        |(workspace, mut rx, chat_id, mut previous, mut emitted)| async move {
+            loop {
+                if emitted {
+                    rx.changed().await.ok()?;
+                }
+                emitted = true;
+                // List publication is asynchronous. Use its watch as an
+                // invalidation, then read the current registry under its lock.
+                // Mark before reading so a concurrent publication is retained.
+                rx.borrow_and_update();
+                let value = match workspace.chat(&chat_id).ok()? {
+                    Some(chat) => serde_json::json!({
+                        "chatId": chat.id, "deviceId": chat.device_id, "config": chat.config
+                    }),
+                    None => serde_json::json!({"chatId": chat_id, "missing": true}),
+                };
+                if previous.as_ref() == Some(&value) {
+                    continue;
+                }
+                previous = Some(value.clone());
+                return Some((value, (workspace, rx, chat_id, previous, emitted)));
+            }
+        },
+    )
     .boxed()
 }
 
@@ -1990,7 +2074,7 @@ impl RpcService for EngineRpc {
 
         // Device-addressed routing: forward calls that target another device over its
         // relay. The target compares the id to its own, so forwards cannot loop.
-        if forwardable(method)
+        if forwardable_request(method, &params)
             && let Some(target) = params.get("targetDeviceId").and_then(|v| v.as_str())
             && target != self.doc_host.device_id()
         {
@@ -2757,6 +2841,25 @@ impl RpcService for EngineRpc {
                     },
                 );
                 Ok(RpcReply::Stream(Box::pin(stream)))
+            }
+            methods::WATCH_CHAT_CONFIG => {
+                let p: ChatParams = parse_params(params)?;
+                let chat = self
+                    .workspace
+                    .chat(&p.chat_id)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?
+                    .ok_or_else(|| {
+                        RpcError::Failed("Chat is unavailable on this computer".into())
+                    })?;
+                if chat.device_id != self.doc_host.device_id() {
+                    return Err(RpcError::Failed(
+                        "Chat has moved to another computer".into(),
+                    ));
+                }
+                Ok(RpcReply::Stream(chat_config_stream(
+                    self.workspace.clone(),
+                    p.chat_id,
+                )))
             }
             methods::WATCH_CHATS => {
                 Ok(RpcReply::Stream(watch_stream(self.workspace.watch_chats())))
@@ -4614,8 +4717,104 @@ mod tests {
         assert!(!registry.enabled_set().contains(&HarnessId::Antigravity));
     }
 
-    /// The UI's Switch/Forget calls send `{id, accountId, harness}` (+ optional
-    /// `targetDeviceId`); the extra fields must be tolerated, `accountId` wins.
+    #[tokio::test]
+    async fn config_contract_rejects_stale_permissions_and_tracks_only_selected_configuration() {
+        let temp = tempfile::tempdir().unwrap();
+        let core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(temp.path()).unwrap(),
+            std::sync::Arc::new(HarnessRegistry::new()),
+            HarnessId::Codex,
+            None,
+        )
+        .unwrap();
+        let rpc = core.rpc_service();
+        let original =
+            serde_json::json!({"harness":"codex","model":"first","sandbox":"workspace-write"});
+        rpc.handle(methods::MUTATE, serde_json::json!({"op":"createChat","chatId":"selected","deviceId":core.device_id,"config":original})).await.unwrap();
+        let RpcReply::Stream(mut stream) = rpc
+            .handle(
+                methods::WATCH_CHAT_CONFIG,
+                serde_json::json!({"chatId":"selected"}),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("configuration watch must stream")
+        };
+        assert_eq!(stream.next().await.unwrap()["config"]["model"], "first");
+        // Changes outside the selected configuration must not produce a frame.
+        rpc.handle(
+            methods::MUTATE,
+            serde_json::json!({"op":"renameChat","chatId":"selected","title":"renamed"}),
+        )
+        .await
+        .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), stream.next())
+                .await
+                .is_err()
+        );
+        let expected =
+            serde_json::to_value(core.workspace.chat("selected").unwrap().unwrap().config).unwrap();
+        let readonly = serde_json::json!({"harness":"codex","model":"first","sandbox":"read-only"});
+        rpc.handle(
+            methods::MUTATE,
+            serde_json::json!({"op":"setChatConfig","chatId":"selected","config":readonly}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            stream.next().await.unwrap()["config"]["sandbox"],
+            "read-only"
+        );
+        let desired =
+            serde_json::json!({"harness":"codex","model":"second","sandbox":"workspace-write"});
+        let stale = rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":core.device_id,"config":expected},"config":desired})).await;
+        assert!(stale.is_err());
+        assert_eq!(
+            core.workspace
+                .chat("selected")
+                .unwrap()
+                .unwrap()
+                .config
+                .unwrap()
+                .sandbox,
+            zuse_protocol::SandboxLevel::ReadOnly
+        );
+        let current =
+            serde_json::to_value(core.workspace.chat("selected").unwrap().unwrap().config).unwrap();
+        let saved = serde_json::json!({"harness":"codex","model":"second","sandbox":"read-only"});
+        rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":core.device_id,"config":current},"config":saved})).await.unwrap();
+        assert_eq!(stream.next().await.unwrap()["config"]["model"], "second");
+        let wrong_host = rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":"another-computer","config":saved},"config":desired})).await;
+        assert!(wrong_host.is_err());
+        rpc.handle(
+            methods::MUTATE,
+            serde_json::json!({"op":"deleteChat","chatId":"selected"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            stream.next().await.unwrap(),
+            serde_json::json!({"chatId":"selected","missing":true})
+        );
+        core.sessions.shutdown().await;
+    }
+
+    #[test]
+    fn config_contract_routes_only_conditional_config_mutations() {
+        let conditional = serde_json::json!({"op":"setChatConfig","expectedConfig":{"deviceId":"remote","config":null}});
+        assert!(super::forwardable_request(methods::MUTATE, &conditional));
+        assert!(!super::forwardable_request(
+            methods::MUTATE,
+            &serde_json::json!({"op":"setChatConfig"})
+        ));
+        assert!(!super::forwardable_request(
+            methods::MUTATE,
+            &serde_json::json!({"op":"deleteChat","expectedConfig":{}})
+        ));
+    }
+
     #[test]
     fn list_models_force_is_optional_and_backward_compatible() {
         let old: ListModelsParams =
@@ -4626,6 +4825,7 @@ mod tests {
         assert!(forced.force);
     }
 
+    /// Switch/Forget sends both id fields; accountId is authoritative.
     #[test]
     fn agent_account_params_accept_ui_shape() {
         let p: AgentAccountParams = parse_params(serde_json::json!({

@@ -17,13 +17,23 @@ impl WorkspaceView {
         if self.selected.is_some() {
             return;
         }
-        if let Some(provider) = &self.preferences.default_provider {
-            if let Some(index) = self.providers.iter().position(|p| {
-                p["id"] == provider.as_str() && p["enabled"] != false && p["installed"] != false
-            }) {
-                self.provider_index = index;
-                self.model = self.preferences.default_models.get(provider).cloned();
-            }
+        let preferred = self.preferences.starting_model();
+        let available =
+            |provider: &Value| provider["enabled"] != false && provider["installed"] != false;
+        let chosen = preferred
+            .as_ref()
+            .and_then(|(provider, _)| {
+                self.providers
+                    .iter()
+                    .position(|row| row["id"] == *provider && available(row))
+            })
+            .or_else(|| self.providers.iter().position(available));
+        if let Some(index) = chosen {
+            self.provider_index = index;
+            self.model = preferred
+                .filter(|(provider, _)| self.providers[index]["id"] == *provider)
+                .and_then(|(_, model)| model);
+            self.restore_model_choices();
         }
     }
     pub(super) fn selected_model(&self) -> Option<&Model> {
@@ -45,6 +55,10 @@ impl WorkspaceView {
         self.access_picker = false;
         self.add_menu = false;
         if self.model_picker {
+            if self.selected.is_some() && !self.model_confirmed && self.model_watch.is_none() {
+                self.refresh_model_config_watch();
+            }
+            self.picker_scope = None;
             self.model_search
                 .update(cx, |input, cx| input.set_value(String::new(), cx));
             window.focus(&self.model_search.focus_handle(cx), cx);
@@ -112,6 +126,9 @@ impl WorkspaceView {
             }
         }
         self.pending.remove(&id);
+        if self.selected.is_none() {
+            self.restore_model_choices();
+        }
         self.configure_reasoning_slider(cx);
         cx.notify();
         true
@@ -134,10 +151,22 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
+        if !self.model_provider_allowed(&provider) {
+            self.error = Some("Start a new chat to use another provider.".into());
+            cx.notify();
+            return;
+        }
+        if !self.can_change_model(cx) {
+            return;
+        }
+        if self.provider_index == index && self.model == model {
+            self.model_picker = false;
+            cx.notify();
+            return;
+        }
         self.provider_index = index;
         self.model = model.clone();
-        self.reasoning = None;
-        self.model_options.clear();
+        self.restore_model_choices();
         if let Some(id) = model {
             self.preferences.record_model(ModelSelection {
                 provider,
@@ -146,7 +175,7 @@ impl WorkspaceView {
             self.save_preferences();
         }
         self.model_picker = false;
-        cx.notify();
+        self.model_choices_changed(cx);
     }
     fn model_row(
         &self,
@@ -283,8 +312,9 @@ impl WorkspaceView {
         let total = self
             .picker_catalog
             .providers
-            .values()
-            .map(|c| c.models.len())
+            .iter()
+            .filter(|(provider, _)| self.model_provider_allowed(provider))
+            .map(|(_, catalog)| catalog.models.len())
             .sum::<usize>();
         let width = (self.content_width - 48.).clamp(272., 380.);
         let height = if self.content_height > 0. {
@@ -342,6 +372,9 @@ impl WorkspaceView {
                         self.providers
                             .iter()
                             .enumerate()
+                            .filter(|(_, p)| {
+                                self.model_provider_allowed(p["id"].as_str().unwrap_or_default())
+                            })
                             .filter(|(_, p)| {
                                 (p["installed"] != false && p["enabled"] != false)
                                     || (!self.model_picker_default
@@ -454,6 +487,9 @@ impl WorkspaceView {
                                         .preferences
                                         .recent_models
                                         .iter()
+                                        .filter(|choice| {
+                                            self.model_provider_allowed(&choice.provider)
+                                        })
                                         .filter_map(|choice| {
                                             self.picker_catalog
                                                 .providers
@@ -491,6 +527,11 @@ impl WorkspaceView {
                             .children(
                                 self.providers
                                     .iter()
+                                    .filter(|p| {
+                                        self.model_provider_allowed(
+                                            p["id"].as_str().unwrap_or_default(),
+                                        )
+                                    })
                                     .filter(|p| {
                                         (p["installed"] != false && p["enabled"] != false)
                                             || (!self.model_picker_default
@@ -672,6 +713,9 @@ impl WorkspaceView {
         let mut matches = Vec::new();
         for provider in &self.providers {
             let id = provider["id"].as_str().unwrap_or_default();
+            if !self.model_provider_allowed(id) {
+                continue;
+            }
             if (provider["installed"] == false || provider["enabled"] == false)
                 && (self.model_picker_default || self.selected.is_none() || id != current)
             {
@@ -776,14 +820,18 @@ impl WorkspaceView {
         if let Some(control) = self.effort_control() {
             // Catalog/open synchronization sets the current stop too; it must
             // not silently rewrite a stored override without a user movement.
-            if index != control.selected
-                && control.select(index, &mut self.reasoning, &mut self.model_options)
-            {
-                cx.notify();
+            if index != control.selected {
+                if !self.can_change_model(cx) {
+                    self.configure_reasoning_slider(cx);
+                    return;
+                }
+                if control.select(index, &mut self.reasoning, &mut self.model_options) {
+                    self.model_choices_changed(cx);
+                }
             }
         }
     }
-    fn configure_reasoning_slider(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn configure_reasoning_slider(&mut self, cx: &mut Context<Self>) {
         let Some(control) = self.effort_control() else {
             return;
         };
@@ -988,9 +1036,11 @@ impl WorkspaceView {
                                                     let id = id.clone();
                                                     let value = value.clone();
                                                     move |this, _, _, cx| {
-                                                        this.model_options
-                                                            .insert(id.clone(), json!(value));
-                                                        cx.notify();
+                                                        this.select_model_option(
+                                                            id.clone(),
+                                                            value.clone(),
+                                                            cx,
+                                                        );
                                                     }
                                                 }),
                                             ),
@@ -1016,8 +1066,7 @@ impl WorkspaceView {
                                     })
                                     .on_click(cx.listener(
                                         move |this, _, _, cx| {
-                                            this.model_options.insert(id.clone(), json!(value));
-                                            cx.notify();
+                                            this.select_model_option(id.clone(), value.clone(), cx);
                                         },
                                     ))
                                 }),

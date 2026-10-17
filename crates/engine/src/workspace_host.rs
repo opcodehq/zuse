@@ -1174,9 +1174,18 @@ impl WorkspaceHost {
         Ok(self.mutate(|doc| doc.set_chat_archived(chat_id, archived))?)
     }
 
-    /// LWW full-config replace on the chat row (zuse `SetChatConfig` — the
-    /// composer's mid-session model/reasoning/options changes). Returns false
-    /// when the chat doesn't exist.
+    /// Compare ownership and configuration under the registry mutation lock.
+    pub fn compare_set_chat_config(
+        &self,
+        chat_id: &str,
+        device_id: &str,
+        expected: &Option<ChatConfig>,
+        config: &ChatConfig,
+    ) -> Result<bool, EngineError> {
+        Ok(self.mutate(|doc| doc.compare_set_chat_config(chat_id, device_id, expected, config))?)
+    }
+
+    /// Replace the saved configuration; false when the chat does not exist.
     pub fn set_chat_config(&self, chat_id: &str, config: &ChatConfig) -> Result<bool, EngineError> {
         Ok(self.mutate(|doc| doc.set_chat_config(chat_id, config))?)
     }

@@ -2223,3 +2223,51 @@ fn attaching_an_edge_after_local_only_writes_reseeds_them() {
     doc.set_local_only(false);
     assert_eq!(doc.pending_len(), 0);
 }
+
+#[test]
+fn config_compare_set_rejects_permission_and_owner_changes() {
+    let mut doc = RegistryDoc::new("dev-a");
+    let mut row = chat("chat-1", "dev-a");
+    doc.upsert_chat(&row).unwrap();
+    let expected = row.config.clone();
+    let mut desired = expected.clone().unwrap();
+    desired.model = Some("model-2".into());
+    row.config.as_mut().unwrap().sandbox = SandboxLevel::ReadOnly;
+    doc.set_chat_config("chat-1", row.config.as_ref().unwrap())
+        .unwrap();
+    assert!(
+        !doc.compare_set_chat_config("chat-1", "dev-a", &expected, &desired)
+            .unwrap()
+    );
+    assert_eq!(doc.chat("chat-1").unwrap().unwrap().config, row.config);
+    assert!(
+        !doc.compare_set_chat_config("chat-1", "dev-b", &row.config, &desired)
+            .unwrap()
+    );
+    desired.sandbox = SandboxLevel::ReadOnly;
+    assert!(
+        doc.compare_set_chat_config("chat-1", "dev-a", &row.config, &desired)
+            .unwrap()
+    );
+    assert_eq!(doc.chat("chat-1").unwrap().unwrap().config, Some(desired));
+}
+#[test]
+fn config_compare_set_distinguishes_unconfigured_and_deleted_chats() {
+    let mut doc = RegistryDoc::new("dev-a");
+    let mut row = chat("chat-1", "dev-a");
+    let config = row.config.take().unwrap();
+    doc.upsert_chat(&row).unwrap();
+    assert!(
+        doc.compare_set_chat_config("chat-1", "dev-a", &None, &config)
+            .unwrap()
+    );
+    assert!(
+        !doc.compare_set_chat_config("chat-1", "dev-a", &None, &config)
+            .unwrap()
+    );
+    doc.delete_chat("chat-1").unwrap();
+    assert!(
+        !doc.compare_set_chat_config("chat-1", "dev-a", &Some(config.clone()), &config)
+            .unwrap()
+    );
+}

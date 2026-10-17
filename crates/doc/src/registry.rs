@@ -1427,6 +1427,32 @@ impl RegistryDoc {
         Ok(true)
     }
 
+    /// Check ownership and the prior value in the same mutation transaction.
+    pub fn compare_set_chat_config(
+        &mut self,
+        chat_id: &str,
+        device_id: &str,
+        expected: &Option<ChatConfig>,
+        config: &ChatConfig,
+    ) -> Result<bool, DocError> {
+        let Some(chat) = self.chat(chat_id)? else {
+            return Ok(false);
+        };
+        if expected.is_none()
+            && self
+                .overlay_row(KIND_CHATS, chat_id)
+                .as_ref()
+                .and_then(|row| row.fields.get("config"))
+                .is_some_and(|value| !value.is_null())
+        {
+            return Ok(false);
+        }
+        if chat.device_id != device_id || &chat.config != expected {
+            return Ok(false);
+        }
+        self.set_chat_config(chat_id, config)
+    }
+
     pub fn set_chat_config(
         &mut self,
         chat_id: &str,

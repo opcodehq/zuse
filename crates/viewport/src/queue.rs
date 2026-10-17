@@ -9,6 +9,7 @@ pub(super) struct PendingQueueAction {
 impl WorkspaceView {
     pub(super) fn queue_action_blocked(&self) -> bool {
         self.queue_edit.is_some()
+            || self.model_change_pending_for_selection()
             || !self.connected
             || !self.workspace_synced
             || self

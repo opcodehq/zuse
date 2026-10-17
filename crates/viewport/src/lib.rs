@@ -8,6 +8,7 @@ mod connection;
 mod draft_journal;
 pub mod input;
 mod model_accounts;
+mod model_config;
 mod model_picker;
 mod navigation;
 mod notifications;
@@ -155,6 +156,11 @@ pub struct WorkspaceView {
     reasoning_slider: Entity<gpui_base::slider::SliderState>,
     reasoning_focus: FocusHandle,
     model_options: serde_json::Map<String, Value>,
+    model_save: Option<model_config::PendingModelSave>,
+    model_watch: Option<u64>,
+    model_confirmed: bool,
+    model_dirty: bool,
+    model_unconfirmed: std::collections::HashSet<String>,
     sandbox: zuse_protocol::SandboxLevel,
     access_picker: bool,
     access_focus: FocusHandle,
@@ -409,6 +415,11 @@ impl WorkspaceView {
             reasoning_slider,
             reasoning_focus,
             model_options: Default::default(),
+            model_save: None,
+            model_watch: None,
+            model_confirmed: false,
+            model_dirty: false,
+            model_unconfirmed: Default::default(),
             sandbox: zuse_protocol::SandboxLevel::WorkspaceWrite,
             access_picker: false,
             access_focus: cx.focus_handle(),
@@ -578,6 +589,9 @@ impl WorkspaceView {
         if self.receive_queue_action(id, &frame, cx) {
             return;
         }
+        if self.receive_model_config(id, &frame, cx) {
+            return;
+        }
         if self.receive_access(id, &frame, cx) {
             return;
         }
@@ -726,7 +740,15 @@ impl WorkspaceView {
                     } else {
                         self.provider_index = 0;
                     }
-                    if initial {
+                    if initial
+                        || (self.selected.is_none()
+                            && self
+                                .providers
+                                .get(self.provider_index)
+                                .is_none_or(|provider| {
+                                    provider["enabled"] == false || provider["installed"] == false
+                                }))
+                    {
                         self.apply_default_model();
                     }
                 }
@@ -741,6 +763,10 @@ impl WorkspaceView {
                             .cloned()
                         {
                             let host_changed = chat["deviceId"] != selected["deviceId"];
+                            let mut chat = chat;
+                            if !host_changed && self.model_confirmed {
+                                chat["config"] = selected["config"].clone();
+                            }
                             let recovery_changed = host_changed
                                 || chat["harnessSessionId"] != selected["harnessSessionId"];
                             if chat["config"]["sandbox"] != selected["config"]["sandbox"]
@@ -750,10 +776,12 @@ impl WorkspaceView {
                                     serde_json::from_value(chat["config"]["sandbox"].clone())
                                         .unwrap_or_default();
                             }
-                            if self.access_unconfirmed.as_deref() == chat["id"].as_str() {
-                                self.access_unconfirmed = None;
+                            self.selected = Some(chat.clone());
+                            if host_changed {
+                                self.interrupt_model_config(cx);
+                                self.refresh_model_config_watch();
                             }
-                            self.selected = Some(chat);
+                            self.reconcile_model_config(&chat);
                             if host_changed {
                                 self.rebind_chat_host(cx);
                             }
@@ -761,13 +789,6 @@ impl WorkspaceView {
                                 self.reset_recovery(cx);
                             }
                         }
-                    }
-                    if self
-                        .access_unconfirmed
-                        .as_ref()
-                        .is_some_and(|id| self.chats.iter().any(|chat| chat["id"] == *id))
-                    {
-                        self.access_unconfirmed = None;
                     }
                 }
                 methods::WATCH_SESSIONS => {
@@ -935,7 +956,10 @@ impl WorkspaceView {
         if !self.require_connection(cx) {
             return;
         }
-        if self.file_navigation_blocked(cx) || self.queue_edit_navigation_blocked(cx) {
+        if self.file_navigation_blocked(cx)
+            || self.queue_edit_navigation_blocked(cx)
+            || self.model_navigation_blocked(cx)
+        {
             return;
         }
         self.stash_draft(cx);
@@ -976,6 +1000,7 @@ impl WorkspaceView {
         self.project =
             (!identity.path.is_empty()).then(|| json!({"path":identity.path,"name":identity.name}));
         self.selected = Some(chat);
+        self.refresh_model_config_watch();
         self.restore_draft(cx);
         if let Some(chat) = &self.selected {
             if let Some(harness) = chat["config"]["harness"].as_str() {
@@ -1002,7 +1027,10 @@ impl WorkspaceView {
         if !self.require_connection(cx) {
             return;
         }
-        if self.file_navigation_blocked(cx) || self.queue_edit_navigation_blocked(cx) {
+        if self.file_navigation_blocked(cx)
+            || self.queue_edit_navigation_blocked(cx)
+            || self.model_navigation_blocked(cx)
+        {
             return;
         }
         self.stash_draft(cx);
@@ -1018,6 +1046,7 @@ impl WorkspaceView {
         self.reset_tool_results();
         self.reset_previews(cx);
         self.selected = None;
+        self.refresh_model_config_watch();
         self.sandbox = self.preferences.default_permission_mode.sandbox();
         self.model = None;
         self.reasoning = None;
@@ -1036,6 +1065,11 @@ impl WorkspaceView {
         }
         if self.queue_edit.is_some() {
             self.commit_queue_edit(cx);
+            return;
+        }
+        if self.model_change_pending_for_selection() {
+            self.error = Some("Wait for the model choices to finish saving before sending.".into());
+            cx.notify();
             return;
         }
         if self.access_change_pending_for_selection() {
