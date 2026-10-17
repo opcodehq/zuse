@@ -385,14 +385,10 @@ impl WorkspaceView {
                                     .aria_label("Change model")
                                     .cursor_pointer()
                                     .h(px(28.))
-                                    .w(px(if self.content_width < 500. {
-                                        148.
-                                    } else {
-                                        176.
-                                    }))
+                                    .w(px((self.content_width * 0.4).clamp(104., 160.)))
                                     .min_w_0()
-                                    .px_2()
-                                    .gap_2()
+                                    .px(px(10.))
+                                    .gap(px(6.))
                                     .rounded_full()
                                     .bg(rgb(0x2b2d26))
                                     .hover(|d| d.bg(rgb(0x34372c)))
@@ -405,7 +401,7 @@ impl WorkspaceView {
                                                 .and_then(|p| p["id"].as_str())
                                                 .unwrap_or_default(),
                                         ))
-                                        .size(px(13.))
+                                        .size(px(12.))
                                         .text_color(rgb(MUTED)),
                                     )
                                     .child(
@@ -414,12 +410,20 @@ impl WorkspaceView {
                                             .min_w_0()
                                             .text_ellipsis()
                                             .text_size(px(11.))
+                                            .font_weight(FontWeight::MEDIUM)
                                             .text_color(rgb(TEXT))
                                             .child(self.picker_label()),
                                     )
-                                    .child(
-                                        icon("alt-arrow-down").size(px(10.)).text_color(rgb(FAINT)),
-                                    )
+                                    .when_some(self.picker_effort_label(), |view, detail| {
+                                        view.child(
+                                            div()
+                                                .flex_none()
+                                                .text_size(px(11.))
+                                                .text_color(rgb(MUTED))
+                                                .child(detail),
+                                        )
+                                    })
+                                    .child(icon("alt-arrow-down").size(px(12.)).opacity(0.6))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_model_picker(window, cx)
                                     })),

@@ -251,13 +251,7 @@ impl WorkspaceView {
         });
         cx.observe(&reasoning_slider, |this, state, cx| {
             let index = state.read(cx).value().end().round().max(0.) as usize;
-            this.reasoning = if index == 0 {
-                None
-            } else {
-                this.selected_model()
-                    .and_then(|m| m.reasoning_levels.get(index - 1))
-                    .copied()
-            };
+            this.select_effort(index, cx);
             cx.notify();
         })
         .detach();

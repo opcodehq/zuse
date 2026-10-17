@@ -65,9 +65,6 @@ fn options_height(count: usize) -> f32 {
     2.0 + count.min(OPTIONS_MAX_ROWS) as f32 * 28.0
 }
 
-/// Option ids Cursor uses for an effort ladder (its models carry none).
-const EFFORT_OPTION_IDS: [&str; 3] = ["effort", "reasoning", "reasoning_effort"];
-
 pub(super) struct CompactEffort {
     pub labels: Vec<SharedString>,
     pub selected: usize,
@@ -587,11 +584,7 @@ impl Pickers {
                 stops: EffortStops::Reasoning(levels),
             });
         }
-        let option = self
-            .selected_model(cx)?
-            .options
-            .iter()
-            .find(|o| EFFORT_OPTION_IDS.contains(&o.id.as_str()) && o.choices.len() > 1)?;
+        let option = zuse_protocol::presentation::model_effort_option(self.selected_model(cx)?)?;
         let options = self.explicit_options(cx);
         let current = options
             .get(&option.id)
@@ -607,6 +600,12 @@ impl Pickers {
                 .choices
                 .iter()
                 .position(|c| c.id == current)
+                .or_else(|| {
+                    option
+                        .choices
+                        .iter()
+                        .position(|choice| choice.id == option.default_choice)
+                })
                 .unwrap_or(0),
             stops: EffortStops::Option {
                 id: option.id.clone(),

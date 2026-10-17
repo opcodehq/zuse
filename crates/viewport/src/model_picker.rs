@@ -4,7 +4,7 @@ use crate::assets::icon;
 use crate::shell::{
     BORDER, FAINT, MUTED, TEXT, column, control, icon_button, label, provider_icon, row,
 };
-use zuse_protocol::{Model, ReasoningLevel, presentation::ModelSelection};
+use zuse_protocol::{Model, presentation::ModelSelection};
 const ACCENT: u32 = 0x89ca21;
 
 impl WorkspaceView {
@@ -761,15 +761,34 @@ impl WorkspaceView {
             cx.notify();
         }
     }
+    fn effort_control(&self) -> Option<zuse_protocol::presentation::ModelEffort> {
+        zuse_protocol::presentation::model_effort(
+            self.selected_model()?,
+            self.reasoning,
+            &self.model_options,
+        )
+    }
+    pub(super) fn picker_effort_label(&self) -> Option<String> {
+        let control = self.effort_control()?;
+        Some(control.stops.get(control.selected)?.label.clone())
+    }
+    pub(super) fn select_effort(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(control) = self.effort_control() {
+            // Catalog/open synchronization sets the current stop too; it must
+            // not silently rewrite a stored override without a user movement.
+            if index != control.selected
+                && control.select(index, &mut self.reasoning, &mut self.model_options)
+            {
+                cx.notify();
+            }
+        }
+    }
     fn configure_reasoning_slider(&mut self, cx: &mut Context<Self>) {
-        let Some(model) = self.selected_model() else {
+        let Some(control) = self.effort_control() else {
             return;
         };
-        let max = model.reasoning_levels.len().max(1) as f32;
-        let index = self
-            .reasoning
-            .and_then(|level| model.reasoning_levels.iter().position(|l| *l == level))
-            .map_or(0, |index| index + 1) as f32;
+        let max = control.stops.len().saturating_sub(1).max(1) as f32;
+        let index = control.selected as f32;
         let current = self.reasoning_slider.read(cx);
         if current.max_value() != max || current.value().end() != index {
             self.reasoning_slider.update(cx, |state, cx| {
@@ -784,6 +803,14 @@ impl WorkspaceView {
     }
     fn reasoning_slider_view(&self, cx: &mut Context<Self>) -> AnyElement {
         use gpui_base::slider::{Slider, SliderIndicator, SliderThumb, SliderTrack};
+        let Some(control) = self.effort_control() else {
+            return div().into_any_element();
+        };
+        let current_label = control
+            .stops
+            .get(control.selected)
+            .map(|stop| stop.label.clone())
+            .unwrap_or_default();
         let state = &self.reasoning_slider;
         let percentage = state.read(cx).percentage().end;
         let steps = state.read(cx).max_value() as usize;
@@ -791,10 +818,14 @@ impl WorkspaceView {
             .gap_2()
             .child(
                 row()
-                    .child(label("Reasoning").text_size(px(11.)))
+                    .child(
+                        label(control.label.clone())
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM),
+                    )
                     .child(div().flex_1())
                     .child(
-                        label(self.reasoning.map(reasoning_label).unwrap_or("Default"))
+                        label(current_label)
                             .text_size(px(11.))
                             .text_color(rgb(TEXT)),
                     ),
@@ -805,14 +836,19 @@ impl WorkspaceView {
                     .track_focus(&self.reasoning_focus)
                     .tab_stop(true)
                     .role(Role::Group)
-                    .aria_label("Reasoning level")
+                    .aria_label(control.label)
                     .relative()
                     .h(px(32.))
                     .px_2()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, window, cx| window.focus(&this.reasoning_focus, cx)),
-                    )
+                    // The thumb consumes its bubble-phase pointer event, even
+                    // when it stays at the current value and emits no change.
+                    .capture_any_mouse_down(cx.listener(
+                        |this, event: &MouseDownEvent, window, cx| {
+                            if event.button == MouseButton::Left {
+                                window.focus(&this.reasoning_focus, cx);
+                            }
+                        },
+                    ))
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                         let current = this.reasoning_slider.read(cx).value().end();
                         let max = this.reasoning_slider.read(cx).max_value();
@@ -871,12 +907,6 @@ impl WorkspaceView {
                                 }))
                                 .child(
                                     SliderThumb::new(state)
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, window, cx| {
-                                                window.focus(&this.reasoning_focus, cx)
-                                            }),
-                                        )
                                         .absolute()
                                         .left(relative(percentage))
                                         .top(px(4.))
@@ -896,116 +926,118 @@ impl WorkspaceView {
         let Some(model) = self.selected_model() else {
             return div().into_any_element();
         };
+        let effort = self.effort_control();
+        let hidden_option = effort.as_ref().and_then(|control| control.option_id());
         column()
             .flex_shrink_0()
-            .p_3()
+            .p(px(10.))
             .gap_2()
             .border_t_1()
             .border_color(rgb(BORDER))
-            .bg(rgb(0x24251f))
-            .when(!model.reasoning_levels.is_empty(), |d| {
+            .bg(crate::settings_style::frame_bg().opacity(0.15))
+            .when(effort.is_some(), |d| {
                 d.child(self.reasoning_slider_view(cx))
             })
-            .children(model.options.iter().enumerate().map(|(i, option)| {
-                let id = option.id.clone();
-                let selected = self
-                    .model_options
-                    .get(&id)
-                    .and_then(Value::as_str)
-                    .unwrap_or(&option.default_choice);
-                if let Some((on, off)) = zuse_protocol::presentation::model_option_switch_values(
-                    &option.id,
-                    option.choices.iter().map(|choice| choice.id.as_str()),
-                ) {
-                    let checked = selected == on;
-                    let value = if checked { off } else { on }.to_owned();
-                    let current_label = option
-                        .choices
-                        .iter()
-                        .find(|choice| choice.id == selected)
-                        .map(|choice| choice.label.clone())
-                        .unwrap_or_default();
-                    return row()
-                        .justify_between()
-                        .gap_3()
-                        .min_h(px(28.))
-                        .child(label(option.label.clone()).text_size(px(11.)))
-                        .child(
-                            row()
-                                .gap_2()
-                                .child(label(current_label).text_size(px(11.)))
+            .children(
+                model
+                    .options
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, option)| hidden_option != Some(option.id.as_str()))
+                    .map(|(i, option)| {
+                        let id = option.id.clone();
+                        let selected = self
+                            .model_options
+                            .get(&id)
+                            .and_then(Value::as_str)
+                            .unwrap_or(&option.default_choice);
+                        if let Some((on, off)) =
+                            zuse_protocol::presentation::model_option_switch_values(
+                                &option.id,
+                                option.choices.iter().map(|choice| choice.id.as_str()),
+                            )
+                        {
+                            let checked = selected == on;
+                            let value = if checked { off } else { on }.to_owned();
+                            let current_label = option
+                                .choices
+                                .iter()
+                                .find(|choice| choice.id == selected)
+                                .map(|choice| choice.label.clone())
+                                .unwrap_or_default();
+                            return row()
+                                .justify_between()
+                                .gap_3()
+                                .min_h(px(28.))
+                                .child(label(option.label.clone()).text_size(px(11.)))
                                 .child(
-                                    crate::settings_style::toggle(
-                                        SharedString::from(format!("model-option-switch-{i}")),
-                                        checked,
-                                        &option.label,
+                                    row()
+                                        .gap_2()
+                                        .child(label(current_label).text_size(px(11.)))
+                                        .child(
+                                            crate::settings_style::toggle(
+                                                SharedString::from(format!(
+                                                    "model-option-switch-{i}"
+                                                )),
+                                                checked,
+                                                &option.label,
+                                            )
+                                            .tab_index(0)
+                                            .on_click(cx.listener({
+                                                let id = id.clone();
+                                                let value = value.clone();
+                                                move |this, _, _, cx| {
+                                                    this.model_options
+                                                        .insert(id.clone(), json!(value));
+                                                    cx.notify();
+                                                }
+                                            }))
+                                            .on_key_down(cx.listener(
+                                                move |this, event: &KeyDownEvent, _, cx| {
+                                                    if !event.is_held
+                                                        && matches!(
+                                                            event.keystroke.key.as_str(),
+                                                            "enter" | "space"
+                                                        )
+                                                    {
+                                                        this.model_options
+                                                            .insert(id.clone(), json!(value));
+                                                        cx.stop_propagation();
+                                                        cx.notify();
+                                                    }
+                                                },
+                                            )),
+                                        ),
+                                )
+                                .into_any_element();
+                        }
+                        column()
+                            .gap_1()
+                            .child(label(option.label.clone()).text_size(px(11.)))
+                            .child(row().gap_1().flex_wrap().children(
+                                option.choices.iter().enumerate().map(|(j, choice)| {
+                                    let id = id.clone();
+                                    let value = choice.id.clone();
+                                    control(
+                                        SharedString::from(format!("model-option-{i}-{j}")),
+                                        SharedString::from(choice.label.clone()),
                                     )
-                                    .tab_index(0)
-                                    .on_click(cx.listener({
-                                        let id = id.clone();
-                                        let value = value.clone();
+                                    .h(px(26.))
+                                    .text_size(px(10.))
+                                    .when(selected == choice.id, |d| {
+                                        d.bg(rgb(0x343d22)).text_color(rgb(ACCENT))
+                                    })
+                                    .on_click(cx.listener(
                                         move |this, _, _, cx| {
                                             this.model_options.insert(id.clone(), json!(value));
                                             cx.notify();
-                                        }
-                                    }))
-                                    .on_key_down(cx.listener(
-                                        move |this, event: &KeyDownEvent, _, cx| {
-                                            if !event.is_held
-                                                && matches!(
-                                                    event.keystroke.key.as_str(),
-                                                    "enter" | "space"
-                                                )
-                                            {
-                                                this.model_options.insert(id.clone(), json!(value));
-                                                cx.stop_propagation();
-                                                cx.notify();
-                                            }
                                         },
-                                    )),
-                                ),
-                        )
-                        .into_any_element();
-                }
-                column()
-                    .gap_1()
-                    .child(label(option.label.clone()).text_size(px(11.)))
-                    .child(row().gap_1().flex_wrap().children(
-                        option.choices.iter().enumerate().map(|(j, choice)| {
-                            let id = id.clone();
-                            let value = choice.id.clone();
-                            control(
-                                SharedString::from(format!("model-option-{i}-{j}")),
-                                SharedString::from(choice.label.clone()),
-                            )
-                            .h(px(26.))
-                            .text_size(px(10.))
-                            .when(selected == choice.id, |d| {
-                                d.bg(rgb(0x343d22)).text_color(rgb(ACCENT))
-                            })
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.model_options.insert(id.clone(), json!(value));
-                                    cx.notify();
-                                },
+                                    ))
+                                }),
                             ))
-                        }),
-                    ))
-                    .into_any_element()
-            }))
+                            .into_any_element()
+                    }),
+            )
             .into_any_element()
-    }
-}
-fn reasoning_label(level: ReasoningLevel) -> &'static str {
-    match level {
-        ReasoningLevel::Minimal => "Minimal",
-        ReasoningLevel::Low => "Low",
-        ReasoningLevel::Medium => "Medium",
-        ReasoningLevel::High => "High",
-        ReasoningLevel::XHigh => "Extra high",
-        ReasoningLevel::Max => "Max",
-        ReasoningLevel::Ultra => "Ultra",
-        ReasoningLevel::Ultracode => "Ultracode",
-        ReasoningLevel::Ultrathink => "Ultrathink",
     }
 }

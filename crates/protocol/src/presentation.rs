@@ -1,4 +1,7 @@
 //! Client presentation state shared without filesystem or rendering dependencies.
+mod effort;
+pub use effort::{EffortSetting, EffortStop, ModelEffort, model_effort, model_effort_option};
+
 use crate::Model;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
