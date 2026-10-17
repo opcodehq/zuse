@@ -77,6 +77,7 @@ impl WorkspaceView {
             || !self.uncertain_drafts.is_empty()
             || !self.queue.is_empty()
             || self.is_working()
+            || self.provider_update_notice()
     }
     pub(super) fn composer_notices(&self, cx: &mut Context<Self>) -> AnyElement {
         let alert = self
@@ -88,6 +89,38 @@ impl WorkspaceView {
                     .map(|(id, text)| (id, text, false))
             });
         let mut view = column().w_full();
+        if self.provider_update_notice() {
+            view = view.child(
+                row()
+                    .id("provider-updates-notice")
+                    .role(Role::Status)
+                    .min_h(px(32.))
+                    .px_3()
+                    .py_1()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(icon("refresh").size(px(14.)).text_color(rgb(MUTED)))
+                    .child(
+                        label("Agent provider updates")
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(11.)),
+                    )
+                    .child(
+                        control("review-provider-updates", "Review")
+                            .h(px(24.))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.settings = true;
+                                this.select_settings_section(
+                                    crate::settings_view::Section::Providers,
+                                    cx,
+                                );
+                                window.focus(&this.settings_nav_focus, cx);
+                            })),
+                    ),
+            );
+        }
         if !self.connected {
             view = view.child(
                 row()

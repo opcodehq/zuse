@@ -13,8 +13,17 @@ pub(super) enum Section {
     Devices,
     Plugins,
     Usage,
+    Shortcuts,
 }
 impl Section {
+    const NAV: [Self; 6] = [
+        Self::General,
+        Self::Providers,
+        Self::Defaults,
+        Self::Plugins,
+        Self::Devices,
+        Self::Shortcuts,
+    ];
     fn title(self) -> &'static str {
         match self {
             Self::General => "General",
@@ -23,6 +32,7 @@ impl Section {
             Self::Devices => "Remote access",
             Self::Plugins => "Plugins",
             Self::Usage => "Accounts & usage",
+            Self::Shortcuts => "Keyboard shortcuts",
         }
     }
     fn icon(self) -> &'static str {
@@ -33,6 +43,7 @@ impl Section {
             Self::Devices => "settings-remote",
             Self::Plugins => "settings-plugins",
             Self::Usage => "clock-circle",
+            Self::Shortcuts => "keyboard",
         }
     }
     fn description(self) -> &'static str {
@@ -45,14 +56,114 @@ impl Section {
             Self::Devices => "Use this computer from your phone, a browser, or another computer.",
             Self::Plugins => "Your Zuse account and the tools shared across your agents.",
             Self::Usage => "Provider accounts, plans and current usage.",
+            Self::Shortcuts => "Keyboard shortcuts for the browser workspace.",
         }
     }
 }
 impl WorkspaceView {
+    pub(super) fn select_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.settings_section = section;
+        self.completion_preset_menu = false;
+        self.default_permission_menu = false;
+        self.model_picker = false;
+        if section == Section::Devices {
+            self.refresh_pairings();
+        }
+        if matches!(section, Section::Providers | Section::Usage) {
+            self.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":false}));
+        }
+        cx.notify();
+    }
+    fn on_settings_nav_key(
+        &mut self,
+        event: &KeyDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event.keystroke.key.as_str() {
+            "up" => {
+                self.settings_nav_active =
+                    (self.settings_nav_active + Section::NAV.len() - 1) % Section::NAV.len()
+            }
+            "down" => {
+                self.settings_nav_active = (self.settings_nav_active + 1) % Section::NAV.len()
+            }
+            "home" => self.settings_nav_active = 0,
+            "end" => self.settings_nav_active = Section::NAV.len() - 1,
+            "enter" | "space" if !event.is_held => {}
+            _ => return,
+        }
+        self.select_settings_section(Section::NAV[self.settings_nav_active], cx);
+        cx.stop_propagation();
+    }
+    fn shortcuts_settings(&self) -> AnyElement {
+        let groups = [
+            (
+                "Navigation",
+                vec![
+                    ("Search sessions", "Cmd K / Ctrl K"),
+                    ("New chat", "Cmd N / Ctrl N"),
+                    ("Close settings or a preview", "Esc"),
+                ],
+            ),
+            (
+                "Composer",
+                vec![
+                    ("Send message or save queued edit", "Enter"),
+                    ("Insert a new line", "Shift Enter"),
+                    ("Cancel a queued-message edit", "Esc"),
+                ],
+            ),
+            (
+                "Workspace files",
+                vec![("Save the open file", "Cmd S / Ctrl S")],
+            ),
+            (
+                "Menus and settings",
+                vec![
+                    ("Move between options", "↑ / ↓"),
+                    ("First or last option", "Home / End"),
+                    ("Choose a focused menu option", "Enter / Space"),
+                    ("Dismiss a menu", "Esc"),
+                ],
+            ),
+        ];
+        column()
+            .gap_4()
+            .children(groups.into_iter().map(|(title, items)| {
+                s::frame().child(s::header(title, "")).child(
+                    s::card().children(items.into_iter().enumerate().map(
+                        |(index, (name, shortcut))| {
+                            s::setting_row(index == 0)
+                                .child(s::title_text(name).flex_1().min_w_0())
+                                .child(
+                                    row()
+                                        .h(px(24.))
+                                        .px_2()
+                                        .rounded(px(5.))
+                                        .border_1()
+                                        .border_color(rgb(BORDER))
+                                        .bg(s::frame_bg())
+                                        .text_size(px(11.))
+                                        .child(shortcut),
+                                )
+                        },
+                    )),
+                )
+            }))
+            .into_any_element()
+    }
     pub(super) fn settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let section = self.settings_section;
         let compact = self.content_width < 800.;
         let navigation = column()
+            .id("settings-navigation")
+            .role(Role::TabList)
+            .aria_label("Settings sections")
+            .track_focus(&self.settings_nav_focus)
+            .tab_index(0)
+            .on_key_down(cx.listener(Self::on_settings_nav_key))
+            .overflow_y_scroll()
             .w(px(if compact { 48. } else { 208. }))
             .h_full()
             .flex_none()
@@ -62,56 +173,39 @@ impl WorkspaceView {
             .px(px(if compact { 6. } else { 10. }))
             .py_3()
             .gap(px(2.))
-            .children(
-                [
-                    Section::General,
-                    Section::Providers,
-                    Section::Defaults,
-                    Section::Plugins,
-                    Section::Devices,
-                    Section::Usage,
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(index, item)| {
-                    row()
-                        .id(("settings-section", index))
-                        .role(Role::Button)
-                        .aria_label(item.title())
-                        .cursor_pointer()
-                        .min_h(px(28.))
-                        .px(px(10.))
-                        .py(px(4.))
-                        .gap_2()
-                        .rounded(px(7.))
-                        .when(item == section, |row| row.bg(s::sidebar_active()))
-                        .text_color(rgb(if item == section { TEXT } else { MUTED }))
-                        .hover(|row| row.bg(s::sidebar_active().opacity(0.6)))
-                        .child(
-                            icon(item.icon())
-                                .size(px(16.))
-                                .text_color(rgb(if item == section { TEXT } else { MUTED })),
-                        )
-                        .when(!compact, |row| {
-                            row.child(div().text_size(px(12.)).child(item.title()))
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.settings_section = item;
-                            this.completion_preset_menu = false;
-                            this.default_permission_menu = false;
-                            if item == Section::Devices {
-                                this.refresh_pairings();
-                            }
-                            if item == Section::Usage {
-                                this.call(
-                                    methods::LIST_AGENT_ACCOUNTS,
-                                    json!({"forceUsage":false}),
-                                );
-                            }
-                            cx.notify();
-                        }))
-                }),
-            );
+            .children(Section::NAV.into_iter().enumerate().map(|(index, item)| {
+                row()
+                    .id(("settings-section", index))
+                    .role(Role::Tab)
+                    .aria_selected(
+                        item == section
+                            || (item == Section::Providers && section == Section::Usage),
+                    )
+                    .aria_label(item.title())
+                    .cursor_pointer()
+                    .min_h(px(28.))
+                    .px(px(if compact { 6. } else { 10. }))
+                    .when(compact, |row| row.justify_center())
+                    .py(px(4.))
+                    .gap_2()
+                    .rounded(px(7.))
+                    .when(item == section, |row| row.bg(s::sidebar_active()))
+                    .text_color(rgb(if item == section { TEXT } else { MUTED }))
+                    .hover(|row| row.bg(s::sidebar_active().opacity(0.6)))
+                    .child(
+                        icon(item.icon())
+                            .size(px(16.))
+                            .text_color(rgb(if item == section { TEXT } else { MUTED })),
+                    )
+                    .when(!compact, |row| {
+                        row.child(div().text_size(px(12.)).child(item.title()))
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.settings_nav_active = index;
+                        window.focus(&this.settings_nav_focus, cx);
+                        this.select_settings_section(item, cx);
+                    }))
+            }));
         let content = match section {
             Section::General => column()
                 .gap_4()
@@ -124,10 +218,12 @@ impl WorkspaceView {
                 .gap_5()
                 .child(self.providers_settings(cx))
                 .child(self.model_accounts_settings(cx))
+                .child(self.usage_settings(cx))
                 .into_any_element(),
             Section::Devices => self.pairing_settings(cx),
             Section::Plugins => self.cloud_settings(cx),
             Section::Usage => self.usage_settings(cx),
+            Section::Shortcuts => self.shortcuts_settings(),
         };
         column()
             .flex_1()
@@ -164,7 +260,21 @@ impl WorkspaceView {
                                 cx.notify();
                             })),
                     )
-                    .child(div().flex_1()),
+                    .child(div().flex_1())
+                    .child(
+                        row()
+                            .gap_2()
+                            .text_size(px(11.))
+                            .text_color(rgb(MUTED))
+                            .child(
+                                icon(if self.paired { "globe" } else { "monitor" }).size(px(14.)),
+                            )
+                            .child(if self.paired {
+                                "Paired computer"
+                            } else {
+                                "Local workspace"
+                            }),
+                    ),
             )
             .child(
                 row()
@@ -183,7 +293,11 @@ impl WorkspaceView {
                             .child(
                                 column()
                                     .w_full()
-                                    .max_w(px(768.))
+                                    .max_w(px(if section == Section::Shortcuts {
+                                        1152.
+                                    } else {
+                                        768.
+                                    }))
                                     .mx_auto()
                                     .gap_5()
                                     .child(

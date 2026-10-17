@@ -131,6 +131,15 @@ pub struct HarnessUpdateStatus {
 }
 
 impl HarnessUpdateStatus {
+    /// Only a discovered, host-owned release can start an installation.
+    pub fn can_start_update(&self) -> bool {
+        self.can_apply
+            && matches!((&self.installed_version, &self.latest_version), (Some(installed), Some(latest)) if !installed.is_empty() && !latest.is_empty() && installed != latest)
+            && (self.phase == HarnessUpdatePhase::Available
+                || (self.phase == HarnessUpdatePhase::Failed
+                    && self.error.as_ref().is_some_and(|error| error.retryable)))
+    }
+
     /// Home notices describe discovered releases or an update in progress.
     /// Manual checks remain available in Settings without implying that a
     /// newer release exists.
@@ -865,6 +874,29 @@ mod tests {
             serde_json::to_string(&HarnessId::ClaudeCode).unwrap(),
             "\"claude-code\""
         );
+    }
+
+    #[test]
+    fn harness_update_installation_requires_a_known_release_and_host_ownership() {
+        let mut status: HarnessUpdateStatus = serde_json::from_value(serde_json::json!({"harness":"codex","installedVersion":"1.0","latestVersion":"1.1","phase":"available","canApply":true})).unwrap();
+        assert!(status.can_start_update());
+        status.can_apply = false;
+        assert!(!status.can_start_update());
+        status.can_apply = true;
+        status.latest_version = None;
+        assert!(!status.can_start_update());
+        status.latest_version = Some("1.0".into());
+        assert!(!status.can_start_update());
+        status.latest_version = Some("1.1".into());
+        status.phase = HarnessUpdatePhase::Installing;
+        assert!(!status.can_start_update());
+        status.phase = HarnessUpdatePhase::Failed;
+        assert!(!status.can_start_update());
+        status.error = Some(HarnessUpdateFailure {
+            message: "Retry download".into(),
+            retryable: true,
+        });
+        assert!(status.can_start_update());
     }
 
     #[test]

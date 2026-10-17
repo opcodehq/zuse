@@ -123,6 +123,7 @@ pub struct WorkspacePreferences {
     pub sidebar_view: SidebarView,
     pub appearance: AppearanceMode,
     pub completion_sound: crate::completion_sound::CompletionSoundPreferences,
+    pub provider_update_notifications: bool,
     pub default_permission_mode: PermissionMode,
     pub collapsed_projects: Vec<String>,
     pub default_provider: Option<String>,

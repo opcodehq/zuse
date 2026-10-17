@@ -15,6 +15,7 @@ mod pairing;
 pub mod palette;
 mod previews;
 mod provider_settings;
+mod provider_updates;
 mod questions;
 mod queue;
 mod queue_edit;
@@ -95,6 +96,14 @@ pub struct WorkspaceView {
     provider_codes: HashMap<String, Entity<input::TextInput>>,
     provider_error: Option<String>,
     settings_section: settings_view::Section,
+    settings_nav_focus: FocusHandle,
+    settings_nav_active: usize,
+    provider_updates: Vec<zuse_protocol::HarnessUpdateStatus>,
+    provider_updates_watch: Option<u64>,
+    provider_updates_action: Option<(u64, &'static str)>,
+    provider_updates_cancel: Option<u64>,
+    provider_updates_confirmed: bool,
+    provider_updates_error: Option<String>,
     paired: bool,
     pairing_origin: String,
     pairings: Value,
@@ -119,6 +128,9 @@ pub struct WorkspaceView {
     completion_preset_menu: bool,
     completion_preset_active: usize,
     completion_preset_focus: FocusHandle,
+    completion_switch_focus: FocusHandle,
+    provider_notice_focus: FocusHandle,
+    provider_policy_focus: FocusHandle,
     repos: Vec<Value>,
     spaces: Vec<zuse_protocol::Space>,
     project: Option<Value>,
@@ -338,6 +350,14 @@ impl WorkspaceView {
             provider_codes: HashMap::new(),
             provider_error: None,
             settings_section: settings_view::Section::General,
+            settings_nav_focus: cx.focus_handle(),
+            settings_nav_active: 0,
+            provider_updates: vec![],
+            provider_updates_watch: None,
+            provider_updates_action: None,
+            provider_updates_cancel: None,
+            provider_updates_confirmed: false,
+            provider_updates_error: None,
             paired: false,
             pairing_origin: String::new(),
             pairings: Value::Null,
@@ -362,6 +382,9 @@ impl WorkspaceView {
             completion_preset_menu: false,
             completion_preset_active: 0,
             completion_preset_focus: cx.focus_handle(),
+            completion_switch_focus: cx.focus_handle(),
+            provider_notice_focus: cx.focus_handle(),
+            provider_policy_focus: cx.focus_handle(),
             repos: vec![],
             spaces: vec![],
             project: None,
@@ -563,6 +586,9 @@ impl WorkspaceView {
             return;
         }
         if self.receive_pairing(id, &frame, cx) {
+            return;
+        }
+        if self.receive_provider_updates(id, &frame, cx) {
             return;
         }
         if self.receive_provider_action(id, &frame, cx) {

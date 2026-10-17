@@ -983,30 +983,17 @@ impl WorkspaceView {
                                                 &option.label,
                                             )
                                             .tab_index(0)
-                                            .on_click(cx.listener({
-                                                let id = id.clone();
-                                                let value = value.clone();
-                                                move |this, _, _, cx| {
-                                                    this.model_options
-                                                        .insert(id.clone(), json!(value));
-                                                    cx.notify();
-                                                }
-                                            }))
-                                            .on_key_down(cx.listener(
-                                                move |this, event: &KeyDownEvent, _, cx| {
-                                                    if !event.is_held
-                                                        && matches!(
-                                                            event.keystroke.key.as_str(),
-                                                            "enter" | "space"
-                                                        )
-                                                    {
+                                            .on_click(
+                                                cx.listener({
+                                                    let id = id.clone();
+                                                    let value = value.clone();
+                                                    move |this, _, _, cx| {
                                                         this.model_options
                                                             .insert(id.clone(), json!(value));
-                                                        cx.stop_propagation();
                                                         cx.notify();
                                                     }
-                                                },
-                                            )),
+                                                }),
+                                            ),
                                         ),
                                 )
                                 .into_any_element();

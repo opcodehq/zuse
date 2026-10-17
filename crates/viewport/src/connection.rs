@@ -39,6 +39,10 @@ impl WorkspaceView {
             self.connection_notice=Some("An action may have completed before the connection closed. Check its current state before trying it again.".into());
         }
         self.interrupt_queue_edit(cx);
+        self.provider_updates_watch = None;
+        self.provider_updates_action = None;
+        self.provider_updates_cancel = None;
+        self.provider_updates_confirmed = false;
         self.connected = false;
         self.notification_baselines.clear();
         self.workspace_synced = false;
@@ -150,6 +154,7 @@ impl WorkspaceView {
         ] {
             self.call(method, json!({}));
         }
+        self.refresh_provider_updates();
         self.refresh_pairings();
         self.refresh_model_connections();
         if self.settings {

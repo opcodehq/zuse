@@ -139,11 +139,19 @@ pub fn details(title: impl Into<SharedString>, description: impl Into<SharedStri
         .child(title_text(title))
         .child(description_text(description))
 }
+// GPUI activates focused clickable controls on key release. Contain the key
+// here so parent menu handlers cannot also apply it on key down.
+fn contain_activation(event: &KeyDownEvent, _: &mut Window, cx: &mut App) {
+    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+        cx.stop_propagation();
+    }
+}
 pub fn button(id: impl Into<ElementId>, name: impl Into<SharedString>) -> Stateful<Div> {
     let name = name.into();
     div()
         .id(id)
         .role(Role::Button)
+        .on_key_down(contain_activation)
         .aria_label(name.clone())
         .cursor_pointer()
         .flex_none()
@@ -180,6 +188,7 @@ pub fn toggle(id: impl Into<ElementId>, checked: bool, label: &str) -> Stateful<
     div()
         .id(id)
         .role(Role::Switch)
+        .on_key_down(contain_activation)
         .aria_label(label.to_owned())
         .aria_toggled(if checked {
             Toggled::True

@@ -248,7 +248,7 @@ impl WorkspaceView {
                                     }))
                                     .child(
                                         label(if query.is_empty() {
-                                            "Start a conversation with ⌘N"
+                                            "Start a conversation with Cmd/Ctrl N"
                                         } else {
                                             "Try a title, project, or branch"
                                         })

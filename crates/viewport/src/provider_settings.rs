@@ -100,6 +100,7 @@ impl WorkspaceView {
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.call(methods::LIST_HARNESSES, json!({}));
                     this.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":true}));
+                    this.check_provider_updates(cx);
                     cx.notify();
                 })),
             );
@@ -133,7 +134,7 @@ impl WorkspaceView {
                         .flex_1()
                         .min_w_0()
                         .gap(px(2.))
-                        .child(s::title_text(name.clone()))
+                        .child(self.provider_update_title(&id,name.clone(),index,cx))
                         .child(
                             row()
                                 .gap(px(6.))
@@ -359,11 +360,12 @@ impl WorkspaceView {
                                 details = details.child(s::description_text(message.to_owned()));
                             }
                         }
+                        details = details.child(self.provider_update_details(&id,index,cx));
                         card = card.child(details);
                     }
                     card
                 });
         s::frame().child(s::header("Agent providers","Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.").child(refresh))
-            .child(s::card().when_some(self.provider_error.clone(),|card,error|card.child(div().px_3().py_2().text_size(px(11.)).text_color(rgb(0xf87171)).child(error))).children(rows)).into_any_element()
+            .child(s::card().when_some(self.provider_error.clone(),|card,error|card.child(div().px_3().py_2().text_size(px(11.)).text_color(rgb(0xf87171)).child(error))).children(rows).when_some(self.provider_updates_error.clone(),|card,error|card.child(s::description_text(error).px_3().py_2()))).into_any_element()
     }
 }

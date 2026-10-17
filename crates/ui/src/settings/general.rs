@@ -141,8 +141,12 @@ impl ShortcutsPage {
         let notifications=widgets::group(theme,"Notifications","")
             .child(widgets::section_card(theme).mt_0()
                 .child(widgets::card_row(theme,true).child(general_details(theme,"Provider update notifications","Show a notification when a newer version of an agent provider is available. Off by default.")).child(update_switch))
-                .child(widgets::card_row(theme,false).child(general_details(theme,"Agent completion sound","Play a short sound when any agent turn finishes, including agents working in background chats.")).child(sound_switch).child(selector)
-                    .child(widgets::text_action(theme,widgets::ActionTone::Outlined,"Preview").id("general-preview-sound").when(!sound, |button| button.opacity(0.5)).on_click(move|_,_,_|{if sound{crate::sound::play_with_completion_preset(crate::sound::Sound::Done, preset);}}))));
+                .child(widgets::card_row(theme,false).flex_col().items_stretch().gap(px(8.))
+                    .child(div().flex().items_start().gap(px(10.)).child(general_details(theme,"Agent completion sound","Play a short sound when any agent turn finishes, including agents working in background chats.")).child(div().flex().items_center().h(px(28.)).child(sound_switch)))
+                    .child(div().flex().items_center().flex_wrap().gap(px(8.)).when(!sound,|controls|controls.opacity(0.6))
+                        .child(crate::icons::icon(crate::icons::VOLUME_LOUD).size(px(16.)).text_color(theme.text_muted))
+                        .child(selector)
+                        .child(widgets::text_action(theme,widgets::ActionTone::Outlined,"Preview").id("general-preview-sound").when(!sound, |button| button.opacity(0.5)).on_click(move|_,_,_|{if sound{crate::sound::play_with_completion_preset(crate::sound::Sound::Done, preset);}})))));
         div()
             .flex()
             .flex_col()

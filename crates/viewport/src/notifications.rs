@@ -107,7 +107,10 @@ impl WorkspaceView {
             enabled,
             "Agent completion sound",
         )
-        .on_click(cx.listener(move |this, _, _, cx| {
+        .track_focus(&self.completion_switch_focus)
+        .tab_index(0)
+        .on_click(cx.listener(move |this, _, window, cx| {
+            window.focus(&this.completion_switch_focus, cx);
             this.preferences.completion_sound.enabled = !enabled;
             this.completion_preset_menu = false;
             this.save_preferences();
@@ -193,7 +196,9 @@ impl WorkspaceView {
         let controls = row()
             .gap_2()
             .flex_none()
-            .child(toggle)
+            .flex_wrap()
+            .when(!enabled, |controls| controls.opacity(0.6))
+            .child(icon("volume-loud").size(px(16.)).text_color(rgb(MUTED)))
             .child(selector)
             .child(
                 s::button("general-preview-sound", "Preview")
@@ -204,8 +209,23 @@ impl WorkspaceView {
                         }
                     })),
             );
-        let settings_row = s::setting_row(true)
-            .child(s::details("Agent completion sound", "Play a short sound when any agent turn finishes, including agents working in background chats."))
+        let updates = self.preferences.provider_update_notifications;
+        let updates_switch = s::toggle(
+            "general-provider-updates",
+            updates,
+            "Provider update notifications",
+        )
+        .track_focus(&self.provider_notice_focus)
+        .tab_index(0)
+        .on_click(cx.listener(|this, _, window, cx| {
+            window.focus(&this.provider_notice_focus, cx);
+            this.preferences.provider_update_notifications =
+                !this.preferences.provider_update_notifications;
+            this.save_preferences();
+            cx.notify();
+        }));
+        let settings_row = s::setting_row(false).flex_col().items_stretch().gap_2()
+            .child(row().items_start().gap(px(10.)).child(s::details("Agent completion sound", "Play a short sound when any agent turn finishes, including agents working in background chats.")).child(row().h(px(28.)).child(toggle)))
             .child(controls);
         s::frame()
             .child(s::header("Notifications", ""))
@@ -215,6 +235,7 @@ impl WorkspaceView {
                         card.style().overflow = Default::default();
                         card
                     })
+                    .child(s::setting_row(true).child(s::details("Provider update notifications","Show a notification when a newer version of an agent provider is available. Off by default.")).child(row().h(px(28.)).child(updates_switch)))
                     .child(settings_row),
             )
             .into_any_element()
