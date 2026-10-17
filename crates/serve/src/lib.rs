@@ -19,6 +19,7 @@ use tower_http::{
     set_header::SetResponseHeaderLayer,
 };
 use zuse_rpc::RpcService;
+mod access_token;
 
 #[derive(Clone)]
 pub struct BrowserServer {
@@ -57,6 +58,10 @@ impl BrowserServer {
         })
     }
 
+    pub fn load_or_create_token(directory: &std::path::Path) -> anyhow::Result<String> {
+        access_token::load_or_create(directory)
+    }
+
     pub fn random_token() -> String {
         format!(
             "{}{}",
@@ -72,6 +77,7 @@ impl BrowserServer {
                 get(|| async { Json(serde_json::json!({"status":"ok", "service":"zuse"})) }),
             )
             .route("/api/session", post(unlock).delete(lock))
+            .route("/api/session/check", post(session_status))
             .route("/api/rpc", get(socket))
             .route("/api/attachments", post(upload))
             .fallback_service(
@@ -185,6 +191,15 @@ async fn lock(State(server): State<BrowserServer>, headers: HeaderMap) -> Respon
         .into_response()
 }
 
+async fn session_status(State(server): State<BrowserServer>, headers: HeaderMap) -> Response {
+    let status = if server.authorized(&headers) && server.valid_origin(&headers) {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::UNAUTHORIZED
+    };
+    ([(header::CACHE_CONTROL, "no-store")], status).into_response()
+}
+
 async fn socket(
     State(server): State<BrowserServer>,
     headers: HeaderMap,
@@ -234,6 +249,45 @@ mod tests {
 
     fn server() -> BrowserServer {
         BrowserServer::new(Arc::new(FixtureService), "a".repeat(64), None).unwrap()
+    }
+
+    #[tokio::test]
+    async fn session_probe_requires_current_cookie_and_origin_without_reissuing_credentials() {
+        for (cookie, origin, expected) in [
+            (
+                format!("zuse_session={}", "a".repeat(64)),
+                "http://127.0.0.1:27656",
+                StatusCode::NO_CONTENT,
+            ),
+            (
+                format!("zuse_session={}", "b".repeat(64)),
+                "http://127.0.0.1:27656",
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                format!("zuse_session={}", "a".repeat(64)),
+                "https://foreign.example",
+                StatusCode::UNAUTHORIZED,
+            ),
+        ] {
+            let response = server()
+                .router(PathBuf::from("missing-fixture-assets"))
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/session/check")
+                        .header("host", "127.0.0.1:27656")
+                        .header("origin", origin)
+                        .header("cookie", cookie)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            assert!(!response.headers().contains_key(header::SET_COOKIE));
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        }
     }
 
     #[tokio::test]

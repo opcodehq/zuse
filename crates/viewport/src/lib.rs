@@ -2,8 +2,10 @@
 
 mod activity;
 pub mod assets;
+mod connection;
 pub mod input;
 mod model_accounts;
+mod navigation;
 mod previews;
 mod questions;
 mod recovery;
@@ -22,7 +24,10 @@ use std::collections::HashMap;
 use zuse_model::{SessionMessageEntry, TranscriptUpdate, apply_transcript_frame};
 use zuse_protocol::methods;
 
-actions!(zuse_client, [Submit, SaveFile, ClosePreview]);
+actions!(
+    zuse_client,
+    [Submit, SaveFile, ClosePreview, SearchSessions, NewSession]
+);
 
 pub struct Transport {
     pub requests: UnboundedSender<Value>,
@@ -34,9 +39,13 @@ struct Draft {
     text: String,
     attachments: Vec<Value>,
     key: String,
+    message_id: Option<String>,
+    chat_id: Option<String>,
+    not_sent: bool,
 }
 
 pub struct WorkspaceView {
+    workspace_focus: FocusHandle,
     input: Entity<input::TextInput>,
     requests: UnboundedSender<Value>,
     next_id: u64,
@@ -61,6 +70,16 @@ pub struct WorkspaceView {
     expanded_parts: std::collections::HashSet<String>,
     device_id: Option<String>,
     status: String,
+    connected: bool,
+    connection_epoch: u64,
+    workspace_synced: bool,
+    uncertain_drafts: Vec<Draft>,
+    connection_notice: Option<String>,
+    uncertain_save: Option<workspace::PendingFileSave>,
+    file_reconcile: Option<u64>,
+    file_reconnect_needed: bool,
+    terminal_last_seq: Option<u64>,
+    terminal_write: Option<(u64, String)>,
     error: Option<String>,
     show_archive: bool,
     settings: bool,
@@ -76,6 +95,9 @@ pub struct WorkspaceView {
     project_picker: bool,
     project_input: Entity<input::TextInput>,
     sidebar_open: bool,
+    search_open: bool,
+    session_search: Entity<input::TextInput>,
+    agent_picker: bool,
     right_open: bool,
     content_width: f32,
     right_tab: String,
@@ -132,10 +154,14 @@ pub struct WorkspaceView {
 
 impl WorkspaceView {
     pub fn new(transport: Transport, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let workspace_focus = cx.focus_handle();
+        window.focus(&workspace_focus, cx);
         let input = cx.new(|cx| input::TextInput::multiline("Do anything…", window, cx));
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         let project_input =
             cx.new(|cx| input::TextInput::new("Absolute project path on this machine", window, cx));
+        let session_search = cx.new(|cx| input::TextInput::new("Search sessions…", window, cx));
+        cx.observe(&session_search, |_, _, cx| cx.notify()).detach();
         let terminal_input = cx.new(|cx| input::TextInput::new("Run a command…", window, cx));
         cx.subscribe_in(
             &input,
@@ -176,7 +202,8 @@ impl WorkspaceView {
                 cx.notify();
             });
         });
-        let mut view = Self {
+        let view = Self {
+            workspace_focus,
             input,
             requests: transport.requests,
             next_id: 1,
@@ -201,6 +228,16 @@ impl WorkspaceView {
             expanded_parts: Default::default(),
             device_id: None,
             status: "Connecting to your engine…".into(),
+            connected: false,
+            connection_epoch: 0,
+            workspace_synced: false,
+            uncertain_drafts: vec![],
+            connection_notice: None,
+            uncertain_save: None,
+            file_reconcile: None,
+            file_reconnect_needed: false,
+            terminal_last_seq: None,
+            terminal_write: None,
             error: None,
             show_archive: false,
             settings: false,
@@ -216,6 +253,9 @@ impl WorkspaceView {
             project_picker: false,
             project_input,
             sidebar_open: true,
+            search_open: false,
+            session_search,
+            agent_picker: false,
             right_open: false,
             content_width: 768.,
             right_tab: "files".into(),
@@ -269,13 +309,6 @@ impl WorkspaceView {
             composer_generation: 0,
             _reader: reader,
         };
-        view.call(methods::CLOUD_ACCOUNT_STATUS, json!({}));
-        view.call(methods::LOCAL_DEVICE, json!({}));
-        view.call(methods::LIST_HARNESSES, json!({}));
-        view.call(methods::WATCH_CHATS, json!({}));
-        view.call(methods::WATCH_SESSIONS, json!({}));
-        view.call(methods::LIST_REPOS, json!({}));
-        view.refresh_model_connections();
         view
     }
 
@@ -292,7 +325,7 @@ impl WorkspaceView {
         self.pending.insert(id, method.into());
         if self
             .requests
-            .unbounded_send(json!({"id":id,"method":method,"params":params}))
+            .unbounded_send(json!({"id":id,"method":method,"params":params,"epoch":if self.connected||method==methods::LOCAL_DEVICE {self.connection_epoch}else{0}}))
             .is_err()
         {
             self.error = Some("The engine connection is closed. Reconnect before sending.".into());
@@ -305,10 +338,8 @@ impl WorkspaceView {
             self.browser_local = local;
             return;
         }
-        if let Some(connection) = frame.get("connection").and_then(Value::as_str) {
-            self.reset_recovery(cx);
-            self.status = connection.into();
-            cx.notify();
+        if frame.get("connection").is_some() {
+            self.receive_connection(&frame, cx);
             return;
         }
         if frame.get("attachment").is_some() || frame.get("uploading").is_some() {
@@ -339,6 +370,9 @@ impl WorkspaceView {
         if method.is_empty() {
             return;
         }
+        if self.receive_file_reconcile(id, &frame, cx) {
+            return;
+        }
         if self.receive_review(id, &frame, cx) {
             return;
         }
@@ -364,6 +398,20 @@ impl WorkspaceView {
                 self.restore_failed_draft(draft, cx);
             }
             self.pending.remove(&id);
+            if self.terminal_watch == Some(id) {
+                self.terminal_watch = None;
+                self.terminal_id = None;
+                self.terminal_last_seq = None;
+                self.terminal_text
+                    .push_str("\n[Terminal unavailable. Open a new terminal to continue.]\n");
+            }
+            if self
+                .terminal_write
+                .as_ref()
+                .is_some_and(|(request, _)| *request == id)
+            {
+                self.terminal_write = None;
+            }
             if self.file_request == Some(id) {
                 self.file_request = None;
                 self.file_read_baseline = None;
@@ -440,13 +488,7 @@ impl WorkspaceView {
                         self.plugin_action(json!({"action":"list"}));
                     }
                 }
-                methods::LOCAL_DEVICE => {
-                    self.device_id = value
-                        .get("deviceId")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                    self.status = "Local engine connected".into();
-                }
+                methods::LOCAL_DEVICE => self.verify_engine(value, cx),
                 methods::LIST_HARNESSES => {
                     self.providers = value
                         .as_array()
@@ -457,6 +499,7 @@ impl WorkspaceView {
                         .collect()
                 }
                 methods::WATCH_CHATS => {
+                    self.workspace_synced = true;
                     self.chats = value.as_array().cloned().unwrap_or_default();
                     if let Some(selected) = &self.selected {
                         if let Some(chat) = self
@@ -562,6 +605,19 @@ impl WorkspaceView {
                         self.terminal_watch = Some(watch);
                     }
                 }
+                methods::WRITE_TERMINAL
+                    if self
+                        .terminal_write
+                        .as_ref()
+                        .is_some_and(|(request, _)| *request == id) =>
+                {
+                    if let Some((_, text)) = self.terminal_write.take() {
+                        if self.terminal_input.read(cx).value(cx) == text {
+                            self.terminal_input
+                                .update(cx, |input, cx| input.set_value(String::new(), cx));
+                        }
+                    }
+                }
                 methods::SUBSCRIBE_TERMINAL if self.terminal_watch == Some(id) => {
                     self.receive_terminal(value)
                 }
@@ -584,6 +640,7 @@ impl WorkspaceView {
                                 self.transcript_scroll.scroll_to_bottom();
                             }
                             self.sync_previews(true, cx);
+                            self.confirm_deliveries();
                         }
                         Err(error) => {
                             self.error = Some(format!("Invalid transcript update: {error}"))
@@ -603,6 +660,9 @@ impl WorkspaceView {
     }
 
     fn select(&mut self, chat: Value, cx: &mut Context<Self>) {
+        if !self.require_connection(cx) {
+            return;
+        }
         if self.file_navigation_blocked(cx) {
             return;
         }
@@ -611,8 +671,7 @@ impl WorkspaceView {
         self.attachments.clear();
         self.uploading = 0;
         if let Some(id) = self.transcript_watch.take() {
-            let _ = self.requests.unbounded_send(json!({"id":id,"cancel":true}));
-            self.pending.remove(&id);
+            self.cancel(id);
         }
         self.clear_workspace();
         let queue_watch = self.call(methods::WATCH_QUEUE, json!({"chatId":chat["id"]}));
@@ -642,6 +701,9 @@ impl WorkspaceView {
     }
 
     fn new_chat(&mut self, cx: &mut Context<Self>) {
+        if !self.require_connection(cx) {
+            return;
+        }
         if self.file_navigation_blocked(cx) {
             return;
         }
@@ -685,6 +747,19 @@ impl WorkspaceView {
             self.run_terminal_command(cx);
             return;
         }
+        if !self.require_connection(cx) {
+            return;
+        }
+        if !self.workspace_synced
+            || self
+                .selected
+                .as_ref()
+                .is_some_and(|chat| !self.chats.iter().any(|row| row["id"] == chat["id"]))
+        {
+            self.error = Some("Wait for the conversation list to refresh before sending.".into());
+            cx.notify();
+            return;
+        }
         if self.creating.is_some() || self.uploading > 0 {
             return;
         }
@@ -710,10 +785,17 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
-        let draft = Draft {
+        let mut draft = Draft {
             text: text.clone(),
             attachments: self.attachments.clone(),
             key: self.draft_key(),
+            chat_id: self
+                .selected
+                .as_ref()
+                .and_then(|chat| chat["id"].as_str())
+                .map(str::to_owned),
+            message_id: None,
+            not_sent: false,
         };
         self.drafts.remove(&draft.key);
         if self.is_working() {
@@ -732,7 +814,9 @@ impl WorkspaceView {
             .map(str::to_owned)
             .collect();
         let prompt = zuse_protocol::message_attachments::with_attachments(&text, &paths);
-        let command = json!({"kind":"run","messageId":uuid::Uuid::new_v4().to_string(),"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":null,"cwd":self.cwd(),"sandbox":"workspace-write","resume":null,"attachments":self.attachment_paths()}});
+        let message_id = uuid::Uuid::new_v4().to_string();
+        draft.message_id = Some(message_id.clone());
+        let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":null,"cwd":self.cwd(),"sandbox":"workspace-write","resume":null,"attachments":self.attachment_paths()}});
         let send = if let Some(chat) = &self.selected {
             self.call(
                 methods::QUEUE_COMMAND,
@@ -741,6 +825,7 @@ impl WorkspaceView {
         } else {
             // IDs are client-owned, allowing the durable send to refer to the same chat.
             let id = uuid::Uuid::new_v4().to_string();
+            draft.chat_id = Some(id.clone());
             let request = self.call(methods::MUTATE, json!({"op":"createChat","chatId":id,"deviceId":device,"cwd":self.project.as_ref().and_then(|p|p["path"].as_str()),"config":{"harness":provider["id"],"model":self.model,"reasoning":null,"sandbox":"workspace-write"}}));
             let chat = json!({"id":id,"title":text.chars().take(70).collect::<String>(),"deviceId":device,"cwd":self.cwd()});
             self.creating = Some((request, chat, command));
@@ -758,6 +843,10 @@ impl WorkspaceView {
 pub fn initialize(cx: &mut App) {
     input::bind_keys(cx);
     cx.bind_keys([
+        KeyBinding::new("cmd-k", SearchSessions, Some("Workspace")),
+        KeyBinding::new("ctrl-k", SearchSessions, Some("Workspace")),
+        KeyBinding::new("cmd-n", NewSession, Some("Workspace")),
+        KeyBinding::new("ctrl-n", NewSession, Some("Workspace")),
         KeyBinding::new("escape", ClosePreview, Some("Workspace")),
         KeyBinding::new("cmd-s", SaveFile, Some("Workspace")),
         KeyBinding::new("ctrl-s", SaveFile, Some("Workspace")),

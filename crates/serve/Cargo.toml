@@ -22,3 +22,5 @@ zuse-protocol.workspace = true
 [dev-dependencies]
 async-trait.workspace = true
 tower = { version = "0.5", features = ["util"] }
+
+tempfile.workspace = true

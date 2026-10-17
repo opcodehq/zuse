@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 zuse-viewport.workspace = true
+zuse-protocol.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 futures.workspace = true
@@ -16,4 +17,4 @@ serde_json.workspace = true
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Location", "History", "WebSocket", "MessageEvent", "CloseEvent", "Event", "Request", "RequestInit", "RequestCredentials", "Response", "Headers", "HtmlInputElement", "HtmlElement", "Node", "File", "FileList", "Blob", "EventTarget", "console"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Location", "History", "WebSocket", "MessageEvent", "CloseEvent", "Event", "Request", "RequestInit", "RequestCredentials", "Response", "Headers", "HtmlInputElement", "HtmlElement", "Node", "File", "FileList", "Blob", "EventTarget", "AbortController", "AbortSignal", "console"] }

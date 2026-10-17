@@ -65,17 +65,42 @@ impl WorkspaceView {
             self.recovery_error = Some(error.into());
         }
         if let Some(value) = frame.get("ok") {
-            match serde_json::from_value(value.clone()) {
+            match serde_json::from_value::<zuse_protocol::recovery::RecoverySnapshot>(value.clone())
+            {
                 Ok(snapshot) => {
-                    self.recovery = Some(snapshot);
-                    self.recovery_selected = None;
-                    self.recovery_output
-                        .update(cx, |input, cx| input.set_value(String::new(), cx));
-                    if self
+                    let resolving = self
                         .pending
                         .get(&id)
-                        .is_some_and(|method| method == methods::RESOLVE_RECOVERY)
-                    {
+                        .is_some_and(|method| method == methods::RESOLVE_RECOVERY);
+                    let previous = self
+                        .recovery
+                        .as_ref()
+                        .and_then(|old| {
+                            self.recovery_selected
+                                .and_then(|index| old.calls.get(index))
+                        })
+                        .map(|call| {
+                            (
+                                call.agent_id.clone(),
+                                call.call_id.clone(),
+                                call.revision.clone(),
+                            )
+                        });
+                    self.recovery_selected = if resolving {
+                        None
+                    } else {
+                        previous.and_then(|(agent, call, revision)| {
+                            snapshot.calls.iter().position(|item| {
+                                item.agent_id == agent
+                                    && item.call_id == call
+                                    && item.revision == revision
+                            })
+                        })
+                    };
+                    self.recovery = Some(snapshot);
+                    if resolving {
+                        self.recovery_output
+                            .update(cx, |input, cx| input.set_value(String::new(), cx));
                         self.recovery_notice =
                             Some("Review saved. Continue in chat when ready.".into());
                     }

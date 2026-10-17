@@ -1,3 +1,5 @@
+#[cfg(target_family = "wasm")]
+mod connection;
 #[cfg(not(target_family = "wasm"))]
 fn main() {
     eprintln!("Build this target with scripts/build-web.sh");
@@ -5,16 +7,13 @@ fn main() {
 
 #[cfg(target_family = "wasm")]
 mod browser {
-    use futures::{
-        StreamExt,
-        channel::{mpsc, oneshot},
-    };
+    use futures::channel::mpsc;
     use gpui::{App, AppContext, Bounds, WindowBounds, WindowOptions, px, size};
     use serde_json::{Value, json};
-    use std::{cell::RefCell, rc::Rc};
+    use std::cell::RefCell;
     use wasm_bindgen::{JsCast, closure::Closure};
     use wasm_bindgen_futures::{JsFuture, spawn_local};
-    use web_sys::{MessageEvent, Request, RequestInit, Response, WebSocket};
+    use web_sys::{Request, RequestInit, Response};
     use zuse_viewport::{Transport, WorkspaceView};
 
     thread_local! {
@@ -23,7 +22,7 @@ mod browser {
         static APPLICATION: RefCell<Option<gpui::ApplicationHandle>> = const { RefCell::new(None) };
     }
 
-    async fn unlock() -> Result<(), wasm_bindgen::JsValue> {
+    pub(super) async fn unlock() -> Result<(), wasm_bindgen::JsValue> {
         let window = web_sys::window().unwrap();
         let hash = window.location().hash()?;
         let Some(token) = hash.strip_prefix("#token=") else {
@@ -51,7 +50,7 @@ mod browser {
         Ok(())
     }
 
-    fn pick_attachments(events: mpsc::UnboundedSender<Value>, generation: u64) {
+    pub(super) fn pick_attachments(events: mpsc::UnboundedSender<Value>, generation: u64) {
         let document = web_sys::window().unwrap().document().unwrap();
         let input: web_sys::HtmlInputElement =
             document.create_element("input").unwrap().unchecked_into();
@@ -130,107 +129,9 @@ mod browser {
 
     pub fn run() {
         gpui_platform::web_init();
-        let (requests, mut outbound) = mpsc::unbounded::<Value>();
+        let (requests, outbound) = mpsc::unbounded::<Value>();
         let (events, inbound) = mpsc::unbounded::<Value>();
-        spawn_local(async move {
-            if let Err(error) = unlock().await {
-                let _ = events.unbounded_send(json!({"connection":error.as_string().unwrap_or_else(||"Authentication failed".into())}));
-                return;
-            }
-            let location = web_sys::window().unwrap().location();
-            let local = matches!(
-                location.hostname().unwrap_or_default().as_str(),
-                "localhost" | "127.0.0.1" | "[::1]" | "::1"
-            );
-            let _ = events.unbounded_send(json!({"browserLocal":local}));
-            let scheme = if location.protocol().unwrap_or_default() == "https:" {
-                "wss"
-            } else {
-                "ws"
-            };
-            let url = format!("{scheme}://{}/api/rpc", location.host().unwrap_or_default());
-            let socket = match WebSocket::new(&url) {
-                Ok(socket) => socket,
-                Err(_) => {
-                    let _ = events
-                        .unbounded_send(json!({"connection":"Unable to open engine connection"}));
-                    return;
-                }
-            };
-            let (ready_tx, ready_rx) = oneshot::channel();
-            let ready_tx = Rc::new(RefCell::new(Some(ready_tx)));
-            let open_ready = ready_tx.clone();
-            let open = Closure::<dyn FnMut()>::new(move || {
-                if let Some(tx) = open_ready.borrow_mut().take() {
-                    let _ = tx.send(true);
-                }
-            });
-            socket.set_onopen(Some(open.as_ref().unchecked_ref()));
-            let rx_events = events.clone();
-            let message = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
-                if let Some(text) = event.data().as_string() {
-                    for line in text.lines() {
-                        if let Ok(value) = serde_json::from_str(line) {
-                            let _ = rx_events.unbounded_send(value);
-                        }
-                    }
-                }
-            });
-            socket.set_onmessage(Some(message.as_ref().unchecked_ref()));
-            let close_events = events.clone();
-            let close_ready = ready_tx.clone();
-            let (closed_tx, closed_rx) = oneshot::channel();
-            let closed_tx = Rc::new(RefCell::new(Some(closed_tx)));
-            let close_signal = closed_tx.clone();
-            let close = Closure::<dyn FnMut()>::new(move || {
-                if let Some(tx) = close_ready.borrow_mut().take() {
-                    let _ = tx.send(false);
-                }
-                if let Some(tx) = close_signal.borrow_mut().take() {
-                    let _ = tx.send(());
-                }
-                let _=close_events.unbounded_send(json!({"connection":"Disconnected. Open an authenticated engine link to reconnect."}));
-            });
-            socket.set_onclose(Some(close.as_ref().unchecked_ref()));
-            let error_events = events.clone();
-            let error_ready = ready_tx.clone();
-            let error = Closure::<dyn FnMut()>::new(move || {
-                if let Some(tx) = error_ready.borrow_mut().take() {
-                    let _ = tx.send(false);
-                }
-                if let Some(tx) = closed_tx.borrow_mut().take() {
-                    let _ = tx.send(());
-                }
-                let _=error_events.unbounded_send(json!({"connection":"Connection failed. Open the access link printed by zuse-server."}));
-            });
-            socket.set_onerror(Some(error.as_ref().unchecked_ref()));
-            if ready_rx.await == Ok(true) {
-                use futures::FutureExt;
-                let closed = closed_rx.fuse();
-                futures::pin_mut!(closed);
-                loop {
-                    let frame = futures::select_biased! {
-                        _=closed=>break,
-                        frame=outbound.next()=> match frame {Some(frame)=>frame,None=>break},
-                    };
-                    if frame["ui"] == "pickAttachments" {
-                        pick_attachments(
-                            events.clone(),
-                            frame["generation"].as_u64().unwrap_or_default(),
-                        );
-                        continue;
-                    }
-                    if socket.send_with_str(&frame.to_string()).is_err() {
-                        break;
-                    }
-                }
-            }
-            socket.set_onopen(None);
-            socket.set_onmessage(None);
-            socket.set_onclose(None);
-            socket.set_onerror(None);
-            let _ = socket.close();
-        });
+        spawn_local(super::connection::run(outbound, events));
         let application = gpui_platform::application()
             .with_assets(zuse_viewport::assets::Assets)
             .run_embedded(move |cx: &mut App| {

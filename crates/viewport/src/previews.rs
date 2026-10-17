@@ -68,6 +68,11 @@ fn thumbnail(bytes: Vec<u8>) -> Result<(Arc<Image>, u32, u32), String> {
 }
 
 impl WorkspaceView {
+    pub(super) fn interrupt_previews(&mut self) {
+        self.preview_pending.clear();
+        self.previews
+            .retain(|_, preview| !matches!(preview, Preview::Loading { .. }));
+    }
     pub(super) fn reset_previews(&mut self, cx: &mut Context<Self>) {
         self.preview_generation = self.preview_generation.wrapping_add(1);
         self.preview_open = None;
@@ -82,6 +87,9 @@ impl WorkspaceView {
     }
 
     pub(super) fn sync_previews(&mut self, refresh: bool, cx: &mut Context<Self>) {
+        if !self.connected {
+            return;
+        }
         let mut paths: Vec<String> = self
             .attachments
             .iter()
@@ -150,6 +158,9 @@ impl WorkspaceView {
     }
 
     pub(super) fn load_preview(&mut self, path: String, cx: &mut Context<Self>) {
+        if !self.require_connection(cx) {
+            return;
+        }
         if self.device_id.is_none() || self.preview_active() >= MAX_PARALLEL {
             return;
         }

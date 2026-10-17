@@ -10,7 +10,9 @@ pub(super) struct PendingFileSave {
 
 impl WorkspaceView {
     pub(super) fn cancel(&mut self, id: u64) {
-        let _ = self.requests.unbounded_send(json!({"id":id,"cancel":true}));
+        let _ = self
+            .requests
+            .unbounded_send(json!({"id":id,"cancel":true,"epoch":self.connection_epoch}));
         self.pending.remove(&id);
     }
 
@@ -40,6 +42,8 @@ impl WorkspaceView {
         self.changes = Value::Null;
         self.changes_error = None;
         self.reset_review();
+        self.terminal_last_seq = None;
+        self.terminal_write = None;
         self.terminal_text.clear();
         self.terminal = vt100::Parser::new(28, 80, 2000);
     }
@@ -55,6 +59,9 @@ impl WorkspaceView {
 
     pub(super) fn project_name(&self) -> String {
         let cwd = self.cwd();
+        if cwd.starts_with("~/.zuse/scratch/") {
+            return "Local workspace".into();
+        }
         cwd.trim_end_matches('/')
             .rsplit('/')
             .next()
@@ -136,6 +143,12 @@ impl WorkspaceView {
     }
 
     pub(super) fn receive_terminal(&mut self, event: &Value) {
+        if let Some(seq) = event["seq"].as_u64() {
+            if self.terminal_last_seq.is_some_and(|last| seq <= last) {
+                return;
+            }
+            self.terminal_last_seq = Some(seq);
+        }
         if event["type"] == "data" {
             if let Some(data) = event["data"].as_str().and_then(|s| STANDARD.decode(s).ok()) {
                 self.terminal.process(&data);
@@ -148,16 +161,18 @@ impl WorkspaceView {
     }
 
     pub(super) fn run_terminal_command(&mut self, cx: &mut Context<Self>) {
+        if !self.require_connection(cx) || self.terminal_write.is_some() {
+            return;
+        }
         let Some(id) = self.terminal_id.clone() else {
             return;
         };
         let command = self.terminal_input.read(cx).value(cx);
-        self.call(
+        let request = self.call(
             methods::WRITE_TERMINAL,
             json!({"terminalId":id,"data":STANDARD.encode(format!("{command}\r"))}),
         );
-        self.terminal_input
-            .update(cx, |input, cx| input.set_value(String::new(), cx));
+        self.terminal_write = Some((request, command));
     }
 
     pub(super) fn queue_action(
@@ -226,13 +241,15 @@ impl WorkspaceView {
     pub(super) fn pick_attachments(&mut self) {
         let _ = self
             .requests
-            .unbounded_send(json!({"ui":"pickAttachments","generation":self.composer_generation}));
+            .unbounded_send(json!({"ui":"pickAttachments","generation":self.composer_generation,"epoch":if self.connected {self.connection_epoch}else{0}}));
     }
 }
 
 impl WorkspaceView {
     pub(super) fn file_navigation_blocked(&mut self, cx: &mut Context<Self>) -> bool {
-        let message = if self.save_request.is_some() {
+        let message = if self.file_reconnect_needed || self.file_reconcile.is_some() {
+            Some("Wait for the file to be verified after reconnecting.")
+        } else if self.save_request.is_some() {
             Some("Wait for the current save before opening or closing a file.")
         } else if self.file_dirty(cx) {
             Some("Save or discard your file edits before continuing.")
@@ -248,6 +265,14 @@ impl WorkspaceView {
         }
     }
     pub(super) fn read_file(&mut self, path: &str, discard: bool, cx: &mut Context<Self>) {
+        if !self.require_connection(cx) {
+            return;
+        }
+        if self.file_reconnect_needed || self.file_reconcile.is_some() {
+            self.error = Some("Wait for the file to be verified after reconnecting.".into());
+            cx.notify();
+            return;
+        }
         if self.save_request.is_some() || (!discard && self.file_navigation_blocked(cx)) {
             return;
         }
@@ -274,6 +299,14 @@ impl WorkspaceView {
     }
 
     pub(super) fn save_file(&mut self, cx: &mut Context<Self>) {
+        if !self.require_connection(cx) {
+            return;
+        }
+        if self.file_reconnect_needed || self.file_reconcile.is_some() {
+            self.error = Some("Wait for the file to be verified after reconnecting.".into());
+            cx.notify();
+            return;
+        }
         if !self.file_dirty(cx) {
             return;
         }
@@ -348,6 +381,7 @@ impl WorkspaceView {
             text: self.input.read(cx).value(cx),
             attachments: self.attachments.clone(),
             key: key.clone(),
+            ..Default::default()
         };
         if draft.text.is_empty() && draft.attachments.is_empty() {
             self.drafts.remove(&key);

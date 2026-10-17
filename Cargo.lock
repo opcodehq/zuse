@@ -13953,6 +13953,7 @@ dependencies = [
  "serde",
  "serde_json",
  "subtle",
+ "tempfile",
  "tokio",
  "tower",
  "tower-http",
@@ -14154,6 +14155,7 @@ name = "zuse-viewport"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "futures",
  "gpui",
  "gpui-base",
@@ -14251,6 +14253,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "zuse-protocol",
  "zuse-viewport",
 ]
 

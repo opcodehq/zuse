@@ -17,6 +17,12 @@ pub(super) struct WorkspaceReview {
     notice: Option<String>,
 }
 impl WorkspaceView {
+    pub(super) fn interrupt_review(&mut self) {
+        self.changes_request = None;
+        if self.review.request.take().is_some() {
+            self.review.error = Some("Diff read interrupted. Refresh when connected.".into());
+        }
+    }
     pub(super) fn reset_review(&mut self) {
         if let Some(id) = self.review.request.take() {
             self.cancel(id);
