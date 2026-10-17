@@ -619,7 +619,7 @@ impl Normalizer {
                                 AgentEvent::ToolResult {
                                     id: b.tool_use_id.clone(),
                                     is_error: b.is_error.unwrap_or(false),
-                                    output: None,
+                                    output: crate::tool_output::text(&b.content),
                                     diff: None,
                                 },
                             )
@@ -648,7 +648,7 @@ impl Normalizer {
                     .map(|b| AgentEvent::ToolResult {
                         id: b.tool_use_id.clone(),
                         is_error: b.is_error.unwrap_or(false),
-                        output: None,
+                        output: crate::tool_output::text(&b.content),
                         diff: None,
                     })
                     .collect()

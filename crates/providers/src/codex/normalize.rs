@@ -339,7 +339,8 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                 vec![AgentEvent::ToolResult {
                     id,
                     is_error: status == "failed" || exit_code != 0,
-                    output: None,
+                    output: field(item, &["aggregatedOutput", "aggregated_output", "output"])
+                        .and_then(crate::tool_output::text),
                     diff: None,
                 }]
             }
@@ -383,7 +384,10 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
             Phase::Completed => vec![AgentEvent::ToolResult {
                 id,
                 is_error: status == "failed",
-                output: None,
+                output: item
+                    .get("result")
+                    .and_then(crate::tool_output::text)
+                    .or_else(|| item.get("error").and_then(crate::tool_output::text)),
                 diff: None,
             }],
         },
@@ -806,14 +810,14 @@ mod tests {
         );
         let completed = map_item(
             Phase::Completed,
-            &json!({"type": "command_execution", "id": "c1", "status": "completed", "exit_code": 2}),
+            &json!({"type": "command_execution", "id": "c1", "status": "completed", "exit_code": 2,"aggregated_output":"command failed with details"}),
         );
         assert_eq!(
             completed,
             vec![AgentEvent::ToolResult {
                 id: "c1".into(),
                 is_error: true,
-                output: None,
+                output: Some("command failed with details".into()),
                 diff: None,
             }]
         );

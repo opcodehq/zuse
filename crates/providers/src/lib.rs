@@ -763,3 +763,5 @@ mod steering_control_tests {
         assert!(receive_steer(&mut rx, &turn).await.is_none());
     }
 }
+
+mod tool_output;

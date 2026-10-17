@@ -74,7 +74,13 @@ const MIGRATIONS: &[&str] = &[
     CREATE TABLE sync_job_clock (id INTEGER PRIMARY KEY CHECK(id=1), value INTEGER NOT NULL) STRICT;
     INSERT INTO sync_job_clock VALUES (1,0);",
     "ALTER TABLE chat_sync_jobs ADD COLUMN cursor TEXT NOT NULL DEFAULT '';",
+    "CREATE TABLE tool_blobs (blob_ref TEXT PRIMARY KEY, doc_id TEXT NOT NULL, bytes BLOB NOT NULL) STRICT;
+     CREATE INDEX tool_blobs_doc ON tool_blobs(doc_id);",
 ];
+
+#[path = "tool_blobs.rs"]
+mod tool_blobs;
+pub use tool_blobs::ToolBlobPage;
 
 const STORE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -471,6 +477,7 @@ impl DocsStore {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM snapshots WHERE doc_id = ?1", params![doc_id])?;
+        tx.execute("DELETE FROM tool_blobs WHERE doc_id = ?1", params![doc_id])?;
         tx.execute("DELETE FROM chat_outbox WHERE doc_id = ?1", params![doc_id])?;
         tx.execute(
             "DELETE FROM chat_sync_jobs WHERE doc_id = ?1",

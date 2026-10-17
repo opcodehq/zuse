@@ -403,14 +403,10 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 {
                     *e = *is_error;
                     *resolved = true;
-                    // Tool OUTPUTS never enter the doc (2026-08-10 product
-                    // call: chips are one-liners — name + call info — like
-                    // pre-output builds; the R2 sidecar is parked with them,
-                    // docs/chat2-sync.md A2). Full text lives only in the
-                    // host's run journal. Inline diffs die the same way:
-                    // stats only, never text. `is_error` still folds so
-                    // failed chips read as failed.
-                    let _ = output; // journal-only
+                    // Full output stays outside compact transcript snapshots.
+                    // The host may persist a local payload and add a durable ref
+                    // after this pure fold; raw text never enters this record.
+                    let _ = output;
                     *out_slot = None;
                     *output_bytes = None;
                     *diff_slot = None;

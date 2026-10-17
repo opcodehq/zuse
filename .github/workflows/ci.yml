@@ -34,6 +34,10 @@ jobs:
       - run: cargo test -p zuse-protocol --lib message_attachments
       - run: cargo test -p zuse-harness -p zuse-model-accounts
       - run: cargo test -p zuse-model -p zuse-serve
+      - run: cargo test -p zuse-providers --lib tool_output
+      - run: cargo test -p zuse-providers --lib command_execution_maps_exit_code_to_error
+      - run: cargo test -p zuse-sync --lib tool_blobs
+      - run: cargo test -p zuse-engine --lib doc_host::tool_result_tests
       - run: cargo test -p zuse-rpc --lib
       - run: cargo test -p zuse-engine --lib account::tests
       - run: cargo test -p zuse-engine --lib harness_models::tests

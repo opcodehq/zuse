@@ -27,3 +27,11 @@ The HTTP connection pool and refresh authority are shared across concurrent agen
 `cargo run -p zuse-cli -- --listen 127.0.0.1:27656 --ipc-port 0 --data-dir .context/local-profile` starts an isolated profile with an available agent-tool RPC port. Relative profile paths are resolved before workspace creation. Each launched agent receives this engine's actual RPC endpoint. SIGTERM and Ctrl+C both drain the runtime. Keep the printed browser access link private.
 
 For an interrupted-write UI fixture, build and run `cargo run -p zuse-engine --example recovery-fixture -- <new-profile-directory>`, then serve that profile. The fixture refuses existing directories, writes an evidence file, and deliberately leaves one durable tool receipt requiring inspection. It uses a scripted model and requires no provider credentials.
+
+## Local tool results
+
+New tool results are saved in the profile's `docs.sqlite3` `tool_blobs` table before their references enter the transcript. Keys include the assistant entry, provider call identity, and content digest, so repeated provider call IDs cannot replace another turn's output. Output and diff save in one transaction. Deleting a chat removes its tool payloads. Ordinary transcript snapshots carry refs and byte counts, without full output text.
+
+`FetchToolBlob` accepts `blobRef`, optional `offset`, and optional `limit`. Paged callers use UTF-8 byte cursors with a 64 KiB maximum page. Replies include `text`, `nextOffset`, `totalBytes`, and `done`. The legacy text response remains available to native clients. Both native and browser result reads address the owning engine; local tool data is not uploaded by this path. Historical results that never retained payloads cannot be recovered through these new refs.
+
+The browser retains four result pages and virtualizes visible lines. It pages raw output and highlights complete small diff payloads; large diff JSON remains accessible as raw pages. Provider output limits remain authoritative: Claude/Codex text results are capped at 256 KiB with an explicit truncation marker; other providers keep their own adapter limits. This does not establish a complete filesystem diff for every provider.

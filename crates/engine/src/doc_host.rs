@@ -4854,12 +4854,100 @@ impl DocHost {
         Ok(())
     }
 
+    /// Save full results locally before publishing their compact transcript refs.
+    pub fn persist_tool_sidecar(
+        &self,
+        chat_id: &str,
+        entry_id: &str,
+        payload: &zuse_doc::SidecarPayload,
+    ) -> Result<(Option<String>, Option<String>), EngineError> {
+        let diff_json = payload
+            .diff
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| EngineError::Other(e.to_string()))?;
+        let mut digest = Sha256::new();
+        for value in [
+            entry_id,
+            payload.part_id.as_str(),
+            payload.output.as_deref().unwrap_or_default(),
+            diff_json.as_deref().unwrap_or_default(),
+        ] {
+            digest.update((value.len() as u64).to_le_bytes());
+            digest.update(value.as_bytes());
+        }
+        let base = format!("{chat_id}/{:x}", digest.finalize());
+        if !valid_tool_blob_ref(&base) {
+            return Err(EngineError::Other("Invalid chat tool reference".into()));
+        }
+        let output_ref = payload.output.as_ref().map(|_| base.clone());
+        let diff_ref = diff_json.as_ref().map(|_| format!("{base}.diff"));
+        let mut blobs = vec![];
+        if let Some(output) = &payload.output {
+            blobs.push((base, output.clone()));
+        }
+        if let Some(diff) = diff_json {
+            blobs.push((diff_ref.clone().unwrap(), diff));
+        }
+        self.inner
+            .store
+            .save_tool_blobs(chat_id, &blobs)
+            .map_err(|e| EngineError::Other(e.to_string()))?;
+        Ok((output_ref, diff_ref))
+    }
+
+    pub async fn fetch_tool_blob_page(
+        &self,
+        blob_ref: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<zuse_sync::ToolBlobPage, EngineError> {
+        if !valid_tool_blob_ref(blob_ref) || !(4..=64 * 1024).contains(&limit) {
+            return Err(EngineError::Other("Invalid tool output read".into()));
+        }
+        if let Some(page) = self
+            .inner
+            .store
+            .read_tool_blob(blob_ref, offset, limit)
+            .map_err(|e| EngineError::Other(e.to_string()))?
+        {
+            return Ok(page);
+        }
+        let text = self.fetch_tool_blob(blob_ref).await?;
+        if offset > text.len() || !text.is_char_boundary(offset) {
+            return Err(EngineError::Other("Invalid tool output cursor".into()));
+        }
+        let mut end = offset.saturating_add(limit).min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        Ok(zuse_sync::ToolBlobPage {
+            text: text[offset..end].to_owned(),
+            next_offset: end,
+            total_bytes: text.len(),
+            done: end == text.len(),
+        })
+    }
+
     /// Upload a tool result's full output/diff to the R2 sidecar
     /// (`PUT {edge}/blob/{chatId}/{partId}[.diff]`, docs/chat2-sync.md A2).
     /// Fire-and-forget: the doc already carries the summary, so a lost upload
     /// degrades to "full output unavailable" — it must never block or fail
     /// the run. Offline/edge-less engines skip silently.
     pub fn upload_tool_sidecar(&self, chat_id: &str, payload: zuse_doc::SidecarPayload) {
+        let mut local = vec![];
+        if let Some(output) = &payload.output {
+            local.push((format!("{chat_id}/{}", payload.part_id), output.clone()));
+        }
+        if let Some(diff) = &payload.diff {
+            if let Ok(text) = serde_json::to_string(diff) {
+                local.push((format!("{chat_id}/{}.diff", payload.part_id), text));
+            }
+        }
+        if let Err(error) = self.inner.store.save_tool_blobs(chat_id, &local) {
+            tracing::warn!(chat=%chat_id,error=%error,"Could not persist frozen tool data");
+        }
         let Some(edge) = self.inner.config.edge.clone() else {
             return;
         };
@@ -4915,21 +5003,16 @@ impl DocHost {
     /// `…​.diff`) — the UI's lazy "Show full output" path, served over RPC
     /// because the UI crate has no HTTP client or edge bearer.
     pub async fn fetch_tool_blob(&self, blob_ref: &str) -> Result<String, EngineError> {
-        // Same shape `apply_sidecar_refs` writes; anything else is a forged ref.
-        let valid = blob_ref.split_once('/').is_some_and(|(chat, part)| {
-            !chat.is_empty()
-                && chat.len() <= 128
-                && chat
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                && !part.is_empty()
-                && part.len() <= 200
-                && part
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"._:#~-".contains(&b))
-        });
-        if !valid {
-            return Err(EngineError::Other(format!("bad blob ref: {blob_ref}")));
+        if !valid_tool_blob_ref(blob_ref) {
+            return Err(EngineError::Other("Invalid tool output reference".into()));
+        }
+        if let Some(page) = self
+            .inner
+            .store
+            .read_tool_blob(blob_ref, 0, 32 * 1024 * 1024)
+            .map_err(|e| EngineError::Other(e.to_string()))?
+        {
+            return Ok(page.text);
         }
         let Some(edge) = self.inner.config.edge.clone() else {
             return Err(EngineError::Other("offline: no edge configured".into()));
@@ -6002,6 +6085,21 @@ pub fn respond_input_prompt(
     lines.join("\n")
 }
 
+fn valid_tool_blob_ref(blob_ref: &str) -> bool {
+    blob_ref.split_once('/').is_some_and(|(chat, part)| {
+        !chat.is_empty()
+            && chat.len() <= 128
+            && chat
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            && !part.is_empty()
+            && part.len() <= 200
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._:#~-".contains(&b))
+    })
+}
+
 /// Percent-encode one URL path segment of a sidecar part id. PART_RE's
 /// alphabet includes `#` and `:` — legal in R2 keys and doc refs, but a raw
 /// `#` in a URL is a fragment delimiter (the request would silently hit the
@@ -6713,3 +6811,96 @@ mod sync_lifecycle_tests;
 
 #[path = "doc_host_delivery.rs"]
 mod remote_delivery;
+
+#[cfg(test)]
+mod tool_result_tests {
+    use super::*;
+    fn host(root: &std::path::Path) -> DocHost {
+        DocHost::new(
+            Arc::new(DocsStore::open(root).unwrap()),
+            DocHostConfig {
+                device_id: "local-results".into(),
+                default_harness: HarnessId::Zuse,
+                edge: None,
+            },
+        )
+    }
+    #[tokio::test]
+    async fn local_results_survive_reopen_and_reused_call_ids_do_not_collide() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host(root.path());
+        let payload = zuse_doc::SidecarPayload {
+            part_id: "call#1".into(),
+            output: Some("🙂 local output\n".repeat(50)),
+            diff: Some(zuse_protocol::ToolDiff {
+                path: "app.rs".into(),
+                old_text: Some("old\n".into()),
+                new_text: "new\n".into(),
+            }),
+        };
+        let first = host
+            .persist_tool_sidecar("chat", "entry-a", &payload)
+            .unwrap();
+        let other = host
+            .persist_tool_sidecar("chat", "entry-b", &payload)
+            .unwrap();
+        assert_ne!(first.0, other.0);
+        let mut corrected = payload.clone();
+        corrected.output = Some("corrected".into());
+        assert_ne!(
+            host.persist_tool_sidecar("chat", "entry-a", &corrected)
+                .unwrap()
+                .0,
+            first.0
+        );
+        host.shutdown_workers().await;
+        drop(host);
+        let reopened = self::host(root.path());
+        let mut actual = String::new();
+        let mut offset = 0;
+        loop {
+            let page = reopened
+                .fetch_tool_blob_page(first.0.as_ref().unwrap(), offset, 31)
+                .await
+                .unwrap();
+            actual.push_str(&page.text);
+            offset = page.next_offset;
+            if page.done {
+                break;
+            }
+        }
+        assert_eq!(actual, payload.output.unwrap());
+        let diff = reopened
+            .fetch_tool_blob(first.1.as_ref().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<zuse_protocol::ToolDiff>(&diff)
+                .unwrap()
+                .new_text,
+            "new\n"
+        );
+        assert!(
+            reopened
+                .fetch_tool_blob_page("../escape", 0, 32)
+                .await
+                .is_err()
+        );
+        assert!(
+            reopened
+                .fetch_tool_blob_page(first.0.as_ref().unwrap(), 1, 32)
+                .await
+                .is_err()
+        );
+        let foreign = tempfile::tempdir().unwrap();
+        let other = self::host(foreign.path());
+        assert!(
+            other
+                .fetch_tool_blob(first.0.as_ref().unwrap())
+                .await
+                .is_err()
+        );
+        reopened.shutdown_workers().await;
+        other.shutdown_workers().await;
+    }
+}

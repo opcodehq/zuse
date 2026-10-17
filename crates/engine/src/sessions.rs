@@ -2161,6 +2161,55 @@ fn subagent_chip_update(event: &AgentEvent) -> Option<&'static str> {
     }
 }
 
+fn persist_tool_result(
+    host: Option<DocHost>,
+    chat_id: &str,
+    entry_id: &str,
+    parts: &mut [MessagePart],
+    event: &AgentEvent,
+) {
+    let (Some(host), Some(payload)) = (host, zuse_doc::sidecar_payload(event)) else {
+        return;
+    };
+    for part in parts.iter_mut() {
+        if let MessagePart::Tool {
+            id,
+            output_ref,
+            diff_ref,
+            output_bytes,
+            ..
+        } = part
+        {
+            if *id == payload.part_id {
+                *output_ref = None;
+                *diff_ref = None;
+                *output_bytes = payload.output.as_ref().map(|text| text.len() as u64);
+            }
+        }
+    }
+    match host.persist_tool_sidecar(chat_id, entry_id, &payload) {
+        Ok((output, diff)) => {
+            for part in parts {
+                if let MessagePart::Tool {
+                    id,
+                    output_ref,
+                    diff_ref,
+                    ..
+                } = part
+                {
+                    if *id == payload.part_id {
+                        *output_ref = output.clone();
+                        *diff_ref = diff.clone();
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            tracing::warn!(chat=%chat_id,error=%error,"Could not persist full tool result")
+        }
+    }
+}
+
 /// Apply the render-parts privacy policy: strip heavy/sensitive tool inputs before doc
 /// entry. Full inputs live only in the local run journal.
 fn render_parts(parts: &[MessagePart]) -> Vec<MessagePart> {
@@ -3025,6 +3074,13 @@ async fn drive_run(
                 }
                 let was_clean = !sink.dirty;
                 zuse_doc::fold_event_into_parts(&mut sink.folded, sub_event);
+                persist_tool_result(
+                    inner.doc_host(),
+                    &chat_id,
+                    &sink.entry_id,
+                    &mut sink.folded,
+                    sub_event,
+                );
                 sink.dirty = true;
                 // A sink waking on its own must arm the same commit window
                 // the parent's dirty flag does — `flush_at` is otherwise only
@@ -3370,12 +3426,7 @@ async fn drive_run(
         let skip_fold = matches!(&event, AgentEvent::SessionStarted { .. }) && !folded.is_empty();
         if !skip_fold {
             fold_event_into_parts(&mut folded, &event);
-            // R2 sidecar PARKED (2026-08-10, product call): the fold's
-            // summary/stats ARE the doc's whole record — no refs stamped, no
-            // uploads. Full outputs survive only in the host's local run
-            // journal. To reintroduce: `zuse_doc::sidecar_payload(&event)`
-            // → `apply_sidecar_refs` → `doc_host.upload_tool_sidecar`, all
-            // still in place and tested.
+            persist_tool_result(inner.doc_host(), &chat_id, &entry_id, &mut folded, &event);
         }
 
         if let AgentEvent::Done { status, .. } = &event {

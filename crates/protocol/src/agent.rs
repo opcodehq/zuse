@@ -629,7 +629,7 @@ pub enum AgentEvent {
         id: String,
         is_error: bool,
         /// Tool output text, capped by the emitting harness (ACP tool-call
-        /// content; claude/codex adapters never populate it). The doc-side
+        /// content or native provider results). The doc-side
         /// fold applies its own byte cap before anything persists.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,

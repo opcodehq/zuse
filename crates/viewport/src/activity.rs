@@ -218,6 +218,18 @@ impl WorkspaceView {
                         ),
                 );
             }
+            if resolved && part["outputBytes"].as_u64().is_some() && !part["outputRef"].is_string()
+            {
+                body = body.child(
+                    label("Detailed output is unavailable for this result.").text_size(px(10.)),
+                );
+            }
+            if let Some(reference) = part["outputRef"].as_str() {
+                body = body.child(self.tool_result_control(reference, "Full output", cx));
+            }
+            if let Some(reference) = part["diffRef"].as_str() {
+                body = body.child(self.tool_result_control(reference, "File diff", cx));
+            }
             view = view.child(body);
         }
         view.into_any_element()

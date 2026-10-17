@@ -574,6 +574,10 @@ fn decode_visual_assets(
 struct FetchToolBlobParams {
     /// Doc-resident sidecar ref (`{chatId}/{partId}` or `…​.diff`).
     blob_ref: String,
+    #[serde(default)]
+    offset: Option<usize>,
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 /// The Mutate surface (feature-inventory §2 DataRpc), tagged by `op`.
@@ -1612,6 +1616,7 @@ fn forwardable(method: &str) -> bool {
             | methods::UPLOAD_CHUNK
             | methods::UPLOAD_COMMIT
             | methods::READ_ATTACHMENT_CHUNK
+            | methods::FETCH_TOOL_BLOB
             // Updates report/apply on the device whose binary they concern.
             | methods::UPDATE_STATUS
             | methods::APPLY_UPDATE
@@ -4016,6 +4021,16 @@ impl RpcService for EngineRpc {
             }
             methods::FETCH_TOOL_BLOB => {
                 let p: FetchToolBlobParams = parse_params(params)?;
+                if let Some(offset) = p.offset {
+                    let page = self
+                        .doc_host
+                        .fetch_tool_blob_page(&p.blob_ref, offset, p.limit.unwrap_or(64 * 1024))
+                        .await
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    return RpcReply::value(
+                        &serde_json::json!({"text":page.text,"nextOffset":page.next_offset,"totalBytes":page.total_bytes,"done":page.done}),
+                    );
+                }
                 let text = self
                     .doc_host
                     .fetch_tool_blob(&p.blob_ref)

@@ -8,6 +8,7 @@ mod previews;
 mod questions;
 mod recovery;
 mod shell;
+mod tool_results;
 mod workspace;
 
 use futures::{
@@ -48,6 +49,8 @@ pub struct WorkspaceView {
     preview_pending: HashMap<u64, String>,
     preview_generation: u64,
     preview_open: Option<String>,
+    tool_results: HashMap<String, tool_results::ToolResultView>,
+    tool_result_requests: HashMap<u64, (String, usize)>,
     transcript_scroll: ScrollHandle,
     input_answers: HashMap<String, zuse_protocol::input_answers::InputAnswers>,
     input_pending: HashMap<u64, String>,
@@ -179,6 +182,8 @@ impl WorkspaceView {
             preview_pending: HashMap::new(),
             preview_generation: 0,
             preview_open: None,
+            tool_results: HashMap::new(),
+            tool_result_requests: HashMap::new(),
             transcript_scroll: ScrollHandle::new(),
             input_answers: HashMap::new(),
             input_pending: HashMap::new(),
@@ -317,6 +322,9 @@ impl WorkspaceView {
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if method.is_empty() {
+            return;
+        }
+        if self.receive_tool_result(id, &frame, cx) {
             return;
         }
         if self.receive_preview(id, &frame, cx) {
@@ -560,6 +568,7 @@ impl WorkspaceView {
         self.transcript_scroll.scroll_to_bottom();
         self.reset_recovery(cx);
         self.reset_inputs(cx);
+        self.reset_tool_results();
         self.reset_previews(cx);
         self.selected = Some(chat);
         self.restore_draft(cx);
@@ -593,6 +602,7 @@ impl WorkspaceView {
         self.clear_workspace();
         self.reset_recovery(cx);
         self.reset_inputs(cx);
+        self.reset_tool_results();
         self.reset_previews(cx);
         self.selected = None;
         self.messages.clear();

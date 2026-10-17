@@ -26,6 +26,7 @@ impl Server {
             .env("PATH", path)
             .env("CLAUDE_CODE_EXECUTABLE", bin.join("claude"))
             .env("ZUSE_STARTUP_CAPTURE", capture)
+            .env("ZUSE_STARTUP_TOOL_FRAME", bin.join("tool-result.json"))
             .env(
                 "ZUSE_BROWSER_TOKEN",
                 "local-startup-fixture-token-with-32-characters",
@@ -87,6 +88,8 @@ async fn browser_servers_inject_their_own_ephemeral_rpc_endpoint_and_drain_on_si
     let root = tempfile::tempdir().unwrap();
     let bin = root.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
+    let full_output = "🙂 persisted tool output\n".repeat(6000);
+    std::fs::write(bin.join("tool-result.json"),serde_json::to_vec(&json!({"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"fixture-tool","content":full_output}]}})).unwrap()).unwrap();
     let executable = bin.join("claude");
     std::fs::write(&executable,r##"#!/bin/sh
 case "$*" in *--version*) echo '2.1.0'; exit 0;; esac
@@ -99,6 +102,9 @@ for argument in "$@"; do
 done
 IFS= read -r prompt
 printf '%s\n' '{"type":"system","subtype":"init","session_id":"startup-fixture","model":"fixture","tools":[]}'
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"fixture-tool","name":"Bash","input":{"command":"printf fixture"}}]}}'
+cat "$ZUSE_STARTUP_TOOL_FRAME"
+printf '\n'
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"startup fixture completed"}]}}'
 printf '%s\n' '{"type":"result","subtype":"success","session_id":"startup-fixture","is_error":false,"result":"startup fixture completed"}'
 "##).unwrap();
@@ -129,6 +135,13 @@ printf '%s\n' '{"type":"result","subtype":"success","session_id":"startup-fixtur
         files.is_ok(),
         "relative profiles must resolve scratch workspaces: {files:?}"
     );
+    let mut messages = client
+        .subscribe_scoped(
+            methods::WATCH_DOC_MESSAGES,
+            json!({"chatId":"startup-chat"}),
+        )
+        .await
+        .unwrap();
     client.call(methods::QUEUE_COMMAND,json!({"chatId":"startup-chat","command":{"kind":"run","messageId":"first","request":{"prompt":"Startup boundary fixture","harness":"claude-code","model":null,"reasoning":null,"cwd":root.path(),"sandbox":"workspace-write","autoApprove":true,"resume":null,"attachments":[]}}})).await.unwrap();
     let config = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -157,6 +170,77 @@ printf '%s\n' '{"type":"result","subtype":"success","session_id":"startup-fixtur
         routed.call(methods::ENGINE_INFO, json!({})).await.unwrap()["deviceId"],
         info["deviceId"]
     );
+    fn find_ref(value: &Value) -> Option<String> {
+        if value["kind"] == "tool" {
+            if let Some(reference) = value["outputRef"].as_str() {
+                return Some(reference.into());
+            }
+        }
+        match value {
+            Value::Object(map) => map.values().find_map(find_ref),
+            Value::Array(items) => items.iter().find_map(find_ref),
+            _ => None,
+        }
+    }
+    let reference = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let frame = messages
+                .recv()
+                .await
+                .expect("transcript ended before tool output");
+            if let Some(reference) = find_ref(&frame) {
+                break reference;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    drop(messages);
+    let first_page = client
+        .call(
+            methods::FETCH_TOOL_BLOB,
+            json!({"blobRef":reference,"offset":0,"limit":65536}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_page["done"], false);
+    assert!(first_page["text"].as_str().unwrap().len() <= 65536);
+    assert!(
+        other
+            .call(methods::FETCH_TOOL_BLOB, json!({"blobRef":reference}))
+            .await
+            .is_err(),
+        "tool results must stay profile-local"
+    );
     first.stop().await;
     second.stop().await;
+    let mut reopened = Server::start(&root.path().join("one"), &bin, &capture).await;
+    let client = reopened.client().await;
+    let mut text = String::new();
+    let mut offset = 0;
+    loop {
+        let page = client
+            .call(
+                methods::FETCH_TOOL_BLOB,
+                json!({"blobRef":reference,"offset":offset,"limit":65536}),
+            )
+            .await
+            .unwrap();
+        text.push_str(page["text"].as_str().unwrap());
+        offset = page["nextOffset"].as_u64().unwrap();
+        if page["done"] == true {
+            break;
+        }
+    }
+    assert_eq!(text, full_output);
+    assert!(
+        client
+            .call(
+                methods::FETCH_TOOL_BLOB,
+                json!({"blobRef":reference,"offset":1})
+            )
+            .await
+            .is_err()
+    );
+    reopened.stop().await;
 }

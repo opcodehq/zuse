@@ -5312,13 +5312,23 @@ impl Transcript {
             return;
         };
         let is_diff = blob_ref.ends_with(".diff");
+        let source = blob_ref.split_once('/').map(|(chat, _)| chat);
+        let target = {
+            let state = self.state.read(cx);
+            state
+                .chats
+                .iter()
+                .find(|chat| Some(chat.id.as_str()) == source)
+                .or_else(|| state.selected_chat_row())
+                .map(|chat| chat.device_id.clone())
+        };
         let ref_key = blob_ref.clone();
         let task = cx.spawn(async move |this, cx| {
             let reply = crate::attachments::call_with_timeout(
                 &engine,
                 cx.background_executor(),
                 zuse_rpc::methods::FETCH_TOOL_BLOB,
-                serde_json::json!({ "blobRef": ref_key.as_ref() }),
+                serde_json::json!({ "blobRef": ref_key.as_ref(), "targetDeviceId": target }),
                 Duration::from_secs(20),
             )
             .await;

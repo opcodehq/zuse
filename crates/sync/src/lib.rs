@@ -30,3 +30,5 @@ pub use registry::{
 };
 pub use store::{DocsStore, StoreError};
 pub use types::{RoomStatsSnapshot, StaticUrl, SyncError, UrlProvider};
+
+pub use store::ToolBlobPage;
