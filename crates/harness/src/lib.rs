@@ -4,6 +4,7 @@ pub mod bridge;
 pub mod broker;
 mod engine;
 pub mod native;
+pub mod processes;
 pub mod prompt;
 pub mod state;
 pub mod store;

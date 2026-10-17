@@ -30,6 +30,7 @@ pub(crate) mod home_index;
 mod http_error;
 pub mod instance_lock;
 pub mod local_import;
+pub use zuse_harness::processes::supervisor as command_host;
 mod model_catalogs;
 pub mod model_connections;
 mod plugin_callback;

@@ -144,6 +144,10 @@ fn spawn_malloc_trimmer() {
 }
 
 fn main() -> anyhow::Result<()> {
+    if zuse_engine::command_host::requested() {
+        zuse_engine::command_host::run_blocking()?;
+        return Ok(());
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--noop-browser")) {
         return Ok(());
     }

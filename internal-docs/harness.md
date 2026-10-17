@@ -6,7 +6,7 @@
 
 `Engine` owns a durable graph of one root and nested children, bounded to three running children and depth two. Rust schedules concurrent child requests, records mailboxes and idempotent delivery identifiers, enforces inherited read-only and plan modes, and delivers child outcomes before root synthesis. The model request budget is shared across the graph and includes compaction and broker retries. User continuation explicitly grants another turn's budget.
 
-`Host` supplies model transport, native tools, checkpoint storage, instructions and application events. Native adapters use `Engine::open_native`, which acquires a per-root OS lease before reading its private journal and retains it until host cleanup succeeds. Root IDs map to hashed profile directories, and journal identities must match their owner. `Engine::open` remains available for fixtures and custom hosts that supply their own ownership authority. Tool definitions and permission decisions belong to the trusted host; model input cannot grant permission or call recovery APIs. `FileStore` writes private checkpoints using temporary files, fsync and atomic replacement. Invalid graphs and damaged journals are preserved for inspection.
+`Host` supplies model transport, native tools, checkpoint storage, instructions and application events. Native adapters use `Engine::open_native_with`, which acquires a per-root OS lease before reading its private journal and retains it until host cleanup succeeds. Root IDs map to hashed profile directories, and journal identities must match their owner. `Engine::open` remains available for fixtures and custom hosts that supply their own ownership authority. Tool definitions and permission decisions belong to the trusted host; model input cannot grant permission or call recovery APIs. `FileStore` writes private checkpoints using temporary files, fsync and atomic replacement. Invalid graphs and damaged journals are preserved for inspection.
 
 A tool's signed input identity and `started` receipt are persisted before execution. Its completed output is persisted before the tool-result message enters model history. Recovery reuses committed outputs; a started receipt with no outcome pauses execution. A trusted user control surface can call `resolve_unknown` with an inspected outcome or explicit retry approval. Approval is saved before continuation and rolled back in memory if storage fails. Approval itself never launches work. This API still needs the application's authenticated recovery controls.
 
@@ -33,3 +33,36 @@ bun run build
 Rust scenarios cover unknown-outcome recovery, explicit inspected retry, failed approval persistence, committed-output replay prevention, concurrent child execution and final synthesis, read-only enforcement, steering deduplication, shared budgets, compaction, checkpoint corruption, account fallback and affinity, and a real bundled Node process with concurrent mocked streams and cancellation. The SDK protocol fixtures cover text, tool calls, usage, request validation and incomplete streams. These are component and protocol fixtures; no live paid-model request or complete application harness session is claimed.
 
 Native ownership fixtures exercise same-process and child-process exclusion, independent roots, stale PID stamps, preserved damaged journals, root identity validation, and release only after host cleanup. Application provider registration and live native session acceptance remain pending.
+
+## Native commands
+
+`processes::Processes` supplies owned background commands, stdin, bounded output
+pages, readiness notices, and a durable completion outbox. Both desktop and server
+entrypoints run `--zuse-command-host` before application initialization; the helper
+uses a current-thread Rust runtime. Its specification and stdin travel over private
+pipes rather than supervisor arguments. Commands run in a fresh process group.
+An independent watchdog kills that group if its engine lease stops advancing,
+even when output backpressure stalls async tasks. Closing the control pipe also
+stops the group. These process groups are lifecycle ownership, not an OS sandbox.
+
+`Engine::open_native_with` takes root ownership before its factory initializes
+native tools or recovers process records. Each command supervisor also holds a
+physical OS lease before the engine acknowledges launch. Recovery waits for that
+lease to be released before marking a recorded running command interrupted; it
+never signals a PID recovered from stale metadata and never reruns the command.
+Runtime close fences new admissions and waits for admitted workers and metadata
+writes before releasing root ownership.
+
+Output is streamed into private files, capped at 64 MiB per command by default.
+Memory holds bounded pipe frames and record metadata rather than entire outputs.
+The default limits are eight running commands and 128 retained records. An
+undelivered notification backlog blocks new admission rather than silently evicting
+pending notices. Consumers must accept stable notice IDs durably and idempotently;
+failed delivery remains in the outbox for retry. Root agents can inspect child
+processes, while siblings cannot access each other's process IDs.
+
+Eight process scenarios cover stdin ordering, UTF-8 cursors, ownership isolation,
+limits/deadlines, descendant cleanup, output backpressure, launch acknowledgement, control EOF, recovery
+lease ordering, shutdown races, and notification restart without command replay.
+Native tool dispatch, application provider registration, and live conversation
+acceptance remain pending.

@@ -139,6 +139,31 @@ impl Engine {
     ) -> Result<Self, Error> {
         let root_id = root_id.into();
         let store = RootStore::acquire(profile, &root_id)?;
+        Self::open_with_store(root_id, options, host, store).await
+    }
+    /// Construct native tools only after ownership is held. The factory receives
+    /// the private root directory for artifacts; it must not start model work.
+    pub async fn open_native_with<F, Fut>(
+        profile: &Path,
+        root_id: impl Into<String>,
+        options: Options,
+        create: F,
+    ) -> Result<Self, Error>
+    where
+        F: FnOnce(PathBuf) -> Fut,
+        Fut: std::future::Future<Output = Result<Arc<dyn Host>, Error>>,
+    {
+        let root_id = root_id.into();
+        let store = RootStore::acquire(profile, &root_id)?;
+        let host = create(store.directory().to_path_buf()).await?;
+        Self::open_with_store(root_id, options, host, store).await
+    }
+    async fn open_with_store(
+        root_id: String,
+        options: Options,
+        host: Arc<dyn Host>,
+        store: RootStore,
+    ) -> Result<Self, Error> {
         let host = Arc::new(NativeHost {
             inner: host,
             store: Mutex::new(Some(store)),
@@ -241,11 +266,20 @@ mod tests {
             started: tokio::sync::Notify::new(),
             finish: tokio::sync::Notify::new(),
         });
-        let engine = Engine::open_native(
+        let factory_host = host.clone();
+        let profile = directory.path().to_path_buf();
+        let engine = Engine::open_native_with(
             directory.path(),
             "root",
             Options::new("chatgpt/fixture"),
-            host.clone(),
+            move |artifacts| async move {
+                assert!(artifacts.starts_with(profile.join("harness")));
+                assert!(matches!(
+                    RootStore::acquire(&profile, "root"),
+                    Err(Error::Paused(_))
+                ));
+                Ok(factory_host as Arc<dyn Host>)
+            },
         )
         .await
         .unwrap();

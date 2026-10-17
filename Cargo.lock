@@ -13740,6 +13740,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "zip",
  "zuse-doc",
+ "zuse-harness",
  "zuse-mcp",
  "zuse-model-accounts",
  "zuse-plugins",
@@ -13757,7 +13758,9 @@ name = "zuse-harness"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "futures",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
