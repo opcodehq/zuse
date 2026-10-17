@@ -4353,7 +4353,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_routing_compares_what_the_cli_launches_with() {
+    fn claude_routing_preserves_access_posture_and_launch_options() {
         let claude = || -> Arc<dyn Harness> { Arc::new(zuse_providers::ClaudeHarness::new()) };
         let mut initial = request();
         initial.model = Some("claude-opus-5-5".into());
@@ -4362,13 +4362,18 @@ mod tests {
             .insert("fastMode".into(), serde_json::json!(false));
         let config = RuntimeConfig::new(HarnessId::ClaudeCode, &initial, claude());
 
-        // The CLI never reads the sandbox level; an option that launches no
-        // flag in either spelling is the same runtime.
+        // Equivalent option spellings can reuse the runtime while the
+        // access posture remains unchanged.
         let mut follow_up = initial.clone();
-        follow_up.sandbox = SandboxLevel::DangerFullAccess;
         follow_up.model_options.clear();
         follow_up.worktree = None;
         assert!(config.can_route(HarnessId::ClaudeCode, &follow_up));
+        follow_up.sandbox = SandboxLevel::DangerFullAccess;
+        assert!(!config.can_route(HarnessId::ClaudeCode, &follow_up));
+        follow_up.sandbox = initial.sandbox;
+        follow_up.auto_approve = !initial.auto_approve;
+        assert!(!config.can_route(HarnessId::ClaudeCode, &follow_up));
+        follow_up.auto_approve = initial.auto_approve;
 
         follow_up
             .model_options

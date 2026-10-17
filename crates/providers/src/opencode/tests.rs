@@ -17,6 +17,7 @@ struct TurnWire {
     interrupt: tokio_util::sync::CancellationToken,
     steering: Option<mpsc::Sender<crate::SteerMessage>>,
     polls: Arc<std::sync::atomic::AtomicUsize>,
+    input_count: Arc<std::sync::atomic::AtomicUsize>,
     command_failure_release: Option<tokio::sync::oneshot::Sender<()>>,
     server: tokio::task::JoinHandle<()>,
     run: tokio::task::JoinHandle<()>,
@@ -97,6 +98,21 @@ impl TurnWire {
         native_command_reply: Option<NativeCommandReply>,
     ) -> Self {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut overrides = overrides;
+        let dropped_input = overrides
+            .as_object_mut()
+            .unwrap()
+            .remove("fixtureDroppedInput")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let reject_permissions = overrides
+            .as_object_mut()
+            .unwrap()
+            .remove("fixtureRejectPermissions")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let input_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count_inputs = input_count.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let (bus, bus_rx) = mpsc::unbounded_channel::<Value>();
@@ -132,6 +148,7 @@ impl TurnWire {
                     };
                     let header = String::from_utf8_lossy(&request[..header_end]);
                     let is_post = header.starts_with("POST ");
+                    let is_patch = header.starts_with("PATCH ");
                     let path = header.lines().next().unwrap().split_whitespace().nth(1).unwrap().to_owned();
                     let length = header.lines().find_map(|line| {
                         let (name, value) = line.split_once(':')?;
@@ -142,7 +159,12 @@ impl TurnWire {
                         if n == 0 { return; }
                         request.extend_from_slice(&buf[..n]);
                     }
-                    if is_post { recorded.lock().unwrap().push((path.clone(), serde_json::from_slice(&request[header_end..header_end+length]).unwrap_or(Value::Null))); }
+                    if is_post || is_patch { recorded.lock().unwrap().push((path.clone(), serde_json::from_slice(&request[header_end..header_end+length]).unwrap_or(Value::Null))); }
+                    if reject_permissions && is_patch {
+                        let body = "permission update refused";
+                        socket.write_all(format!("HTTP/1.1 409 Conflict\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                        return;
+                    }
                     if path == "/global/event" || path == "/api/event" {
                         socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n: connected\n\n").await.unwrap();
                         let mut events = bus_rx.lock().await.take().unwrap();
@@ -248,7 +270,7 @@ impl TurnWire {
             .unwrap_or(false)
             .then_some(steer_tx);
         let interrupt = tokio_util::sync::CancellationToken::new();
-        let mut request = json!({"prompt": if native_command_reply.is_some() { "/project-review" } else { "first" }, "cwd":"", "sandbox":"workspace-write", "autoApprove": auto_approve, "model": if v2 { Some("opencode/muse") } else { None }, "reasoning": "low"});
+        let mut request = json!({"prompt": if native_command_reply.is_some() { "/project-review" } else { "first" }, "cwd":"", "sandbox":"danger-full-access", "autoApprove": auto_approve, "model": if v2 { Some("opencode/muse") } else { None }, "reasoning": "low"});
         request
             .as_object_mut()
             .unwrap()
@@ -260,8 +282,12 @@ impl TurnWire {
                 realtime: None,
                 execution_lease: None,
                 request_input: Box::new(move |questions| {
-                    let answer = answer.expect("fixture must not ask for input");
+                    count_inputs.fetch_add(questions.len(), std::sync::atomic::Ordering::SeqCst);
                     let (tx, rx) = tokio::sync::oneshot::channel();
+                    if dropped_input {
+                        return rx;
+                    }
+                    let answer = answer.expect("fixture must not ask for input");
                     let _ = tx.send(
                         questions
                             .into_iter()
@@ -300,6 +326,7 @@ impl TurnWire {
             interrupt,
             steering: retained_steering,
             polls,
+            input_count,
             command_failure_release: matches!(
                 native_command_reply,
                 Some(NativeCommandReply::DelayedHttp404)
@@ -1742,7 +1769,7 @@ fn prompt_body_v2_carries_text_and_files_only() {
 #[tokio::test]
 async fn permissions_stay_session_scoped_and_never_persist_grants() {
     for v2 in [false, true] {
-        let mut wire = TurnWire::start_policy(false, v2, false, None).await;
+        let mut wire = TurnWire::start_policy(false, v2, true, None).await;
         if v2 {
             wire.request("/api/model").await;
         }
@@ -1807,25 +1834,23 @@ async fn permissions_stay_session_scoped_and_never_persist_grants() {
 }
 
 #[tokio::test]
-async fn permissions_always_approve_without_user_input() {
+async fn full_access_permissions_approve_once_without_user_input() {
     for version in ["2.0.0", "2.0.3", "2.0.4", "2.0.11"] {
-        for auto_approve in [false, true] {
-            // No input callback is available: any permission prompt fails the fixture.
-            let mut wire =
-                TurnWire::start_config(false, true, auto_approve, None, version, json!({}), false)
-                    .await;
-            wire.request("/api/model").await;
-            wire.request("/prompt").await;
-            let key = if version == "2.0.0" || version == "2.0.3" {
-                "reply"
-            } else {
-                "decision"
-            };
-            for id in ["first", "second", "third"] {
-                wire.v2("permission.asked", json!({"id":id, "sessionID":"fixture"}));
-                let body = wire.posted(&format!("/permission/{id}/reply")).await;
-                assert_eq!(body, json!({key: "once"}));
-            }
+        let mut wire =
+            TurnWire::start_config(false, true, true, None, version, json!({}), false).await;
+        wire.request("/api/model").await;
+        wire.request("/prompt").await;
+        let key = if version == "2.0.0" || version == "2.0.3" {
+            "reply"
+        } else {
+            "decision"
+        };
+        for id in ["first", "second", "third"] {
+            wire.v2("permission.asked", json!({"id":id,"sessionID":"fixture"}));
+            assert_eq!(
+                wire.posted(&format!("/permission/{id}/reply")).await,
+                json!({key:"once"})
+            );
         }
     }
 }
@@ -2301,8 +2326,10 @@ async fn agent_selection_on_create_and_resume() {
                     expected
                 );
                 if resume && v2 && agent == "build-id" {
+                    assert_eq!(posts[0].0, "/api/session/fixture");
+                    assert!(posts[0].1["permissions"].is_array());
                     assert_eq!(
-                        posts[0],
+                        posts[1],
                         (
                             "/api/session/fixture/agent".into(),
                             json!({"agent":"build-id"})
@@ -2660,4 +2687,149 @@ fn native_skill_catalog_rejects_unrepresentable_commands() {
         };
         assert_eq!(invocation_links(&invocation.link())[0].1, invocation);
     }
+}
+
+#[tokio::test]
+async fn access_choices_apply_session_rules_and_route_permission_replies() {
+    for (v2, version) in [
+        (false, "1.18.31"),
+        (true, "2.0.0"),
+        (true, "2.0.3"),
+        (true, "2.0.4"),
+        (true, "2.0.11"),
+    ] {
+        for (sandbox, auto, answer, expected, count) in [
+            ("workspace-write", true, Some(true), "once", 1),
+            ("workspace-write", false, Some(false), "reject", 1),
+            ("danger-full-access", true, None, "once", 0),
+            ("danger-full-access", false, Some(false), "reject", 1),
+            ("read-only", true, None, "reject", 0),
+        ] {
+            let mut wire = TurnWire::start_config(
+                false,
+                v2,
+                auto,
+                answer,
+                version,
+                json!({"sandbox":sandbox}),
+                false,
+            )
+            .await;
+            if v2 {
+                wire.request("/api/model").await;
+            }
+            wire.request(if v2 { "/prompt" } else { "/prompt_async" })
+                .await;
+            let create = wire
+                .posted(if v2 { "/api/session" } else { "/session" })
+                .await;
+            let field = if v2 { "permissions" } else { "permission" };
+            let (action, resource, effect) = if v2 {
+                ("action", "resource", "effect")
+            } else {
+                ("permission", "pattern", "action")
+            };
+            let rules = create[field].as_array().expect("session-scoped rule array");
+            assert!(rules.iter().any(|rule| rule[action] == "*"
+                && rule[resource] == "*"
+                && rule[effect]
+                    == if sandbox == "read-only" {
+                        "deny"
+                    } else {
+                        "ask"
+                    }));
+            assert!(
+                rules
+                    .iter()
+                    .any(|rule| rule[action] == "read" && rule[effect] == "allow")
+            );
+            let properties = json!({"id":"access-check","sessionID":"fixture","action":"edit","resources":["/tmp/access.txt"]});
+            if v2 {
+                wire.v2("permission.asked", properties);
+            } else {
+                wire.bus
+                    .send(json!({"type":"permission.asked","properties":properties}))
+                    .unwrap();
+            }
+            let reply = wire.posted("/permission/access-check/reply").await;
+            let key = if v2 && !matches!(version, "2.0.0" | "2.0.3") {
+                "decision"
+            } else {
+                "reply"
+            };
+            assert_eq!(reply, json!({key:expected}), "{version}/{sandbox}/{auto}");
+            assert_eq!(
+                wire.input_count.load(std::sync::atomic::Ordering::SeqCst),
+                count
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn access_denies_a_dropped_resolver_and_a_failed_resume_policy_update() {
+    for v2 in [false, true] {
+        let mut wire = TurnWire::start_config(
+            false,
+            v2,
+            false,
+            None,
+            "2.0.11",
+            json!({"sandbox":"workspace-write","fixtureDroppedInput":true}),
+            false,
+        )
+        .await;
+        if v2 {
+            wire.request("/api/model").await;
+        }
+        wire.request(if v2 { "/prompt" } else { "/prompt_async" })
+            .await;
+        let properties = json!({"id":"dropped","sessionID":"fixture","action":"edit"});
+        if v2 {
+            wire.v2("permission.asked", properties);
+        } else {
+            wire.bus
+                .send(json!({"type":"permission.asked","properties":properties}))
+                .unwrap();
+        }
+        let body = wire.posted("/permission/dropped/reply").await;
+        assert_eq!(body, json!({if v2 {"decision"} else {"reply"}:"reject"}));
+        drop(wire);
+        let mut wire = TurnWire::start_config(
+            false,
+            v2,
+            false,
+            None,
+            "2.0.11",
+            json!({"resume":"fixture","sandbox":"read-only","fixtureRejectPermissions":true}),
+            false,
+        )
+        .await;
+        assert_eq!(wire.done().await.0, DoneStatus::Errored);
+        assert!(
+            !wire
+                .posts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(path, _)| path.ends_with("/prompt") || path.ends_with("/prompt_async"))
+        );
+        assert_eq!(
+            wire.input_count.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+}
+
+#[test]
+fn access_readonly_planning_and_runtime_identity_keep_the_same_policy() {
+    let mut request: RunRequest = serde_json::from_value(json!({"prompt":"","cwd":"/tmp","sandbox":"danger-full-access","autoApprove":true,"modelOptions":{"agent":"plan"}})).unwrap();
+    assert!(read_only_access(&request));
+    assert_eq!(
+        session_access_rules(&request, Protocol::V2)[0]["effect"],
+        "deny"
+    );
+    let before = request.clone();
+    request.model_options.insert("agent".into(), json!("build"));
+    assert!(!OpencodeHarness::new().reconfigures_in_place(&before, &request));
 }

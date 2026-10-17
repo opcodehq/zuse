@@ -67,8 +67,8 @@ use tokio::sync::mpsc;
 
 use zuse_protocol::{
     AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice, ReasoningLevel,
-    RunRequest, SlashCommand, SteeringMode, TodoItem, TodoStatus, ToolCall, UserInputAnswer,
-    UserInputQuestion,
+    RunRequest, SandboxLevel, SlashCommand, SteeringMode, TodoItem, TodoStatus, ToolCall,
+    UserInputAnswer, UserInputQuestion,
 };
 
 use crate::process::{Child, Command, Stdio};
@@ -390,6 +390,7 @@ impl Harness for OpencodeHarness {
         live.cwd == next.cwd
             && live.sandbox == next.sandbox
             && live.auto_approve == next.auto_approve
+            && live.model_options == next.model_options
             && (next.model.is_some() || live.model.is_none())
             && (next.reasoning.is_some() || live.reasoning.is_none())
     }
@@ -817,6 +818,36 @@ impl Server {
         if !status.is_success() {
             return Err(HarnessError::Protocol(post_error_message(
                 path, status, &text,
+            )));
+        }
+        Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    async fn patch_json(
+        &self,
+        path: &str,
+        directory: Option<&str>,
+        body: &Value,
+    ) -> Result<Value, HarnessError> {
+        let response = self
+            .scoped(
+                self.request(reqwest::Method::PATCH, path)
+                    .timeout(CALL_TIMEOUT)
+                    .json(body),
+                directory,
+            )
+            .await
+            .send()
+            .await
+            .map_err(|error| {
+                HarnessError::Protocol(format!("Session permission update failed: {error}"))
+            })?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(HarnessError::Protocol(format!(
+                "The agent server could not apply the selected permissions ({status}): {}",
+                truncate_body(&text)
             )));
         }
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
@@ -1534,7 +1565,25 @@ async fn run_session(session: Session) {
                             .and_then(Value::as_str)
                             .unwrap_or(resume)
                             .to_owned();
-                        if server.protocol().await == Protocol::V2
+                        let protocol = server.protocol().await;
+                        let rules = session_access_rules(&request, protocol);
+                        let field = if protocol == Protocol::V2 {
+                            "permissions"
+                        } else {
+                            "permission"
+                        };
+                        let already_applied = info[field]
+                            .as_array()
+                            .is_some_and(|saved| saved.ends_with(rules.as_array().unwrap()));
+                        if !already_applied {
+                            let path = if protocol == Protocol::V2 {
+                                format!("/api/session/{id}")
+                            } else {
+                                format!("/session/{id}")
+                            };
+                            server.patch_json(&path, dir, &json!({field:rules})).await?;
+                        }
+                        if protocol == Protocol::V2
                             && let Some(agent) = agent
                         {
                             server
@@ -1552,11 +1601,11 @@ async fn run_session(session: Session) {
                             target: "zuse_providers::opencode",
                             "session resume failed (starting fresh): {e}"
                         );
-                        create_session(&server, dir, agent).await?
+                        create_session(&server, dir, agent, &request).await?
                     }
                 }
             }
-            None => create_session(&server, dir, agent).await?,
+            None => create_session(&server, dir, agent, &request).await?,
         };
 
         // Provider catalog: resolves the model's advertised reasoning
@@ -2274,6 +2323,7 @@ async fn run_session(session: Session) {
                             dir,
                             event_tx: &event_tx,
                             request_input: &request_input,
+                            request: &request,
                             main_feed: &mut main_feed,
                             children: &mut children,
                             pending_spawns: &mut pending_spawns,
@@ -2330,10 +2380,66 @@ async fn run_session(session: Session) {
     server.shutdown(kill_grace).await;
 }
 
+fn read_only_access(request: &RunRequest) -> bool {
+    request.sandbox == SandboxLevel::ReadOnly
+        || request.model_options.get("agent").and_then(Value::as_str) == Some("plan")
+}
+fn session_access_rules(request: &RunRequest, protocol: Protocol) -> Value {
+    let default = if read_only_access(request) {
+        "deny"
+    } else {
+        "ask"
+    };
+    let entries = [
+        ("*", "*", default),
+        ("read", "*", "allow"),
+        ("glob", "*", "allow"),
+        ("grep", "*", "allow"),
+        ("question", "*", "allow"),
+        ("read", "*.env", "deny"),
+        ("read", "*.env.*", "deny"),
+        ("read", "*.env.example", "allow"),
+    ];
+    Value::Array(
+        entries
+            .into_iter()
+            .map(|(action, resource, effect)| match protocol {
+                Protocol::V1 => json!({"permission":action,"pattern":resource,"action":effect}),
+                Protocol::V2 => json!({"action":action,"resource":resource,"effect":effect}),
+            })
+            .collect(),
+    )
+}
+fn access_approval_question(props: &Value) -> UserInputQuestion {
+    let action = props
+        .get("action")
+        .or_else(|| props.get("permission"))
+        .and_then(Value::as_str)
+        .unwrap_or("tool action");
+    let resources = props
+        .get("resources")
+        .or_else(|| props.get("patterns"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let preview: String = resources.to_string().chars().take(4000).collect();
+    UserInputQuestion {
+        id: new_message_id(),
+        header: "Approve action".into(),
+        question: format!(
+            "The agent wants permission for {action}. Allow this action?\n\n{preview}"
+        ),
+        options: vec!["Yes".into(), "No".into()],
+        prefill: None,
+        multiline: false,
+        multi_select: false,
+    }
+}
+
 async fn create_session(
     server: &Server,
     dir: Option<&str>,
     agent: Option<&str>,
+    request: &RunRequest,
 ) -> Result<String, HarnessError> {
     if server.protocol().await == Protocol::V2 {
         // 2.x takes the run directory in the BODY (`location.directory`) —
@@ -2347,6 +2453,7 @@ async fn create_session(
         if let Some(agent) = agent {
             body["agent"] = json!(agent);
         }
+        body["permissions"] = session_access_rules(request, Protocol::V2);
         let created = server.post_json("/api/session", dir, &body).await?;
         return created
             .pointer("/data/id")
@@ -2366,7 +2473,13 @@ async fn create_session(
     // retried immediately succeeds. Retry once on any 5xx: this failure
     // class then costs one round-trip instead of a dead turn.
     for attempt in 0..2 {
-        let (status, text) = server.post_json_raw("/session", dir, &json!({})).await?;
+        let (status, text) = server
+            .post_json_raw(
+                "/session",
+                dir,
+                &json!({"permission":session_access_rules(request, Protocol::V1)}),
+            )
+            .await?;
         if status.is_success() {
             let created = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
             return created
@@ -2769,6 +2882,7 @@ struct BusCtx<'a> {
     dir: Option<&'a str>,
     event_tx: &'a mpsc::Sender<Result<AgentEvent, HarnessError>>,
     request_input: &'a Arc<RequestInput>,
+    request: &'a RunRequest,
     main_feed: &'a mut SessionFeed,
     children: &'a mut HashMap<String, ChildRun>,
     pending_spawns: &'a mut VecDeque<PendingSpawn>,
@@ -2820,6 +2934,7 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
         dir,
         event_tx,
         request_input,
+        request,
         main_feed,
         children,
         pending_spawns,
@@ -3172,6 +3287,10 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
             } else {
                 "reply"
             };
+            let readonly = read_only_access(request);
+            let unrestricted = request.auto_approves_tools();
+            let input = Arc::clone(request_input);
+            let approval = access_approval_question(props);
             tokio::spawn(async move {
                 let server = Server {
                     child: None,
@@ -3182,11 +3301,24 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                     protocol: protocol_cell,
                     version: tokio::sync::OnceCell::new(),
                 };
-                // Like Claude and Codex, normal Zuse sessions run unattended,
-                // regardless of RunRequest.auto_approve. Approve each owned
-                // request without writing durable permission rules via "always".
-                // Genuine agent questions use the separate question.asked path.
-                let reply = "once";
+                let reply = if readonly {
+                    "reject"
+                } else if unrestricted {
+                    "once"
+                } else {
+                    let answers = (input)(vec![approval.clone()]).await.unwrap_or_default();
+                    if answers.iter().any(|answer| {
+                        answer.question_id == approval.id
+                            && answer
+                                .labels
+                                .iter()
+                                .any(|label| label.eq_ignore_ascii_case("yes"))
+                    }) {
+                        "once"
+                    } else {
+                        "reject"
+                    }
+                };
                 if server
                     .post_json(
                         &reply_path,

@@ -240,6 +240,7 @@ impl FakeOpencode {
                 Value::Object(self.statuses.lock().unwrap().clone()),
             ),
             ("GET", "/session/ses_resume") => ("200 OK", json!({ "id": "ses_resume" })),
+            ("PATCH", "/session/ses_resume") => ("200 OK", json!({"id":"ses_resume"})),
             ("GET", p) if p.starts_with("/session/") => ("404 Not Found", json!({})),
             ("POST", p) if p.ends_with("/prompt_async") => ("204 No Content", json!({})),
             ("POST", p) if p.ends_with("/abort") && *self.fail_aborts.lock().unwrap() => (
