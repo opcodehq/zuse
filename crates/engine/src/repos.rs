@@ -1418,6 +1418,9 @@ impl Repos {
         )
         .await?;
         let checkout = self.checkout_identity(&path).await?;
+        crate::archives::Archives::new(self.data_dir())
+            .register_managed(repo_path, &path)
+            .await?;
         Ok(Worktree {
             repo_path: repo_path.to_string_lossy().to_string(),
             path: path.to_string_lossy().to_string(),

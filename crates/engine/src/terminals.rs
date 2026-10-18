@@ -38,6 +38,7 @@ const EXITED_TTL: Duration = Duration::from_secs(30 * 60);
 const REAPER_INTERVAL: Duration = Duration::from_secs(60);
 
 struct LiveTerminal {
+    cwd: std::path::PathBuf,
     // Keep the private action script alive until the shell exits or the tab is closed.
     initial_script: Option<tempfile::NamedTempFile>,
     #[cfg(all(test, windows))]
@@ -303,6 +304,7 @@ impl Terminals {
 
         let id = new_id();
         let session = Arc::new(Mutex::new(LiveTerminal {
+            cwd: std::path::PathBuf::from(cwd),
             initial_script,
             #[cfg(all(test, windows))]
             process_id: child.process_id().expect("ConPTY child has a process id"),
@@ -467,6 +469,18 @@ impl Terminals {
                 "Windows terminal reader did not finish cleanup".into(),
             ))
         }
+    }
+
+    /// A detached shell still owns its working files until explicitly closed.
+    pub(crate) fn has_live_checkout(&self, checkout: &std::path::Path) -> bool {
+        lock(&self.inner.sessions).values().any(|session| {
+            let session = lock(session);
+            if session.exited {
+                return false;
+            }
+            let cwd = std::fs::canonicalize(&session.cwd).unwrap_or_else(|_| session.cwd.clone());
+            cwd.starts_with(checkout)
+        })
     }
 
     /// Any live PTY (the reaper prunes exited ones) — restarts kill shells, so

@@ -247,6 +247,8 @@ async fn publish_steer(
 }
 
 struct Inner {
+    filesystem_gate: Arc<tokio::sync::RwLock<()>>,
+    filesystem_admissions: Mutex<HashMap<String, usize>>,
     voice: crate::voice::VoiceManager,
     device_id: String,
     /// The engine is shutting down: dying runs re-dispatch nothing.
@@ -289,6 +291,22 @@ struct Inner {
     turn_listener: OnceLock<TurnListener>,
 }
 
+struct FilesystemAdmission {
+    inner: Arc<Inner>,
+    chat_id: String,
+}
+impl Drop for FilesystemAdmission {
+    fn drop(&mut self) {
+        let mut admissions = lock(&self.inner.filesystem_admissions);
+        if let Some(count) = admissions.get_mut(&self.chat_id) {
+            *count -= 1;
+            if *count == 0 {
+                admissions.remove(&self.chat_id);
+            }
+        }
+    }
+}
+
 /// Turn-start hook: called with `(chat_id, cwd)`.
 pub type TurnListener = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
@@ -310,6 +328,8 @@ impl SessionsEngine {
         let (sessions_tx, _) = watch::channel(Vec::new());
         Self {
             inner: Arc::new(Inner {
+                filesystem_gate: Arc::new(tokio::sync::RwLock::new(())),
+                filesystem_admissions: Mutex::new(HashMap::new()),
                 voice: crate::voice::VoiceManager::default(),
                 device_id,
                 shutting_down: std::sync::atomic::AtomicBool::new(false),
@@ -399,6 +419,49 @@ impl SessionsEngine {
             .doc_host()
             .ok_or_else(|| EngineError::Other("doc host not wired into sessions engine".into()))?;
         host.open(chat_id)
+    }
+
+    /// Archive serializes the brief admission claim with its idle check.
+    /// The claim remains live across provider/mailbox waits without holding a
+    /// read lease that could deadlock an agent's nested filesystem RPC.
+    pub(crate) async fn filesystem_admission(&self) -> tokio::sync::OwnedRwLockReadGuard<()> {
+        self.inner.filesystem_gate.clone().read_owned().await
+    }
+
+    pub(crate) async fn archive_exclusive(&self) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+        self.inner.filesystem_gate.clone().write_owned().await
+    }
+
+    fn claim_filesystem_admission(&self, chat_id: &str) -> FilesystemAdmission {
+        *lock(&self.inner.filesystem_admissions)
+            .entry(chat_id.to_owned())
+            .or_default() += 1;
+        FilesystemAdmission {
+            inner: self.inner.clone(),
+            chat_id: chat_id.to_owned(),
+        }
+    }
+
+    pub(crate) fn archive_busy(&self, chat_id: &str) -> bool {
+        lock(&self.inner.filesystem_admissions)
+            .get(chat_id)
+            .copied()
+            .unwrap_or(0)
+            != 0
+            || self.turn_in_flight(chat_id)
+            || self.holds_background_work(chat_id)
+    }
+
+    fn require_unarchived(&self, chat_id: &str) -> Result<(), EngineError> {
+        let host = lock(&self.inner.doc_host).clone();
+        if let Some(workspace) = host.as_ref().and_then(|host| host.workspace()) {
+            if workspace.chat(chat_id)?.is_some_and(|chat| chat.archived) {
+                return Err(EngineError::Other(
+                    "Unarchive this thread before running its agent.".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Status watch: the full session list, re-sent on every transition.
@@ -625,6 +688,10 @@ impl SessionsEngine {
         startup_retry: bool,
         idle: bool,
     ) -> Result<String, EngineError> {
+        let admission = self.filesystem_admission().await;
+        self.require_unarchived(chat_id)?;
+        let _activity = self.claim_filesystem_admission(chat_id);
+        drop(admission);
         // Project-less chats store a home-relative cwd (the creating device
         // can't know the host's home); expand it here, on the host, where the
         // run spawns, creating a new chat's scratch folder.
@@ -979,6 +1046,10 @@ impl SessionsEngine {
         message_id: Option<String>,
         issued_at: i64,
     ) -> Result<SteerOutcome, EngineError> {
+        let admission = self.filesystem_admission().await;
+        self.require_unarchived(chat_id)?;
+        let _activity = self.claim_filesystem_admission(chat_id);
+        drop(admission);
         let target = lock(&self.inner.runs)
             .get(chat_id)
             .filter(|h| h.steerable && !h.retiring.load(std::sync::atomic::Ordering::Acquire))

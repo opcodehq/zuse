@@ -1,0 +1,17 @@
+# Thread archive storage
+
+Archiving retains the conversation and its journal. For an isolated, managed linked worktree, the host checkpoints working files before removing the checkout. Main project folders, externally managed worktrees, and checkouts used by another active thread stay on disk.
+
+The checkpoint uses a temporary Git index and a private `refs/zuse/archive/...` reference. It includes tracked modifications/deletions and nonignored untracked files without moving the branch or modifying the real index. Context, attachments in `.context`, and ignored user files such as `.env` are copied into private archive storage. Ignored dependency/build caches in the configured cache-directory list are rebuilt after restore rather than retained. Special files and nested repositories/submodules are rejected before cleanup.
+
+The host writes the saved context and an atomic archive record before removal. Cleanup uses `git worktree remove` and keeps the branch. There is no recursive filesystem-removal fallback. A failed or interrupted cleanup keeps its checkpoint and archive record. An admitted operation continues if its caller loses the response or disconnects.
+
+Unarchive recreates the checkout and materializes the saved working tree before changing the thread to active. Restored changes are unstaged. If the saved branch advanced, restoration uses a detached checkout at the saved commit and returns a notice; it does not rewind that branch. An occupied destination is rejected. Incomplete restores resume when the checkout still matches the saved base or checkpoint; newer conflicting work is retained and requires resolution before retrying.
+
+Original context/attachment paths continue to read from retained archive files or lazily materialized Git blobs while the checkout is absent. Both the original chat path and the archive cache are checked against their own path boundaries.
+
+Archive and restore run on the owning engine. `GetChatArchiveStatus {chatId, targetDeviceId?}` reports the saved phase, checkpoint, changed paths and whether storage has been reclaimed. Hosts advertise `checkout-archives-v1`. Callers should inspect status after a lost acknowledgement instead of repeating a mutation.
+
+Stop active agents and close checkout terminals before cleanup. Idle runtimes are retired. Existing queued rows remain held, and new messages cannot silently reactivate an archived thread. New run/steer admission and host filesystem mutations are coordinated with archive cleanup. The admission barrier currently belongs to the engine; new filesystem admissions can wait during cleanup even for another checkout. Narrowing that barrier is remaining concurrency/performance work.
+
+Six isolated real-Git scenarios cover the file/index/branch/context round trip, occupied destinations, advanced branches, interrupted phase persistence, managed-checkout boundaries, and the engine RPC flow with shared checkouts and retained history. The host-native server also passes an isolated WebSocket/HTTP archive round trip, retained attachment reads and a stdio MCP handshake listing 21 tools. The queue suite passes 30 integration scenarios, including archive rejection while steering is backpressured; a concurrent publication regression covers delivery of complete queue rows. These checks are not physical macOS/Wayland or paired-device acceptance. Archived-file diff browsing, full visual parity, and release-package acceptance remain separate work.

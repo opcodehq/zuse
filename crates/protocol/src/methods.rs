@@ -11,10 +11,12 @@ pub const WATCH_PREVIEWS: &str = "WatchPreviews";
 pub const LIST_HARNESSES: &str = "ListHarnesses";
 pub const CANCEL_INSTALL: &str = "CancelInstall";
 pub const INSTALL_HARNESS: &str = "InstallHarness";
-/// Flip a harness's enablement on the target device (Settings → Providers);
-/// replies with the device's fresh `ListHarnesses` catalog.
+/// Read the owning host's saved checkpoint and checkout cleanup phase.
+pub const GET_CHAT_ARCHIVE_STATUS: &str = "GetChatArchiveStatus";
 pub const GET_TITLE_SETTINGS: &str = "GetTitleSettings";
 pub const SET_TITLE_SETTINGS: &str = "SetTitleSettings";
+/// Flip a harness's enablement on the target device (Settings → Providers);
+/// replies with the device's fresh `ListHarnesses` catalog.
 pub const SET_HARNESS_ENABLED: &str = "SetHarnessEnabled";
 pub const LIST_MODELS: &str = "ListModels";
 pub const LIST_SKILLS: &str = "ListSkills";
@@ -266,6 +268,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | FETCH_TOOL_BLOB
         | SUBSCRIBE_TERMINAL
         | INSPECT_RECOVERY
+        | GET_CHAT_ARCHIVE_STATUS
         | LIST_REFS
         | LIST_FOLDERS
         | SEARCH_FILES => true,

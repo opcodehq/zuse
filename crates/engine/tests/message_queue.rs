@@ -614,6 +614,21 @@ async fn saturated_steering_mailbox_waits_without_restarting_or_losing_messages(
     wait_for(|| user_messages(&core).len() == 33, "mailbox to fill").await;
     assert!(!sending.is_finished(), "saturation must wait for capacity");
     assert_eq!(harness.requests.lock().unwrap().len(), 1);
+    let client = zuse_rpc::memory_client(core.rpc_service());
+    let archive = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.call(
+            zuse_rpc::methods::MUTATE,
+            serde_json::json!({"op":"setChatArchived","chatId":CHAT,"archived":true}),
+        ),
+    )
+    .await
+    .expect("archive admission must not deadlock behind a full steering mailbox");
+    assert!(
+        archive.is_err(),
+        "a busy agent must retain its live checkout"
+    );
+    assert!(!core.workspace.chat(CHAT).unwrap().unwrap().archived);
     gate.notify_one();
     tokio::time::timeout(Duration::from_secs(5), sending)
         .await

@@ -17,6 +17,7 @@ use zuse_sync::DocsStore;
 
 pub mod account;
 pub mod agent_accounts;
+pub mod archives;
 pub mod auth;
 pub mod browser_access;
 mod change_request_store;

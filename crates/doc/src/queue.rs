@@ -124,7 +124,7 @@ impl SessionDoc {
             return Err(DocError::Schema("queued message text required".into()));
         }
         let queue = self.doc().get_movable_list("queue");
-        let map = queue.push_container(loro::LoroMap::new())?;
+        let map = insert_queue_map(&queue, None)?;
         write_queued_map(&map, item)?;
         self.doc().commit();
         Ok(())
@@ -142,7 +142,7 @@ impl SessionDoc {
             return Err(DocError::Schema("queued message text required".into()));
         }
         let queue = self.doc().get_movable_list("queue");
-        let map = queue.insert_container(index.min(queue.len()), loro::LoroMap::new())?;
+        let map = insert_queue_map(&queue, Some(index))?;
         write_queued_map(&map, item)?;
         self.doc().commit();
         Ok(())
@@ -336,8 +336,25 @@ fn index_of(queue: &loro::LoroMovableList, id: &str) -> Option<usize> {
     })
 }
 
+fn insert_queue_map(
+    queue: &loro::LoroMovableList,
+    index: Option<usize>,
+) -> Result<loro::LoroMap, DocError> {
+    loop {
+        let len = queue.len();
+        let position = index.map_or(len, |index| index.min(len));
+        match queue.insert_container(position, loro::LoroMap::new()) {
+            Ok(map) => return Ok(map),
+            // A drainer can shorten the list between len() and insertion.
+            // The SDK rejects this before adding the container, so retrying
+            // with a fresh position cannot duplicate a queued message.
+            Err(loro::LoroError::OutOfBound { .. }) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
 fn write_queued_map(map: &loro::LoroMap, item: &QueuedMessage) -> Result<(), DocError> {
-    map.insert("id", item.id.as_str())?;
     map.insert("text", item.text.as_str())?;
     map.insert("issuedBy", item.issued_by.as_str())?;
     map.insert("issuedAt", item.issued_at)?;
@@ -359,6 +376,9 @@ fn write_queued_map(map: &loro::LoroMap, item: &QueuedMessage) -> Result<(), Doc
             crate::schema::loro_value_from_json(&serde_json::to_value(gate)?),
         )?;
     }
+    // Readers admit rows by id. Publish it only after every delivery field is
+    // present: another host task can drain a row before this writer commits.
+    map.insert("id", item.id.as_str())?;
     Ok(())
 }
 
@@ -432,6 +452,59 @@ mod tests {
             .into_iter()
             .map(|i| i.text)
             .collect()
+    }
+
+    #[test]
+    fn concurrent_queue_delivery_never_observes_half_written_rows() {
+        use std::sync::{
+            Arc, Barrier,
+            atomic::{AtomicBool, Ordering},
+        };
+        let doc = Arc::new(doc());
+        let start = Arc::new(Barrier::new(2));
+        let done = Arc::new(AtomicBool::new(false));
+        let writer_doc = doc.clone();
+        let writer_start = start.clone();
+        let writer_done = done.clone();
+        let writer = std::thread::spawn(move || {
+            writer_start.wait();
+            let result = (|| -> Result<(), DocError> {
+                for n in 0..512 {
+                    let mut row = item(&format!("row-{n}"), "queued text");
+                    row.attachments = vec![format!("context/{n}")];
+                    row.hold_for_turn_end = true;
+                    row.edited_at = Some(2000);
+                    writer_doc.push_queued(&row)?;
+                }
+                Ok(())
+            })();
+            writer_done.store(true, Ordering::Release);
+            result
+        });
+        start.wait();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut delivered = std::collections::HashSet::new();
+        loop {
+            if let Some(row) = doc.take_queue_head().unwrap() {
+                let n = row.id.strip_prefix("row-").unwrap();
+                assert_eq!(row.attachments, vec![format!("context/{n}")]);
+                assert!(row.hold_for_turn_end);
+                assert_eq!(row.edited_at, Some(2000));
+                assert_eq!(row.issued_by, "device-a");
+                assert_eq!(row.issued_at, 1000);
+                assert!(delivered.insert(row.id));
+            } else if done.load(Ordering::Acquire) && doc.read_queue().unwrap().is_empty() {
+                break;
+            } else {
+                std::thread::yield_now();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "concurrent delivery did not settle"
+            );
+        }
+        writer.join().unwrap().unwrap();
+        assert_eq!(delivered.len(), 512);
     }
 
     /// A send that fails after the row was taken puts it back where it was,

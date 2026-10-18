@@ -1174,6 +1174,31 @@ impl WorkspaceHost {
         Ok(self.mutate(|doc| doc.set_chat_archived(chat_id, archived))?)
     }
 
+    /// Publish archive state and restored checkout metadata under one ownership check.
+    pub(crate) fn transition_archive(
+        &self,
+        expected: &Chat,
+        archived: bool,
+        checkout_id: Option<&str>,
+        branch: Option<&str>,
+    ) -> Result<bool, EngineError> {
+        Ok(self.mutate(|doc| {
+            let Some(current) = doc.chat(&expected.id)? else {
+                return Ok(false);
+            };
+            if current.device_id != expected.device_id || current.cwd != expected.cwd {
+                return Ok(false);
+            }
+            if let Some(checkout) = checkout_id {
+                doc.set_chat_checkout(&expected.id, checkout)?;
+            }
+            if let Some(branch) = branch {
+                doc.set_chat_branch(&expected.id, branch)?;
+            }
+            doc.set_chat_archived(&expected.id, archived)
+        })?)
+    }
+
     /// Compare ownership and configuration under the registry mutation lock.
     pub fn compare_set_chat_config(
         &self,

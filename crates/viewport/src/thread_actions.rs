@@ -196,6 +196,9 @@ impl WorkspaceView {
             self.thread_error(message, cx);
             return true;
         }
+        if let Some(notice) = frame["ok"]["archive"]["notice"].as_str() {
+            self.connection_notice = Some(notice.to_owned());
+        }
         let selected = self
             .selected
             .as_ref()

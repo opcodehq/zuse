@@ -700,6 +700,7 @@ enum MutateParams {
 
 #[derive(Clone)]
 pub struct EngineRpc {
+    archives: crate::archives::Archives,
     pairings: Option<zuse_remote::authority::Authority>,
     browser_access: Option<crate::browser_access::BrowserAccess>,
     model_connections: Option<crate::model_connections::ModelConnections>,
@@ -752,7 +753,9 @@ impl EngineRpc {
             capabilities: zuse_protocol::capabilities::current(),
         };
         let github = GitHubCli::new().with_store(repos.data_dir());
+        let archives = crate::archives::Archives::new(repos.data_dir());
         Self {
+            archives,
             pairings: None,
             browser_access: None,
             model_connections: None,
@@ -1205,7 +1208,11 @@ impl EngineRpc {
             });
             return Ok(RpcReply::Stream(stream.boxed()));
         }
-        let deadline = forward_deadline(method);
+        let deadline = if method == methods::MUTATE && params["op"] == "setChatArchived" {
+            std::time::Duration::from_secs(10 * 60)
+        } else {
+            forward_deadline(method)
+        };
         match tokio::time::timeout(deadline, client.call(method, params)).await {
             Ok(Ok(value)) => Ok(RpcReply::Value(value)),
             Ok(Err(err)) => {
@@ -1365,11 +1372,9 @@ impl EngineRpc {
                     .map_err(failed)
                     .map(drop)
             }
-            MutateParams::SetChatArchived { chat_id, archived } => self
-                .workspace
-                .set_chat_archived(&chat_id, archived)
-                .map_err(failed)
-                .map(drop),
+            MutateParams::SetChatArchived { .. } => Err(RpcError::Failed(
+                "Archive changes must use the host lifecycle handler.".into(),
+            )),
             MutateParams::ChangeSidebarPin { change } => {
                 self.workspace.change_sidebar_pin(&change).map_err(failed)
             }
@@ -1571,8 +1576,8 @@ const LOGIN_TUNNEL_TTL: Duration = Duration::from_secs(15 * 60);
 fn forwardable_request(method: &str, params: &serde_json::Value) -> bool {
     forwardable(method)
         || (method == methods::MUTATE
-            && params["op"] == "setChatConfig"
-            && params.get("expectedConfig").is_some())
+            && (params["op"] == "setChatArchived"
+                || (params["op"] == "setChatConfig" && params.get("expectedConfig").is_some())))
 }
 
 fn forwardable(method: &str) -> bool {
@@ -1586,6 +1591,7 @@ fn forwardable(method: &str) -> bool {
             | methods::INSTALL_HARNESS
             | methods::CANCEL_INSTALL
             | methods::GET_TITLE_SETTINGS
+            | methods::GET_CHAT_ARCHIVE_STATUS
             | methods::SET_TITLE_SETTINGS
             | methods::SET_HARNESS_ENABLED
             | methods::LIST_MODELS
@@ -1983,6 +1989,7 @@ impl RpcService for AuthRpc {
 #[async_trait]
 impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        let failed = |error: crate::EngineError| RpcError::Failed(error.to_string());
         if matches!(
             method,
             methods::BROWSER_ACCESS_STATUS
@@ -2072,6 +2079,26 @@ impl RpcService for EngineRpc {
             };
         }
 
+        let mut params = params;
+        if method == methods::GET_CHAT_ARCHIVE_STATUS
+            || (method == methods::MUTATE && params["op"] == "setChatArchived")
+        {
+            if let Some(id) = params["chatId"].as_str() {
+                if let Some(chat) = self.workspace.chat(id).map_err(failed)? {
+                    if params["targetDeviceId"]
+                        .as_str()
+                        .is_some_and(|target| target != chat.device_id)
+                    {
+                        return Err(RpcError::Failed(
+                            "This thread moved to another computer. Refresh before archiving it."
+                                .into(),
+                        ));
+                    }
+                    params["targetDeviceId"] = serde_json::json!(chat.device_id);
+                }
+            }
+        }
+
         // Device-addressed routing: forward calls that target another device over its
         // relay. The target compares the id to its own, so forwards cannot loop.
         if forwardable_request(method, &params)
@@ -2108,6 +2135,35 @@ impl RpcService for EngineRpc {
                 .handle(method, params)
                 .await;
         }
+        let _filesystem_admission = if matches!(
+            method,
+            methods::OPEN_TERMINAL
+                | methods::RUN_PROJECT_ACTION
+                | methods::WRITE_WORKSPACE_FILE
+                | methods::MOVE_WORKSPACE_ENTRY
+                | methods::DELETE_WORKSPACE_ENTRY
+                | methods::DISCARD_WORKING_TREE
+                | methods::CREATE_WORKTREE
+                | methods::DELETE_WORKTREE
+                | methods::SWITCH_REF
+        ) {
+            let lease = self.sessions.filesystem_admission().await;
+            if let Some(id) = params["chatId"].as_str() {
+                if self
+                    .workspace
+                    .chat(id)
+                    .map_err(failed)?
+                    .is_some_and(|chat| chat.archived)
+                {
+                    return Err(RpcError::Failed(
+                        "Unarchive this thread before changing its checkout.".into(),
+                    ));
+                }
+            }
+            Some(lease)
+        } else {
+            None
+        };
         match method {
             methods::INSPECT_RECOVERY | methods::RESOLVE_RECOVERY => {
                 let profile = self.repos.data_dir().to_path_buf();
@@ -2284,6 +2340,33 @@ impl RpcService for EngineRpc {
                 let p: ListModelsParams = parse_params(params)?;
                 self.registry.installs.cancel(p.harness);
                 RpcReply::value(&serde_json::json!({}))
+            }
+            methods::GET_CHAT_ARCHIVE_STATUS => {
+                let request: ChatParams = parse_params(params)?;
+                let chat = self
+                    .workspace
+                    .chat(&request.chat_id)
+                    .map_err(failed)?
+                    .ok_or_else(|| RpcError::Failed("Thread not found.".into()))?;
+                if chat.device_id != self.doc_host.device_id() {
+                    return Err(RpcError::Failed(
+                        "Archive status belongs to another computer.".into(),
+                    ));
+                }
+                let record = chat
+                    .cwd
+                    .as_deref()
+                    .map(|cwd| self.archives.record(std::path::Path::new(cwd)))
+                    .transpose()
+                    .map_err(failed)?
+                    .flatten();
+                RpcReply::value(
+                    &serde_json::json!({"chatId":chat.id,"archived":chat.archived,
+                    "phase":record.as_ref().map(|record|&record.phase),
+                    "storageReclaimed":record.as_ref().is_some_and(|record|!record.checkout.exists() && record.phase!=crate::archives::Phase::Restored),
+                    "checkpoint":record.as_ref().map(|record|&record.checkpoint),
+                    "changedPaths":record.as_ref().map(|record|&record.changed_paths).cloned().unwrap_or_default()}),
+                )
             }
             methods::GET_TITLE_SETTINGS => RpcReply::value(&self.registry.title_settings()),
             methods::SET_TITLE_SETTINGS => {
@@ -2984,6 +3067,10 @@ impl RpcService for EngineRpc {
             }
             methods::MUTATE => {
                 let p: MutateParams = parse_params(params)?;
+                if let MutateParams::SetChatArchived { chat_id, archived } = &p {
+                    let outcome = self.archive_chat(chat_id, *archived).await?;
+                    return RpcReply::value(&serde_json::json!({"ok":true,"archive":outcome}));
+                }
                 let sidebar_pins = matches!(&p, MutateParams::ChangeSidebarPin { .. });
                 self.mutate(p)?;
                 if sidebar_pins {
@@ -4141,22 +4228,42 @@ impl RpcService for EngineRpc {
             }
             methods::READ_ATTACHMENT_CHUNK => {
                 let p: ReadAttachmentChunkParams = parse_params(params)?;
-                // Path jail: the uploads dir plus every workspace-known chat cwd.
-                let roots: Vec<std::path::PathBuf> = self
+                // Archive materialization is admitted only for an original chat
+                // path. Its private cache then gets its own canonical path jail.
+                let mut roots: Vec<std::path::PathBuf> = self
                     .workspace
                     .read_chats()
-                    .unwrap_or_default()
+                    .map_err(failed)?
                     .into_iter()
                     .filter_map(|chat| chat.cwd)
                     .map(std::path::PathBuf::from)
                     .collect();
+                let original = std::path::PathBuf::from(&p.path);
+                let resolved = if !original.exists()
+                    && roots.iter().any(|root| {
+                        original.strip_prefix(root).is_ok_and(|relative| {
+                            relative
+                                .components()
+                                .all(|part| matches!(part, std::path::Component::Normal(_)))
+                        })
+                    }) {
+                    self.archives.attachment(&original).await.map_err(failed)?
+                } else {
+                    None
+                };
+                let path = if let Some((file, root)) = resolved {
+                    roots.push(root);
+                    file.to_string_lossy().into_owned()
+                } else {
+                    p.path
+                };
                 let uploads = self.uploads.clone();
                 let chunk = tokio::task::spawn_blocking(move || {
-                    uploads.read_chunk(&p.path, p.offset, &roots)
+                    uploads.read_chunk(&path, p.offset, &roots)
                 })
                 .await
-                .map_err(|e| RpcError::Failed(e.to_string()))?
-                .map_err(|e| RpcError::Failed(e.to_string()))?;
+                .map_err(|err| RpcError::Failed(err.to_string()))?
+                .map_err(failed)?;
                 RpcReply::value(&chunk)
             }
             methods::PUBLISH_VISUAL => {
@@ -5469,5 +5576,239 @@ mod context_usage_tests {
         remote.clear_context_usage().unwrap();
         tx.send_replace(crate::doc_host::TranscriptSnapshot::default());
         assert!(stream.next().await.unwrap()["contextUsage"].is_null());
+    }
+}
+
+impl EngineRpc {
+    async fn archive_chat(
+        &self,
+        chat_id: &str,
+        archived: bool,
+    ) -> Result<crate::archives::ArchiveOutcome, RpcError> {
+        // Once admitted, finishing the journal transaction outlives a closed
+        // renderer or a lost RPC response. A caller never replays the mutation.
+        let this = self.clone();
+        let chat = chat_id.to_owned();
+        tokio::spawn(async move { this.archive_chat_inner(&chat, archived).await })
+            .await
+            .map_err(|error| RpcError::Failed(format!("Archive operation interrupted: {error}")))?
+    }
+    async fn archive_chat_inner(
+        &self,
+        chat_id: &str,
+        archived: bool,
+    ) -> Result<crate::archives::ArchiveOutcome, RpcError> {
+        use crate::archives::{ArchiveOutcome, Phase};
+        use std::path::{Path, PathBuf};
+        let failed = |error: crate::EngineError| RpcError::Failed(error.to_string());
+        let _exclusive = self.sessions.archive_exclusive().await;
+        let chat = self
+            .workspace
+            .chat(chat_id)
+            .map_err(failed)?
+            .ok_or_else(|| RpcError::Failed("Thread not found.".into()))?;
+        if chat.device_id != self.doc_host.device_id() {
+            return Err(RpcError::Failed(
+                "Archive must run on the thread’s owning computer.".into(),
+            ));
+        }
+        let cwd = chat.cwd.as_deref().map(PathBuf::from);
+        if !archived {
+            let outcome = if let Some(cwd) = &cwd {
+                if let Some(mut record) = self.archives.record(cwd).map_err(failed)? {
+                    if self.terminals.has_live_checkout(cwd) {
+                        return Err(RpcError::Failed(
+                            "Close this checkout’s terminals before restoring it.".into(),
+                        ));
+                    }
+                    self.archives.restore(&mut record).await.map_err(failed)?
+                } else {
+                    if cwd.is_absolute() && !cwd.exists() {
+                        return Err(RpcError::Failed("This checkout is missing and has no saved archive. The conversation remains archived.".into()));
+                    }
+                    ArchiveOutcome::retained(
+                        "The existing checkout was retained while this thread was archived.",
+                    )
+                }
+            } else {
+                ArchiveOutcome::retained("Conversation restored.")
+            };
+            let (checkout_id, branch) = if let Some(cwd) = &cwd {
+                (
+                    self.repos
+                        .checkout_identity(cwd)
+                        .await
+                        .ok()
+                        .map(|checkout| checkout.id),
+                    self.repos.current_branch(cwd).await.ok(),
+                )
+            } else {
+                (None, None)
+            };
+            if !self
+                .workspace
+                .transition_archive(&chat, false, checkout_id.as_deref(), branch.as_deref())
+                .map_err(failed)?
+            {
+                return Err(RpcError::Failed("The thread moved during restore. Its saved files are retained; refresh before continuing.".into()));
+            }
+            return Ok(outcome);
+        }
+        let chats = self.workspace.read_chats().map_err(failed)?;
+        let mut family = std::collections::HashSet::from([chat_id.to_owned()]);
+        loop {
+            let before = family.len();
+            for child in &chats {
+                if child.device_id == chat.device_id
+                    && child
+                        .parent_chat_id
+                        .as_ref()
+                        .is_some_and(|parent| family.contains(parent))
+                {
+                    family.insert(child.id.clone());
+                }
+            }
+            if family.len() == before {
+                break;
+            }
+        }
+        for id in &family {
+            if self.sessions.archive_busy(id) {
+                return Err(RpcError::Failed(
+                    "Stop the thread and its active agents before archiving their worktree.".into(),
+                ));
+            }
+        }
+        for id in &family {
+            self.sessions.terminate(id).await.map_err(failed)?;
+        }
+        let mark_archived = || -> Result<(), RpcError> {
+            for id in &family {
+                let expected = chats.iter().find(|row| row.id == *id).ok_or_else(|| {
+                    RpcError::Failed("A thread was removed while archiving.".into())
+                })?;
+                if !self
+                    .workspace
+                    .transition_archive(expected, true, None, None)
+                    .map_err(failed)?
+                {
+                    return Err(RpcError::Failed("A thread moved while archiving. Its saved files are retained; refresh before continuing.".into()));
+                }
+                self.doc_host.pause_chat_queue(id).map_err(failed)?;
+            }
+            Ok(())
+        };
+        let Some(cwd) = cwd.filter(|cwd| cwd.is_absolute()) else {
+            mark_archived()?;
+            return Ok(ArchiveOutcome::retained(
+                "Conversation retained; this thread has no managed worktree to remove.",
+            ));
+        };
+        if let Some(record) = self.archives.record(&cwd).map_err(failed)? {
+            if record.phase == Phase::Removed && !cwd.exists() {
+                mark_archived()?;
+                return Ok(ArchiveOutcome {
+                    storage_reclaimed: true,
+                    checkpoint: Some(record.checkpoint),
+                    changed_paths: record.changed_paths,
+                    notice: None,
+                });
+            }
+        }
+        let Some(space) = chat
+            .space_id
+            .as_deref()
+            .map(|id| self.workspace.space(id))
+            .transpose()
+            .map_err(failed)?
+            .flatten()
+        else {
+            mark_archived()?;
+            return Ok(ArchiveOutcome::retained(
+                "Conversation retained; the checkout is not a managed project worktree.",
+            ));
+        };
+        let repo = Path::new(&space.path);
+        let root = PathBuf::from(self.repos.worktree_settings().effective_directory);
+        if !cwd.exists() {
+            return Err(RpcError::Failed("The checkout is missing and has no recoverable archive. Its conversation was kept.".into()));
+        }
+        if !self
+            .archives
+            .managed_checkout(repo, &cwd, &root)
+            .await
+            .map_err(failed)?
+        {
+            mark_archived()?;
+            return Ok(ArchiveOutcome::retained(
+                "The main project or user-managed checkout was kept. Only managed linked worktrees are removed.",
+            ));
+        }
+        let checkout =
+            std::fs::canonicalize(&cwd).map_err(|err| RpcError::Failed(err.to_string()))?;
+        let same_checkout = |row: &&zuse_protocol::Chat| {
+            row.device_id == chat.device_id
+                && row.cwd.as_deref().is_some_and(|path| {
+                    Path::new(path) == checkout
+                        || std::fs::canonicalize(path).is_ok_and(|path| path == checkout)
+                })
+        };
+        let sharing = chats.iter().filter(same_checkout).collect::<Vec<_>>();
+        if sharing
+            .iter()
+            .any(|row| !row.archived && !family.contains(&row.id))
+        {
+            mark_archived()?;
+            return Ok(ArchiveOutcome::retained(
+                "Another active thread uses this checkout, so its files were kept.",
+            ));
+        }
+        for row in &sharing {
+            if self.sessions.archive_busy(&row.id) {
+                return Err(RpcError::Failed(
+                    "Another agent is still using this worktree. Stop it before archiving.".into(),
+                ));
+            }
+        }
+        if self.terminals.has_live_checkout(&checkout) {
+            return Err(RpcError::Failed("Close the worktree’s terminals before archiving it. Running processes have not been stopped.".into()));
+        }
+        for row in &sharing {
+            self.sessions.terminate(&row.id).await.map_err(failed)?;
+        }
+        for row in &sharing {
+            if let Some(path) = row.cwd.as_deref() {
+                self.archives
+                    .remember_path(Path::new(path), &checkout)
+                    .await
+                    .map_err(failed)?;
+            }
+        }
+        let mut record = self
+            .archives
+            .prepare(repo, &checkout)
+            .await
+            .map_err(failed)?;
+        let latest = self
+            .workspace
+            .chat(chat_id)
+            .map_err(failed)?
+            .ok_or_else(|| RpcError::Failed("Thread was removed during checkpointing.".into()))?;
+        if latest.device_id != chat.device_id || latest.cwd != chat.cwd {
+            return Err(RpcError::Failed("The thread moved during checkpointing. Its checkout and saved checkpoint were kept.".into()));
+        }
+        let current = self.workspace.read_chats().map_err(failed)?;
+        if current
+            .iter()
+            .filter(same_checkout)
+            .any(|row| !row.archived && !family.contains(&row.id))
+        {
+            mark_archived()?;
+            return Ok(ArchiveOutcome::retained(
+                "A new active thread uses this checkout, so its files were kept.",
+            ));
+        }
+        mark_archived()?;
+        self.archives.remove(&mut record).await.map_err(failed)
     }
 }

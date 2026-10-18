@@ -1130,6 +1130,14 @@ impl DocHost {
         }
     }
 
+    /// Keep pre-archive queued rows held until an explicit send resumes them.
+    pub(crate) fn pause_chat_queue(&self, chat_id: &str) -> Result<(), EngineError> {
+        self.open(chat_id)?
+            .queue_paused
+            .store(true, Ordering::Release);
+        Ok(())
+    }
+
     /// Test-only retirement sentinel: reports true once the doc-host graph
     /// has actually been freed.
     #[doc(hidden)]
@@ -3427,6 +3435,13 @@ impl DocHost {
         payload: SessionCommandPayload,
         transfers: Vec<crate::uploads::AttachmentTransfer>,
     ) -> Result<String, EngineError> {
+        let is_message = matches!(
+            &payload,
+            SessionCommandPayload::Run { .. } | SessionCommandPayload::Steer { .. }
+        );
+        if is_message {
+            self.require_unarchived(chat_id)?;
+        }
         let handle = self.open(chat_id)?;
         let id = new_id();
         let now = now_ms();
@@ -3434,10 +3449,6 @@ impl DocHost {
             turn_id: Some(m.id.clone()),
             frontier: None,
         });
-        let is_message = matches!(
-            payload,
-            SessionCommandPayload::Run { .. } | SessionCommandPayload::Steer { .. }
-        );
         let entry = SessionCommandEntry {
             id: id.clone(),
             payload,
@@ -3449,12 +3460,6 @@ impl DocHost {
             resolution: None,
         };
         handle.doc.queue_command(&entry)?;
-        // Sending a message revives an archived chat: the user is acting in it
-        // again, so the LWW row flips back to active on every device. Best-
-        // effort — the command itself is durable regardless.
-        if is_message {
-            self.unarchive_on_send(chat_id);
-        }
         // The cold host must discover the command even after its room rows
         // are ACKed. Persist that wake independently and recover it on restart.
         self.nudge_remote_host(chat_id);
@@ -3462,19 +3467,15 @@ impl DocHost {
         Ok(id)
     }
 
-    /// A send revives an archived chat on every device (best-effort).
-    fn unarchive_on_send(&self, chat_id: &str) {
-        let Some(workspace) = self.workspace() else {
-            return;
-        };
-        match workspace.chat(chat_id) {
-            Ok(Some(chat)) if chat.archived => {
-                if let Err(err) = workspace.set_chat_archived(chat_id, false) {
-                    tracing::warn!(chat = %chat_id, error = %err, "unarchive on send failed");
-                }
+    fn require_unarchived(&self, chat_id: &str) -> Result<(), EngineError> {
+        if let Some(workspace) = self.workspace() {
+            if workspace.chat(chat_id)?.is_some_and(|chat| chat.archived) {
+                return Err(EngineError::Other(
+                    "Unarchive this thread before sending another message.".into(),
+                ));
             }
-            _ => {}
         }
+        Ok(())
     }
 
     /// Hold a message for later: append it to the doc's queue. Any device may
@@ -3500,6 +3501,7 @@ impl DocHost {
         attachments: Vec<String>,
         hold_for_turn_end: bool,
     ) -> Result<String, EngineError> {
+        self.require_unarchived(chat_id)?;
         let handle = self.open(chat_id)?;
         let id = new_id();
         handle.doc.push_queued(&QueuedMessage {
@@ -3513,8 +3515,6 @@ impl DocHost {
             delivery_gate: None,
         })?;
         handle.publish_queue();
-        // Same reasoning as a command: the user is acting in this chat again.
-        self.unarchive_on_send(chat_id);
         self.nudge_remote_host(chat_id);
         Ok(id)
     }
@@ -4046,7 +4046,7 @@ impl DocHost {
         let Some(sessions) = self.sessions() else {
             return; // executor not wired yet; the set_sessions kick re-drains
         };
-        if !self.is_host(&handle.chat_id) {
+        if !self.is_host(&handle.chat_id) || self.require_unarchived(&handle.chat_id).is_err() {
             return;
         }
         // One drain at a time per chat. Waiters are cheap: whoever takes the
