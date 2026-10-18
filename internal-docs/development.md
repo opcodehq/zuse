@@ -30,6 +30,34 @@ Pass `--binary /absolute/path/to/browser-fixture` to reuse a completed build, or
 
 Use `cargo check` for integration feedback. Keep tests centered on observable behavior and run relevant suites at milestones. Run native and browser acceptance separately: a web screenshot does not verify platform-specific desktop integration.
 
+### Browser input conformance
+
+The opt-in input fixture renders the production single-line editors without an
+engine connection. Build it into a separate directory:
+
+```sh
+bash scripts/build-web.sh --features browser-input-fixture \
+  --dist ../../.context/browser-input-fixture-dist
+```
+
+With a dedicated Chromium session running with WebGPU enabled, pass its
+`DevToolsActivePort` file to the regression runner (Node.js 22+):
+
+```sh
+node scripts/test-browser-input.mjs --assets .context/browser-input-fixture-dist \
+  --devtools-file /path/to/chrome-profile/DevToolsActivePort
+```
+
+The runner serves the fixture on loopback, creates and closes its own isolated
+browser context, and checks editor contents and submit events. Cases cover
+paste/composition immediately after focus changes, Unicode preedit replacement
+and cancellation, stale composition events after editor/window/DOM blur,
+keyboard paste, and IME confirmation versus normal Enter submission. It uses
+both DOM events and trusted Chromium input commands. Physical IME candidate
+windows, OS clipboard menus and macOS/Linux hardware input remain separate
+acceptance gates. Build the ordinary browser application with
+`bash scripts/build-web.sh`.
+
 ## Account and hosted plugins
 
 Local sessions do not require a cloud account. Settings → Plugins includes the engine-owned Zuse account and managed plugin connections. Sign-in opens device authorization; profile metadata and progress stream through `CloudAccountStatus`. Refresh credentials are stored in the device profile's `account/session.json` with private Unix permissions and atomic replacement. Access tokens stay in engine memory and never appear in account RPC responses.

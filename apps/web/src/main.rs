@@ -11,6 +11,9 @@ fn main() {
     eprintln!("Build this target with scripts/build-web.sh");
 }
 
+#[cfg(all(target_family = "wasm", feature = "browser-input-fixture"))]
+mod input_fixture;
+
 #[cfg(target_family = "wasm")]
 mod browser {
     use futures::channel::mpsc;
@@ -287,5 +290,8 @@ mod browser {
 
 #[cfg(target_family = "wasm")]
 fn main() {
+    #[cfg(feature = "browser-input-fixture")]
+    input_fixture::run();
+    #[cfg(not(feature = "browser-input-fixture"))]
     browser::run();
 }

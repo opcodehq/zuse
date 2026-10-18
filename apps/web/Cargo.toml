@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+browser-input-fixture = []
+
 [dependencies]
 zuse-remote.workspace = true
 base64 = "0.22"
