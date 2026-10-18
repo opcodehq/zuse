@@ -223,6 +223,40 @@ impl Account {
         })))
     }
 
+    #[cfg(test)]
+    pub(crate) fn fixture_signed_in(root: &Path, api_url: String, subject: &str) -> Self {
+        let account = Self::configured(
+            root,
+            api_url,
+            "fixture-client".into(),
+            "http://127.0.0.1:1".into(),
+        )
+        .unwrap();
+        account.fixture_install(subject);
+        account
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_install(&self, subject: &str) {
+        let payload = URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&json!({"sub":subject,"exp":now()+3600})).unwrap());
+        let generation = lock(&self.0.state).generation;
+        self.install(
+            TokenResponse {
+                access_token: format!("fixture.{payload}.signature"),
+                refresh_token: format!("refresh-{subject}"),
+                user: IdentityUser {
+                    id: subject.into(),
+                    email: format!("{subject}@example.test"),
+                    first_name: None,
+                    last_name: None,
+                },
+            },
+            generation,
+            None,
+        )
+        .unwrap();
+    }
+
     pub fn api_url(&self) -> &str {
         &self.0.api_url
     }

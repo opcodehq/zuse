@@ -33,6 +33,7 @@ pub(crate) mod home_index;
 mod http_error;
 pub mod instance_lock;
 pub mod local_import;
+pub mod managed_access;
 pub mod relay_access;
 pub use zuse_harness::processes::supervisor as command_host;
 pub mod harness_models;
@@ -151,6 +152,7 @@ pub struct EngineCore {
     pub browser_access: browser_access::Owner,
     pub relay_access: relay_access::Owner,
     pub account: account::Account,
+    pub managed_access: managed_access::AccountClient,
     pub model_connections: model_connections::ModelConnections,
     pub harness_models: harness_models::HarnessModels,
     pub plugins: plugins::Plugins,
@@ -356,6 +358,8 @@ impl EngineCore {
         let spaces_sync = SpacesSync::start(repos.clone(), workspace.clone(), &device_id);
         let account =
             account::Account::open(data_dir).map_err(|e| EngineError::Other(e.to_string()))?;
+        let managed_access = managed_access::AccountClient::new(account.clone())
+            .map_err(|e| EngineError::Other(e.to_string()))?;
         let model_connections =
             model_connections::ModelConnections::new(data_dir.to_path_buf(), account.clone());
         let harness_models = harness_models::HarnessModels::new(
@@ -390,6 +394,7 @@ impl EngineCore {
             harness_models,
             model_connections,
             account,
+            managed_access,
             plugins,
             sessions,
             doc_host,
@@ -545,6 +550,7 @@ impl EngineCore {
         .with_relay_access(self.relay_access.control())
         .with_model_connections(self.model_connections.clone())
         .with_account(self.account.clone(), self.plugins.clone())
+        .with_managed_access(self.managed_access.clone())
         .with_auth(self.auth())
         .with_previews(self.previews.clone())
         .with_harness_updates(self.harness_updates.clone());

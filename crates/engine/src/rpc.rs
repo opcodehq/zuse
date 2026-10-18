@@ -709,6 +709,7 @@ pub struct EngineRpc {
     relay_access: Option<crate::relay_access::RelayAccess>,
     model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
+    managed_access: Option<crate::managed_access::AccountClient>,
     plugins: Option<crate::plugins::Plugins>,
     voice: crate::voice::VoiceManager,
     visuals: crate::visuals::Visuals,
@@ -766,6 +767,7 @@ impl EngineRpc {
             relay_access: None,
             model_connections: None,
             account: None,
+            managed_access: None,
             plugins: None,
             voice: sessions.voice_manager(),
             visuals: crate::visuals::Visuals::default(),
@@ -812,6 +814,11 @@ impl EngineRpc {
     ) -> Self {
         self.account = Some(account);
         self.plugins = Some(plugins);
+        self
+    }
+
+    pub fn with_managed_access(mut self, access: crate::managed_access::AccountClient) -> Self {
+        self.managed_access = Some(access);
         self
     }
 
@@ -2361,6 +2368,46 @@ impl RpcService for EngineRpc {
                 };
                 result.map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({"ok":true}))
+            }
+            methods::LIST_ACCOUNT_ENVIRONMENTS
+            | methods::LIST_ACCOUNT_DEVICES
+            | methods::REVOKE_ACCOUNT_DEVICE => {
+                if params
+                    .get("targetDeviceId")
+                    .filter(|v| !v.is_null())
+                    .is_some_and(|v| v.as_str() != Some(self.doc_host.device_id()))
+                {
+                    return Err(RpcError::BadParams(
+                        "Account access belongs to the connected profile".into(),
+                    ));
+                }
+                let access = self.managed_access.as_ref().ok_or_else(|| {
+                    RpcError::Failed("Account remote access is unavailable.".into())
+                })?;
+                match method {
+                    methods::LIST_ACCOUNT_ENVIRONMENTS => RpcReply::value(
+                        &access
+                            .environments()
+                            .await
+                            .map_err(|e| RpcError::Failed(e.to_string()))?,
+                    ),
+                    methods::LIST_ACCOUNT_DEVICES => RpcReply::value(
+                        &access
+                            .clients()
+                            .await
+                            .map_err(|e| RpcError::Failed(e.to_string()))?,
+                    ),
+                    _ => {
+                        let id = params["clientId"].as_str().ok_or_else(|| {
+                            RpcError::BadParams("Choose an authorized device".into())
+                        })?;
+                        access
+                            .revoke_client(id)
+                            .await
+                            .map_err(|e| RpcError::Failed(e.to_string()))?;
+                        RpcReply::value(&serde_json::json!({"ok":true}))
+                    }
+                }
             }
             methods::CLOUD_ACCOUNT_STATUS => {
                 let account = self
