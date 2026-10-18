@@ -1,7 +1,7 @@
 //! Shared native/browser Git panel. The host supplies transport; actions never replay.
 use crate::plugin_setup::SetupColors;
 use gpui::{prelude::*, *};
-use gpui_base::input::{InputEditorStyle, InputState};
+use gpui_base::input::{InputEditorStyle, InputState, TextareaState};
 use serde_json::{Value, json};
 use zuse_protocol::{
     GitFileState,
@@ -33,6 +33,16 @@ pub struct GitControls {
     pending_commit: bool,
     message: Entity<InputState>,
     branch: Entity<InputState>,
+    pr_title: Entity<InputState>,
+    pr_base: Entity<InputState>,
+    pr_repository: Entity<InputState>,
+    pr_body: Entity<TextareaState>,
+    draft_pr: bool,
+    creating_pr: bool,
+    clear_pr: bool,
+    pending_pr: bool,
+    submitted_pr: Option<(String, String, String, String, bool)>,
+    created_pr: Option<String>,
     scroll: UniformListScrollHandle,
     pub colors: SetupColors,
     applied_colors: SetupColors,
@@ -58,10 +68,23 @@ impl GitControls {
         };
         let message = field("Commit message");
         let branch = field("Branch name");
-        let subscriptions = [&message, &branch]
-            .into_iter()
-            .map(|input| cx.observe(input, |_, _, cx| cx.notify()))
-            .collect();
+        let pr_title = field("Pull request title");
+        let pr_base = field("Base branch (default when blank)");
+        let pr_repository = field("Base repository (optional owner/repo)");
+        let pr_body = cx.new(|cx| {
+            let mut input = TextareaState::new(window, cx)
+                .placeholder("Description")
+                .auto_grow(2, 5)
+                .submit_on_enter(false);
+            input.set_editor_style(style.clone());
+            input
+        });
+        let mut subscriptions: Vec<Subscription> =
+            [&message, &branch, &pr_title, &pr_base, &pr_repository]
+                .into_iter()
+                .map(|input| cx.observe(input, |_, _, cx| cx.notify()))
+                .collect();
+        subscriptions.push(cx.observe(&pr_body, |_, _, cx| cx.notify()));
         Self {
             target: None,
             snapshot: None,
@@ -74,6 +97,16 @@ impl GitControls {
             pending_commit: false,
             message,
             branch,
+            pr_title,
+            pr_base,
+            pr_repository,
+            pr_body,
+            draft_pr: true,
+            creating_pr: false,
+            clear_pr: false,
+            pending_pr: false,
+            submitted_pr: None,
+            created_pr: None,
             scroll: Default::default(),
             colors,
             applied_colors: colors,
@@ -85,6 +118,9 @@ impl GitControls {
             return;
         }
         self.target = target;
+        self.clear_pr = true;
+        self.creating_pr = false;
+        self.created_pr = None;
         self.snapshot = None;
         self.pending = None;
         self.error = None;
@@ -107,6 +143,15 @@ impl GitControls {
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.send(None, cx);
     }
+    fn pr_draft(&self, cx: &App) -> (String, String, String, String, bool) {
+        (
+            self.pr_title.read(cx).value().to_string(),
+            self.pr_body.read(cx).value().to_string(),
+            self.pr_base.read(cx).value().to_string(),
+            self.pr_repository.read(cx).value().to_string(),
+            self.draft_pr,
+        )
+    }
     fn send(&mut self, operation: Option<GitOperation>, cx: &mut Context<Self>) {
         if self.pending.is_some() {
             return;
@@ -117,6 +162,13 @@ impl GitControls {
         let mut params =
             json!({"chatId":target.chat_id,"cwd":target.cwd,"targetDeviceId":target.device_id});
         let mutation = operation.is_some();
+        self.pending_pr = matches!(
+            operation.as_ref(),
+            Some(GitOperation::CreatePullRequest { .. })
+        );
+        if self.pending_pr {
+            self.submitted_pr = Some(self.pr_draft(cx));
+        }
         self.pending_commit = matches!(operation.as_ref(), Some(GitOperation::Commit { .. }));
         if mutation {
             self.notice = None;
@@ -160,6 +212,11 @@ impl GitControls {
                     .as_ref()
                     .is_some_and(|t| t.chat_id == snapshot.chat_id) =>
             {
+                if let Some(url) = snapshot.created_pull_request_url.clone() {
+                    self.created_pr = Some(url);
+                    self.creating_pr = false;
+                    self.clear_pr = self.submitted_pr.as_ref() == Some(&self.pr_draft(cx));
+                }
                 self.snapshot = Some(snapshot);
                 self.error = None;
                 if mutation {
@@ -174,7 +231,11 @@ impl GitControls {
             }
             Err(error) => {
                 if mutation {
-                    self.notice = Some(error);
+                    self.notice = Some(if self.pending_pr {
+                        format!("{error} Check pull requests before trying Create again.")
+                    } else {
+                        error
+                    });
                     self.snapshot = None;
                     self.refresh(cx);
                 } else {
@@ -300,9 +361,25 @@ impl Render for GitControls {
                 caret: c.text.into(),
                 ..Default::default()
             };
-            for field in [&self.message, &self.branch] {
+            for field in [
+                &self.message,
+                &self.branch,
+                &self.pr_title,
+                &self.pr_base,
+                &self.pr_repository,
+            ] {
                 field.update(cx, |input, _| input.set_editor_style(style.clone()));
             }
+            self.pr_body
+                .update(cx, |input, _| input.set_editor_style(style));
+        }
+        if self.clear_pr {
+            self.clear_pr = false;
+            for field in [&self.pr_title, &self.pr_base, &self.pr_repository] {
+                field.update(cx, |input, cx| input.set_value("", window, cx));
+            }
+            self.pr_body
+                .update(cx, |input, cx| input.set_value("", window, cx));
         }
         if self.clear_inputs {
             self.clear_inputs = false;
@@ -378,6 +455,64 @@ impl Render for GitControls {
             );
         }
         if let Some(snapshot) = &self.snapshot {
+            if self.creating_pr {
+                let draft = self.draft_pr;
+                let create = self
+                    .button(
+                        "git-create-pr-submit",
+                        if self.pending.is_some() {
+                            "Creating…"
+                        } else {
+                            "Create pull request"
+                        },
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let title = this.pr_title.read(cx).value().to_string();
+                        let body = this.pr_body.read(cx).value().to_string();
+                        let base = this.pr_base.read(cx).value().trim().to_owned();
+                        let repository = this.pr_repository.read(cx).value().trim().to_owned();
+                        this.send(
+                            Some(GitOperation::CreatePullRequest {
+                                title,
+                                body,
+                                base,
+                                base_repository: (!repository.is_empty()).then_some(repository),
+                                draft: this.draft_pr,
+                            }),
+                            cx,
+                        );
+                    }));
+                return view
+                    .child(div().text_size(px(11.)).text_color(self.colors.muted).child(
+                        "Push this branch first. Blank base and repository use hosted defaults.",
+                    ))
+                    .child(self.pr_title.clone())
+                    .child(self.pr_body.clone())
+                    .child(self.pr_base.clone())
+                    .child(self.pr_repository.clone())
+                    .child(
+                        crate::settings_style::toggle("git-create-pr-draft", draft, "Draft pull request")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if this.pending.is_none() {
+                                    this.draft_pr = !this.draft_pr;
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                    .child(div().flex().gap(px(6.)).child(
+                        self.button("git-create-pr-cancel", "Cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if this.pending.is_none() {
+                                    this.creating_pr = false;
+                                    cx.notify();
+                                }
+                            })),
+                    ).child(create))
+                    .when_some(self.notice.clone().or(self.error.clone()), |d, error| {
+                        d.child(div().text_size(px(11.)).text_color(self.colors.danger).child(error))
+                    });
+            }
+
             let counts = format!(
                 "{} staged · {} unstaged · ↑{} ↓{}",
                 staged.len(),
@@ -446,6 +581,26 @@ impl Render for GitControls {
                     let message = this.message.read(cx).value().to_string();
                     this.send(Some(GitOperation::Commit { message }), cx);
                 }));
+            view = view.child(
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .child(
+                        self.button("git-create-pr", "Create pull request")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if this.pending.is_none() {
+                                    this.creating_pr = true;
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                    .when_some(self.created_pr.clone(), |d, url| {
+                        d.child(
+                            self.button("git-open-created-pr", "Open created PR")
+                                .on_click(move |_, _, cx| cx.open_url(&url)),
+                        )
+                    }),
+            );
             let create = self
                 .button("git-create-branch", "Create")
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -533,7 +688,7 @@ mod tests {
             })
         });
         window
-            .update(cx, |view, _, cx| {
+            .update(cx, |view, window, cx| {
                 view.set_target(
                     Some(Target {
                         chat_id: "a".into(),
@@ -579,6 +734,44 @@ mod tests {
                 let read = view.pending.unwrap().0;
                 view.respond(read, Ok(snapshot("b")), cx);
                 assert_eq!(view.notice.as_deref(), Some("Confirmation lost"));
+                view.pr_title.update(cx, |input, cx| {
+                    input.set_value("Original title", window, cx)
+                });
+                let create = GitOperation::CreatePullRequest {
+                    title: "Original title".into(),
+                    body: "".into(),
+                    base: "".into(),
+                    base_repository: None,
+                    draft: true,
+                };
+                view.send(Some(create.clone()), cx);
+                let id = view.pending.unwrap().0;
+                view.respond(id, Err("Receipt lost".into()), cx);
+                assert!(
+                    view.notice
+                        .as_ref()
+                        .unwrap()
+                        .contains("Check pull requests")
+                );
+                let read = view.pending.unwrap().0;
+                view.respond(read, Ok(snapshot("b")), cx);
+                assert_eq!(view.pr_title.read(cx).value().as_ref(), "Original title");
+                view.send(Some(create), cx);
+                let id = view.pending.unwrap().0;
+                view.pr_title
+                    .update(cx, |input, cx| input.set_value("New draft", window, cx));
+                let mut receipt = snapshot("b");
+                receipt["createdPullRequestUrl"] = json!("https://github.com/acme/app/pull/1");
+                view.clear_pr = false;
+                view.respond(id, Ok(receipt), cx);
+                assert!(
+                    !view.clear_pr,
+                    "a successful creation cannot clear a newer draft"
+                );
+                assert_eq!(
+                    view.created_pr.as_deref(),
+                    Some("https://github.com/acme/app/pull/1")
+                );
                 view.set_target(
                     Some(Target {
                         chat_id: "b".into(),
@@ -598,14 +791,14 @@ mod tests {
                 .iter()
                 .filter(|c| c.method == methods::GIT_WORKSPACE_ACTION)
                 .count(),
-            2
+            4
         );
         assert_eq!(
             calls
                 .iter()
                 .filter(|c| c.method == methods::GET_GIT_WORKSPACE)
                 .count(),
-            3
+            4
         );
     }
 }

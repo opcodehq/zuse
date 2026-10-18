@@ -27,6 +27,7 @@ mod previews;
 mod project_actions;
 mod provider_settings;
 mod provider_updates;
+mod pull_requests;
 mod questions;
 mod queue;
 mod queue_edit;
@@ -70,6 +71,7 @@ use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 
 pub struct WorkspaceView {
     git_controls: Entity<git_controls::GitControls>,
+    pull_requests: pull_requests::PullRequests,
     git_requests: HashMap<u64, u64>,
     _git_events: Subscription,
     workspace_focus: FocusHandle,
@@ -362,6 +364,7 @@ impl WorkspaceView {
                 this.git_requests.insert(id, event.id);
             },
         );
+        let pull_requests = pull_requests::PullRequests::new(window, cx);
         let reasoning_focus = cx.focus_handle();
         let file_editor = cx.new(|cx| input::TextInput::code(window, cx));
         cx.observe(&file_editor, |_, _, cx| cx.notify()).detach();
@@ -599,6 +602,7 @@ impl WorkspaceView {
             uploading: 0,
             composer_generation: 0,
             git_controls,
+            pull_requests,
             git_requests: HashMap::new(),
             _git_events: git_events,
             _reader: reader,
@@ -751,6 +755,9 @@ impl WorkspaceView {
                     self.reset_history(cx);
                 }
             }
+            return;
+        }
+        if self.receive_pull_requests(id, &frame, cx) {
             return;
         }
         if self.receive_thread_action(id, &frame, cx) {

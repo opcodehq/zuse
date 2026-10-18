@@ -74,14 +74,71 @@ impl EngineRpc {
                         "Git state changed. Refresh before trying this action.".into(),
                     ));
                 }
-                let result =
-                    crate::git_workspace::apply(&actual.root, &current, &request.operation).await;
-                this.diff_sync.sync_all();
-                result.map_err(|e| RpcError::Failed(e.to_string()))?;
-                let updated =
+                let created =
+                    if let zuse_protocol::git_workspace::GitOperation::CreatePullRequest {
+                        title,
+                        body,
+                        base,
+                        base_repository,
+                        draft,
+                    } = &request.operation
+                    {
+                        if current.upstream.is_none()
+                            || current.ahead > 0
+                            || current.head_sha.is_none()
+                            || current.branch == "HEAD"
+                        {
+                            return Err(RpcError::Failed(
+                                "Push this branch before creating its pull request.".into(),
+                            ));
+                        }
+                        let resolver = crate::source_control::ChangeRequestResolver::new();
+                        let source = resolver
+                            .inspect_checkout(&actual.root)
+                            .await
+                            .map_err(change_request_rpc_error)?;
+                        if source.branch.local_branch != current.branch {
+                            return Err(RpcError::Failed(
+                                "The branch changed. Refresh Git before creating a pull request."
+                                    .into(),
+                            ));
+                        }
+                        let repository = resolver
+                            .repository_for_checkout(&actual.root)
+                            .await
+                            .ok_or_else(|| {
+                                RpcError::Failed(
+                                    "This checkout has no supported GitHub remote.".into(),
+                                )
+                            })?;
+                        Some(
+                            this.github
+                                .create_pull_request(
+                                    &repository,
+                                    &source.branch.head_branch,
+                                    current.head_sha.as_deref().unwrap(),
+                                    title,
+                                    body,
+                                    base,
+                                    base_repository.as_deref().filter(|s| !s.trim().is_empty()),
+                                    *draft,
+                                )
+                                .await
+                                .map_err(change_request_rpc_error)?,
+                        )
+                    } else {
+                        let result =
+                            crate::git_workspace::apply(&actual.root, &current, &request.operation)
+                                .await;
+                        this.diff_sync.sync_all();
+                        result.map_err(|e| RpcError::Failed(e.to_string()))?;
+                        None
+                    };
+                let mut updated =
                     crate::git_workspace::snapshot(&this.repos, &actual.root, &target.chat_id)
                         .await
                         .map_err(|e| RpcError::Failed(e.to_string()))?;
+                updated.created_pull_request_url = created;
                 this.workspace
                     .reconcile_git_branch(&chat, &updated.checkout_id, &updated.branch)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;

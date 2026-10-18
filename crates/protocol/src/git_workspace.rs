@@ -15,6 +15,8 @@ pub struct GitWorkspace {
     pub files: Vec<GitFileStatus>,
     pub complete: bool,
     pub revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_pull_request_url: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(
@@ -24,13 +26,30 @@ pub struct GitWorkspace {
     deny_unknown_fields
 )]
 pub enum GitOperation {
-    Stage { paths: Vec<String> },
-    Unstage { paths: Vec<String> },
-    Commit { message: String },
+    Stage {
+        paths: Vec<String>,
+    },
+    Unstage {
+        paths: Vec<String>,
+    },
+    Commit {
+        message: String,
+    },
     Push,
     Pull,
-    CreateBranch { name: String },
-    SwitchBranch { name: String },
+    CreateBranch {
+        name: String,
+    },
+    SwitchBranch {
+        name: String,
+    },
+    CreatePullRequest {
+        title: String,
+        body: String,
+        base: String,
+        base_repository: Option<String>,
+        draft: bool,
+    },
 }
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

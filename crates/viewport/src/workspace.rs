@@ -20,6 +20,7 @@ impl WorkspaceView {
         for (id, _) in std::mem::take(&mut self.git_requests) {
             self.cancel(id);
         }
+        self.reset_pull_requests(cx);
         self.reset_project_actions(cx);
         self.detach_browser_terminal(cx);
         for id in [
@@ -171,6 +172,7 @@ impl WorkspaceView {
             }
             "changes" if !self.cwd().is_empty() => self.refresh_changes(cx),
             "history" if self.history.page.is_none() => self.refresh_history(cx),
+            "pullRequests" => self.refresh_pull_requests(cx),
             "terminal" if self.terminal_id.is_none() => {
                 if !self.restore_browser_terminal(cx) {
                     self.open_browser_terminal(cx);

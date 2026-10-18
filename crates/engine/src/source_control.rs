@@ -3,6 +3,8 @@
 //! Process execution and provider calls intentionally live outside this layer so
 //! remote parsing and head selector construction remain deterministic and testable.
 
+#[path = "source_control_create.rs"]
+mod create;
 #[path = "source_control_review_threads.rs"]
 mod review_threads;
 
@@ -519,18 +521,18 @@ impl GitHubCli {
                 ),
                 ..github_request()
             })
-            .await
-            .map_err(classify_run_error)?;
-        if !output.success {
-            return Err(classify_github_failure(&output.stderr));
-        }
-        // Evict after the server accepted the write, even if its reply cannot
-        // be decoded. A read already in flight may predate it: keep it out too.
+            .await;
+        // A lost receipt may still represent an accepted write. Evict on every
+        // attempt, including timeouts, and retire reads that predate it.
         let key = format!("false:{url}:");
         let mut cache = self.pr_cache.lock().await;
         cache.entries.retain(|entry| !entry.0.starts_with(&key));
         cache.in_flight.retain(|entry, _| !entry.starts_with(&key));
         drop(cache);
+        let output = output.map_err(classify_run_error)?;
+        if !output.success {
+            return Err(classify_github_failure(&output.stderr));
+        }
         if output.stdout_truncated {
             return Err(ChangeRequestError::Decode);
         }
@@ -4482,6 +4484,147 @@ printf '%s\n' '[{"number":90,"title":"Host-resolved pull request","url":"https:/
         assert_eq!(
             context.head_selectors,
             ["acme:feature/shared", "feature/shared"]
+        );
+    }
+    #[tokio::test]
+    async fn pr_creation_posts_literal_json_after_published_revision_check() {
+        let sha = "a".repeat(40);
+        let body = "A description\n\n`$(literal)`";
+        let runner = FakeProcessRunner::with_responses([
+            command_success(br#"{"full_name":"acme/app","default_branch":"main"}"#.to_vec()),
+            command_success(serde_json::to_vec(&serde_json::json!({"commit":{"sha":sha}})).unwrap()),
+            command_success(serde_json::to_vec(&serde_json::json!({"html_url":"https://github.com/acme/app/pull/7","head":{"sha":sha}})).unwrap()),
+        ]);
+        let github = GitHubCli::with_runner(runner.clone());
+        let url = github
+            .create_pull_request(
+                "acme/app",
+                "feature/topic",
+                &sha,
+                "Add feature",
+                body,
+                "",
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(url, "https://github.com/acme/app/pull/7");
+        let requests = runner.requests();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[1].args[1].ends_with("branches/feature%2Ftopic"));
+        assert_eq!(
+            requests[2].args,
+            [
+                "api",
+                "--method",
+                "POST",
+                "repos/acme/app/pulls",
+                "--input",
+                "-"
+            ]
+        );
+        let payload: serde_json::Value =
+            serde_json::from_slice(requests[2].stdin.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            payload,
+            serde_json::json!({"title":"Add feature","body":body,"base":"main","head":"feature/topic","draft":true})
+        );
+    }
+
+    #[tokio::test]
+    async fn pr_creation_targets_fork_parent_and_refuses_unpublished_head() {
+        let sha = "b".repeat(40);
+        let fork = br#"{"full_name":"acme/fork","parent":{"full_name":"acme/app"}}"#.to_vec();
+        let parent = br#"{"full_name":"acme/app","default_branch":"main"}"#.to_vec();
+        let published = serde_json::to_vec(&serde_json::json!({"commit":{"sha":sha}})).unwrap();
+        let runner = FakeProcessRunner::with_responses([
+            command_success(fork.clone()), command_success(parent.clone()), command_success(published),
+            command_success(serde_json::to_vec(&serde_json::json!({"html_url":"https://github.com/acme/app/pull/8","head":{"sha":sha}})).unwrap()),
+        ]);
+        GitHubCli::with_runner(runner.clone())
+            .create_pull_request(
+                "acme/fork",
+                "topic",
+                &sha,
+                "Title",
+                "",
+                "release",
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let requests = runner.requests();
+        let payload: serde_json::Value =
+            serde_json::from_slice(requests[3].stdin.as_ref().unwrap()).unwrap();
+        assert_eq!(payload["head"], "acme:topic");
+        assert_eq!(payload["head_repo"], "fork");
+        assert_eq!(payload["base"], "release");
+        let stale = FakeProcessRunner::with_responses([
+            command_success(fork),
+            command_success(parent),
+            command_success(
+                serde_json::to_vec(&serde_json::json!({"commit":{"sha":"c".repeat(40)}})).unwrap(),
+            ),
+        ]);
+        assert_eq!(
+            GitHubCli::with_runner(stale.clone())
+                .create_pull_request("acme/fork", "topic", &sha, "Title", "", "", None, false)
+                .await,
+            Err(ChangeRequestError::RepositoryUnavailable)
+        );
+        assert_eq!(
+            stale.requests().len(),
+            3,
+            "no POST for an unpublished revision"
+        );
+    }
+
+    #[tokio::test]
+    async fn pr_write_timeouts_retire_cached_reads_without_replaying_writes() {
+        let sha = "a".repeat(40);
+        let runner = FakeProcessRunner::with_responses([
+            command_success(br#"{"full_name":"acme/app","default_branch":"main"}"#.to_vec()),
+            command_success(
+                serde_json::to_vec(&serde_json::json!({"commit":{"sha":sha}})).unwrap(),
+            ),
+            Err(ProcessRunError::Timeout),
+            Err(ProcessRunError::Timeout),
+        ]);
+        let github = GitHubCli::with_runner(runner.clone());
+        let key = "false:https://github.com/acme/app/pull/1::";
+        github.pr_cache.lock().await.entries.push((
+            key.into(),
+            Instant::now(),
+            Ok(serde_json::json!({})),
+        ));
+        assert!(
+            github
+                .create_pull_request("acme/app", "topic", &sha, "Title", "", "", None, false)
+                .await
+                .is_err()
+        );
+        assert!(github.pr_cache.lock().await.entries.is_empty());
+        github.pr_cache.lock().await.entries.push((
+            key.into(),
+            Instant::now(),
+            Ok(serde_json::json!({})),
+        ));
+        assert!(
+            github
+                .post_comment("https://github.com/acme/app/pull/1", "Body")
+                .await
+                .is_err()
+        );
+        assert!(github.pr_cache.lock().await.entries.is_empty());
+        assert_eq!(
+            runner
+                .requests()
+                .iter()
+                .filter(|r| r.args.iter().any(|a| a == "POST"))
+                .count(),
+            2
         );
     }
 }

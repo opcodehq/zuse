@@ -170,6 +170,7 @@ pub(crate) async fn snapshot(
         files,
         complete,
         revision: crate::repos::hex(&hash.finalize()),
+        created_pull_request_url: None,
     })
 }
 pub(crate) async fn apply(
@@ -183,6 +184,11 @@ pub(crate) async fn apply(
         ));
     }
     match operation {
+        GitOperation::CreatePullRequest { .. } => {
+            return Err(error(
+                "PR creation must use the host source-control workflow.",
+            ));
+        }
         GitOperation::Stage { paths } | GitOperation::Unstage { paths } => {
             if paths.is_empty() || paths.len() > 10000 {
                 return Err(error("Choose between one and 10,000 changed files."));

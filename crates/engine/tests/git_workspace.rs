@@ -91,6 +91,9 @@ async fn literal_staging_unborn_unstage_selective_commit_stale_index_and_archive
     std::fs::write(f.repo.join("literal1.txt"), "other\n").unwrap();
     let before = f.status().await;
     assert!(before["headSha"].is_null());
+    let create = json!({"action":"createPullRequest","title":"Feature","body":"", "base":"", "baseRepository":null,"draft":true});
+    let error = f.action_at(&before, create.clone()).await.unwrap_err();
+    assert!(error.to_string().contains("Push this branch"));
     let staged = f
         .action(json!({"action":"stage","paths":["literal[1].txt"]}))
         .await;
@@ -136,6 +139,8 @@ async fn literal_staging_unborn_unstage_selective_commit_stale_index_and_archive
         "unstaged edit\n"
     );
     let current = f.status().await;
+    let error = f.action_at(&current, create).await.unwrap_err();
+    assert!(error.to_string().contains("Push this branch"));
     for path in ["../outside", "literal*.txt", "/tmp/outside"] {
         assert!(
             f.action_at(&current, json!({"action":"stage","paths":[path]}))

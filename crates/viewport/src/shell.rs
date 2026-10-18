@@ -803,7 +803,7 @@ impl WorkspaceView {
         column()
             .w(px(if self.open_file.is_some() {
                 400.
-            } else if self.right_tab == "history" {
+            } else if matches!(self.right_tab.as_str(), "history" | "pullRequests") {
                 400.
             } else if self.right_tab == "terminal" {
                 360.
@@ -833,6 +833,7 @@ impl WorkspaceView {
                                     ("files", "Files"),
                                     ("changes", "Changes"),
                                     ("history", "History"),
+                                    ("pullRequests", "PRs"),
                                     ("terminal", "Terminal"),
                                     ("actions", "Actions"),
                                     ("recovery", "Recovery"),
@@ -904,6 +905,7 @@ impl WorkspaceView {
                     .into_any_element(),
                 "changes" => self.workspace_changes_view(cx),
                 "history" => self.history_view(cx),
+                "pullRequests" => self.pull_requests_view(cx),
                 _ => self.files_view(cx),
             })
             .into_any_element()
@@ -1200,7 +1202,9 @@ impl Render for WorkspaceView {
 
         let panel_width = if !self.right_open || self.settings || self.project_picker {
             0.
-        } else if self.open_file.is_some() || self.right_tab == "history" {
+        } else if self.open_file.is_some()
+            || matches!(self.right_tab.as_str(), "history" | "pullRequests")
+        {
             400.
         } else if self.right_tab == "terminal" {
             360.
@@ -1374,7 +1378,7 @@ fn inline(runs: &[InlineRun]) -> AnyElement {
         .into_any_element()
 }
 
-fn markdown_block(block: &Block) -> AnyElement {
+pub(super) fn markdown_block(block: &Block) -> AnyElement {
     match block {
         Block::Paragraph { runs } => div().child(inline(runs)).into_any_element(),
         Block::Heading { level, runs } => div()
