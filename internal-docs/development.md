@@ -8,6 +8,24 @@ The native platform needs a C/C++ compiler, pkg-config, CMake, OpenSSL, Fontconf
 
 The cloud development VM runs Amazon Linux 2023, whose configured package repositories lack WebKitGTK 4.1. Native builds were verified in an Ubuntu 24.04 userspace with the real WebKitGTK and JSON-GLib development packages. Use a distribution providing these packages for native development; a missing package must not silently disable previews. Compilation alone does not verify a rendered desktop or embedded browser.
 
+On Ubuntu 24.04, install the native build dependencies with:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev \
+  libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+  libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev \
+  libwebkit2gtk-4.1-dev libjson-glib-dev
+```
+
+The SDK model transport additionally requires Node.js 22 or newer. Individual agent CLIs require their own installation and provider login.
+
+### Linux native browser scenario
+
+`bash scripts/test-native-browser-linux.sh` builds the native browser fixture and runs the production shell with real WebKitGTK in an isolated Xvfb display. Install `xvfb xauth xdotool imagemagick dbus-x11 mesa-vulkan-drivers fonts-dejavu-core` for this scenario. It needs no provider credentials, uses temporary profile storage and a loopback website, and saves its log, PNGs and result JSON under a new `.context/native-browser-linux-*` directory.
+
+Pass `--binary /absolute/path/to/browser-fixture` to reuse a completed build, or `--output /path/to/empty-directory` to select the evidence directory. The run has a five-minute external deadline; an independent heartbeat fails sooner if an animated page starves GPUI's main executor. Failure preserves evidence and prints the log tail. The scenario covers native browser input/compositing with synthetic conversation data, not real agent execution, physical input devices, OS portals or hardware-GPU performance.
+
 ## Validation policy
 
 Use `cargo check` for integration feedback. Keep tests centered on observable behavior and run relevant suites at milestones. Run native and browser acceptance separately: a web screenshot does not verify platform-specific desktop integration.

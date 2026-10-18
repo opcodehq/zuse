@@ -141,6 +141,44 @@ pub async fn exercise(
     cx: &mut AsyncApp,
 ) -> anyhow::Result<()> {
     eval(&page,"document.body.style.paddingTop='0'; document.body.insertAdjacentHTML('afterbegin', `<div id='browser-blur-grid' style='height:140px;background:repeating-conic-gradient(#172f25 0% 25%,#f5f0df 0% 50%) 0 0/16px 16px'></div><input id='browser-input' style='height:32px;width:200px' placeholder='Browser input'><button id='browser-button' onclick='window.browserClicks=(window.browserClicks||0)+1'>Click</button>`); window.browserClicks=0; document.body.addEventListener('pointerdown',()=>window.pagePresses=(window.pagePresses||0)+1); let live=document.createElement('div');live.style='position:fixed;bottom:12px;right:12px;background:#29483b;color:white;padding:8px;border-radius:6px;font:12px monospace';document.body.append(live);window.browserFrames=0;function frame(){live.textContent='LIVE '+(++window.browserFrames);requestAnimationFrame(frame)}frame();true",cx).await?;
+    // Animated pages can keep the native event queue continuously ready.
+    // Keep an independent deadline so executor starvation fails this process
+    // even when a main-thread timeout could never get polled.
+    let max_ui_gap = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let measured_gap = max_ui_gap.clone();
+    let (pulse, deadline) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut previous = std::time::Instant::now();
+        loop {
+            match deadline.recv_timeout(Duration::from_secs(3)) {
+                Ok(()) => {
+                    measured_gap.fetch_max(
+                        previous.elapsed().as_millis() as u64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    previous = std::time::Instant::now();
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    eprintln!(
+                        "Browser fixture failed: animated browser starved the UI timer beyond 3 seconds"
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+    });
+    let _heartbeat = cx.spawn(async move |cx| {
+        loop {
+            pause(cx, 100).await;
+            if matches!(
+                pulse.try_send(()),
+                Err(std::sync::mpsc::TrySendError::Disconnected(_))
+            ) {
+                break;
+            }
+        }
+    });
     pause(cx, 400).await;
     let bounds = page.read_with(cx, |b, _| b.fixture_linux_bounds());
     let input=eval(&page,"(()=>{let r=document.getElementById('browser-input').getBoundingClientRect();return [r.x+20,r.y+15]})()",cx).await?;
@@ -238,13 +276,18 @@ pub async fn exercise(
         }),
         cx,
     )?;
-    pause(cx, 150).await;
-    anyhow::ensure!(
-        cx.update(|cx| cx.read_from_clipboard().and_then(|v| v.text()))
-            .as_deref()
-            == Some("hello linux — café 日本語"),
-        "browser copy did not reach app clipboard"
-    );
+    let copied = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let clipboard = cx.update(|cx| cx.read_from_clipboard().and_then(|v| v.text()));
+        if clipboard.as_deref() == Some("hello linux — café 日本語") {
+            break;
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < copied,
+            "browser copy did not reach app clipboard: {clipboard:?}"
+        );
+        pause(cx, 20).await;
+    }
     eval(&page,"(()=>{let e=document.getElementById('browser-input');e.setSelectionRange(e.value.length,e.value.length);return true})()",cx).await?;
     window.update(cx, |_, w, cx| {
         page.update(cx, |b, cx| {
@@ -568,7 +611,7 @@ pub async fn exercise(
     std::fs::write(
         output.join("linux-results.json"),
         serde_json::to_vec_pretty(
-            &serde_json::json!({"keyboard":true,"unicodeClipboard":true,"imeComposition":true,"buttonAndScroll":true,"menuClickIsolation":true,"hoverVisibility":true,"resizeWidths":widths,"cssViewport":width,"liveFrames":frames,"sidebarTransitions":true}),
+            &serde_json::json!({"maxUiTimerGapMs":max_ui_gap.load(std::sync::atomic::Ordering::Relaxed),"keyboard":true,"unicodeClipboard":true,"imeComposition":true,"buttonAndScroll":true,"menuClickIsolation":true,"hoverVisibility":true,"resizeWidths":widths,"cssViewport":width,"liveFrames":frames,"sidebarTransitions":true}),
         )?,
     )?;
     Ok(())

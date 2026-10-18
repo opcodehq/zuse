@@ -10,7 +10,7 @@ use std::{
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         Arc, Mutex, Weak,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
 };
 use tokio::sync::mpsc::Sender;
@@ -64,11 +64,40 @@ impl Drop for Worker {
 }
 struct Route {
     tx: Sender<NativeEvent>,
+    frame_pending: AtomicBool,
+    state_pending: AtomicBool,
     state: Mutex<PageState>,
     frame: Mutex<Option<(Arc<RenderImage>, f32)>>,
     input: Mutex<Value>,
     #[cfg(feature = "browser-fixture")]
     evaluation: Mutex<Option<Value>>,
+}
+
+impl Route {
+    fn notify(&self, event: NativeEvent) {
+        let pending = match &event {
+            NativeEvent::Frame => &self.frame_pending,
+            NativeEvent::Changed => &self.state_pending,
+            // These carry an action rather than replaceable cached state.
+            _ => {
+                let _ = self.tx.blocking_send(event);
+                return;
+            }
+        };
+        if !pending.swap(true, Ordering::AcqRel) && self.tx.try_send(event).is_err() {
+            pending.store(false, Ordering::Release);
+        }
+    }
+
+    fn acknowledge(&self, event: &NativeEvent) {
+        // Clear before reading the cached frame/state. A concurrent producer
+        // then either joins that read or queues a subsequent notification.
+        match event {
+            NativeEvent::Frame => self.frame_pending.store(false, Ordering::Release),
+            NativeEvent::Changed => self.state_pending.store(false, Ordering::Release),
+            _ => {}
+        }
+    }
 }
 
 fn helper_path() -> Result<std::path::PathBuf, String> {
@@ -254,12 +283,9 @@ impl BrowserData {
                         b'J' => { *route.evaluation.lock().unwrap() = serde_json::from_slice(&data).ok(); continue; }
                         _ => continue,
                     };
-                    // At most one latest frame is retained per page. A busy UI
-                    // never accumulates video frames or blocks the engine.
-                    match event {
-                        NativeEvent::NewTab(_) | NativeEvent::Clipboard(_) | NativeEvent::Menu(_) => { let _ = route.tx.blocking_send(event); }
-                        _ => { let _ = route.tx.try_send(event); }
-                    }
+                    // Cache the newest pixels/state and queue only one wake
+                    // for each. Animation must not fill the UI with stale wakes.
+                    route.notify(event);
                 }
             })();
             if result.is_err() {
@@ -267,7 +293,7 @@ impl BrowserData {
                     let mut state = route.state.lock().unwrap();
                     state.loading = false;
                     state.error = Some("The browser helper stopped. Check that WebKitGTK 4.1 is installed, then reopen the tab.".into());
-                    drop(state); let _ = route.tx.try_send(NativeEvent::Changed);
+                    drop(state); route.notify(NativeEvent::Changed);
                 }
             }
         }).map_err(|e| e.to_string())?;
@@ -333,6 +359,8 @@ impl NativePage {
         let id = worker.next_id.fetch_add(1, Ordering::Relaxed);
         let route = Arc::new(Route {
             tx,
+            frame_pending: AtomicBool::new(false),
+            state_pending: AtomicBool::new(false),
             state: Mutex::default(),
             frame: Mutex::default(),
             input: Mutex::new(json!({})),
@@ -480,6 +508,7 @@ impl super::BrowserSurface {
         let Some(native) = &mut self.native else {
             return;
         };
+        native.route.acknowledge(&event);
         native.update_frame(window);
         match event {
             NativeEvent::NewTab(url) => {
@@ -842,6 +871,52 @@ impl super::BrowserSurface {
 #[cfg(test)]
 mod storage_tests {
     use super::*;
+
+    #[test]
+    fn native_browser_notifications_coalesce_pixels_without_dropping_actions() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let route = Route {
+            tx,
+            frame_pending: AtomicBool::new(false),
+            state_pending: AtomicBool::new(false),
+            state: Mutex::default(),
+            frame: Mutex::default(),
+            input: Mutex::new(json!({})),
+            #[cfg(feature = "browser-fixture")]
+            evaluation: Mutex::default(),
+        };
+        for _ in 0..1000 {
+            route.notify(NativeEvent::Frame);
+            route.notify(NativeEvent::Changed);
+        }
+        route.notify(NativeEvent::Clipboard("copied text".into()));
+        route.notify(NativeEvent::NewTab("https://example.org".into()));
+        route.notify(NativeEvent::Menu(json!({"items":[]})));
+        assert_eq!(rx.len(), 5, "cached updates must leave room for actions");
+        let frame = rx.try_recv().unwrap();
+        assert!(matches!(frame, NativeEvent::Frame));
+        route.acknowledge(&frame);
+        // A new frame arriving while the UI reads the cache needs a new wake.
+        route.notify(NativeEvent::Frame);
+        let state = rx.try_recv().unwrap();
+        assert!(matches!(state, NativeEvent::Changed));
+        route.acknowledge(&state);
+        route.notify(NativeEvent::Changed);
+        assert!(
+            matches!(rx.try_recv().unwrap(), NativeEvent::Clipboard(text) if text == "copied text")
+        );
+        assert!(
+            matches!(rx.try_recv().unwrap(), NativeEvent::NewTab(url) if url == "https://example.org")
+        );
+        assert!(matches!(rx.try_recv().unwrap(), NativeEvent::Menu(_)));
+        assert!(matches!(rx.try_recv().unwrap(), NativeEvent::Frame));
+        assert!(matches!(rx.try_recv().unwrap(), NativeEvent::Changed));
+        assert!(rx.try_recv().is_err());
+        drop(rx);
+        route.acknowledge(&NativeEvent::Frame);
+        route.notify(NativeEvent::Frame);
+        assert!(!route.frame_pending.load(Ordering::Acquire));
+    }
 
     #[test]
     fn startup_surfaces_storage_errors_and_rejects_invalid_packets() {

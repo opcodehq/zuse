@@ -175,6 +175,13 @@ impl BrowserSurface {
                 {
                     break;
                 }
+                // An animated offscreen page may produce updates faster than
+                // a redraw finishes. Tokio's cooperative budget is not driven
+                // by GPUI's executor: explicitly return control to its event loop.
+                #[cfg(target_os = "linux")]
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1))
+                    .await;
             }
         });
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
