@@ -13,6 +13,9 @@ pub struct PairingCard {
     state: Entity<AppState>,
     engine: Option<EngineHandle>,
     status: Value,
+    relay_status: Value,
+    relay_origin: Entity<ComposerInput>,
+    relay_credential: Entity<ComposerInput>,
     peers: Vec<zuse_remote::PeerMetadata>,
     invitation: Option<zuse_remote::PairedTarget>,
     name: Entity<ComposerInput>,
@@ -48,6 +51,11 @@ impl PairingCard {
             this.invitation = None;
             this.peers.clear();
             this.status = Value::Null;
+            this.relay_status = Value::Null;
+            this.relay_origin
+                .update(cx, |input, cx| input.set_text("", cx));
+            this.relay_credential
+                .update(cx, |input, cx| input.set_text("", cx));
             this.busy = false;
             this.error = None;
             this.refresh(cx);
@@ -60,7 +68,13 @@ impl PairingCard {
         let certificate = cx.new(|cx| ComposerInput::new("Certificate file path", cx));
         let key = cx.new(|cx| ComposerInput::new("Private key file path", cx));
         let destination = cx.new(|cx| ComposerInput::new("Paste a private pairing link", cx));
+        let relay_origin = cx.new(|cx| ComposerInput::new("https://relay.example.com", cx));
+        let relay_credential =
+            cx.new(|cx| ComposerInput::new("Private host credential file on this computer", cx));
         let mut card = Self {
+            relay_status: Value::Null,
+            relay_origin,
+            relay_credential,
             state,
             engine,
             status: Value::Null,
@@ -88,15 +102,22 @@ impl PairingCard {
         };
         let epoch = self.epoch;
         self.load = Some(cx.spawn(async move |this, cx| {
-            let (status, peers) = futures::join!(
+            let (status, peers, relay) = futures::join!(
                 engine
                     .client()
                     .call(methods::BROWSER_ACCESS_STATUS, json!({})),
-                engine.client().call(methods::LIST_PAIRINGS, json!({}))
+                engine.client().call(methods::LIST_PAIRINGS, json!({})),
+                engine
+                    .client()
+                    .call(methods::RELAY_ACCESS_STATUS, json!({}))
             );
             let _ = this.update(cx, |card, cx| {
                 if card.epoch != epoch {
                     return;
+                }
+                match relay {
+                    Ok(status) => card.relay_status = status,
+                    Err(error) => card.error = Some(error.to_string()),
                 }
                 match status {
                     Ok(status) => card.status = status,
@@ -133,9 +154,9 @@ impl PairingCard {
                     Ok(value)=>{
                         if method==methods::CREATE_PAIRING {
                             card.invitation=value["fragment"].as_str().and_then(|fragment|zuse_remote::Invitation::parse_fragment(fragment).ok())
-                                .and_then(|invitation|card.status["origin"].as_str().and_then(|origin|zuse_remote::PairedTarget::new(origin,invitation).ok()));
-                            if card.invitation.is_none(){card.error=Some("The invitation was created, but its browser URL is unavailable. Refresh browser access before sharing it.".into());}
-                        }else if method==methods::REVOKE_PAIRING{card.invitation=None;}
+                                .and_then(|invitation|value["origin"].as_str().and_then(|origin|zuse_remote::PairedTarget::new(origin,invitation).ok()));
+                            if card.invitation.is_none(){card.error=Some("The invitation was created, but its connection URL is unavailable. Start browser or relay access before sharing it.".into());}
+                        }else if matches!(method, methods::REVOKE_PAIRING | methods::START_RELAY_ACCESS | methods::STOP_RELAY_ACCESS){card.invitation=None;}
                         card.refresh(cx);
                     },
                     Err(error)=>card.error=Some(error.to_string()),
@@ -152,6 +173,10 @@ impl PairingCard {
         };
         let params = json!({"listen":self.listen.read(cx).text().trim(),"publicOrigin":optional(&self.origin),"tlsCert":optional(&self.certificate),"tlsKey":optional(&self.key)});
         self.request(methods::START_BROWSER_ACCESS, params, cx);
+    }
+    fn start_relay(&mut self, cx: &mut Context<Self>) {
+        let params = json!({"origin":self.relay_origin.read(cx).text().trim(),"hostTokenFile":self.relay_credential.read(cx).text().trim()});
+        self.request(methods::START_RELAY_ACCESS, params, cx);
     }
     fn create(&mut self, cx: &mut Context<Self>) {
         let name = self.name.read(cx).text().trim().to_owned();
@@ -233,6 +258,8 @@ impl Render for PairingCard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
         let running = self.status["running"] == true;
+        let relay_running = self.relay_status["running"] == true;
+        let can_invite = running || relay_running;
         let managed = self.status["managed"] == true;
         let busy = self.busy;
         let invite = self.invitation.clone();
@@ -248,12 +275,21 @@ impl Render for PairingCard {
                         .child(widgets::card_row(&theme,false).child(details(&theme,"Public URL","Required for access from other devices. Use an HTTPS URL trusted by them.")).child(field(&theme,self.origin.clone())))
                         .child(widgets::card_row(&theme,false).child(details(&theme,"HTTPS certificate","Choose a certificate and matching private key for direct HTTPS."))
                             .child(div().flex_1().min_w(px(200.)).flex().flex_col().gap(px(8.)).child(field(&theme,self.certificate.clone())).child(field(&theme,self.key.clone())))))))
+            .child(frame(&theme).child(header(&theme,"Relay access","Connect across networks through an outbound encrypted connection. Start explicitly for this engine session."))
+                .child(widgets::section_card(&theme).mt(px(0.))
+                    .child(widgets::card_row(&theme,true).child(details(&theme,"Relay",if relay_running {self.relay_status["origin"].as_str().unwrap_or("Running")}else{"Stopped"}))
+                        .child(widgets::text_action(&theme,widgets::ActionTone::Outlined,if relay_running {"Stop relay"}else{"Start relay"}).id("native-relay-access")
+                            .on_click(cx.listener(move|this,_,_,cx|{if relay_running {this.request(methods::STOP_RELAY_ACCESS,json!({}),cx);}else{this.start_relay(cx);}}))))
+                    .when(!relay_running,|card|card
+                        .child(widgets::card_row(&theme,false).child(details(&theme,"Relay URL","Use your relay’s HTTPS origin.")).child(field(&theme,self.relay_origin.clone())))
+                        .child(widgets::card_row(&theme,false).child(details(&theme,"Host credential","Choose the private token file issued by your relay operator on this engine’s computer.")).child(field(&theme,self.relay_credential.clone()))))
+                    .when(relay_running,|card|card.child(widgets::card_row(&theme,false).child(details(&theme,"Transport",&format!("{} broker sockets · {} sessions. Refresh to update. Socket counts do not confirm application responsiveness.",self.relay_status["sockets"].as_u64().unwrap_or(0),self.relay_status["sessions"].as_u64().unwrap_or(0))))))))
             .child(frame(&theme).child(header(&theme,"Connect a device","Invitations grant access to this engine’s agents, files, terminals and settings."))
                 .child(widgets::section_card(&theme).mt(px(0.))
                     .child(widgets::card_row(&theme,true).child(field(&theme,self.name.clone()))
                         .child(widgets::text_action(&theme,widgets::ActionTone::Filled,if busy{"Working…"}else{"Create invitation"}).id("native-create-invitation")
-                            .when(!running||busy,|button|button.opacity(0.45))
-                            .on_click(cx.listener(move|this,_,_,cx|{if running&&!busy{this.create(cx);}}))))
+                            .when(!can_invite||busy,|button|button.opacity(0.45))
+                            .on_click(cx.listener(move|this,_,_,cx|{if can_invite&&!busy{this.create(cx);}}))))
                     .when_some(invite,|card,target|{
                         let copy=target.clone();
                         card.child(widgets::card_row(&theme,false).child(details(&theme,"Private invitation","Share only with someone you trust. Unused invitations expire in ten minutes."))

@@ -46,6 +46,7 @@ struct Shared {
     profile: PathBuf,
     device_id: String,
     pairings: zuse_remote::authority::Authority,
+    slots: Arc<tokio::sync::Semaphore>,
     closed: CancellationToken,
     state: Mutex<State>,
 }
@@ -68,6 +69,7 @@ impl Owner {
             profile: profile.into(),
             device_id,
             pairings,
+            slots: Arc::new(tokio::sync::Semaphore::new(64)),
             closed: CancellationToken::new(),
             state: Mutex::new(State::default()),
         })))
@@ -84,6 +86,9 @@ impl Owner {
     }
 }
 impl BrowserAccess {
+    pub fn pairing_slots(&self) -> Arc<tokio::sync::Semaphore> {
+        self.0.slots.clone()
+    }
     /// The foreground server owns its listener and shutdown; Settings can still
     /// issue invitations using its actual origin without starting a second host.
     pub async fn register_external(&self, listen: SocketAddr, origin: String) {
@@ -164,6 +169,7 @@ impl BrowserAccess {
         let shutdown = self.0.closed.child_token();
         let browser = BrowserServer::new(service, token, options.public_origin.clone())?
             .with_pairings(self.0.pairings.clone(), self.0.device_id.clone())
+            .with_pairing_slots(self.0.slots.clone())
             .with_shutdown_token(shutdown.clone());
         let listener = tokio::select! { biased;
             _ = self.0.closed.cancelled() => anyhow::bail!("The engine is shutting down"),

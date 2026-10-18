@@ -144,6 +144,11 @@ pub struct WorkspaceView {
     pairing_name: Entity<input::TextInput>,
     pairing_fragment: Option<String>,
     pairing_fetch: Option<u64>,
+    relay_status: Value,
+    relay_fetch: Option<u64>,
+    relay_action: Option<u64>,
+    relay_origin: Entity<input::TextInput>,
+    relay_credential: Entity<input::TextInput>,
     pairing_action: Option<u64>,
     provider_index: usize,
     send_draft: HashMap<u64, Draft>,
@@ -347,6 +352,11 @@ impl WorkspaceView {
             },
         )
         .detach();
+        let relay_origin =
+            cx.new(|cx| input::TextInput::new("https://relay.example.com", window, cx));
+        let relay_credential = cx.new(|cx| {
+            input::TextInput::new("Host credential file on the engine computer", window, cx)
+        });
         let pairing_name = cx.new(|cx| input::TextInput::new("Device name", window, cx));
         let mut events = transport.events;
         let reader = cx.spawn(async move |this, cx| {
@@ -438,6 +448,11 @@ impl WorkspaceView {
             pairing_name,
             pairing_fragment: None,
             pairing_fetch: None,
+            relay_status: Value::Null,
+            relay_fetch: None,
+            relay_action: None,
+            relay_origin,
+            relay_credential,
             pairing_action: None,
             provider_index: 0,
             send_draft: HashMap::new(),

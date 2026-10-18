@@ -704,6 +704,7 @@ pub struct EngineRpc {
     archives: crate::archives::Archives,
     pairings: Option<zuse_remote::authority::Authority>,
     browser_access: Option<crate::browser_access::BrowserAccess>,
+    relay_access: Option<crate::relay_access::RelayAccess>,
     model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
     plugins: Option<crate::plugins::Plugins>,
@@ -759,6 +760,7 @@ impl EngineRpc {
             archives,
             pairings: None,
             browser_access: None,
+            relay_access: None,
             model_connections: None,
             account: None,
             plugins: None,
@@ -815,6 +817,10 @@ impl EngineRpc {
         self
     }
 
+    pub fn with_relay_access(mut self, access: crate::relay_access::RelayAccess) -> Self {
+        self.relay_access = Some(access);
+        self
+    }
     pub fn with_browser_access(mut self, access: crate::browser_access::BrowserAccess) -> Self {
         self.browser_access = Some(access);
         self
@@ -1996,6 +2002,37 @@ impl RpcService for EngineRpc {
         let failed = |error: crate::EngineError| RpcError::Failed(error.to_string());
         if matches!(
             method,
+            methods::RELAY_ACCESS_STATUS | methods::START_RELAY_ACCESS | methods::STOP_RELAY_ACCESS
+        ) {
+            if params
+                .get("targetDeviceId")
+                .filter(|v| !v.is_null())
+                .is_some_and(|v| v.as_str() != Some(self.doc_host.device_id()))
+            {
+                return Err(RpcError::BadParams(
+                    "Relay access belongs to the connected profile".into(),
+                ));
+            }
+            let access = self
+                .relay_access
+                .as_ref()
+                .ok_or_else(|| RpcError::Failed("Relay access is unavailable".into()))?;
+            return match method {
+                methods::RELAY_ACCESS_STATUS => RpcReply::value(&access.status().await),
+                methods::STOP_RELAY_ACCESS => RpcReply::value(&access.stop().await),
+                _ => {
+                    let mut params = params;
+                    if let Some(object) = params.as_object_mut() {
+                        object.remove("targetDeviceId");
+                    }
+                    let status = access.start(parse_params(params)?, std::sync::Arc::new(self.clone())).await
+                        .map_err(|_| RpcError::Failed("Could not start relay access. Check the relay URL and private host credential file.".into()))?;
+                    RpcReply::value(&status)
+                }
+            };
+        }
+        if matches!(
+            method,
             methods::BROWSER_ACCESS_STATUS
                 | methods::START_BROWSER_ACCESS
                 | methods::STOP_BROWSER_ACCESS
@@ -2060,10 +2097,14 @@ impl RpcService for EngineRpc {
                     let fragment = invitation.fragment().map_err(|_| {
                         RpcError::Failed("Could not encode pairing invitation".into())
                     })?;
-                    let origin = match &self.browser_access {
+                    let relay_origin = match &self.relay_access {
                         Some(access) => access.status().await.origin,
                         None => None,
                     };
+                    let origin = relay_origin.or(match &self.browser_access {
+                        Some(access) => access.status().await.origin,
+                        None => None,
+                    });
                     RpcReply::value(
                         &serde_json::json!({"peer":peer,"fragment":fragment,"origin":origin}),
                     )

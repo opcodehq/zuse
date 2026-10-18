@@ -78,6 +78,12 @@ impl BrowserServer {
         self
     }
 
+    /// Share one admission budget across direct listeners and outbound relay.
+    pub fn with_pairing_slots(mut self, slots: Arc<tokio::sync::Semaphore>) -> Self {
+        self.paired_slots = slots;
+        self
+    }
+
     pub fn with_pairings(
         mut self,
         authority: zuse_remote::authority::Authority,

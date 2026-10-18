@@ -66,10 +66,9 @@ async fn run() -> anyhow::Result<()> {
         return Ok(());
     }
     let relay = match (&args.relay_origin, &args.relay_host_token_file) {
-        (Some(origin), Some(path)) => Some((
-            zuse_serve::relay::validate_origin(origin)?,
-            zuse_serve::relay::HostToken::read_file(path)?,
-        )),
+        (Some(origin), Some(path)) => {
+            Some((zuse_serve::relay::validate_origin(origin)?, path.clone()))
+        }
         (None, None) => None,
         _ => anyhow::bail!("Relay access requires its origin and host token file"),
     };
@@ -125,6 +124,7 @@ async fn run() -> anyhow::Result<()> {
                 runtime.core().pairings.clone(),
                 runtime.core().device_id.clone(),
             )
+            .with_pairing_slots(runtime.core().browser_access.control().pairing_slots())
             .with_shutdown_token(shutdown.clone()),
         Err(error) => {
             runtime.shutdown().await;
@@ -145,30 +145,34 @@ async fn run() -> anyhow::Result<()> {
         .core()
         .browser_access
         .control()
-        .register_external(
-            address,
-            relay
-                .as_ref()
-                .map(|(origin, _)| origin.clone())
-                .unwrap_or_else(|| origin.clone()),
-        )
+        .register_external(address, origin.clone())
         .await;
     println!("Agent tools listen on 127.0.0.1:{ipc_port}");
     println!("Open {origin}/#token={token}");
-    let connector = relay.map(|(origin, token)| {
-        let browser = browser.clone();
-        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            zuse_serve::relay::serve_host(browser, &origin, token).await
-        }))
-    });
+    if let Some((origin, host_token_file)) = relay {
+        if let Err(error) = runtime
+            .core()
+            .relay_access
+            .control()
+            .start(
+                zuse_engine::relay_access::Start {
+                    origin,
+                    host_token_file,
+                },
+                runtime.core().rpc_service(),
+            )
+            .await
+        {
+            ipc_task.abort();
+            runtime.shutdown().await;
+            return Err(error);
+        }
+    }
     let result = match tls {
         Some(tls) => browser.serve_tls(listener, args.assets, tls).await,
         None => browser.serve(listener, args.assets).await,
     };
     shutdown.cancel();
-    if let Some(connector) = connector {
-        let _ = connector.await;
-    }
     ipc_task.abort();
     runtime.shutdown().await;
     result

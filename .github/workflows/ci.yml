@@ -45,6 +45,7 @@ jobs:
       - run: cargo test -p zuse-remote
       - run: cargo test -p zuse-engine --test pairing
       - run: cargo test -p zuse-engine --test browser_access
+      - run: cargo test -p zuse-engine --test relay_access
       - run: cargo test -p zuse-engine --test durable_turn_review
       - run: cargo test -p zuse-engine --lib diff_sync::turn_snapshot
       - run: cargo test -p zuse-engine --test custom_acp

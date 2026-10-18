@@ -32,6 +32,7 @@ pub(crate) mod home_index;
 mod http_error;
 pub mod instance_lock;
 pub mod local_import;
+pub mod relay_access;
 pub use zuse_harness::processes::supervisor as command_host;
 pub mod harness_models;
 mod model_catalogs;
@@ -146,6 +147,7 @@ pub struct EngineConfig {
 pub struct EngineCore {
     pub pairings: zuse_remote::authority::Authority,
     pub browser_access: browser_access::Owner,
+    pub relay_access: relay_access::Owner,
     pub account: account::Account,
     pub model_connections: model_connections::ModelConnections,
     pub harness_models: harness_models::HarnessModels,
@@ -372,7 +374,14 @@ impl EngineCore {
             .map_err(|e| EngineError::Other(e.to_string()))?;
         let browser_access =
             browser_access::Owner::new(profile.store_root(), device_id.clone(), pairings.clone());
+        let relay_access = relay_access::Owner::new(
+            profile.store_root().into(),
+            device_id.clone(),
+            pairings.clone(),
+            browser_access.control().pairing_slots(),
+        );
         Ok(Self {
+            relay_access,
             browser_access,
             pairings,
             harness_models,
@@ -528,6 +537,7 @@ impl EngineCore {
         )
         .with_pairings(self.pairings.clone())
         .with_browser_access(self.browser_access.control())
+        .with_relay_access(self.relay_access.control())
         .with_model_connections(self.model_connections.clone())
         .with_account(self.account.clone(), self.plugins.clone())
         .with_auth(self.auth())
@@ -562,12 +572,14 @@ impl EngineCore {
     /// snapshot.
     pub async fn shutdown(&self) {
         self.browser_access.begin_close();
+        self.relay_access.begin_close();
         self.pairings.close();
         // Freeze admission before any awaited cleanup: an Idle transition must
         // not release another queued command while credentials are draining.
         self.doc_host.pause_all_queues();
         self.account.retire();
         self.browser_access.close().await;
+        self.relay_access.close().await;
         self.sessions.shutdown().await;
         self.harness_models.shutdown().await;
         self.model_connections.retire().await;

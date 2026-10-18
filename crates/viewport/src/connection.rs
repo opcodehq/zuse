@@ -116,6 +116,9 @@ impl WorkspaceView {
         self.plugin_setup = None;
         self.plugin_setup_events = None;
         self.pairing_fetch = None;
+        self.relay_fetch = None;
+        self.relay_action = None;
+        self.relay_status = Value::Null;
         self.pairing_action = None;
         self.terminal_watch = None;
         self.terminal_write = None;

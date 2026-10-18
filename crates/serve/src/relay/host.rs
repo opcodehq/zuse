@@ -9,6 +9,42 @@ use tokio_tungstenite::{
     tungstenite::{self, client::IntoClientRequest, protocol::WebSocketConfig},
 };
 use zuse_remote::{MAX_RECORD_BYTES, PairId, authority::Credentials};
+/// Socket counts describe broker transport, not encrypted application health.
+#[derive(Clone, Default)]
+pub struct HostStatus(Arc<Counts>);
+#[derive(Default)]
+struct Counts {
+    sockets: std::sync::atomic::AtomicUsize,
+    sessions: std::sync::atomic::AtomicUsize,
+}
+impl HostStatus {
+    pub fn sockets(&self) -> usize {
+        self.0.sockets.load(std::sync::atomic::Ordering::Acquire)
+    }
+    pub fn sessions(&self) -> usize {
+        self.0.sessions.load(std::sync::atomic::Ordering::Acquire)
+    }
+    fn track(&self, session: bool) -> CountGuard {
+        let counter = if session {
+            &self.0.sessions
+        } else {
+            &self.0.sockets
+        };
+        counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        CountGuard(self.clone(), session)
+    }
+}
+struct CountGuard(HostStatus, bool);
+impl Drop for CountGuard {
+    fn drop(&mut self) {
+        let counter = if self.1 {
+            &self.0.0.sessions
+        } else {
+            &self.0.0.sockets
+        };
+        counter.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
 /// Maintain outbound rendezvous sockets for saved grants. RPC and Noise remain
 /// authorized by the execution host, including revocation and profile scope.
 /// This future owns all workers; cancellation or drop cannot detach them.
@@ -16,6 +52,14 @@ pub async fn serve_host(
     server: BrowserServer,
     origin: &str,
     token: HostToken,
+) -> anyhow::Result<()> {
+    serve_host_with_status(server, origin, token, HostStatus::default()).await
+}
+pub async fn serve_host_with_status(
+    server: BrowserServer,
+    origin: &str,
+    token: HostToken,
+    metrics: HostStatus,
 ) -> anyhow::Result<()> {
     let origin = zuse_remote::normalized_origin(origin)?;
     let (authority, device) = server
@@ -37,10 +81,10 @@ pub async fn serve_host(
                     // Refresh expiry even for existing workers, cancelling stale invitations.
                     let Ok(credentials)=authority.credentials(&id)else{continue;};
                     if !running.insert(peer.id.clone()){continue;}
-                    let server=server.clone();let token=token.clone();let origin=origin.clone();let authority=authority.clone();let device=device.clone();
+                    let server=server.clone();let token=token.clone();let origin=origin.clone();let authority=authority.clone();let device=device.clone();let metrics=metrics.clone();
                     tasks.spawn(async move{
                         let credentials=Arc::new(credentials);
-                        let workers=(0..4).map(|_|worker(server.clone(),authority.clone(),device.clone(),credentials.clone(),origin.clone(),token.clone()));
+                        let workers=(0..4).map(|_|worker(server.clone(),authority.clone(),device.clone(),credentials.clone(),origin.clone(),token.clone(),metrics.clone()));
                         futures::future::join_all(workers).await;peer.id
                     });
                 }
@@ -58,6 +102,7 @@ async fn worker(
     credentials: Arc<Credentials>,
     origin: String,
     token: HostToken,
+    metrics: HostStatus,
 ) {
     let scheme = if origin.starts_with("https:") {
         "wss"
@@ -92,6 +137,7 @@ async fn worker(
             .await
             .map_err(|_| ())?
             .map_err(|_| ())?;
+            let _socket_count = metrics.track(false);
             let mut ping = tokio::time::interval(Duration::from_secs(15));
             let mut seen = tokio::time::Instant::now();
             loop {
@@ -112,6 +158,7 @@ async fn worker(
                 .clone()
                 .try_acquire_owned()
                 .map_err(|_| ())?;
+            let _session_count = metrics.track(true);
             // Translate framing only; the same host session performs all crypto,
             // proof confirmation and canonical authorization as direct access.
             let socket = socket

@@ -1,6 +1,6 @@
 # Paired remote access
 
-The shared encrypted channel is implemented in `zuse-remote` for native and WASM. The engine owns persistent pairing grants, and the browser server exposes a binary paired RPC endpoint. Native and browser connection adapters plus pairing settings controls are implemented. Native controls still require desktop runtime acceptance; the operator-managed outbound broker is implemented; account-scoped provisioning and production relay acceptance remain pending. Existing device-room relay traffic retains its previous transport.
+The shared encrypted channel is implemented in `zuse-remote` for native and WASM. The engine owns persistent pairing grants, and the browser server exposes a binary paired RPC endpoint. Native and browser connection adapters plus pairing settings controls are implemented. Native controls still require desktop runtime acceptance; the operator-managed outbound broker and settings-owned connector are implemented; account-scoped provisioning and production relay acceptance remain pending. Existing device-room relay traffic retains its previous transport.
 
 ## Channel contract
 
@@ -67,8 +67,16 @@ The foreground server advertises the broker origin for invitations while its loc
 
 Three actual-socket relay scenarios cover concurrent native clients, 180 KB payloads, canonical subscriptions, profile routing rejection, revocation, connector process-task replacement, shutdown, unauthorized host registration, wrong pairing keys and rejected plaintext. The full transport suite remains a regression gate for the shared direct/relay session. Evidence: `.context/relay-transport-tests.log`.
 
-Still pending: embedded-desktop relay configuration and status, per-account host credential provisioning/rotation, encrypted end-to-end heartbeats, broker restart/outage acceptance through browser and physical Mac/Linux clients, and production deployment. The global operator token is suitable for an operator-controlled relay; it is not a tenant authorization service. Control-frame pings are not proof that an untrusted broker can reach the execution host.
+Still pending: per-account host credential provisioning/rotation, encrypted end-to-end heartbeats, broker restart/outage acceptance through browser and physical Mac/Linux clients, and production deployment. The global operator token is suitable for an operator-controlled relay; it is not a tenant authorization service. Control-frame pings are not proof that an untrusted broker can reach the execution host.
 
 Connector cancellation is also a canonical RPC lifetime gate. Request tasks now have a connection-owned drop guard, so aborting the dispatcher cancels its subscriptions. Reusing a request ID cancels the previous task. The connector-replacement scenario asserts that its subscription guard is released; it failed before this fix (`.context/relay-cancellation-regression-before.log`) and passes afterward in the transport suite. Shared host writes have a 30-second deadline.
 
-The current connector keeps four sockets per grant. Burst media/uploads can exhaust those slots; queued connection admission remains an acceptance gap alongside embedded relay controls and end-to-end heartbeats.
+The current connector keeps four sockets per grant. Burst media/uploads can exhaust those slots; queued connection admission remains an acceptance gap alongside end-to-end heartbeats.
+
+## Settings-owned outbound relay
+
+Native and browser Settings → Devices provide relay URL and private host credential file fields, explicit start/stop and transport status refresh. The credential path refers to the engine computer. `RelayAccessStatus`, `StartRelayAccess {origin, hostTokenFile}` and `StopRelayAccess` belong to the connected profile and reject foreign targets. Status exposes only the normalized origin, running flag, broker socket/session counts and a sanitized terminal error, never credential contents or paths. A running connector with zero sockets does not establish broker reachability or encrypted application responsiveness. Grants are registered as they appear; no local HTTP listener or browser asset folder is required for outbound access.
+
+The engine owns the connector. RPC clones cannot extend its lifetime; stop drains workers before admitting a replacement, cancels active relayed sessions and retains pairing grants. Direct and relay sessions share the profile's 64-session admission budget. Invitations advertise the relay origin while its connector is running and fall back to direct browser access after stop. Existing invitations retain their exported origin. The CLI relay flags now start this same connector, so Settings can inspect and stop a foreground server's relay too. Native invitation copying uses the creation receipt's origin instead of a cached browser origin.
+
+Starting is explicit for each engine session. Host credentials remain operator-issued private files; automatic account credential provisioning/rotation and saved auto-start configuration remain open. An interrupted start/stop receipt is not replayed by the browser. Refresh status after reconnecting.

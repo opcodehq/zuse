@@ -2,7 +2,7 @@
 mod broker;
 mod host;
 pub use broker::RelayBroker;
-pub use host::serve_host;
+pub use host::{HostStatus, serve_host, serve_host_with_status};
 use std::{io::Read, path::Path, sync::Arc};
 use subtle::ConstantTimeEq;
 pub use zuse_remote::normalized_origin as validate_origin;

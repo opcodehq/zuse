@@ -248,7 +248,8 @@ pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";
 /// Unknown methods and all actions keep their original delivery uncertainty.
 pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
     match method {
-        BROWSER_ACCESS_STATUS
+        RELAY_ACCESS_STATUS
+        | BROWSER_ACCESS_STATUS
         | LIST_PAIRINGS
         | CLOUD_ACCOUNT_STATUS
         | LOCAL_DEVICE
@@ -326,3 +327,8 @@ pub const REVOKE_PAIRING: &str = "RevokePairing";
 pub const BROWSER_ACCESS_STATUS: &str = "BrowserAccessStatus";
 pub const START_BROWSER_ACCESS: &str = "StartBrowserAccess";
 pub const STOP_BROWSER_ACCESS: &str = "StopBrowserAccess";
+
+/// Profile-owned outbound relay; routing credentials never appear in status.
+pub const RELAY_ACCESS_STATUS: &str = "RelayAccessStatus";
+pub const START_RELAY_ACCESS: &str = "StartRelayAccess";
+pub const STOP_RELAY_ACCESS: &str = "StopRelayAccess";
