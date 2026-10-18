@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: opcodehq/zkit
-          ref: 9a98a5bd51156ca04ded453b6a64f7cfc9f06687
+          ref: 31d5dd67b42194423f59903f199ab624ff57503c
           path: vendor/zkit
       - run: python3 -m unittest discover -s scripts -p test_package.py -v
 

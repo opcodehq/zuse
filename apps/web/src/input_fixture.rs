@@ -11,6 +11,7 @@ struct InputFixture {
     first: Entity<TextInput>,
     second: Entity<TextInput>,
     submitted: usize,
+    readonly: bool,
     _observations: Vec<Subscription>,
 }
 
@@ -35,6 +36,7 @@ impl InputFixture {
             first,
             second,
             submitted: 0,
+            readonly: false,
             _observations: observations,
         }
     }
@@ -52,6 +54,9 @@ impl Render for InputFixture {
                 "first": self.first.read(cx).value(cx),
                 "second": self.second.read(cx).value(cx),
                 "submitted": self.submitted,
+                "readonly": self.readonly,
+                "firstError": self.first.read(cx).clipboard_error().is_some(),
+                "secondError": self.second.read(cx).clipboard_error().is_some(),
             });
             let _ = body.set_attribute("data-input-fixture", &value.to_string());
         }
@@ -101,12 +106,48 @@ impl Render for InputFixture {
                     .on_click(cx.listener(|this, _, window, cx| {
                         window.blur();
                         for field in [&this.first, &this.second] {
-                            field.update(cx, |field, cx| field.set_value(String::new(), cx));
+                            field.update(cx, |field, cx| {
+                                field.set_readonly(false, cx);
+                                field.set_value(String::new(), cx);
+                            });
                         }
                         this.submitted = 0;
+                        this.readonly = false;
                         cx.notify();
                     }))
                     .child("Reset"),
+            )
+            .child(
+                div()
+                    .id("paste-action")
+                    .absolute()
+                    .left(px(40.))
+                    .top(px(380.))
+                    .w(px(200.))
+                    .h(px(32.))
+                    .on_click(|_, window, cx| {
+                        let action = cx
+                            .build_action("input::Paste", None)
+                            .expect("registered Paste action");
+                        window.dispatch_action(action, cx);
+                    })
+                    .child("Paste action"),
+            )
+            .child(
+                div()
+                    .id("toggle-readonly")
+                    .absolute()
+                    .left(px(40.))
+                    .top(px(440.))
+                    .w(px(200.))
+                    .h(px(32.))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.readonly = !this.readonly;
+                        this.first
+                            .update(cx, |field, cx| field.set_readonly(this.readonly, cx));
+                        cx.notify();
+                    }))
+                    .child("Toggle read-only"),
             )
     }
 }

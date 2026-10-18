@@ -58,6 +58,19 @@ windows, OS clipboard menus and macOS/Linux hardware input remain separate
 acceptance gates. Build the ordinary browser application with
 `bash scripts/build-web.sh`.
 
+The shared editors and plugin forms provide Cut, Copy, Paste and Select all
+menus with mouse/keyboard navigation. Explicit browser Paste actions use an
+asynchronous clipboard read. A changed edit, selection, focus, editability or
+newer paste request retires an older result; empty or blocked reads preserve
+the text. Blocked reads show the keyboard-paste fallback. The conformance runner
+also covers delayed reads, undo/redo, read-only transitions, menu interactions
+and WASM Meta-key editing commands.
+
+In a Zkit checkout, `cargo --config .github/clipboard-tests.toml test --locked
+-p gpui-base --lib paste` runs the native clipboard/undo regressions. The toolkit
+workflow runs those checks on Linux and macOS; hosted results and physical
+clipboard behavior require their own verification.
+
 ## Account and hosted plugins
 
 Local sessions do not require a cloud account. Settings → Plugins includes the engine-owned Zuse account and managed plugin connections. Sign-in opens device authorization; profile metadata and progress stream through `CloudAccountStatus`. Refresh credentials are stored in the device profile's `account/session.json` with private Unix permissions and atomic replacement. Access tokens stay in engine memory and never appear in account RPC responses.

@@ -34,11 +34,17 @@ pub struct PluginSetup {
     secret: Entity<InputState>,
     auth: ServerAuth,
     error: Option<&'static str>,
+    menu: Option<crate::input::edit_menu::EditMenu>,
     pub busy: bool,
     pub colors: SetupColors,
     _inputs: Vec<Subscription>,
 }
 impl EventEmitter<SetupEvent> for PluginSetup {}
+impl crate::input::edit_menu::Host for PluginSetup {
+    fn edit_menu(&mut self) -> &mut Option<crate::input::edit_menu::EditMenu> {
+        &mut self.menu
+    }
+}
 impl PluginSetup {
     pub fn new(
         tenant: String,
@@ -56,12 +62,17 @@ impl PluginSetup {
             caret: colors.text.into(),
             ..Default::default()
         };
+        let owner = cx.weak_entity();
         let mut field = |placeholder: &str, masked: bool| {
             cx.new(|cx| {
                 let mut input = InputState::new(window, cx)
                     .placeholder(placeholder.to_owned())
                     .masked(masked);
                 input.set_editor_style(style.clone());
+                input.on_context_menu(crate::input::edit_menu::handler(
+                    owner.clone(),
+                    input.focus_handle(cx),
+                ));
                 input
             })
         };
@@ -72,7 +83,14 @@ impl PluginSetup {
         let subscriptions = [&name, &url, &header, &secret]
             .into_iter()
             .map(|input| {
-                cx.subscribe(input, |_, input, _: &InputEvent, cx| {
+                cx.subscribe(input, |this, input, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::ClipboardReadFailed) {
+                        this.error = Some(crate::input::CLIPBOARD_PASTE_ERROR);
+                    } else if matches!(event, InputEvent::Change)
+                        && this.error == Some(crate::input::CLIPBOARD_PASTE_ERROR)
+                    {
+                        this.error = None;
+                    }
                     // Focus changes must repaint the editor's platform text handler.
                     input.update(cx, |_, cx| cx.notify());
                     cx.notify();
@@ -95,6 +113,7 @@ impl PluginSetup {
             secret,
             auth: ServerAuth::Automatic,
             error: None,
+            menu: None,
             busy: false,
             colors,
             _inputs: subscriptions,
@@ -203,6 +222,7 @@ impl Render for PluginSetup {
             .when(needs_key,|d|d.child(field("API key",self.secret.clone())))
             .when(server && self.auth==ServerAuth::Automatic,|d|d.child(div().text_size(px(11.)).text_color(self.colors.muted).child("Use the server’s sign-in flow, or connect without authentication when supported.")))
             .when_some(self.error,|d,error|d.child(div().id("plugin-setup-error").role(Role::Alert).text_color(self.colors.danger).child(error)))
+            .when_some(self.menu.as_ref(), |d, menu| d.child(crate::input::edit_menu::render(menu,cx)))
             .child(div().flex().justify_end().gap(px(8.))
                 .child(button("cancel-plugin-setup","Cancel").on_click(cx.listener(|_,_,_,cx|cx.emit(SetupEvent::Cancel))))
                 .child(button("submit-plugin-setup",if self.busy {"Working…"} else {"Connect"}).on_click(cx.listener(|this,_,_,cx|this.submit(cx)))))
