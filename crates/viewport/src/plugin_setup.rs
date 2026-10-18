@@ -84,12 +84,25 @@ impl PluginSetup {
             .into_iter()
             .map(|input| {
                 cx.subscribe(input, |this, input, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::ClipboardReadFailed) {
-                        this.error = Some(crate::input::CLIPBOARD_PASTE_ERROR);
-                    } else if matches!(event, InputEvent::Change)
-                        && this.error == Some(crate::input::CLIPBOARD_PASTE_ERROR)
-                    {
-                        this.error = None;
+                    match event {
+                        InputEvent::ClipboardReadFailed => {
+                            this.error = Some(crate::input::CLIPBOARD_PASTE_ERROR);
+                        }
+                        InputEvent::ClipboardWriteFailed => {
+                            this.error = Some(crate::input::CLIPBOARD_COPY_ERROR);
+                        }
+                        InputEvent::Change | InputEvent::ClipboardWriteSucceeded
+                            if matches!(
+                                this.error,
+                                Some(
+                                    crate::input::CLIPBOARD_PASTE_ERROR
+                                        | crate::input::CLIPBOARD_COPY_ERROR
+                                )
+                            ) =>
+                        {
+                            this.error = None;
+                        }
+                        _ => {}
                     }
                     // Focus changes must repaint the editor's platform text handler.
                     input.update(cx, |_, cx| cx.notify());

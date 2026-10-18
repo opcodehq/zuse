@@ -8,7 +8,7 @@ import {resolve, sep, extname} from 'node:path';
 
 const option = name => process.argv[process.argv.indexOf(name) + 1];
 if (!process.argv.includes('--assets') || !process.argv.includes('--devtools-file')) {
-  console.error('Usage: node scripts/test-browser-input.mjs --assets DIR --devtools-file DevToolsActivePort');
+  console.error('Usage: node scripts/test-browser-input.mjs --assets DIR --devtools-file DevToolsActivePort [--filter TEXT]');
   process.exit(2);
 }
 const assets = resolve(option('--assets'));
@@ -79,14 +79,15 @@ try {
   async function reset() {
     await evaluate(`(() => {
       if (Object.hasOwn(navigator, 'clipboard')) delete navigator.clipboard;
-      if (navigator.clipboard) delete navigator.clipboard.readText;
-      window.__clipboardReads=0; window.__clipboardResolvers=[];
+      if (navigator.clipboard) { delete navigator.clipboard.readText; delete navigator.clipboard.writeText; }
+      window.__clipboardReads=0; window.__clipboardResolvers=[]; window.__clipboardWrites=[]; window.__writeResolvers=[];
       const input=document.querySelector('input'); input.blur();
       const canvas=document.querySelector('canvas');
       for(const type of ['pointerdown','pointerup']) canvas.dispatchEvent(new PointerEvent(type,
         {clientX:100,clientY:335,button:0,buttons:type==='pointerdown'?1:0,pointerId:1,bubbles:true,cancelable:true}));
     })()`);
     await expect({first: '', second: ''});
+    await evaluate('new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)))');
   }
   // The first GPU/font initialization may take longer than a field update.
   for (let attempt = 0; attempt < 400 && !await state(); attempt++) await pause(50);
@@ -109,7 +110,9 @@ try {
     for (const type of ['keyDown', 'keyUp']) await call('Input.dispatchKeyEvent', {type, key, code, modifiers,
       windowsVirtualKeyCode: key.length === 1 ? key.toUpperCase().charCodeAt(0) : undefined}, sessionId);
   };
+  const filter = process.argv.includes('--filter') ? option('--filter') : '';
   async function test(name, run) {
+    if (filter && !name.includes(filter)) return;
     try { await reset(); await run(); results.push({name, passed: true}); }
     catch (error) { results.push({name, passed: false, error: error.message}); }
     console.error(`${results.at(-1).passed ? 'PASS' : 'FAIL'} ${name}${results.at(-1).error ? ': ' + results.at(-1).error : ''}`);
@@ -333,6 +336,95 @@ try {
     await until('(async()=>await navigator.clipboard.readText()==="replace me")()');
     await key('z','KeyZ',2); await expect({first:'replace me',second:''});
   });
+  await test('denied Cut preserves selected text and reports failure', async () => {
+    await focus('first'); await call('Input.insertText',{text:'replace me'},sessionId);
+    await expect({first:'replace me',second:''}); await key('a','KeyA',2);
+    await evaluate("Object.defineProperty(navigator.clipboard,'writeText',{configurable:true,value:text=>{window.__clipboardWrites.push(text);return Promise.reject(new DOMException('Denied','NotAllowedError'))}})");
+    await pointer(75,95,2); await drain(); await pointer(150,114);
+    await expect({first:'replace me',second:'',firstError:true});
+  });
+  const mockWrite = expression => evaluate(`Object.defineProperty(navigator.clipboard,'writeText',{
+    configurable:true,value:text=>{window.__clipboardWrites.push(text);return ${expression}}})`);
+  const selectForCut = async () => {
+    await focus('first'); await call('Input.insertText',{text:'replace me'},sessionId);
+    await expect({first:'replace me',second:''}); await key('a','KeyA',2);
+  };
+  const menuCut = async () => {
+    await pointer(75,95,2); await drain(); await pointer(150,114);
+  };
+  const pendingCut = async () => {
+    await selectForCut();
+    await mockWrite('new Promise(resolve=>window.__writeResolvers.push(resolve))');
+    await menuCut(); await until('window.__writeResolvers.length===1'); await drain();
+    await expect({first:'replace me',second:''});
+  };
+  const releaseCut = async () => {
+    await evaluate('window.__writeResolvers.shift()()'); await drain();
+  };
+  await test('Cut waits for clipboard completion and has one undo step', async () => {
+    await pendingCut(); await releaseCut(); await expect({first:'',second:''});
+    assert.deepEqual(await evaluate('window.__clipboardWrites'),['replace me']);
+    await key('z','KeyZ',2); await expect({first:'replace me',second:''});
+    await key('y','KeyY',2); await expect({first:'',second:''});
+  });
+  await test('synchronous clipboard write throw preserves Cut selection', async () => {
+    await selectForCut(); await mockWrite('(()=>{throw new Error("unavailable")})()');
+    await menuCut(); await expect({first:'replace me',second:'',firstError:true});
+  });
+  await test('missing clipboard API preserves Cut selection', async () => {
+    await selectForCut();
+    await evaluate("Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined})");
+    await menuCut(); await expect({first:'replace me',second:'',firstError:true});
+  });
+  await test('Copy reports denied access and a successful retry clears the error', async () => {
+    await selectForCut(); await mockWrite("Promise.reject(new DOMException('Denied','NotAllowedError'))");
+    await key('c','KeyC',2); await expect({first:'replace me',second:'',firstError:true});
+    await mockWrite('Promise.resolve()'); await key('c','KeyC',2);
+    await until('window.__clipboardWrites.length===2'); await drain();
+    await expect({first:'replace me',second:''});
+  });
+  await test('late Cut cannot delete a subsequent edit or its undo', async () => {
+    await pendingCut(); await call('Input.insertText',{text:'new'},sessionId);
+    await expect({first:'new',second:''}); await key('z','KeyZ',2);
+    await expect({first:'replace me',second:''}); await releaseCut();
+    await expect({first:'replace me',second:''});
+  });
+  await test('focus round trip retires a pending Cut', async () => {
+    await pendingCut(); await focus('second'); await focus('first'); await releaseCut();
+    await expect({first:'replace me',second:''});
+  });
+  await test('selection round trip retires a pending Cut', async () => {
+    await pendingCut(); await key('Home','Home'); await key('a','KeyA',2); await releaseCut();
+    await expect({first:'replace me',second:''});
+  });
+  await test('read-only round trip retires a pending Cut', async () => {
+    await pendingCut(); await readonlyButton(); await readonlyButton(); await releaseCut();
+    await expect({first:'replace me',second:''});
+  });
+  await test('a newer Copy retires an earlier pending Cut', async () => {
+    await pendingCut(); await key('c','KeyC',2);
+    await until('window.__writeResolvers.length===2');
+    await evaluate('window.__writeResolvers[1]()'); await drain();
+    await releaseCut(); await expect({first:'replace me',second:''});
+    assert.deepEqual(await evaluate('window.__clipboardWrites'),['replace me','replace me']);
+  });
+  await test('retired clipboard write failure cannot mark a later edit', async () => {
+    await selectForCut();
+    await mockWrite('new Promise((resolve,reject)=>window.__writeResolvers.push(reject))');
+    await menuCut(); await until('window.__writeResolvers.length===1');
+    await call('Input.insertText',{text:'new'},sessionId); await expect({first:'new',second:''});
+    await evaluate("window.__writeResolvers.shift()(new DOMException('Denied','NotAllowedError'))");
+    await drain(); await expect({first:'new',second:''});
+  });
+  await test('read-only keyboard Cut does not write while Copy still works', async () => {
+    await selectForCut(); await readonlyButton(); await key('a','KeyA',2);
+    await mockWrite('Promise.resolve()'); await key('x','KeyX',2); await drain();
+    await expect({first:'replace me',second:'',readonly:true});
+    assert.deepEqual(await evaluate('window.__clipboardWrites'),[]);
+    await key('c','KeyC',2); await until('window.__clipboardWrites.length===1');
+    await drain(); await expect({first:'replace me',second:'',readonly:true});
+    assert.deepEqual(await evaluate('window.__clipboardWrites'),['replace me']);
+  });
   await test('context menu Enter activates the hovered item', async () => {
     await focus('first'); await call('Input.insertText',{text:'replace me'},sessionId);
     await expect({first:'replace me',second:''}); await key('a','KeyA',2);
@@ -360,6 +452,7 @@ try {
     await expect({first:'Meta paste',second:''});
   });
   console.log(JSON.stringify(results, null, 2));
+  assert(results.length > 0, 'No browser input cases matched');
   assert(results.every(result => result.passed), 'Browser input conformance failed');
 } finally {
   if (context) await call('Target.disposeBrowserContext', {browserContextId: context}).catch(() => {});

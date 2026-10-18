@@ -88,15 +88,15 @@ loro = "1.13"
 loro-protocol = "0.3"
 
 # Pinned native and browser rendering platform; provenance is in THIRD_PARTY_NOTICES.md.
-gpui = { git = "https://github.com/opcodehq/zkit", rev = "31d5dd67b42194423f59903f199ab624ff57503c" }
-gpui_platform = { git = "https://github.com/opcodehq/zkit", rev = "31d5dd67b42194423f59903f199ab624ff57503c", features = [
+gpui = { git = "https://github.com/opcodehq/zkit", rev = "38173c5aeb16855b50cab64e2500283170e35b3d" }
+gpui_platform = { git = "https://github.com/opcodehq/zkit", rev = "38173c5aeb16855b50cab64e2500283170e35b3d", features = [
     "wayland",
     "x11",
     "font-kit",
     "runtime_shaders",
 ] }
-gpui_tokio = { git = "https://github.com/opcodehq/zkit", rev = "31d5dd67b42194423f59903f199ab624ff57503c" }
-gpui-base = { git = "https://github.com/opcodehq/zkit", rev = "31d5dd67b42194423f59903f199ab624ff57503c" }
+gpui_tokio = { git = "https://github.com/opcodehq/zkit", rev = "38173c5aeb16855b50cab64e2500283170e35b3d" }
+gpui-base = { git = "https://github.com/opcodehq/zkit", rev = "38173c5aeb16855b50cab64e2500283170e35b3d" }
 
 # diffs
 similar = "2"

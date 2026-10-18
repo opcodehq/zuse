@@ -9,6 +9,8 @@ impl EventEmitter<Submitted> for TextInput {}
 
 pub const CLIPBOARD_PASTE_ERROR: &str =
     "Clipboard access is unavailable. Use the keyboard paste shortcut.";
+pub const CLIPBOARD_COPY_ERROR: &str =
+    "Clipboard write failed. Your text was kept. Check clipboard permissions.";
 
 #[derive(Clone)]
 enum Editor {
@@ -21,7 +23,7 @@ pub struct TextInput {
     editor: Editor,
     window: AnyWindowHandle,
     light_style: bool,
-    clipboard_unavailable: bool,
+    clipboard_error: Option<&'static str>,
     menu: Option<edit_menu::EditMenu>,
     _events: Subscription,
 }
@@ -40,7 +42,7 @@ impl TextInput {
             editor: Editor::Single(editor),
             window: window.window_handle(),
             light_style: crate::palette::is_light(),
-            clipboard_unavailable: false,
+            clipboard_error: None,
             menu: None,
             _events: events,
         }
@@ -62,7 +64,7 @@ impl TextInput {
             editor: Editor::Multi(editor),
             window: window.window_handle(),
             light_style: crate::palette::is_light(),
-            clipboard_unavailable: false,
+            clipboard_error: None,
             menu: None,
             _events: events,
         }
@@ -84,7 +86,7 @@ impl TextInput {
             editor: Editor::Code(editor),
             window: window.window_handle(),
             light_style: crate::palette::is_light(),
-            clipboard_unavailable: false,
+            clipboard_error: None,
             menu: None,
             _events: events,
         }
@@ -107,7 +109,7 @@ impl TextInput {
     }
 
     pub fn clipboard_error(&self) -> Option<&'static str> {
-        self.clipboard_unavailable.then_some(CLIPBOARD_PASTE_ERROR)
+        self.clipboard_error
     }
 
     fn on_input_event(&mut self, event: &InputEvent, cx: &mut Context<Self>) {
@@ -115,8 +117,9 @@ impl TextInput {
             self.close_edit_menu(cx);
         }
         match event {
-            InputEvent::ClipboardReadFailed => self.clipboard_unavailable = true,
-            InputEvent::Change | InputEvent::Focus => self.clipboard_unavailable = false,
+            InputEvent::ClipboardReadFailed => self.clipboard_error = Some(CLIPBOARD_PASTE_ERROR),
+            InputEvent::ClipboardWriteFailed => self.clipboard_error = Some(CLIPBOARD_COPY_ERROR),
+            InputEvent::Change | InputEvent::ClipboardWriteSucceeded => self.clipboard_error = None,
             _ => {}
         }
         if !matches!(self.editor, Editor::Code(_))
@@ -151,7 +154,7 @@ impl TextInput {
     }
     pub fn set_value(&mut self, value: String, cx: &mut Context<Self>) {
         self.close_edit_menu(cx);
-        self.clipboard_unavailable = false;
+        self.clipboard_error = None;
         let editor = self.editor.clone();
         let window = self.window;
         cx.defer(move |cx| {
@@ -202,7 +205,7 @@ impl Render for TextInput {
             .w_full()
             .when(matches!(self.editor, Editor::Code(_)), |d| d.h_full())
             .when(
-                matches!(self.editor, Editor::Code(_)) && self.clipboard_unavailable,
+                matches!(self.editor, Editor::Code(_)) && self.clipboard_error.is_some(),
                 |d| d.pb(px(18.)),
             )
             .text_size(px(if matches!(self.editor, Editor::Single(_)) {
@@ -221,15 +224,15 @@ impl Render for TextInput {
                 Editor::Multi(state) => state.clone().into_any_element(),
                 Editor::Code(state) => state.clone().into_any_element(),
             })
-            .when(self.clipboard_unavailable, |d| {
+            .when_some(self.clipboard_error, |d, error| {
                 d.child(
                     div()
-                        .id("clipboard-paste-error")
+                        .id("clipboard-error")
                         .role(gpui::Role::Alert)
                         .text_size(px(11.))
                         .line_height(px(14.))
                         .text_color(rgb(0xf87171))
-                        .child(CLIPBOARD_PASTE_ERROR),
+                        .child(error),
                 )
             })
             .when_some(self.menu.as_ref(), |d, menu| {
