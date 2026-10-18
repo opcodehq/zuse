@@ -29,6 +29,7 @@ pub struct Status {
     pub managed: bool,
     pub origin: Option<String>,
     pub listen: Option<SocketAddr>,
+    pub local_http: bool,
     pub error: Option<String>,
 }
 struct Running {
@@ -48,6 +49,7 @@ struct Shared {
     pairings: zuse_remote::authority::Authority,
     slots: Arc<tokio::sync::Semaphore>,
     closed: CancellationToken,
+    managed: Option<Arc<dyn zuse_serve::managed::Authority>>,
     state: Mutex<State>,
 }
 #[derive(Clone)]
@@ -71,11 +73,21 @@ impl Owner {
             pairings,
             slots: Arc::new(tokio::sync::Semaphore::new(64)),
             closed: CancellationToken::new(),
+            managed: None,
             state: Mutex::new(State::default()),
         })))
     }
     pub fn control(&self) -> BrowserAccess {
         self.0.clone()
+    }
+    pub fn with_managed_authority(
+        mut self,
+        authority: Arc<dyn zuse_serve::managed::Authority>,
+    ) -> Self {
+        Arc::get_mut(&mut self.0.0)
+            .expect("configure before sharing browser access")
+            .managed = Some(authority);
+        self
     }
     pub fn begin_close(&self) {
         self.0.0.closed.cancel();
@@ -91,7 +103,7 @@ impl BrowserAccess {
     }
     /// The foreground server owns its listener and shutdown; Settings can still
     /// issue invitations using its actual origin without starting a second host.
-    pub async fn register_external(&self, listen: SocketAddr, origin: String) {
+    pub async fn register_external(&self, listen: SocketAddr, origin: String, local_http: bool) {
         let mut state = self.0.state.lock().await;
         if !self.0.closed.is_cancelled() {
             state.external = Some(Status {
@@ -99,6 +111,7 @@ impl BrowserAccess {
                 managed: false,
                 origin: Some(origin),
                 listen: Some(listen),
+                local_http,
                 error: None,
             });
         }
@@ -167,10 +180,13 @@ impl BrowserAccess {
         );
         let token = BrowserServer::load_or_create_token(&self.0.profile)?;
         let shutdown = self.0.closed.child_token();
-        let browser = BrowserServer::new(service, token, options.public_origin.clone())?
+        let mut browser = BrowserServer::new(service, token, options.public_origin.clone())?
             .with_pairings(self.0.pairings.clone(), self.0.device_id.clone())
             .with_pairing_slots(self.0.slots.clone())
             .with_shutdown_token(shutdown.clone());
+        if let Some(authority) = &self.0.managed {
+            browser = browser.with_managed_authority(authority.clone());
+        }
         let listener = tokio::select! { biased;
             _ = self.0.closed.cancelled() => anyhow::bail!("The engine is shutting down"),
             listener = TcpListener::bind(options.listen) => listener?,
@@ -187,6 +203,7 @@ impl BrowserAccess {
             managed: true,
             origin: Some(origin),
             listen: Some(address),
+            local_http: tls.is_none(),
             error: None,
         };
         let signal = shutdown.clone();

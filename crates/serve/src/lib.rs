@@ -20,6 +20,7 @@ use tower_http::{
 };
 use zuse_rpc::RpcService;
 mod access_token;
+pub mod managed;
 mod paired;
 pub mod relay;
 mod tls;
@@ -29,6 +30,7 @@ pub use tls::TlsConfig;
 pub struct BrowserServer {
     service: Arc<dyn RpcService>,
     pairings: Option<(zuse_remote::authority::Authority, String)>,
+    managed: Option<Arc<dyn managed::Authority>>,
     paired_slots: Arc<tokio::sync::Semaphore>,
     token: Arc<str>,
     public_origin: Option<String>,
@@ -63,6 +65,7 @@ impl BrowserServer {
         Ok(Self {
             service,
             pairings: None,
+            managed: None,
             paired_slots: Arc::new(tokio::sync::Semaphore::new(64)),
             token: token.into(),
             secure_transport: public_origin.is_some(),
@@ -93,6 +96,11 @@ impl BrowserServer {
         self
     }
 
+    pub fn with_managed_authority(mut self, authority: Arc<dyn managed::Authority>) -> Self {
+        self.managed = Some(authority);
+        self
+    }
+
     pub fn load_or_create_token(directory: &std::path::Path) -> anyhow::Result<String> {
         access_token::load_or_create(directory)
     }
@@ -115,6 +123,7 @@ impl BrowserServer {
             .route("/api/session/check", post(session_status))
             .route("/api/rpc", get(socket))
             .route("/api/paired-rpc/{pair_id}", get(paired::upgrade))
+            .route("/api/account-rpc", get(managed::upgrade))
             .route("/api/attachments", post(upload))
             .fallback_service(
                 ServeDir::new(&assets).not_found_service(ServeFile::new(assets.join("index.html"))),

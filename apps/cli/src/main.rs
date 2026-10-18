@@ -120,6 +120,7 @@ async fn run() -> anyhow::Result<()> {
         args.public_origin.clone(),
     ) {
         Ok(browser) => browser
+            .with_managed_authority(std::sync::Arc::new(runtime.core().managed_host.control()))
             .with_pairings(
                 runtime.core().pairings.clone(),
                 runtime.core().device_id.clone(),
@@ -145,7 +146,7 @@ async fn run() -> anyhow::Result<()> {
         .core()
         .browser_access
         .control()
-        .register_external(address, origin.clone())
+        .register_external(address, origin.clone(), tls.is_none())
         .await;
     println!("Agent tools listen on 127.0.0.1:{ipc_port}");
     println!("Open {origin}/#token={token}");

@@ -26,6 +26,7 @@ async fn pairing_rpc_keeps_capabilities_private_and_profile_scoped_across_restar
         .register_external(
             "127.0.0.1:27656".parse().unwrap(),
             "https://relay.example".into(),
+            true,
         )
         .await;
     let client = zuse_rpc::memory_client(host.rpc_service());

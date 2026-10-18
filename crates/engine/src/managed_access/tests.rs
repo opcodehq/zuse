@@ -23,6 +23,7 @@ struct Fixture {
     revoked: AtomicUsize,
     refuse_once: AtomicBool,
     hold: AtomicBool,
+    unlink_refuse: AtomicBool,
     entered: Notify,
     release: Notify,
     nonces: StdMutex<HashSet<String>>,
@@ -117,7 +118,13 @@ async fn api(
             assert_eq!(proof["environmentId"], body["environmentId"]);
             assert_eq!(body["origin"]["localHttpHost"], "127.0.0.1");
             assert_eq!(body["endpoint"]["httpBaseUrl"], "http://127.0.0.1:27656");
-            json!({"environmentId":body["environmentId"],"endpoint":{"httpBaseUrl":"https://computer.example","wsBaseUrl":"wss://computer.example"},"apiIssuer":"https://account.example","environmentCredential":"private-host-credential","mintPublicKey":body["environmentPublicKey"],"tunnelHostname":"computer.example","connectorToken":"private-connector"})
+            json!({"environmentId":body["environmentId"],"endpoint":{"httpBaseUrl":"https://computer.example","wsBaseUrl":"wss://computer.example"},"apiIssuer":"https://account.example","environmentCredential":"private-host-credential","mintPublicKey":mint_jwk(),"tunnelHostname":"computer.example","connectorToken":"private-connector"})
+        }
+        (Method::POST, "/v1/client/environment-unlink") => {
+            if state.unlink_refuse.load(Ordering::SeqCst) {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            json!({"ok":true})
         }
         (Method::POST, "/v1/client/dpop-token") => {
             validate_proof(
@@ -304,6 +311,9 @@ async fn engine_account_discovery_rejects_foreign_targets_without_breaking_engin
         methods::LIST_ACCOUNT_ENVIRONMENTS,
         methods::LIST_ACCOUNT_DEVICES,
         methods::REVOKE_ACCOUNT_DEVICE,
+        methods::MANAGED_HOST_STATUS,
+        methods::LINK_MANAGED_HOST,
+        methods::UNLINK_MANAGED_HOST,
     ] {
         assert!(
             rpc.call(
@@ -329,4 +339,103 @@ async fn engine_account_discovery_rejects_foreign_targets_without_breaking_engin
         &json!({})
     ));
     core.shutdown().await;
+}
+
+fn mint_jwk() -> String {
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+    json!({"kty":"OKP","crv":"Ed25519","x":URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes())})
+        .to_string()
+}
+fn mint_connect(mut claims: Value, typ: &str) -> String {
+    use ed25519_dalek::pkcs8::EncodePrivateKey;
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+        .to_pkcs8_der()
+        .unwrap();
+    let mut header = jsonwebtoken::Header::new(Algorithm::EdDSA);
+    header.typ = Some(typ.into());
+    if claims["iat"].is_null() {
+        claims["iat"] = json!(chrono::Utc::now().timestamp());
+    }
+    jsonwebtoken::encode(
+        &header,
+        &claims,
+        &jsonwebtoken::EncodingKey::from_ed_der(key.as_bytes()),
+    )
+    .unwrap()
+}
+#[tokio::test]
+async fn managed_host_persists_identity_checks_grants_and_disables_before_uncertain_unlink() {
+    use zuse_serve::managed::Authority;
+    let root = tempfile::tempdir().unwrap();
+    let (state, server) = fixture().await;
+    let account = Account::fixture_signed_in(root.path(), state.origin.clone(), "user_a");
+    let client = AccountClient::new(account.clone()).unwrap();
+    let owner = host::Owner::open(root.path(), "device_1", client.clone());
+    let host = owner.control();
+    assert!(!host.status().configured);
+    host.link("Build computer", 27656).await.unwrap();
+    let claims = json!({"sub":"user_a","environmentId":"device_1","iss":"https://account.example","aud":"zuse-env:device_1","exp":chrono::Utc::now().timestamp()+300});
+    let token = mint_connect(claims.clone(), "connect+jwt");
+    let grant = host.authorize(&token).unwrap();
+    assert!(host.valid_origin("https://computer.example"));
+    assert!(!host.valid_origin("https://unrelated.example"));
+    assert!(grant.is_live());
+    assert_eq!(grant.device_id, "device_1");
+    assert!(
+        host.authorize(&mint_connect(claims.clone(), "wrong+jwt"))
+            .is_none()
+    );
+    for (key, value) in [
+        ("environmentId", json!("other")),
+        ("aud", json!("zuse-env:other")),
+        ("iss", json!("https://other.example")),
+        ("exp", json!(chrono::Utc::now().timestamp() - 1)),
+        ("sub", json!("")),
+        ("nbf", json!(chrono::Utc::now().timestamp() + 300)),
+    ] {
+        let mut invalid = claims.clone();
+        invalid[key] = value;
+        assert!(
+            host.authorize(&mint_connect(invalid, "connect+jwt"))
+                .is_none(),
+            "accepted invalid {key}"
+        );
+    }
+    let public = serde_json::to_string(&host.status()).unwrap();
+    assert!(!public.contains("private-host-credential") && !public.contains("private-connector"));
+    drop(owner);
+    assert!(!grant.is_live());
+    assert!(host.authorize(&token).is_none());
+    let owner = host::Owner::open(root.path(), "device_1", client.clone());
+    let host = owner.control();
+    assert!(host.status().configured && host.status().account_matches);
+    let grant = host.authorize(&token).unwrap();
+    account.sign_out().unwrap();
+    assert!(!grant.is_live());
+    assert!(host.authorize(&token).is_none());
+    account.fixture_install("user_b");
+    assert!(!host.status().account_matches);
+    assert!(host.authorize(&token).is_none());
+    assert!(host.unlink().await.is_err());
+    account.sign_out().unwrap();
+    account.fixture_install("user_a");
+    let grant = host.authorize(&token).unwrap();
+    state.unlink_refuse.store(true, Ordering::SeqCst);
+    assert!(matches!(host.unlink().await, Err(Error::Unavailable)));
+    assert!(!grant.is_live());
+    assert!(!host.status().enabled);
+    drop(owner);
+    let owner = host::Owner::open(root.path(), "device_1", client.clone());
+    let host = owner.control();
+    assert!(host.status().configured && !host.status().enabled);
+    assert!(host.authorize(&token).is_none());
+    state.unlink_refuse.store(false, Ordering::SeqCst);
+    host.unlink().await.unwrap();
+    assert!(!host.status().configured);
+    assert!(!root.path().join("managed-access/link.json").exists());
+    drop(owner);
+    let owner = host::Owner::open(root.path(), "device_1", client);
+    assert!(!owner.control().status().configured);
+    server.abort();
+    let _ = server.await;
 }

@@ -710,6 +710,7 @@ pub struct EngineRpc {
     model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
     managed_access: Option<crate::managed_access::AccountClient>,
+    managed_host: Option<crate::managed_access::host::Host>,
     plugins: Option<crate::plugins::Plugins>,
     voice: crate::voice::VoiceManager,
     visuals: crate::visuals::Visuals,
@@ -768,6 +769,7 @@ impl EngineRpc {
             model_connections: None,
             account: None,
             managed_access: None,
+            managed_host: None,
             plugins: None,
             voice: sessions.voice_manager(),
             visuals: crate::visuals::Visuals::default(),
@@ -819,6 +821,11 @@ impl EngineRpc {
 
     pub fn with_managed_access(mut self, access: crate::managed_access::AccountClient) -> Self {
         self.managed_access = Some(access);
+        self
+    }
+
+    pub fn with_managed_host(mut self, host: crate::managed_access::host::Host) -> Self {
+        self.managed_host = Some(host);
         self
     }
 
@@ -2408,6 +2415,55 @@ impl RpcService for EngineRpc {
                         RpcReply::value(&serde_json::json!({"ok":true}))
                     }
                 }
+            }
+            methods::MANAGED_HOST_STATUS
+            | methods::LINK_MANAGED_HOST
+            | methods::UNLINK_MANAGED_HOST => {
+                if params
+                    .get("targetDeviceId")
+                    .filter(|v| !v.is_null())
+                    .is_some_and(|v| v.as_str() != Some(self.doc_host.device_id()))
+                {
+                    return Err(RpcError::BadParams(
+                        "Managed access belongs to the connected profile".into(),
+                    ));
+                }
+                let host = self
+                    .managed_host
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Managed access is unavailable".into()))?;
+                let status = match method {
+                    methods::MANAGED_HOST_STATUS => host.status(),
+                    methods::LINK_MANAGED_HOST => {
+                        let label = params["label"]
+                            .as_str()
+                            .ok_or_else(|| RpcError::BadParams("Enter a computer name".into()))?;
+                        let browser = self
+                            .browser_access
+                            .as_ref()
+                            .ok_or_else(|| {
+                                RpcError::Failed(
+                                    "Start browser access before linking this computer".into(),
+                                )
+                            })?
+                            .status()
+                            .await;
+                        let listen = browser.listen
+                            .filter(|address| browser.running && browser.local_http
+                                && address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+                            .ok_or_else(|| RpcError::Failed(
+                                "Start an HTTP browser listener on 127.0.0.1 before linking this computer".into()
+                            ))?;
+                        host.link(label, listen.port())
+                            .await
+                            .map_err(|e| RpcError::Failed(e.to_string()))?
+                    }
+                    _ => host
+                        .unlink()
+                        .await
+                        .map_err(|e| RpcError::Failed(e.to_string()))?,
+                };
+                RpcReply::value(&status)
             }
             methods::CLOUD_ACCOUNT_STATUS => {
                 let account = self

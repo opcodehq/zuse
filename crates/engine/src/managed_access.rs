@@ -1,4 +1,5 @@
 //! Existing account-control API; account, transport and host authority stay separate.
+pub mod host;
 mod identity;
 mod proof;
 use crate::account::Account;

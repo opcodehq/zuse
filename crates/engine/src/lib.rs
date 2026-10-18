@@ -153,6 +153,7 @@ pub struct EngineCore {
     pub relay_access: relay_access::Owner,
     pub account: account::Account,
     pub managed_access: managed_access::AccountClient,
+    pub managed_host: managed_access::host::Owner,
     pub model_connections: model_connections::ModelConnections,
     pub harness_models: harness_models::HarnessModels,
     pub plugins: plugins::Plugins,
@@ -360,6 +361,11 @@ impl EngineCore {
             account::Account::open(data_dir).map_err(|e| EngineError::Other(e.to_string()))?;
         let managed_access = managed_access::AccountClient::new(account.clone())
             .map_err(|e| EngineError::Other(e.to_string()))?;
+        let managed_host = managed_access::host::Owner::open(
+            profile.store_root(),
+            &device_id,
+            managed_access.clone(),
+        );
         let model_connections =
             model_connections::ModelConnections::new(data_dir.to_path_buf(), account.clone());
         let harness_models = harness_models::HarnessModels::new(
@@ -380,7 +386,8 @@ impl EngineCore {
         let plugins = plugins::Plugins::open(data_dir, account.clone(), workspace.clone())
             .map_err(|e| EngineError::Other(e.to_string()))?;
         let browser_access =
-            browser_access::Owner::new(profile.store_root(), device_id.clone(), pairings.clone());
+            browser_access::Owner::new(profile.store_root(), device_id.clone(), pairings.clone())
+                .with_managed_authority(Arc::new(managed_host.control()));
         let relay_access = relay_access::Owner::new(
             profile.store_root().into(),
             device_id.clone(),
@@ -395,6 +402,7 @@ impl EngineCore {
             model_connections,
             account,
             managed_access,
+            managed_host,
             plugins,
             sessions,
             doc_host,
@@ -551,6 +559,7 @@ impl EngineCore {
         .with_model_connections(self.model_connections.clone())
         .with_account(self.account.clone(), self.plugins.clone())
         .with_managed_access(self.managed_access.clone())
+        .with_managed_host(self.managed_host.control())
         .with_auth(self.auth())
         .with_previews(self.previews.clone())
         .with_harness_updates(self.harness_updates.clone());
@@ -582,6 +591,7 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) {
+        self.managed_host.begin_close();
         self.browser_access.begin_close();
         self.relay_access.begin_close();
         self.pairings.close();
