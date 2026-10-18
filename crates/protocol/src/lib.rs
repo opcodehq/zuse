@@ -8,6 +8,7 @@ pub mod attachment_mentions;
 pub mod change_request_assessment;
 pub mod chat_config;
 pub mod chat_mentions;
+pub mod custom_acp;
 pub mod device_paths;
 pub mod entities;
 pub mod file_mentions;

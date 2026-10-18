@@ -13,6 +13,9 @@ pub const CANCEL_INSTALL: &str = "CancelInstall";
 pub const INSTALL_HARNESS: &str = "InstallHarness";
 /// Read the owning host's saved checkpoint and checkout cleanup phase.
 pub const GET_CHAT_ARCHIVE_STATUS: &str = "GetChatArchiveStatus";
+pub const GET_CUSTOM_ACP_AGENTS: &str = "GetCustomAcpAgents";
+pub const SET_CUSTOM_ACP_AGENT: &str = "SetCustomAcpAgent";
+pub const DELETE_CUSTOM_ACP_AGENT: &str = "DeleteCustomAcpAgent";
 pub const GET_TITLE_SETTINGS: &str = "GetTitleSettings";
 pub const SET_TITLE_SETTINGS: &str = "SetTitleSettings";
 /// Flip a harness's enablement on the target device (Settings → Providers);
@@ -268,6 +271,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | FETCH_TOOL_BLOB
         | SUBSCRIBE_TERMINAL
         | INSPECT_RECOVERY
+        | GET_CUSTOM_ACP_AGENTS
         | GET_CHAT_ARCHIVE_STATUS
         | LIST_REFS
         | LIST_FOLDERS

@@ -112,6 +112,7 @@ pub fn cli_name(harness: HarnessId) -> &'static str {
         HarnessId::Kiro => "kiro-cli",
         HarnessId::Zuse => "Zuse",
         HarnessId::Mock => "mock",
+        HarnessId::CustomAcp(_) => "configured ACP executable",
     }
 }
 
@@ -164,6 +165,8 @@ fn harness_update_label(status: &HarnessUpdateStatus, theme: &Theme) -> (SharedS
 pub struct HarnessesPage {
     plugins: Entity<super::plugins::PluginsCard>,
     model_accounts: Entity<super::model_accounts::ModelAccountsCard>,
+    custom_acp: Entity<super::custom_acp::CustomAcpCard>,
+    _custom_changed: gpui::Subscription,
     state: Entity<AppState>,
     scroll: widgets::PageScroll,
     harnesses: Loadable<Vec<HarnessDescriptor>>,
@@ -200,9 +203,13 @@ impl HarnessesPage {
         let plugins = cx.new(|cx| super::plugins::PluginsCard::new(state.clone(), cx));
         let model_accounts =
             cx.new(|cx| super::model_accounts::ModelAccountsCard::new(state.clone(), cx));
+        let custom_acp = cx.new(|cx| super::custom_acp::CustomAcpCard::new(state.clone(), cx));
+        let custom_changed = cx.subscribe(&custom_acp, |this: &mut Self, _, _, cx| this.load(cx));
         let mut page = Self {
             plugins,
             model_accounts,
+            custom_acp,
+            _custom_changed: custom_changed,
             state,
             scroll: widgets::PageScroll::default(),
             harnesses: Loadable::Idle,
@@ -405,6 +412,9 @@ impl HarnessesPage {
         self.install_task = None;
         self.policy_selects.clear();
         self.target_device = target;
+        self.custom_acp.update(cx, |card, cx| {
+            card.set_target(self.target_device.clone(), cx)
+        });
         if let Some(accounts) = &self.accounts_page {
             accounts.update(cx, |page, cx| {
                 page.set_target_device(self.target_device.clone(), cx)
@@ -1341,6 +1351,7 @@ impl Render for HarnessesPage {
                                 .child(div().mt(px(20.)).flex().flex_col().gap(px(16.))
                                     .child(widgets::group_with_action(&theme, "Agent providers", "Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.", Some(div().flex().items_center().gap(px(6.)).child(check).child(switcher).into_any_element()))
                                         .children(update_error).child(body))
+                                    .child(self.custom_acp.clone())
                                     .child(self.model_accounts.clone())),
                         ),
                 )

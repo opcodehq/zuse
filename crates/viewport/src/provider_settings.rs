@@ -366,6 +366,6 @@ impl WorkspaceView {
                     card
                 });
         s::frame().child(s::header("Agent providers","Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.").child(refresh))
-            .child(s::card().when_some(self.provider_error.clone(),|card,error|card.child(div().px_3().py_2().text_size(px(11.)).text_color(rgb(0xf87171)).child(error))).children(rows).when_some(self.provider_updates_error.clone(),|card,error|card.child(s::description_text(error).px_3().py_2()))).into_any_element()
+            .child(s::card().when_some(self.provider_error.clone(),|card,error|card.child(div().px_3().py_2().text_size(px(11.)).text_color(rgb(0xf87171)).child(error))).children(rows).when_some(self.provider_updates_error.clone(),|card,error|card.child(s::description_text(error).px_3().py_2()))).child(self.custom_acp_settings(cx)).into_any_element()
     }
 }

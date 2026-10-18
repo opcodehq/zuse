@@ -105,6 +105,7 @@ fn agent_name(harness: HarnessId) -> &'static str {
         HarnessId::Kiro => "Kiro CLI",
         HarnessId::Zuse => "Zuse",
         HarnessId::Mock => "Mock",
+        HarnessId::CustomAcp(_) => "ACP agent",
     }
 }
 

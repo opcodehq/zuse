@@ -1261,6 +1261,7 @@ enum Launch {
 /// fake agent with [`AcpHarness::with_executable`].
 pub struct AcpHarness {
     spec: AcpAgentSpec,
+    custom: Option<zuse_protocol::custom_acp::CustomAcpAgent>,
     executable: Option<PathBuf>,
     /// Override of the agent's on-disk sessions root (grok's
     /// `~/.grok/sessions`), where subagent transcripts are tailed from.
@@ -1288,6 +1289,7 @@ impl AcpHarness {
     fn with_spec(spec: AcpAgentSpec) -> Self {
         Self {
             spec,
+            custom: None,
             executable: None,
             sessions_root: None,
             interrupt_grace: Duration::from_secs(2),
@@ -1302,6 +1304,37 @@ impl AcpHarness {
             workspace_commands: crate::skills::CommandDiscovery::default(),
             devin_models: Default::default(),
         }
+    }
+
+    /// Run an explicitly configured native ACP server through the shared engine.
+    pub fn custom(config: zuse_protocol::custom_acp::CustomAcpAgent) -> Result<Self, HarnessError> {
+        config.validate().map_err(HarnessError::Protocol)?;
+        let mut spec = gemini_spec();
+        spec.id = config.id;
+        spec.display_name = "ACP agent";
+        spec.executable = "custom-acp";
+        spec.cli_executable = "custom-acp";
+        spec.env_override = "ZUSE_CUSTOM_ACP_EXECUTABLE";
+        spec.args = &[];
+        spec.install_hint = "Configure an installed ACP executable in Settings → Providers.";
+        let mut harness = Self::with_spec(spec);
+        harness.custom = Some(config);
+        Ok(harness)
+    }
+
+    fn custom_program(&self) -> Result<Option<PathBuf>, HarnessError> {
+        let Some(config) = &self.custom else {
+            return Ok(None);
+        };
+        let path = Path::new(&config.command);
+        let path = if path.components().count() == 1 && !path.is_absolute() {
+            find_on_paths(&config.command, Vec::new()).ok_or_else(|| {
+                HarnessError::NotInstalled("The configured ACP executable was not found.".into())
+            })?
+        } else {
+            path.to_path_buf()
+        };
+        crate::executable::validate_native_override(&path).map(Some)
     }
 
     /// Gemini CLI's native ACP transport, using the existing local login.
@@ -1589,6 +1622,12 @@ impl AcpHarness {
     }
 
     fn resolve_launch(&self) -> Result<Launch, HarnessError> {
+        if let Some(config) = &self.custom {
+            return Ok(Launch::Program(
+                self.custom_program()?.unwrap(),
+                config.args.clone(),
+            ));
+        }
         let spec_args: Vec<String> = self.spec.args.iter().map(|a| a.to_string()).collect();
         if let Some(p) = &self.executable {
             return crate::executable::validate_native_override(p)
@@ -1701,6 +1740,9 @@ impl AcpHarness {
     }
 
     fn configure_adapter_environment(&self, cmd: &mut Command, executable: &Path) {
+        if let Some(config) = &self.custom {
+            cmd.envs(&config.env);
+        }
         if self.spec.id == HarnessId::Antigravity
             && let Some(parent) = executable.parent()
         {
@@ -1893,7 +1935,7 @@ impl AcpHarness {
             let session = client
                 .request("session/new", json!({ "cwd": cwd, "mcpServers": [] }))
                 .await?;
-            let mut models = models_from_session(&session, &(self.spec.models)());
+            let mut models = models_from_session(&session, &self.fallback_models());
             // Prompt-convention modes (Claude Ultrathink) extend any real
             // ladder — never an effort-less model's empty one.
             for model in &mut models {
@@ -2182,7 +2224,10 @@ impl Harness for AcpHarness {
         self.spec.id
     }
     fn display_name(&self) -> &str {
-        self.spec.display_name
+        self.custom
+            .as_ref()
+            .map(|config| config.name.as_str())
+            .unwrap_or(self.spec.display_name)
     }
     fn authoritative_prompt_end(&self) -> bool {
         // ACP session/prompt owns the turn until its response. The engine's
@@ -2230,6 +2275,9 @@ impl Harness for AcpHarness {
     /// adapter does NOT count when the CLI itself is missing. Explicit
     /// executables (tests, `*_EXECUTABLE` overrides) always count.
     fn installed(&self) -> bool {
+        if self.custom.is_some() {
+            return self.custom_program().is_ok();
+        }
         // Overrides go through the same validation as `resolve_launch`, so an
         // override that points at nothing reports not-installed instead of an
         // agent that shows up in the composer and then fails to launch.
@@ -2258,6 +2306,9 @@ impl Harness for AcpHarness {
                 Launch::Archive { entry, .. } => Some(entry),
                 Launch::Managed { .. } => None,
             };
+        }
+        if self.custom.is_some() {
+            return None;
         }
         // Version checks and updates target the agent CLI when its transport differs.
         if self.spec.executable == self.spec.cli_executable {
@@ -2295,9 +2346,36 @@ impl Harness for AcpHarness {
         } else {
             vec![]
         };
-        crate::model_context::context(self.id(), &binary, &extra).map(Some)
+        let mut context = crate::model_context::context(self.id(), &binary, &extra)?;
+        if let Some(config) = &self.custom {
+            // Configuration/credential bytes affect catalog identity, but only
+            // their digest can leave this process or enter a disk catalog.
+            use sha2::{Digest, Sha256};
+            let mut hash = Sha256::new();
+            hash.update(context.hash.as_bytes());
+            hash.update([0]);
+            hash.update(
+                serde_json::to_vec(config)
+                    .map_err(|_| HarnessError::Protocol("Invalid ACP definition".into()))?,
+            );
+            context.hash = format!("{:x}", hash.finalize());
+        }
+        Ok(Some(context))
     }
     fn fallback_models(&self) -> Vec<Model> {
+        if let Some(config) = &self.custom {
+            return config
+                .model_ids
+                .iter()
+                .map(|id| Model {
+                    id: id.clone(),
+                    label: id.clone(),
+                    description: None,
+                    reasoning_levels: vec![],
+                    options: vec![],
+                })
+                .collect();
+        }
         (self.spec.models)()
     }
     async fn model_catalog(&self, force: bool) -> Result<crate::ModelCatalog, HarnessError> {

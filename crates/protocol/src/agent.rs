@@ -3,8 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(try_from = "String", into = "String")]
 pub enum HarnessId {
+    CustomAcp(crate::custom_acp::CustomAcpId),
     Zuse,
     ClaudeCode,
     Codex,

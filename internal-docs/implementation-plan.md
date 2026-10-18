@@ -39,3 +39,7 @@ Acceptance includes provider protocol failures/recovery; queue races and crash r
 ## Toolkit reuse clarification
 
 Retain the complete imported Zkit platform and mature component base directly. Prefer thin adaptations and focused improvements over replacement implementations. Preserve all required upstream licenses, copyright notices and provenance. No separate parallel component framework is needed.
+
+## Custom ACP setup milestone
+
+Device-scoped custom ACP identities, configuration persistence and registry mutation now reuse the shared session/queue engine. Native and browser Providers settings expose setup fields; see `custom-agents.md` for launch semantics and storage. Complete installed-agent login/plugin and physical-client acceptance before calling provider parity finished.

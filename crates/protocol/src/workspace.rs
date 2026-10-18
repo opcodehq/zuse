@@ -14,6 +14,7 @@ pub mod capabilities {
     pub const MESSAGE_QUEUE_CLEAN_ATTACHMENT_TEXT_V1: &str =
         "message-queue-clean-attachment-text-v1";
     pub const MESSAGE_QUEUE_EDIT_LEASE_V1: &str = "message-queue-edit-lease-v1";
+    pub const CUSTOM_ACP_AGENTS_V1: &str = "custom-acp-agents-v1";
     pub const CHECKOUT_ARCHIVES_V1: &str = "checkout-archives-v1";
     pub const HARNESS_UPDATES_V1: &str = "harness-updates-v1";
     /// The host creates a projectless chat's scratch folder
@@ -29,6 +30,7 @@ pub mod capabilities {
         MESSAGE_QUEUE_EDIT_LEASE_V1,
         HARNESS_UPDATES_V1,
         CHECKOUT_ARCHIVES_V1,
+        CUSTOM_ACP_AGENTS_V1,
         PROJECTLESS_SCRATCH_V1,
         crate::voice::remote::CAPABILITY,
     ];
@@ -111,6 +113,8 @@ mod tests {
                     "message-queue-clean-attachment-text-v1",
                     "message-queue-edit-lease-v1",
                     "harness-updates-v1",
+                    "checkout-archives-v1",
+                    "custom-acp-agents-v1",
                     "projectless-scratch-v1",
                     "voice-client-media-v1"
                 ],

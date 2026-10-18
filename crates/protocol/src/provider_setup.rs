@@ -12,6 +12,6 @@ pub fn manual_command(id: HarnessId) -> Option<&'static str> {
         Hermes => "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
         Devin => "curl -fsSL https://cli.devin.ai/install.sh | bash",
         Gemini => "npm install -g @google/gemini-cli",
-        Zuse | Kiro | Antigravity | Mock => return None,
+        Zuse | Kiro | Antigravity | Mock | CustomAcp(_) => return None,
     })
 }

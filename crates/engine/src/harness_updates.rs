@@ -284,7 +284,7 @@ fn provider(id: HarnessId) -> ProviderSpec {
             update_args: None,
             manual_command: "kiro-cli update",
         },
-        HarnessId::Zuse | HarnessId::Mock => ProviderSpec {
+        HarnessId::Zuse | HarnessId::Mock | HarnessId::CustomAcp(_) => ProviderSpec {
             version_args: &["--version"],
             latest: LatestSource::Manual,
             update_args: None,

@@ -20,6 +20,7 @@ pub mod accounts;
 pub mod appearance;
 pub mod archived;
 pub mod composer;
+mod custom_acp;
 pub mod defaults;
 pub mod devices;
 pub mod files;

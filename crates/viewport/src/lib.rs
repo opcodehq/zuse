@@ -8,6 +8,7 @@ mod attachment_tests;
 mod composer_alerts;
 mod connection;
 pub mod context_status;
+mod custom_acp;
 mod draft_journal;
 pub mod input;
 mod model_accounts;
@@ -122,6 +123,7 @@ pub struct WorkspaceView {
     worktree_settings: worktree_settings::WorktreeSettingsView,
     title_settings: title_settings::TitleSettingsView,
     provider_expanded: Option<String>,
+    custom_acp: custom_acp::Settings,
     provider_actions: HashMap<u64, String>,
     provider_logins: HashMap<String, Value>,
     provider_codes: HashMap<String, Entity<input::TextInput>>,
@@ -413,6 +415,7 @@ impl WorkspaceView {
             worktree_settings,
             title_settings: title_settings::TitleSettingsView::new(window, cx),
             provider_expanded: None,
+            custom_acp: Default::default(),
             provider_actions: HashMap::new(),
             provider_logins: HashMap::new(),
             provider_codes: HashMap::new(),
@@ -703,6 +706,9 @@ impl WorkspaceView {
             return;
         }
         if self.receive_provider_updates(id, &frame, cx) {
+            return;
+        }
+        if self.receive_custom_acp(id, &frame, cx) {
             return;
         }
         if self.receive_provider_action(id, &frame, cx) {

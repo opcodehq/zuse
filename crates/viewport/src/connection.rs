@@ -84,6 +84,7 @@ impl WorkspaceView {
             self.connection_notice = Some("The permission change may have completed. The saved mode will be checked after reconnecting.".into());
         }
         self.creating = None;
+        self.interrupt_custom_acp();
         self.interrupt_model_catalogs();
         if !self.provider_actions.is_empty() {
             self.provider_error=Some("Connection interrupted. Refresh provider status and check linked accounts before trying the action again.".into());

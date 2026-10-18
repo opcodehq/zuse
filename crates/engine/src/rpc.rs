@@ -1591,6 +1591,9 @@ fn forwardable(method: &str) -> bool {
             | methods::LIST_HARNESSES
             | methods::INSTALL_HARNESS
             | methods::CANCEL_INSTALL
+            | methods::GET_CUSTOM_ACP_AGENTS
+            | methods::SET_CUSTOM_ACP_AGENT
+            | methods::DELETE_CUSTOM_ACP_AGENT
             | methods::GET_TITLE_SETTINGS
             | methods::GET_CHAT_ARCHIVE_STATUS
             | methods::SET_TITLE_SETTINGS
@@ -2368,6 +2371,42 @@ impl RpcService for EngineRpc {
                     "checkpoint":record.as_ref().map(|record|&record.checkpoint),
                     "changedPaths":record.as_ref().map(|record|&record.changed_paths).cloned().unwrap_or_default()}),
                 )
+            }
+            methods::GET_CUSTOM_ACP_AGENTS => RpcReply::value(
+                &self
+                    .registry
+                    .custom_acp_agents()
+                    .map_err(RpcError::Failed)?,
+            ),
+            methods::SET_CUSTOM_ACP_AGENT => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    agent: zuse_protocol::custom_acp::CustomAcpAgent,
+                    expected_revision: u64,
+                }
+                let p: P = parse_params(params)?;
+                let snapshot = self
+                    .registry
+                    .set_custom_acp_agent(p.agent, p.expected_revision)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&snapshot)
+            }
+            methods::DELETE_CUSTOM_ACP_AGENT => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    harness: HarnessId,
+                    expected_revision: u64,
+                }
+                let p: P = parse_params(params)?;
+                let snapshot = self
+                    .registry
+                    .delete_custom_acp_agent(p.harness, p.expected_revision)
+                    .await
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&snapshot)
             }
             methods::GET_TITLE_SETTINGS => RpcReply::value(&self.registry.title_settings()),
             methods::SET_TITLE_SETTINGS => {

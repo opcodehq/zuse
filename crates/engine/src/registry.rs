@@ -7,6 +7,8 @@
 //! Per-device because CLI installs are — a viewer retargets the settings page at
 //! another device and edits THAT device's set over the forwarded RPCs.
 
+mod custom_acp;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -116,6 +118,8 @@ enum Slot {
 }
 
 pub struct HarnessRegistry {
+    custom_acp: Mutex<custom_acp::CustomAcpState>,
+    custom_acp_mutation: tokio::sync::Mutex<()>,
     pub(crate) installs: crate::rpc::Installations,
     slots: Mutex<HashMap<HarnessId, Slot>>,
     order: Mutex<Vec<HarnessId>>,
@@ -209,6 +213,8 @@ impl HarnessRegistry {
             order: Mutex::new(Vec::new()),
             prefs: Mutex::new(HarnessPrefsFile::default()),
             prefs_path: Mutex::new(None),
+            custom_acp: Mutex::new(custom_acp::CustomAcpState::default()),
+            custom_acp_mutation: tokio::sync::Mutex::new(()),
             gates: Mutex::new(HashMap::new()),
             pending_updates: Mutex::new(std::collections::HashSet::new()),
             update_generation,
@@ -321,6 +327,7 @@ impl HarnessRegistry {
             .prefs_path
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(path);
+        self.load_custom_acp(data_dir);
         self.migrate_legacy_prefs();
     }
 

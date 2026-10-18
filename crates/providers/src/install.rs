@@ -52,7 +52,7 @@ fn methods(id: HarnessId, platform: Platform) -> Vec<Method> {
     use Method::*;
     let windows = platform == Platform::Windows;
     match id {
-        Zuse | Mock | Kiro => vec![],
+        Zuse | Mock | Kiro | CustomAcp(_) => vec![],
         Gemini => vec![Npm("@google/gemini-cli", false)],
         Antigravity => vec![Archive],
         ClaudeCode if windows => vec![PowerShell("irm https://claude.ai/install.ps1 | iex")],
@@ -166,6 +166,7 @@ fn cli_and_dir(id: HarnessId) -> (&'static str, &'static str) {
         Kiro => ("kiro-cli", "~/.local/bin"),
         Zuse => ("zuse", "built in"),
         Mock => ("mock", "PATH"),
+        CustomAcp(_) => ("ACP executable", "its configured location"),
     }
 }
 
@@ -184,7 +185,7 @@ pub fn installed(id: HarnessId) -> bool {
         Gemini => crate::AcpHarness::gemini().installed(),
         Kiro => crate::AcpHarness::kiro().installed(),
         Zuse => cfg!(unix),
-        Mock => false,
+        Mock | CustomAcp(_) => false,
     }
 }
 
