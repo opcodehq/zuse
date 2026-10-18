@@ -42,6 +42,7 @@ mod thread_actions;
 mod title_settings;
 mod tool_results;
 mod transcript;
+mod visuals;
 mod voice;
 mod voice_orb;
 mod workspace;
@@ -73,6 +74,7 @@ use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 
 pub struct WorkspaceView {
     voice: voice::Voice,
+    visuals: visuals::Visuals,
     git_controls: Entity<git_controls::GitControls>,
     pull_requests: pull_requests::PullRequests,
     git_requests: HashMap<u64, u64>,
@@ -605,6 +607,7 @@ impl WorkspaceView {
             uploading: 0,
             composer_generation: 0,
             voice: voice::Voice::default(),
+            visuals: visuals::Visuals::default(),
             git_controls,
             pull_requests,
             git_requests: HashMap::new(),
@@ -728,6 +731,9 @@ impl WorkspaceView {
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if method.is_empty() {
+            return;
+        }
+        if self.receive_visual(id, &frame, cx) {
             return;
         }
         if self.receive_voice_rpc(id, &frame, cx) {
@@ -1168,6 +1174,7 @@ impl WorkspaceView {
         self.reset_recovery(cx);
         self.reset_inputs(cx);
         self.reset_tool_results();
+        self.reset_visuals();
         self.reset_previews(cx);
         let projects = self.known_projects();
         let roots = projects
@@ -1239,6 +1246,7 @@ impl WorkspaceView {
         self.reset_recovery(cx);
         self.reset_inputs(cx);
         self.reset_tool_results();
+        self.reset_visuals();
         self.reset_previews(cx);
         self.selected = None;
         self.prefetch_model_catalogs();

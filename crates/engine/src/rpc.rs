@@ -52,6 +52,7 @@
 
 mod archive_review;
 mod git_workspace;
+mod visuals;
 mod voice_chat;
 mod voice_remote;
 use async_trait::async_trait;
@@ -710,6 +711,7 @@ pub struct EngineRpc {
     account: Option<crate::account::Account>,
     plugins: Option<crate::plugins::Plugins>,
     voice: crate::voice::VoiceManager,
+    visuals: crate::visuals::Visuals,
     sessions: SessionsEngine,
     doc_host: DocHost,
     workspace: WorkspaceHost,
@@ -766,6 +768,7 @@ impl EngineRpc {
             account: None,
             plugins: None,
             voice: sessions.voice_manager(),
+            visuals: crate::visuals::Visuals::default(),
             sessions,
             doc_host,
             workspace,
@@ -787,6 +790,11 @@ impl EngineRpc {
             local_import: None,
             engine_info,
         }
+    }
+
+    pub(crate) fn with_visuals(mut self, visuals: crate::visuals::Visuals) -> Self {
+        self.visuals = visuals;
+        self
     }
 
     pub fn with_model_connections(
@@ -1595,7 +1603,8 @@ fn forwardable(method: &str) -> bool {
     }
     matches!(
         method,
-        methods::FORK_SIDE_CHAT
+        methods::OPEN_VISUAL | methods::CONTROL_VISUAL | methods::DRAW_VISUAL
+            | methods::FORK_SIDE_CHAT
             | methods::LIST_HARNESSES
             | methods::INSTALL_HARNESS
             | methods::CANCEL_INSTALL
@@ -1717,7 +1726,8 @@ fn is_stream_method(method: &str) -> bool {
     }
     matches!(
         method,
-        methods::WATCH_DOC_MESSAGES
+        methods::OPEN_VISUAL
+            | methods::WATCH_DOC_MESSAGES
             | methods::WATCH_CHAT_CONFIG
             | methods::WATCH_QUEUE
             | methods::SUBSCRIBE_TERMINAL
@@ -4490,6 +4500,9 @@ impl RpcService for EngineRpc {
                 .map_err(|err| RpcError::Failed(err.to_string()))?
                 .map_err(failed)?;
                 RpcReply::value(&chunk)
+            }
+            methods::OPEN_VISUAL | methods::CONTROL_VISUAL | methods::DRAW_VISUAL => {
+                self.visual_rpc(method, params).await
             }
             methods::PUBLISH_VISUAL => {
                 let p: PublishVisualParams = parse_params(params)?;

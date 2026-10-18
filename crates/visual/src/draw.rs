@@ -12,7 +12,7 @@ use crate::style::{Align, Color, TextSize, Token, Weight};
 pub const MAX_COMMANDS: usize = 40_000;
 const MAX_POINTS: usize = 200_000;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum DrawCmd {
     /// An open or closed stroked path.
     Stroke {
@@ -30,7 +30,7 @@ pub enum DrawCmd {
     Text(DrawText),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct DrawText {
     pub x: f32,
     pub y: f32,
@@ -44,7 +44,7 @@ pub struct DrawText {
 }
 
 /// The pointer, in canvas pixels, while it is over the canvas.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize)]
 pub struct Pointer {
     pub x: f32,
     pub y: f32,

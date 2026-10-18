@@ -24,6 +24,7 @@ pub mod projectless;
 pub mod recovery;
 pub mod sidebar_pins;
 pub mod view;
+pub mod visual_session;
 pub mod voice;
 pub mod workspace;
 

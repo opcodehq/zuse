@@ -201,8 +201,12 @@ pub const CANCEL_AGENT_LOGIN: &str = "CancelAgentLogin";
 pub const UPLOAD_CHUNK: &str = "UploadChunk";
 pub const UPLOAD_COMMIT: &str = "UploadCommit";
 pub const READ_ATTACHMENT_CHUNK: &str = "ReadAttachmentChunk";
-/// Store an agent's HTML page and show it inline in that chat's live
-/// turn (`show_visual`). Local only: the calling agent runs on this device.
+/// A transient host-owned visual subscription; cancellation retires its lease.
+pub const OPEN_VISUAL: &str = "OpenVisual";
+pub const CONTROL_VISUAL: &str = "ControlVisual";
+pub const DRAW_VISUAL: &str = "DrawVisual";
+/// Store an agent's sandboxed visual in its live turn (`show_visual`).
+/// Local only: the calling agent runs on this device.
 pub const PUBLISH_VISUAL: &str = "PublishVisual";
 /// Lazy full-tool-output fetch from the R2 sidecar by doc-resident ref
 /// (chat2-sync A3). Edge-direct from any device — never relay-forwarded.

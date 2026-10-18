@@ -33,6 +33,7 @@ pub mod capabilities {
         CUSTOM_ACP_AGENTS_V1,
         PROJECTLESS_SCRATCH_V1,
         crate::voice::remote::CAPABILITY,
+        crate::visual_session::CAPABILITY,
     ];
 
     pub fn current() -> Vec<String> {
@@ -116,7 +117,8 @@ mod tests {
                     "checkout-archives-v1",
                     "custom-acp-agents-v1",
                     "projectless-scratch-v1",
-                    "voice-client-media-v1"
+                    "voice-client-media-v1",
+                    "visual-sessions-v1"
                 ],
             })
         );

@@ -32,7 +32,7 @@ pub const MAX_BUFFERS: usize = 4;
 pub const MAX_TEXTURES: usize = 4;
 
 /// How a shader's output sits on the chat.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize)]
 pub enum Blend {
     /// The alpha the shader writes (0 shows the chat through).
     Alpha,

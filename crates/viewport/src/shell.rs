@@ -676,16 +676,7 @@ impl WorkspaceView {
                                             )))
                                             .into_any_element(),
                                     ),
-                                    "visual" => Some(
-                                        row()
-                                            .gap_2()
-                                            .child(icon("file-code").size(px(13.)))
-                                            .child(label(format!(
-                                                "Interactive visual: {}",
-                                                part["title"].as_str().unwrap_or("Visual")
-                                            )))
-                                            .into_any_element(),
-                                    ),
+                                    "visual" => Some(self.visual_part(part,cx)),
                                     "tool" | "reasoning" => Some(self.activity_part(&entry.id,part,cx)),
                                     "image" => Some(self.image_preview(
                                         part["path"].as_str().unwrap_or_default(),

@@ -10,10 +10,10 @@ use crate::style::{Align, Color, Justify, TextSize, Token, Weight};
 
 /// A Lua function a node calls back (an event handler or a draw function),
 /// valid until the next render.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct HandlerId(pub u32);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Node {
     pub kind: NodeKind,
     /// Fixed width in design pixels, inside a row or grid.
@@ -25,14 +25,14 @@ pub struct Node {
     pub key: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 pub enum Axis {
     #[default]
     Vertical,
     Horizontal,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum NodeKind {
     Stack(Stack),
     Grid {
@@ -87,7 +87,7 @@ pub enum NodeKind {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
 pub struct Stack {
     pub axis: Axis,
     pub gap: f32,
@@ -101,7 +101,7 @@ pub struct Stack {
     pub children: Vec<Node>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
 pub struct Text {
     pub spans: Vec<Span>,
     pub size: TextSize,
@@ -113,7 +113,7 @@ pub struct Text {
     pub truncate: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
 pub struct Span {
     pub text: String,
     pub weight: Option<Weight>,
@@ -123,7 +123,7 @@ pub struct Span {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
 pub struct Table_ {
     pub columns: Vec<Column>,
     pub rows: Vec<Vec<Node>>,
@@ -131,14 +131,14 @@ pub struct Table_ {
     pub hover: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
 pub struct Column {
     pub label: String,
     pub align: Align,
     pub width: Option<f32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
 pub struct NumberFormat {
     pub prefix: String,
     pub unit: String,
@@ -184,7 +184,7 @@ impl NumberFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum ChartKind {
     Bar,
     Line,
@@ -192,7 +192,7 @@ pub enum ChartKind {
     Scatter,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Chart {
     pub kind: ChartKind,
     pub height: f32,
@@ -209,7 +209,7 @@ pub struct Chart {
     pub legend: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Series {
     pub name: String,
     pub color: Color,
@@ -219,7 +219,7 @@ pub struct Series {
     pub points: Vec<(f64, f64)>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Canvas {
     pub height: f32,
     pub draw: HandlerId,
@@ -227,7 +227,7 @@ pub struct Canvas {
     pub on_click: Option<HandlerId>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SceneNode {
     pub height: f32,
     pub draw: HandlerId,
@@ -241,7 +241,7 @@ pub struct SceneNode {
 }
 
 /// A fragment shader the desktop runs on the GPU (see [`crate::shader`]).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ShaderNode {
     pub height: f32,
     /// GLSL defining `mainImage`: the image pass.

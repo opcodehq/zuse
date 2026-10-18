@@ -7,7 +7,7 @@
 use crate::VisualError;
 
 /// A theme color a visual may use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum Token {
     /// Primary text.
     Text,
@@ -89,7 +89,7 @@ impl Token {
 
 /// A resolved-at-paint color: a token, optionally mixed toward a second
 /// token, at an opacity.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct Color {
     pub token: Token,
     pub mix: Option<(Token, f32)>,
@@ -115,7 +115,7 @@ impl Color {
 
 /// A step on the transcript's type scale. Sizes are design pixels at the
 /// 16px interface base; the renderer scales them with the reader's text size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 pub enum TextSize {
     Xs,
     Sm,
@@ -159,7 +159,7 @@ impl TextSize {
 }
 
 /// Weights the interface font carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 pub enum Weight {
     #[default]
     Regular,
@@ -193,7 +193,7 @@ impl Weight {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 pub enum Align {
     #[default]
     Start,
@@ -216,7 +216,7 @@ impl Align {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 pub enum Justify {
     #[default]
     Start,

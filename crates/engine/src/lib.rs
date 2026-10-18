@@ -56,6 +56,7 @@ pub mod terminals;
 pub mod titles;
 mod transcript_history;
 pub mod uploads;
+mod visuals;
 pub mod voice;
 pub mod workspace_files;
 pub mod workspace_host;
@@ -166,6 +167,7 @@ pub struct EngineCore {
     pub diff_sync: CheckoutDiffSync,
     pub spaces_sync: SpacesSync,
     pub uploads: Uploads,
+    visuals: visuals::Visuals,
     pub agent_accounts: AgentAccounts,
     pub harness_updates: harness_updates::HarnessUpdateCoordinator,
     pub device_id: String,
@@ -402,6 +404,7 @@ impl EngineCore {
             diff_sync,
             spaces_sync,
             uploads,
+            visuals: visuals::Visuals::default(),
             agent_accounts,
             harness_updates,
             device_id,
@@ -536,6 +539,7 @@ impl EngineCore {
             self.agent_accounts.clone(),
             self.workspace_scope,
         )
+        .with_visuals(self.visuals.clone())
         .with_pairings(self.pairings.clone())
         .with_browser_access(self.browser_access.control())
         .with_relay_access(self.relay_access.control())
@@ -586,6 +590,7 @@ impl EngineCore {
         self.model_connections.retire().await;
         self.previews.shutdown().await;
         self.harness_updates.shutdown().await;
+        self.visuals.shutdown();
         self.terminals.shutdown();
         self.agent_accounts.shutdown();
         self.change_requests.shutdown();

@@ -13774,6 +13774,7 @@ dependencies = [
  "zuse-doc",
  "zuse-harness",
  "zuse-mcp",
+ "zuse-model",
  "zuse-model-accounts",
  "zuse-plugins",
  "zuse-preview",
@@ -14266,6 +14267,7 @@ dependencies = [
  "image",
  "mlua",
  "naga",
+ "serde",
  "thiserror 2.0.20",
 ]
 

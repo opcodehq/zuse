@@ -1179,3 +1179,76 @@ mod generated_image_tests {
         std::fs::rename(&parent, root.path().join("moved")).unwrap();
     }
 }
+
+impl Uploads {
+    /// Load only an engine-issued visual identity through the attachment jail.
+    /// Caller has already verified membership in the requested chat transcript.
+    pub(crate) fn load_visual(
+        &self,
+        id: &str,
+    ) -> Result<(String, zuse_visual::Assets), EngineError> {
+        let uuid = id
+            .strip_prefix("v:")
+            .ok_or_else(|| EngineError::Other("Invalid visual identity".into()))?;
+        uuid::Uuid::parse_str(uuid)
+            .map_err(|_| EngineError::Other("Invalid visual identity".into()))?;
+        let stem = sanitize(id);
+        let read = |name: &str, limit: usize| -> Result<Vec<u8>, EngineError> {
+            let path = self.dir().join(name).to_string_lossy().into_owned();
+            let mut bytes = Vec::new();
+            let mut offset = 0;
+            loop {
+                let chunk = self.read_chunk(&path, offset, &[])?;
+                let data = BASE64
+                    .decode(chunk.data)
+                    .map_err(|_| EngineError::Other("Invalid visual data".into()))?;
+                if bytes.len().saturating_add(data.len()) > limit {
+                    return Err(EngineError::Other(
+                        "Visual exceeds its storage limit".into(),
+                    ));
+                }
+                bytes.extend(data);
+                if chunk.done {
+                    break;
+                }
+                if chunk.next_offset <= offset {
+                    return Err(EngineError::Other("Visual read made no progress".into()));
+                }
+                offset = chunk.next_offset;
+            }
+            Ok(bytes)
+        };
+        let script = String::from_utf8(read(
+            &format!("{stem}-visual.luau"),
+            zuse_visual::MAX_SCRIPT_BYTES,
+        )?)
+        .map_err(|_| EngineError::Other("Visual source is not valid text".into()))?;
+        let manifest = format!("{stem}-assets.json");
+        let mut assets = std::collections::HashMap::new();
+        if self.dir().join(&manifest).symlink_metadata().is_ok() {
+            let names: Vec<String> = serde_json::from_slice(&read(&manifest, 64 * 1024)?)
+                .map_err(|_| EngineError::Other("Invalid visual assets".into()))?;
+            if names.len() > zuse_visual::assets::MAX_ASSETS {
+                return Err(EngineError::Other("Too many visual assets".into()));
+            }
+            let mut total = 0;
+            for name in names {
+                if !zuse_visual::assets::valid_name(&name) || assets.contains_key(&name) {
+                    return Err(EngineError::Other("Invalid visual asset name".into()));
+                }
+                let bytes = read(
+                    &format!("{stem}-asset-{}", sanitize(&name)),
+                    zuse_visual::assets::MAX_ASSET_BYTES,
+                )?;
+                total += bytes.len();
+                if total > zuse_visual::assets::MAX_TOTAL_ASSET_BYTES {
+                    return Err(EngineError::Other(
+                        "Visual assets exceed their storage limit".into(),
+                    ));
+                }
+                assets.insert(name, Arc::<[u8]>::from(bytes));
+            }
+        }
+        Ok((script, zuse_visual::Assets::new(assets)))
+    }
+}

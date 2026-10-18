@@ -15,6 +15,7 @@ zuse-protocol.workspace = true
 zuse-plugins.workspace = true
 zuse-model-accounts.workspace = true
 zuse-doc.workspace = true
+zuse-model.workspace = true
 zuse-sync.workspace = true
 zuse-providers.workspace = true
 zuse-rpc.workspace = true
