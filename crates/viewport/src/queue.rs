@@ -10,6 +10,7 @@ impl WorkspaceView {
     pub(super) fn queue_action_blocked(&self) -> bool {
         self.queue_edit.is_some()
             || self.model_change_pending_for_selection()
+            || self.transcript_blocked()
             || !self.connected
             || !self.workspace_synced
             || self
@@ -139,9 +140,7 @@ impl WorkspaceView {
             self.cancel(id);
         }
         self.interrupt_queue_edit(cx);
-        if let Some(watch) = self.transcript_watch.take() {
-            self.cancel(watch);
-        }
+        self.stop_transcript();
         // Until the new snapshot arrives, old approval cards must not submit
         // answers to a different host. Canceled subscription frames are ignored.
         self.messages.clear();
@@ -155,8 +154,7 @@ impl WorkspaceView {
         self.reset_tool_results();
         self.reset_previews(cx);
         self.refresh_queue_snapshot(&chat);
-        self.transcript_watch =
-            Some(self.call(methods::WATCH_DOC_MESSAGES, chat_request(&chat, json!({}))));
+        self.begin_transcript(cx);
         self.connection_notice = Some("This chat moved to another computer. Its queue and transcript are refreshing. Check any action already sent before trying it again.".into());
     }
 }

@@ -266,7 +266,100 @@ pub fn diff_transcript(
 #[error("transcript delta desync: {0}")]
 pub struct TranscriptDesync(pub String);
 
-/// Apply a frame in place. On any error the state is unreliable — resubscribe.
+// Validate without copying message bodies. A streaming tick only indexes its
+// appended parts; structural updates project row references before any mutation.
+fn validate_appends<'a>(
+    lookup: impl Fn(&str) -> Option<&'a SessionMessageEntry>,
+    appends: &[TextAppend],
+) -> Result<(), TranscriptDesync> {
+    let mut lengths: HashMap<(&str, &str), usize> = HashMap::new();
+    for append in appends {
+        let key = (append.entry.as_str(), append.part.as_str());
+        let previous = match lengths.get(&key).copied() {
+            Some(length) => length,
+            None => {
+                let entry = lookup(&append.entry).ok_or_else(|| {
+                    TranscriptDesync(format!("missing append entry {}", append.entry))
+                })?;
+                entry
+                    .parts
+                    .iter()
+                    .find_map(|part| match part {
+                        MessagePart::Text { id, text } | MessagePart::Reasoning { id, text }
+                            if id == &append.part =>
+                        {
+                            Some(text.len())
+                        }
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        TranscriptDesync(format!("missing append part {}", append.part))
+                    })?
+            }
+        };
+        let length = previous
+            .checked_add(append.text.len())
+            .ok_or_else(|| TranscriptDesync("append length overflow".into()))?;
+        if length != append.len {
+            return Err(TranscriptDesync(format!(
+                "append length mismatch on {}#{}: have {length}, expected {}",
+                append.entry, append.part, append.len
+            )));
+        }
+        lengths.insert(key, length);
+    }
+    Ok(())
+}
+
+fn validate_delta(
+    current: &[SessionMessageEntry],
+    upsert: &[TranscriptUpsert],
+    append: &[TextAppend],
+    remove: &[String],
+    count: usize,
+) -> Result<(), TranscriptDesync> {
+    let length = if upsert.is_empty() && remove.is_empty() {
+        validate_appends(|id| current.iter().find(|entry| entry.id == id), append)?;
+        current.len()
+    } else {
+        let gone: std::collections::HashSet<_> = remove.iter().map(String::as_str).collect();
+        let mut projected = current
+            .iter()
+            .filter(|entry| !gone.contains(entry.id.as_str()))
+            .collect::<Vec<_>>();
+        for update in upsert {
+            if let Some(index) = projected
+                .iter()
+                .position(|entry| entry.id == update.entry.id)
+            {
+                projected.remove(index);
+            }
+            let at = match &update.after {
+                None => 0,
+                Some(anchor) => projected
+                    .iter()
+                    .position(|entry| &entry.id == anchor)
+                    .map(|index| index + 1)
+                    .ok_or_else(|| TranscriptDesync(format!("missing anchor {anchor}")))?,
+            };
+            projected.insert(at, &update.entry);
+        }
+        validate_appends(
+            |id| projected.iter().copied().find(|entry| entry.id == id),
+            append,
+        )?;
+        projected.len()
+    };
+    if length != count {
+        return Err(TranscriptDesync(format!(
+            "count mismatch: have {length}, expected {count}"
+        )));
+    }
+    Ok(())
+}
+
+/// Apply a frame atomically. An error preserves the last valid transcript;
+/// consumers must still resubscribe for a canonical reset before trusting it.
 pub fn apply_transcript_frame(
     current: &mut Vec<SessionMessageEntry>,
     frame: TranscriptFrame,
@@ -282,6 +375,7 @@ pub fn apply_transcript_frame(
             remove,
             count,
         } => {
+            validate_delta(current, &upsert, &append, &remove, count)?;
             if !remove.is_empty() {
                 let gone: std::collections::HashSet<&str> =
                     remove.iter().map(String::as_str).collect();
@@ -483,6 +577,105 @@ mod tests {
             diff_transcript(&prev, &next),
             TranscriptFrame::Reset { .. }
         ));
+    }
+
+    #[test]
+    fn failed_frames_preserve_rows_and_previously_valid_appends() {
+        let original = vec![entry("a", "hello"), entry("b", "世界")];
+        let good = TextAppend {
+            entry: "a".into(),
+            part: "t0".into(),
+            text: "!".into(),
+            len: 6,
+        };
+        let cases = [
+            TranscriptFrame::Delta {
+                remove: vec!["b".into()],
+                upsert: vec![TranscriptUpsert {
+                    after: Some("gone".into()),
+                    entry: entry("a", "replacement"),
+                }],
+                append: vec![],
+                count: 1,
+            },
+            TranscriptFrame::Delta {
+                remove: vec!["b".into()],
+                upsert: vec![],
+                append: vec![good.clone()],
+                count: 2,
+            },
+            TranscriptFrame::Delta {
+                remove: vec![],
+                upsert: vec![],
+                append: vec![
+                    good.clone(),
+                    TextAppend {
+                        entry: "b".into(),
+                        part: "missing".into(),
+                        text: "!".into(),
+                        len: 7,
+                    },
+                ],
+                count: 2,
+            },
+            TranscriptFrame::Delta {
+                remove: vec![],
+                upsert: vec![],
+                append: vec![good.clone(), good.clone()],
+                count: 2,
+            },
+            TranscriptFrame::Delta {
+                remove: vec![],
+                upsert: vec![TranscriptUpsert {
+                    after: None,
+                    entry: entry("c", "new"),
+                }],
+                append: vec![TextAppend {
+                    entry: "c".into(),
+                    part: "t0".into(),
+                    text: "!".into(),
+                    len: 99,
+                }],
+                count: 3,
+            },
+        ];
+        for frame in cases {
+            let mut current = original.clone();
+            assert!(apply_transcript_frame(&mut current, frame).is_err());
+            assert_eq!(current, original);
+        }
+    }
+
+    #[test]
+    fn structural_updates_can_append_multiple_utf8_tails_to_a_new_row() {
+        let mut current = vec![entry("a", "old"), entry("b", "keep")];
+        apply_transcript_frame(
+            &mut current,
+            TranscriptFrame::Delta {
+                remove: vec!["a".into()],
+                upsert: vec![TranscriptUpsert {
+                    after: Some("b".into()),
+                    entry: entry("c", "日"),
+                }],
+                append: vec![
+                    TextAppend {
+                        entry: "c".into(),
+                        part: "t0".into(),
+                        text: "本".into(),
+                        len: 6,
+                    },
+                    TextAppend {
+                        entry: "c".into(),
+                        part: "t0".into(),
+                        text: "語".into(),
+                        len: 9,
+                    },
+                ],
+                count: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(current, vec![entry("b", "keep"), entry("c", "日本語")]);
     }
 
     #[test]

@@ -27,6 +27,7 @@ mod settings_view;
 mod shell;
 pub mod styling;
 mod tool_results;
+mod transcript;
 mod workspace;
 mod workspace_review;
 
@@ -64,6 +65,7 @@ pub struct WorkspaceView {
     selected: Option<Value>,
     messages: Vec<SessionMessageEntry>,
     transcript_watch: Option<u64>,
+    transcript_state: transcript::TranscriptState,
     context_usage: Option<zuse_protocol::ContextUsage>,
     context_menu: bool,
     context_confirmed: bool,
@@ -329,6 +331,7 @@ impl WorkspaceView {
             selected: None,
             messages: vec![],
             transcript_watch: None,
+            transcript_state: Default::default(),
             context_usage: None,
             context_menu: false,
             context_confirmed: false,
@@ -624,11 +627,9 @@ impl WorkspaceView {
         if self.receive_model_accounts(id, &frame, cx) {
             return;
         }
-        if self.transcript_watch == Some(id)
-            && (frame.get("err").is_some() || frame["done"] == true)
-        {
-            self.context_confirmed = false;
-            self.context_menu = false;
+        if method == methods::WATCH_DOC_MESSAGES {
+            self.receive_transcript(id, &frame, cx);
+            return;
         }
         if let Some(error) = frame.get("err").and_then(Value::as_str) {
             self.error = Some(error.into());
@@ -936,41 +937,6 @@ impl WorkspaceView {
                 methods::QUEUE_MESSAGE => {
                     self.send_draft.remove(&id);
                 }
-                methods::WATCH_DOC_MESSAGES if self.transcript_watch == Some(id) => {
-                    match serde_json::from_value::<TranscriptUpdate>(value.clone()) {
-                        Ok(update) => {
-                            let follow = self.transcript_scroll.max_offset().y
-                                + self.transcript_scroll.offset().y
-                                <= px(24.);
-                            if let Err(error) =
-                                apply_transcript_frame(&mut self.messages, update.frame)
-                            {
-                                self.error =
-                                    Some(format!("Transcript needs resynchronization: {error}"));
-                                self.context_confirmed = false;
-                            } else {
-                                self.context_usage = update.context_usage;
-                                self.context_confirmed = true;
-                                if !self
-                                    .context_usage
-                                    .and_then(|usage| usage.window)
-                                    .is_some_and(|window| window > 0)
-                                {
-                                    self.context_menu = false;
-                                }
-                            }
-                            if follow {
-                                self.transcript_scroll.scroll_to_bottom();
-                            }
-                            self.sync_previews(true, cx);
-                            self.confirm_deliveries();
-                        }
-                        Err(error) => {
-                            self.error = Some(format!("Invalid transcript update: {error}"));
-                            self.context_confirmed = false;
-                        }
-                    }
-                }
                 methods::QUEUE_COMMAND => {
                     self.send_draft.remove(&id);
                 }
@@ -997,20 +963,13 @@ impl WorkspaceView {
         self.composer_generation += 1;
         self.attachments.clear();
         self.uploading = 0;
-        if let Some(id) = self.transcript_watch.take() {
-            self.cancel(id);
-        }
+        self.stop_transcript();
         self.clear_workspace();
         let queue_watch = self.call(
             methods::WATCH_QUEUE,
             zuse_protocol::presentation::chat_request(&chat, json!({})),
         );
         self.queue_watch = Some(queue_watch);
-        let id = self.call(
-            methods::WATCH_DOC_MESSAGES,
-            zuse_protocol::presentation::chat_request(&chat, json!({})),
-        );
-        self.transcript_watch = Some(id);
         self.messages.clear();
         self.reset_context_status();
         self.transcript_scroll.scroll_to_bottom();
@@ -1032,6 +991,7 @@ impl WorkspaceView {
         self.project =
             (!identity.path.is_empty()).then(|| json!({"path":identity.path,"name":identity.name}));
         self.selected = Some(chat);
+        self.begin_transcript(cx);
         self.refresh_model_config_watch();
         self.restore_draft(cx);
         if let Some(chat) = &self.selected {
@@ -1070,9 +1030,7 @@ impl WorkspaceView {
         self.composer_generation += 1;
         self.attachments.clear();
         self.uploading = 0;
-        if let Some(id) = self.transcript_watch.take() {
-            self.cancel(id);
-        }
+        self.stop_transcript();
         self.clear_workspace();
         self.reset_recovery(cx);
         self.reset_inputs(cx);
@@ -1132,6 +1090,13 @@ impl WorkspaceView {
             return;
         }
         if !self.require_connection(cx) {
+            return;
+        }
+        if self.transcript_blocked() {
+            self.transcript_state
+                .notice
+                .get_or_insert_with(|| "Wait for chat history to refresh before sending.".into());
+            cx.notify();
             return;
         }
         if !self.workspace_synced

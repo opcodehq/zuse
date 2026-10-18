@@ -87,7 +87,7 @@ impl WorkspaceView {
             self.queue_unconfirmed.insert(action.chat);
         }
         self.pending.clear();
-        self.transcript_watch = None;
+        self.stop_transcript();
         // This card is read-only: keep it usable while retrying the same host.
         self.context_confirmed = false;
         self.queue_watch = None;
@@ -165,10 +165,7 @@ impl WorkspaceView {
             self.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":false}));
         }
         if let Some(chat) = self.selected.clone() {
-            self.transcript_watch = Some(self.call(
-                methods::WATCH_DOC_MESSAGES,
-                zuse_protocol::presentation::chat_request(&chat, json!({})),
-            ));
+            self.begin_transcript(cx);
             self.queue_watch = Some(self.call(
                 methods::WATCH_QUEUE,
                 zuse_protocol::presentation::chat_request(&chat, json!({})),

@@ -19,9 +19,13 @@ unicode-segmentation.workspace = true
 
 base64 = "0.22"
 vt100 = "0.15"
+web-time = "1.1"
 zuse-markdown.workspace = true
 
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff", "ico"] }
 
 similar.workspace = true
 chrono.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

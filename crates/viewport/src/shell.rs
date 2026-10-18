@@ -456,7 +456,7 @@ impl WorkspaceView {
                                         } else {
                                             "Send message"
                                         },
-                                        has_draft && self.connected,
+                                        has_draft && self.connected && !self.transcript_blocked(),
                                         true,
                                     )
                                     .on_click(cx.listener(

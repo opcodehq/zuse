@@ -183,7 +183,9 @@ impl WorkspaceView {
             );
         if !self.connected || !self.context_confirmed {
             card = card.child(div().text_size(px(11.)).text_color(rgb(FAINT)).child(
-                if self.connected {
+                if self.connected && !self.transcript_refresh_pending() {
+                    "Last reported · refresh needed"
+                } else if self.connected {
                     "Last reported · refreshing from host"
                 } else {
                     "Last reported · offline"

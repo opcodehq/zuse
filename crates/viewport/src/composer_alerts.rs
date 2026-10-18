@@ -71,6 +71,7 @@ impl WorkspaceView {
     }
     pub(super) fn has_composer_notices(&self) -> bool {
         !self.connected
+            || self.transcript_state.notice.is_some()
             || self.error.is_some()
             || self.latest_provider_alert().is_some()
             || self.connection_notice.is_some()
@@ -89,6 +90,28 @@ impl WorkspaceView {
                     .map(|(id, text)| (id, text, false))
             });
         let mut view = column().w_full();
+        if let Some(notice) = &self.transcript_state.notice {
+            view = view.child(
+                row()
+                    .id("transcript-refresh-notice")
+                    .role(Role::Status)
+                    .min_h(px(32.))
+                    .px_3()
+                    .py_1()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(icon("refresh").size(px(14.)).text_color(rgb(MUTED)))
+                    .child(label(notice.clone()).flex_1().min_w_0().text_size(px(11.)))
+                    .child(
+                        control("retry-transcript", "Retry")
+                            .tab_index(0)
+                            .h(px(24.))
+                            .on_click(cx.listener(|this, _, _, cx| this.retry_transcript(cx))),
+                    ),
+            );
+        }
+
         if self.provider_update_notice() {
             view = view.child(
                 row()

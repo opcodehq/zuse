@@ -28,6 +28,9 @@ impl WorkspaceView {
         questions: Vec<UserInputQuestion>,
         cx: &mut Context<Self>,
     ) {
+        if self.transcript_blocked() {
+            return;
+        }
         if self.input_submitted.contains(&request) {
             return;
         }
@@ -52,11 +55,12 @@ impl WorkspaceView {
         let questions = serde_json::from_value::<Vec<UserInputQuestion>>(part["questions"].clone())
             .unwrap_or_default();
         let busy = self.input_submitted.contains(&request);
-        let ready = self
-            .input_answers
-            .get(&request)
-            .and_then(|answers| answers.complete(&questions))
-            .is_some();
+        let ready = !self.transcript_blocked()
+            && self
+                .input_answers
+                .get(&request)
+                .and_then(|answers| answers.complete(&questions))
+                .is_some();
         let mut card = column()
             .gap_3()
             .p_3()
