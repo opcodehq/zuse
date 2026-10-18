@@ -13,6 +13,7 @@ impl WorkspaceView {
         if self.access_save.is_some() {
             return;
         }
+        self.context_menu = false;
         self.access_picker = !self.access_picker;
         self.add_menu = false;
         self.model_picker = false;

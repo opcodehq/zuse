@@ -88,6 +88,8 @@ impl WorkspaceView {
         }
         self.pending.clear();
         self.transcript_watch = None;
+        // This card is read-only: keep it usable while retrying the same host.
+        self.context_confirmed = false;
         self.queue_watch = None;
         self.directory_request = None;
         self.file_request = None;

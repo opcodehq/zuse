@@ -97,3 +97,9 @@ Composer notices attach above the input and expose expansion, copy, dismissal an
 Model, reasoning, Context, Fast and access changes share one per-chat save coordinator. An execution-host configuration watch supplies canonical values; replicated conversation lists cannot overwrite the selected host snapshot or a pending choice. Model changes own only model-related fields, and permission changes own only the sandbox field. Conditional writes compare the current host configuration, coalesce later choices, and survive navigation. Sending and explicit queue delivery wait for confirmed configuration.
 
 An interrupted or malformed acknowledgement triggers a fresh read and discards queued choices rather than replaying a possibly committed mutation. The access menu can refresh saved choices without writing. Attaching a replacement engine clears previous transport proof and pending intents before opening a new owner watch. This does not establish complete native transport reconnection or physical paired-device acceptance.
+
+## Browser context status
+
+The composer’s context ring reads `contextUsage` from the selected execution host’s `WatchDocMessages` stream. The card shows reported tokens/capacity, a 38-segment meter and remaining capacity. It distinguishes zero usage from unknown usage, hides unreported or zero capacity, clamps the displayed percentage and saturates remaining capacity at zero. It never derives occupancy from cumulative billing totals or guesses a capacity from a model name.
+
+Changing conversations or execution hosts clears the previous measurement. Disconnection preserves the last reported value with an offline label; reconnecting keeps it marked as refreshing until a valid transcript update arrives. Malformed transcript updates do not replace the last valid measurement. The card is read-only and shares its GPU ring painter with the native indicators.

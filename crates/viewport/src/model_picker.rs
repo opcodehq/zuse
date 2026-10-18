@@ -50,6 +50,7 @@ impl WorkspaceView {
             .unwrap_or_else(|| "Agent default".into())
     }
     pub(super) fn open_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.context_menu = false;
         self.model_picker = !self.model_picker;
         self.model_picker_default = false;
         self.agent_picker = false;

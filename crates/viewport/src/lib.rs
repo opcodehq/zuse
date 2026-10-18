@@ -5,6 +5,7 @@ mod activity;
 pub mod assets;
 mod composer_alerts;
 mod connection;
+pub mod context_status;
 mod draft_journal;
 pub mod input;
 mod model_accounts;
@@ -63,6 +64,11 @@ pub struct WorkspaceView {
     selected: Option<Value>,
     messages: Vec<SessionMessageEntry>,
     transcript_watch: Option<u64>,
+    context_usage: Option<zuse_protocol::ContextUsage>,
+    context_menu: bool,
+    context_confirmed: bool,
+    context_focus: FocusHandle,
+    context_trigger: model_picker::TriggerBounds,
     previews: HashMap<String, previews::Preview>,
     preview_pending: HashMap<u64, String>,
     preview_generation: u64,
@@ -323,6 +329,11 @@ impl WorkspaceView {
             selected: None,
             messages: vec![],
             transcript_watch: None,
+            context_usage: None,
+            context_menu: false,
+            context_confirmed: false,
+            context_focus: cx.focus_handle(),
+            context_trigger: Default::default(),
             previews: HashMap::new(),
             preview_pending: HashMap::new(),
             preview_generation: 0,
@@ -612,6 +623,12 @@ impl WorkspaceView {
         }
         if self.receive_model_accounts(id, &frame, cx) {
             return;
+        }
+        if self.transcript_watch == Some(id)
+            && (frame.get("err").is_some() || frame["done"] == true)
+        {
+            self.context_confirmed = false;
+            self.context_menu = false;
         }
         if let Some(error) = frame.get("err").and_then(Value::as_str) {
             self.error = Some(error.into());
@@ -930,6 +947,17 @@ impl WorkspaceView {
                             {
                                 self.error =
                                     Some(format!("Transcript needs resynchronization: {error}"));
+                                self.context_confirmed = false;
+                            } else {
+                                self.context_usage = update.context_usage;
+                                self.context_confirmed = true;
+                                if !self
+                                    .context_usage
+                                    .and_then(|usage| usage.window)
+                                    .is_some_and(|window| window > 0)
+                                {
+                                    self.context_menu = false;
+                                }
                             }
                             if follow {
                                 self.transcript_scroll.scroll_to_bottom();
@@ -938,7 +966,8 @@ impl WorkspaceView {
                             self.confirm_deliveries();
                         }
                         Err(error) => {
-                            self.error = Some(format!("Invalid transcript update: {error}"))
+                            self.error = Some(format!("Invalid transcript update: {error}"));
+                            self.context_confirmed = false;
                         }
                     }
                 }
@@ -983,6 +1012,7 @@ impl WorkspaceView {
         );
         self.transcript_watch = Some(id);
         self.messages.clear();
+        self.reset_context_status();
         self.transcript_scroll.scroll_to_bottom();
         self.reset_recovery(cx);
         self.reset_inputs(cx);
@@ -1056,6 +1086,7 @@ impl WorkspaceView {
         self.model_options.clear();
         self.apply_default_model();
         self.messages.clear();
+        self.reset_context_status();
         self.transcript_scroll.set_offset(point(px(0.), px(0.)));
         self.settings = false;
         self.restore_draft(cx);

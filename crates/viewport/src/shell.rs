@@ -308,6 +308,7 @@ impl WorkspaceView {
                                         cx.stop_propagation()
                                     })
                                     .on_click(cx.listener(|this, _, _, cx| {
+                                        this.context_menu = false;
                                         this.add_menu = !this.add_menu;
                                         this.access_picker = false;
                                         this.model_picker = false;
@@ -433,6 +434,9 @@ impl WorkspaceView {
                                         this.open_model_picker(window, cx)
                                     })),
                             )
+                            .when_some(self.context_control(cx), |view, control| {
+                                view.child(control)
+                            })
                             .when(working && self.queue_edit.is_none(), |d| {
                                 d.child(
                                     icon_button("stop", "stop", "Stop agent")
@@ -1175,12 +1179,17 @@ impl Render for WorkspaceView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    if this.model_picker || this.agent_picker || this.access_picker || this.add_menu
+                    if this.model_picker
+                        || this.agent_picker
+                        || this.access_picker
+                        || this.add_menu
+                        || this.context_menu
                     {
                         this.model_picker = false;
                         this.agent_picker = false;
                         this.access_picker = false;
                         this.add_menu = false;
+                        this.context_menu = false;
                         cx.notify();
                     }
                 }),
@@ -1193,6 +1202,12 @@ impl Render for WorkspaceView {
                 cx.listener(|this, _: &NewSession, window, cx| this.start_new_session(window, cx)),
             )
             .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
+                if this.context_menu {
+                    this.context_menu = false;
+                    window.focus(&this.context_focus, cx);
+                    cx.notify();
+                    return;
+                }
                 if this.settings {
                     if this.model_picker && this.model_picker_default {
                         this.model_picker = false;

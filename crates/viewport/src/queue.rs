@@ -145,6 +145,7 @@ impl WorkspaceView {
         // Until the new snapshot arrives, old approval cards must not submit
         // answers to a different host. Canceled subscription frames are ignored.
         self.messages.clear();
+        self.reset_context_status();
         self.queue.clear();
         let inputs = self.input_pending.keys().copied().collect::<Vec<_>>();
         for id in inputs {

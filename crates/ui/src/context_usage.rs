@@ -1,6 +1,6 @@
 //! Context occupancy is read from the replicated chat snapshot, never local CLI state.
 use crate::theme::Theme;
-use gpui::{IntoElement, PathBuilder, SharedString, canvas, div, point, prelude::*, px};
+use gpui::{IntoElement, SharedString, div, prelude::*, px};
 use zuse_protocol::ContextUsage;
 
 /// The context ring's trigger chip; the footer ([`crate::account_usage`])
@@ -60,39 +60,12 @@ pub(crate) fn ring_chip(
 /// The footer's 16px progress ring: a faint full track under a `fraction` arc
 /// starting at twelve o'clock. Shared with the account usage indicator.
 pub(crate) fn ring(fraction: f32, color: gpui::Hsla, theme: &Theme) -> impl IntoElement {
-    let track = theme.text_faint.opacity(0.25);
-    canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            let center = bounds.center();
-            let mut arc = |fraction: f32, color| {
-                if fraction <= 0.0 {
-                    return;
-                }
-                let steps = (64.0 * fraction).ceil().max(2.0) as usize;
-                let mut path = PathBuilder::stroke(px(1.8));
-                for i in 0..=steps {
-                    let angle = -std::f32::consts::FRAC_PI_2
-                        + std::f32::consts::TAU * fraction * i as f32 / steps as f32;
-                    let p = point(
-                        center.x + px(6.0 * angle.cos()),
-                        center.y + px(6.0 * angle.sin()),
-                    );
-                    if i == 0 {
-                        path.move_to(p);
-                    } else {
-                        path.line_to(p);
-                    }
-                }
-                if let Ok(path) = path.build() {
-                    window.paint_path(path, color);
-                }
-            };
-            arc(1.0, track);
-            arc(fraction.clamp(0.0, 1.0), color);
-        },
+    zuse_viewport::context_status::progress_ring(
+        Some(fraction),
+        color,
+        theme.text_faint.opacity(0.25),
+        16.,
     )
-    .size(px(16.0))
 }
 
 fn with_separators(count: u64) -> String {
