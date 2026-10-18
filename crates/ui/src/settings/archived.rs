@@ -279,21 +279,14 @@ impl Render for ArchivedPage {
                 let chat_id = chat.id.clone();
                 // zuse settings.archived.tsx row: archive tile, medium title
                 // + tabular time, quiet device · location meta, Unarchive.
-                div()
+                widgets::card_row(&theme, ix == 0)
                     .id(("archived-row", ix))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(12.0))
-                    .rounded(px(8.0))
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .hover(|s| s.bg(crate::theme::ink(0.03)))
+                    .flex_nowrap()
                     .child(
                         div()
                             .flex_none()
-                            .size(px(32.0))
-                            .rounded(px(6.0))
+                            .size(px(28.0))
+                            .rounded(px(7.0))
                             .border_1()
                             .border_color(theme.border)
                             .flex()
@@ -321,7 +314,9 @@ impl Render for ArchivedPage {
                                         div()
                                             .min_w_0()
                                             .truncate()
-                                            .text_size(crate::typography::ui_rems(13.0))
+                                            .text_size(crate::typography::ui_rems(
+                                                widgets::ROW_TITLE_SIZE,
+                                            ))
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .text_color(theme.text)
                                             .child(title),
@@ -368,12 +363,12 @@ impl Render for ArchivedPage {
                             .flex_row()
                             .items_center()
                             .gap(px(6.0))
+                            .h(px(28.0))
                             .px(px(10.0))
-                            .py(px(4.0))
-                            .rounded(px(6.0))
+                            .rounded(px(7.0))
                             .border_1()
                             .border_color(theme.border)
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_muted)
                             .opacity(0.8)
                             .when(is_busy, |el| el.opacity(0.4))
@@ -403,7 +398,7 @@ impl Render for ArchivedPage {
         let body: AnyElement = if items.is_empty() {
             // Centered empty state (zuse settings.archived.tsx).
             div()
-                .mt(px(96.0))
+                .py(px(40.0))
                 .flex()
                 .flex_col()
                 .items_center()
@@ -419,7 +414,7 @@ impl Render for ArchivedPage {
                 .child(
                     div()
                         .mt(px(12.0))
-                        .text_size(crate::typography::ui_rems(14.0))
+                        .text_size(crate::typography::ui_rems(13.0))
                         .child(SharedString::from("Nothing archived")),
                 )
                 .child(
@@ -433,21 +428,20 @@ impl Render for ArchivedPage {
                 )
                 .into_any_element()
         } else {
-            div()
-                .mt(px(24.0))
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .children(items)
-                .into_any_element()
+            div().flex().flex_col().children(items).into_any_element()
         };
 
         let pagination = (count > ARCHIVE_PAGE_SIZE).then(|| {
             div()
-                .mt(px(16.0))
+                .px(px(12.0))
+                .py(px(8.0))
+                .border_t_1()
+                .border_color(widgets::row_divider(&theme))
                 .flex()
                 .items_center()
                 .justify_between()
+                .text_size(crate::typography::ui_rems(11.0))
+                .text_color(theme.text_muted)
                 .child(
                     widgets::ghost_action(&theme)
                         .id("archived-previous")
@@ -491,7 +485,8 @@ impl Render for ArchivedPage {
         });
         let deleting = self.delete_all_task.is_some();
         let delete_all = (count > 0).then(|| {
-            widgets::action_button(&theme, widgets::ActionTone::Danger)
+            widgets::action_button(&theme, widgets::ActionTone::Quiet)
+                .text_color(theme.danger)
                 .id("archived-delete-all")
                 .flex_none()
                 .when(deleting, |el| el.opacity(0.5).cursor_default())
@@ -501,8 +496,8 @@ impl Render for ArchivedPage {
                 .on_click(cx.listener(|this, _, _, cx| this.request_delete_all(cx)))
                 .child(
                     crate::icons::icon(crate::icons::TRASH_BIN_MINIMALISTIC)
-                        .size(px(16.0))
-                        .text_color(gpui::white()),
+                        .size(px(14.0))
+                        .text_color(theme.danger),
                 )
                 .child(SharedString::from(if deleting {
                     "Deleting…"
@@ -528,32 +523,29 @@ impl Render for ArchivedPage {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::page_column()
+                                .child(widgets::section_title_with_action(
+                                    &theme,
+                                    "Archived sessions",
+                                    (count > 0).then_some(count),
+                                    "Hidden from the sidebar until restored.",
+                                    None,
+                                ))
                                 .child(
-                                    // Delete all sits bottom-right, level with
-                                    // the subtitle rather than the title.
-                                    div()
-                                        .flex()
-                                        .flex_row()
-                                        .items_end()
-                                        .gap(px(16.0))
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .child(widgets::page_header(
-                                                    &theme,
-                                                    "Archived sessions",
-                                                    (count > 0).then_some(count),
-                                                ))
-                                                .child(widgets::page_subtitle(
-                                                    &theme,
-                                                    "Hidden from the sidebar until restored.",
-                                                )),
+                                    widgets::section_stack().child(
+                                        widgets::group_with_action(
+                                            &theme,
+                                            "Sessions",
+                                            "",
+                                            delete_all.map(IntoElement::into_any_element),
                                         )
-                                        .children(delete_all),
-                                )
-                                .child(body)
-                                .children(pagination),
+                                        .child(
+                                            widgets::section_card(&theme)
+                                                .mt_0()
+                                                .child(body)
+                                                .children(pagination),
+                                        ),
+                                    ),
+                                ),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),

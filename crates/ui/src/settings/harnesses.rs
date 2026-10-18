@@ -116,54 +116,99 @@ pub fn cli_name(harness: HarnessId) -> &'static str {
     }
 }
 
-/// A provider's version line: the installed version, plus only what the
-/// Update button doesn't already say (progress, a failure), all in one muted
-/// tone. Up-to-date providers, checks in flight and providers whose updates
-/// aren't monitored show just the version, so rows don't flash through
+/// The tone of a provider row's status dot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatusTone {
+    Ready,
+    Warning,
+    Error,
+    Muted,
+}
+
+impl StatusTone {
+    fn color(self, theme: &Theme) -> gpui::Hsla {
+        match self {
+            StatusTone::Ready => theme.success,
+            StatusTone::Warning => theme.warning,
+            StatusTone::Error => theme.danger,
+            StatusTone::Muted => theme.text_muted.opacity(0.6),
+        }
+    }
+}
+
+/// What an update adds to the status line, beyond the version shown next to
+/// the name: an available release, progress, or a failure. Up-to-date
+/// providers and checks in flight add nothing, so rows don't flash through
 /// states while checks run.
-fn harness_update_label(status: &HarnessUpdateStatus, theme: &Theme) -> (SharedString, gpui::Hsla) {
-    let installed = status
-        .installed_version
+fn update_detail(status: &HarnessUpdateStatus) -> Option<String> {
+    let latest = status
+        .latest_version
         .as_deref()
-        .map(|version| format!("v{version}"));
-    let with = |detail: &str| match &installed {
-        Some(version) => format!("{version} · {detail}"),
-        None => detail.to_owned(),
-    };
-    let version_only = || installed.clone().unwrap_or_default();
-    let label = match status.phase {
+        .filter(|latest| status.installed_version.as_deref() != Some(*latest));
+    match status.phase {
         HarnessUpdatePhase::Dormant
         | HarnessUpdatePhase::Checking
-        | HarnessUpdatePhase::Current => version_only(),
-        // The row's Update button already says it; one Zuse can only
-        // describe (a command to run yourself) is just the version too.
-        HarnessUpdatePhase::Available | HarnessUpdatePhase::ManualActionRequired
-            if status.can_apply =>
-        {
-            version_only()
-        }
-        HarnessUpdatePhase::Available => match status.latest_version.as_deref() {
-            Some(latest) => with(&format!("v{latest} available")),
-            None => with("Update available"),
-        },
-        HarnessUpdatePhase::ManualActionRequired => version_only(),
-        HarnessUpdatePhase::WaitingForIdle => with("Waiting for agent to be idle"),
-        HarnessUpdatePhase::Preparing => with("Preparing update…"),
-        HarnessUpdatePhase::Downloading => with("Downloading…"),
-        HarnessUpdatePhase::Installing => with("Installing…"),
-        HarnessUpdatePhase::Verifying => with("Verifying…"),
-        HarnessUpdatePhase::Updated => with("Updated"),
-        HarnessUpdatePhase::Failed => with("Couldn't check for updates"),
+        | HarnessUpdatePhase::Current
+        | HarnessUpdatePhase::ManualActionRequired => None,
+        HarnessUpdatePhase::Available => Some(match latest {
+            Some(latest) => format!("v{latest} available"),
+            None => "Update available".into(),
+        }),
+        HarnessUpdatePhase::WaitingForIdle => Some("Waiting for agent to be idle".into()),
+        HarnessUpdatePhase::Preparing => Some("Preparing update…".into()),
+        HarnessUpdatePhase::Downloading => Some("Downloading…".into()),
+        HarnessUpdatePhase::Installing => Some("Installing…".into()),
+        HarnessUpdatePhase::Verifying => Some("Verifying…".into()),
+        HarnessUpdatePhase::Updated => Some("Updated".into()),
+        HarnessUpdatePhase::Failed => Some("Couldn't check for updates".into()),
+    }
+}
+
+/// A provider row's status line: ready, off, not installed (with the install
+/// hint) or a failed update check, plus any update detail.
+fn provider_status(
+    harness: HarnessId,
+    installed: bool,
+    enabled: bool,
+    can_install: bool,
+    update: Option<&HarnessUpdateStatus>,
+) -> (StatusTone, String) {
+    if !installed {
+        return (
+            StatusTone::Warning,
+            install_hint(harness, enabled, can_install),
+        );
+    }
+    let detail = update.and_then(update_detail);
+    if update.is_some_and(|status| status.phase == HarnessUpdatePhase::Failed) {
+        return (StatusTone::Error, detail.unwrap_or_default());
+    }
+    let (tone, label) = if enabled {
+        (StatusTone::Ready, "Ready")
+    } else {
+        (StatusTone::Muted, "Off")
     };
-    let color = match status.phase {
-        HarnessUpdatePhase::Failed => theme.danger_muted,
-        _ => theme.text_muted.opacity(0.75),
+    match detail {
+        Some(detail) => (tone, format!("{label} · {detail}")),
+        None => (tone, label.into()),
+    }
+}
+
+/// The frame's "Checked 2m ago" from the newest update check (epoch ms).
+fn checked_label(checked_at: Option<i64>, now_ms: i64) -> String {
+    let Some(checked_at) = checked_at else {
+        return "Checked".into();
     };
-    (label.into(), color)
+    let minutes = (now_ms - checked_at).max(0) / 60_000;
+    match minutes {
+        0 => "Checked just now".into(),
+        1..=59 => format!("Checked {minutes}m ago"),
+        60..=1439 => format!("Checked {}h ago", minutes / 60),
+        _ => format!("Checked {}d ago", minutes / 1440),
+    }
 }
 
 pub struct HarnessesPage {
-    plugins: Entity<super::plugins::PluginsCard>,
     custom_acp: Entity<super::custom_acp::CustomAcpCard>,
     _custom_changed: gpui::Subscription,
     state: Entity<AppState>,
@@ -195,15 +240,10 @@ pub struct HarnessesPage {
 }
 
 impl HarnessesPage {
-    pub fn plugins_card(&self) -> Entity<super::plugins::PluginsCard> {
-        self.plugins.clone()
-    }
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let plugins = cx.new(|cx| super::plugins::PluginsCard::new(state.clone(), cx));
         let custom_acp = cx.new(|cx| super::custom_acp::CustomAcpCard::new(state.clone(), cx));
         let custom_changed = cx.subscribe(&custom_acp, |this: &mut Self, _, _, cx| this.load(cx));
         let mut page = Self {
-            plugins,
             custom_acp,
             _custom_changed: custom_changed,
             state,
@@ -850,28 +890,27 @@ impl HarnessesPage {
                     _ => None,
                 };
 
-                let mut meta: Vec<gpui::AnyElement> = Vec::new();
-                if installed && self.installing != Some(harness) {
-                    meta.push(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(div().size(px(6.)).rounded_full().bg(theme.text_muted))
-                            .child(if enabled { "Installed" } else { "Disabled" })
-                            .into_any_element(),
-                    );
-                }
-                // Installing REPLACES the not-installed hint in place, so the
-                // row's text never shifts while the install runs.
-
-                if self.installing == Some(harness) {
-                    meta.push(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.0))
-                            .child(crate::loaders::mini_mono_spinner(
+                let installing = self.installing == Some(harness);
+                let version = update
+                    .filter(|_| installed)
+                    .and_then(|status| status.installed_version.clone())
+                    .map(|version| SharedString::from(format!("v{version}")));
+                let (tone, text) =
+                    provider_status(harness, installed, enabled, descriptor.can_install, update);
+                // Installing REPLACES the status in place, so the row's text
+                // never shifts while the install runs.
+                let status_line = div()
+                    .mt(px(2.))
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .text_size(crate::typography::ui_rems(11.))
+                    .line_height(crate::typography::ui_rems(16.))
+                    .text_color(theme.text_muted)
+                    .map(|line| {
+                        if installing {
+                            line.child(crate::loaders::mini_mono_spinner(
                                 format!("harness-install-spinner-{harness:?}"),
                                 1.5,
                                 theme.text_muted,
@@ -879,57 +918,17 @@ impl HarnessesPage {
                                 cx,
                             ))
                             .child(SharedString::from(install_label(&descriptor.name)))
-                            .into_any_element(),
-                    );
-                } else if !installed {
-                    meta.push(
-                        div()
-                            .text_color(theme.text_muted.opacity(0.75))
-                            .child(SharedString::from(install_hint(
-                                harness,
-                                enabled,
-                                descriptor.can_install,
-                            )))
-                            .into_any_element(),
-                    );
-                }
-                // Not installed: the hint above says all there is.
-                if let Some(status) = update.filter(|_| installed) {
-                    let (text, color) = harness_update_label(status, &theme);
-                    // Next to an Update button the version reads as the
-                    // jump it would make: v1.2 → v1.3.
-                    let next = status
-                        .latest_version
-                        .as_deref()
-                        .filter(|_| {
-                            status.can_apply
-                                && matches!(
-                                    status.phase,
-                                    HarnessUpdatePhase::Available
-                                        | HarnessUpdatePhase::ManualActionRequired
-                                )
-                        })
-                        .filter(|latest| status.installed_version.as_deref() != Some(*latest));
-                    if let Some(next) = next.filter(|_| !text.is_empty()) {
-                        meta.push(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(4.0))
-                                .text_color(color)
-                                .child(text)
-                                .child(
-                                    crate::icons::icon(crate::icons::ARROW_RIGHT)
-                                        .size(px(11.0))
-                                        .text_color(color),
-                                )
-                                .child(format!("v{next}"))
-                                .into_any_element(),
-                        );
-                    } else if !text.is_empty() {
-                        meta.push(div().text_color(color).child(text).into_any_element());
-                    }
-                }
+                        } else {
+                            line.child(
+                                div()
+                                    .flex_none()
+                                    .size(px(6.))
+                                    .rounded_full()
+                                    .bg(tone.color(&theme)),
+                            )
+                            .child(div().min_w_0().truncate().child(SharedString::from(text)))
+                        }
+                    });
                 // widgets::row_tile with the brand tint honored (the Claude
                 // mark keeps its orange, like the picker rail).
                 let tile = div()
@@ -1072,10 +1071,27 @@ impl HarnessesPage {
                                     .min_w_0()
                                     .flex()
                                     .flex_col()
-                                    .child(widgets::row_title(&theme, descriptor.name.clone()))
-                                    .when(!meta.is_empty(), |label| {
-                                        label.child(widgets::meta_line(&theme, meta))
-                                    }),
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_baseline()
+                                            .gap(px(6.))
+                                            .child(widgets::row_title(
+                                                &theme,
+                                                descriptor.name.clone(),
+                                            ))
+                                            .when_some(version, |name, version| {
+                                                name.child(
+                                                    div()
+                                                        .flex_none()
+                                                        .font_family(theme.font_mono.clone())
+                                                        .text_size(crate::typography::ui_rems(10.))
+                                                        .text_color(theme.text_muted)
+                                                        .child(version),
+                                                )
+                                            }),
+                                    )
+                                    .child(status_line),
                             )
                             .children(update_action)
                             // Install / Cancel sit with the row's other
@@ -1206,6 +1222,73 @@ impl HarnessesPage {
             })
             .collect()
     }
+    /// Review fixtures: a seeded provider list; `acp` opens the Add ACP
+    /// agent dialog, `expanded` expands the first provider.
+    #[cfg(feature = "browser-fixture")]
+    pub fn fixture_seed(&mut self, variant: &str, cx: &mut Context<Self>) {
+        let descriptor = |id, name: &str, installed: bool, enabled: bool| HarnessDescriptor {
+            id,
+            name: name.into(),
+            supports_steering: false,
+            steering_mode: zuse_protocol::SteeringMode::TurnBoundary,
+            reasoning_levels: Vec::new(),
+            installed,
+            can_install: true,
+            enabled: Some(enabled),
+        };
+        self.harnesses = Loadable::Ready(vec![
+            descriptor(HarnessId::ClaudeCode, "Claude Code", true, true),
+            descriptor(HarnessId::Codex, "Codex", true, true),
+            descriptor(HarnessId::Cursor, "Cursor", true, false),
+            descriptor(HarnessId::Gemini, "Gemini CLI", false, false),
+            descriptor(HarnessId::Opencode, "OpenCode", true, true),
+        ]);
+        let now = chrono::Utc::now().timestamp_millis();
+        let status = |harness, installed: &str, latest: Option<&str>, phase| HarnessUpdateStatus {
+            installed_version: Some(installed.into()),
+            latest_version: latest.map(str::to_owned),
+            checked_at: Some(now - 120_000),
+            phase,
+            ..serde_json::from_value(serde_json::json!({"harness": harness, "phase": "current"}))
+                .expect("fixture update status")
+        };
+        self.updates = Loadable::Ready(vec![
+            status(
+                HarnessId::ClaudeCode,
+                "2.1.14",
+                None,
+                HarnessUpdatePhase::Current,
+            ),
+            status(
+                HarnessId::Codex,
+                "0.48.0",
+                Some("0.49.1"),
+                HarnessUpdatePhase::Available,
+            ),
+            status(
+                HarnessId::Cursor,
+                "2025.10.2",
+                None,
+                HarnessUpdatePhase::Current,
+            ),
+            status(
+                HarnessId::Opencode,
+                "1.0.12",
+                None,
+                HarnessUpdatePhase::Current,
+            ),
+        ]);
+        if variant == "expanded" {
+            self.toggle_agent_details(HarnessId::ClaudeCode, cx);
+            if let Some(accounts) = &self.accounts_page {
+                accounts.update(cx, |page, cx| page.fixture_seed(cx));
+            }
+        }
+        self.custom_acp
+            .update(cx, |card, cx| card.fixture_seed(variant == "acp", cx));
+        cx.notify();
+    }
+
     fn on_scroll_hovered(&mut self, hovered: &bool, _: &mut Window, cx: &mut Context<Self>) {
         if self.scroll.set_list_hovered(*hovered) {
             cx.notify();
@@ -1291,12 +1374,16 @@ impl Render for HarnessesPage {
 
         let checking =
             matches!(self.harnesses, Loadable::Idle | Loadable::Loading) || self.checking_updates;
-        let status = if checking {
-            "Checking…"
+        let status: SharedString = if checking {
+            "Checking…".into()
         } else if matches!(self.harnesses, Loadable::Error(_)) {
-            "Probe failed"
+            "Probe failed".into()
         } else {
-            "Checked"
+            let checked_at = match &self.updates {
+                Loadable::Ready(statuses) => statuses.iter().filter_map(|s| s.checked_at).max(),
+                _ => None,
+            };
+            checked_label(checked_at, chrono::Utc::now().timestamp_millis()).into()
         };
         let check = div()
             .flex()
@@ -1304,7 +1391,7 @@ impl Render for HarnessesPage {
             .gap(px(6.))
             .child(
                 div()
-                    .text_size(crate::typography::ui_rems(10.))
+                    .text_size(crate::typography::ui_rems(11.))
                     .text_color(theme.text_muted)
                     .child(status),
             )

@@ -597,7 +597,7 @@ fn binding_control(
                 .min_w(px(96.0))
                 .h(px(widgets::SELECT_HEIGHT))
                 .px(px(12.0))
-                .rounded(px(8.0))
+                .rounded(px(7.0))
                 // Same glass wash as the settings dropdowns; the
                 // transparent edge is held for the focus ring.
                 .border_1()
@@ -950,27 +950,30 @@ impl Render for ShortcutsPage {
                             .child(
                                 widgets::page_column()
                                     .child(self.general_header(&theme))
-                                    .child(div().mt(px(20.)).child(self.general_account.clone()))
-                                    .child(self.general_preferences(&theme, cx))
                                     .child(
-                                        widgets::group(&theme, "Composer", "").mt(px(20.)).child(
-                                            widgets::section_card(&theme)
-                                                .mt_0()
-                                                .child(send_behavior_row)
-                                                .child(compact_mode_row)
-                                                .child(compact_model_picker_row)
-                                                .child(escape_behavior_row),
-                                        ),
-                                    )
-                                    .child(widgets::section(
-                                        &theme,
-                                        "Links",
-                                        widgets::section_card(&theme)
-                                            .mt_0()
-                                            .child(pull_request_destination_row),
-                                    ))
-                                    .child(self.thread_naming.clone())
-                                    .child(self.worktrees.clone()),
+                                        widgets::section_stack()
+                                            .child(self.general_account.clone())
+                                            .child(self.general_preferences(&theme, cx))
+                                            .child(
+                                                widgets::group(&theme, "Composer", "").child(
+                                                    widgets::section_card(&theme)
+                                                        .mt_0()
+                                                        .child(send_behavior_row)
+                                                        .child(compact_mode_row)
+                                                        .child(compact_model_picker_row)
+                                                        .child(escape_behavior_row),
+                                                ),
+                                            )
+                                            .child(widgets::section(
+                                                &theme,
+                                                "Links",
+                                                widgets::section_card(&theme)
+                                                    .mt_0()
+                                                    .child(pull_request_destination_row),
+                                            ))
+                                            .child(self.thread_naming.clone())
+                                            .child(self.worktrees.clone()),
+                                    ),
                             ),
                     )
                     .fade_overflow_y(&self.scroll.scroll),
@@ -1024,34 +1027,12 @@ impl Render for ShortcutsPage {
                     .child(
                         widgets::page_column()
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_start()
-                                    .flex_wrap()
-                                    .justify_between()
-                                    .gap(px(24.0))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w(px(200.0))
-                                            .flex()
-                                            .flex_col()
-                                            .child(widgets::page_header(
-                                                &theme,
-                                                "Keyboard shortcuts",
-                                                None,
-                                            ))
-                                            .child(
-                                                widgets::page_subtitle(
-                                                    &theme,
-                                                    "Click a binding, then press the new key combination.",
-                                                )
-                                                .max_w(px(512.0))
-                                                .line_height(px(20.0)),
-                                            ),
-                                    )
-                                    .child({
+                                widgets::section_title_with_action(
+                                    &theme,
+                                    "Keyboard shortcuts",
+                                    None,
+                                    "Click a binding, then press the new key combination.",
+                                    Some({
                                         // `disabled:opacity-35` when nothing is
                                         // customized or while recording.
                                         let disabled = !customized || recording.is_some();
@@ -1082,14 +1063,11 @@ impl Render for ShortcutsPage {
                                                     .text_color(theme.text_muted),
                                             )
                                             .child(SharedString::from("Restore defaults"))
+                                            .into_any_element()
                                     }),
+                                ),
                             )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .children(groups),
-                            )
+                            .child(widgets::section_stack().children(groups))
                             .child(
                                 div()
                                     .mt(px(12.0))

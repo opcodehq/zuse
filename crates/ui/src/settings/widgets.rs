@@ -352,22 +352,48 @@ pub fn page_header(theme: &Theme, title: &str, count: Option<usize>) -> gpui::Di
         })
 }
 
-/// Settings SectionTitle, shared by every page that uses the app layout.
+/// Settings SectionTitle, shared by every settings page: a 20px title, one
+/// muted subtitle line and a hairline underneath.
 pub fn section_title(theme: &Theme, title: &str, description: &str) -> gpui::Div {
-    div()
+    section_title_with_action(theme, title, None, description, None)
+}
+
+/// [`section_title`] with an optional muted count after the title and an
+/// optional page-wide action on the title row ("Restore defaults").
+pub fn section_title_with_action(
+    theme: &Theme,
+    title: &str,
+    count: Option<usize>,
+    description: &str,
+    action: Option<AnyElement>,
+) -> gpui::Div {
+    let heading = div()
+        .flex_1()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap(px(4.))
-        .pb(px(16.))
-        .border_b_1()
-        .border_color(theme.border)
         .child(
             div()
-                .text_size(crate::typography::ui_rems(20.))
-                .line_height(crate::typography::ui_rems(28.))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text)
-                .child(SharedString::from(title.to_owned())),
+                .flex()
+                .items_baseline()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(20.))
+                        .line_height(crate::typography::ui_rems(28.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child(SharedString::from(title.to_owned())),
+                )
+                .when_some(count, |row, count| {
+                    row.child(
+                        div()
+                            .text_size(crate::typography::ui_rems(13.))
+                            .text_color(theme.text_muted)
+                            .child(SharedString::from(count.to_string())),
+                    )
+                }),
         )
         .child(
             div()
@@ -375,7 +401,18 @@ pub fn section_title(theme: &Theme, title: &str, description: &str) -> gpui::Div
                 .line_height(crate::typography::ui_rems(20.))
                 .text_color(theme.text_muted)
                 .child(SharedString::from(description.to_owned())),
-        )
+        );
+    div()
+        .flex()
+        .items_end()
+        .gap(px(12.))
+        .pb(px(16.))
+        .border_b_1()
+        .border_color(theme.border)
+        .child(heading)
+        .when_some(action, |row, action| {
+            row.child(div().flex_none().flex().items_center().child(action))
+        })
 }
 
 /// Subtitle under the headline: `mt-1 text-[13px] text-muted-foreground`.
@@ -481,8 +518,10 @@ pub fn option_card(
 
 /// Section labels and page titles sit a little inside the blocks' edge.
 const SECTION_LABEL_INSET: f32 = 8.0;
-/// Air between one section and the next.
+/// Air between the page title and its first frame.
 const SECTION_GAP: f32 = 20.0;
+/// Air between one frame and the next.
+const FRAME_GAP: f32 = 16.0;
 
 /// The small plain label above a block ("Startup", "Fonts"): sentence case,
 /// muted, never an uppercase eyebrow.
@@ -511,30 +550,28 @@ pub fn details_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div
 }
 
 /// A framed section with a compact header and its bordered settings card.
-/// Pass a [`section_card`] (or any block) as `block`.
+/// Pass a [`section_card`] (with `.mt_0()`) or any block as `block`. Renders
+/// exactly like [`group`]; kept for call sites that build the card first.
 pub fn section(
     theme: &Theme,
     label: impl Into<SharedString>,
     block: impl IntoElement,
 ) -> gpui::Div {
-    div()
-        .mt(px(SECTION_GAP))
-        .p(px(4.0))
-        .rounded(px(zuse_viewport::settings_style::FRAME_RADIUS))
-        .bg(theme.settings_frame_bg())
-        .flex()
-        .flex_col()
-        .child(
-            section_label(theme, label)
-                .px(px(10.0))
-                .py(px(8.0))
-                .text_size(crate::typography::ui_rems(12.0))
-                .text_color(theme.text),
-        )
-        .child(block)
+    group(theme, label, "").child(block)
 }
 
-/// Direct counterpart of Zuse's SettingsGroup header and muted frame.
+/// Vertical stack for a page's frames, placed under its [`section_title`].
+/// Owns the air below the title and between frames so pages never drift.
+pub fn section_stack() -> gpui::Div {
+    div()
+        .mt(px(SECTION_GAP))
+        .flex()
+        .flex_col()
+        .gap(px(FRAME_GAP))
+}
+
+/// Direct counterpart of Zuse's SettingsGroup header and muted frame. Add the
+/// [`section_card`] (with `.mt_0()`) as the frame's child.
 pub fn group(
     theme: &Theme,
     title: impl Into<SharedString>,
@@ -543,6 +580,7 @@ pub fn group(
     group_with_action(theme, title, description, None)
 }
 
+/// [`group`] with an optional control (h 28) at the right of its header.
 pub fn group_with_action(
     theme: &Theme,
     title: impl Into<SharedString>,
@@ -550,17 +588,16 @@ pub fn group_with_action(
     action: Option<AnyElement>,
 ) -> gpui::Div {
     let description = description.into();
+    let description_empty = description.is_empty();
     let header = div()
         .flex()
         .flex_col()
         .gap(px(2.))
-        .px(px(10.))
-        .py(px(8.))
         .child(row_title(theme, title))
         .when(!description.is_empty(), |header| {
             header.child(
                 div()
-                    .text_size(crate::typography::ui_rems(11.))
+                    .text_size(crate::typography::ui_rems(ROW_DESCRIPTION_SIZE))
                     .line_height(crate::typography::ui_rems(16.))
                     .text_color(theme.text_muted)
                     .child(description),
@@ -570,16 +607,26 @@ pub fn group_with_action(
         .flex()
         .flex_col()
         .p(px(4.))
-        .rounded(px(12.))
+        .rounded(px(zuse_viewport::settings_style::FRAME_RADIUS))
         .bg(theme.settings_frame_bg())
         .child(
             div()
                 .flex()
-                .items_center()
-                .gap(px(10.))
+                .when(description_empty, |row| row.items_center())
+                .when(!description_empty, |row| row.items_start())
+                .gap(px(12.))
+                .px(px(10.))
+                .py(px(8.))
                 .child(header.flex_1().min_w_0())
                 .when_some(action, |row, action| {
-                    row.child(div().flex_none().pr(px(10.)).child(action))
+                    row.child(
+                        div()
+                            .flex_none()
+                            .h(px(zuse_viewport::settings_style::CONTROL_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .child(action),
+                    )
                 }),
         )
 }
@@ -627,6 +674,10 @@ pub fn card_row(theme: &Theme, first: bool) -> gpui::Div {
         .flex_wrap()
         .items_center()
         .gap(px(zuse_viewport::settings_style::ROW_GAP))
+        // A 28px control plus the row padding, so title-only rows and rows
+        // with a control line up from page to page.
+        .min_h(px(zuse_viewport::settings_style::CONTROL_HEIGHT
+            + 2.0 * zuse_viewport::settings_style::ROW_PAD_Y))
 }
 
 /// Bare leading glyph for rows whose icon carries identity (a device's
@@ -962,20 +1013,18 @@ pub fn section_tab(
     hover_key: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
     let hover_key = hover_key.into();
-    let base_bg = crate::motion::mix(
-        crate::theme::wash(0.0),
-        if theme.variant_id.as_ref() == "zuse-dark" {
-            zuse_viewport::settings_style::SIDEBAR_ACTIVE
-        } else {
-            theme.element_active
-        },
-        selection_t,
-    );
+    let active_bg = if theme.variant_id.as_ref() == "zuse-dark" {
+        zuse_viewport::settings_style::SIDEBAR_ACTIVE
+    } else {
+        theme.element_active
+    };
+    let base_bg = crate::motion::mix(crate::theme::wash(0.0), active_bg, selection_t);
     let base_text = crate::motion::mix(theme.text_muted, theme.text, selection_t);
+    // Hover previews the active fill at reduced strength.
     let hover_bg = if selected {
         base_bg
     } else {
-        theme.glass_hover()
+        active_bg.opacity(0.6)
     };
     div()
         .flex()
@@ -997,8 +1046,8 @@ pub fn section_tab(
         .on_hover(crate::motion::hover_listener(hover_key))
 }
 
-/// Height of every settings select trigger: centered in a 60px card row.
-pub const SELECT_HEIGHT: f32 = 32.0;
+/// Height of every settings select trigger: the shared 28px row control.
+pub const SELECT_HEIGHT: f32 = zuse_viewport::settings_style::CONTROL_HEIGHT;
 /// Menus never shrink below this, so short values still open a readable list.
 const SELECT_MENU_MIN_WIDTH: f32 = 160.0;
 
@@ -1030,7 +1079,7 @@ pub fn select_trigger(
         .h(px(SELECT_HEIGHT))
         .pl(px(10.0))
         .pr(px(8.0))
-        .rounded(px(8.0))
+        .rounded(px(7.0))
         .border_1()
         .border_color(gpui::transparent_black())
         .bg(if open {
@@ -1044,7 +1093,7 @@ pub fn select_trigger(
         .items_center()
         .gap(px(8.0))
         .cursor_pointer()
-        .text_size(crate::typography::ui_rems(12.5))
+        .text_size(crate::typography::ui_rems(12.0))
         .text_color(theme.text)
         .tab_index(0)
         .role(gpui::Role::Button)

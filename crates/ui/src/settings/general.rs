@@ -50,12 +50,7 @@ impl ShortcutsPage {
                             }))
                     }),
             );
-        let appearance = widgets::group(
-            theme,
-            "Appearance",
-            "Choose the app theme, or follow your system setting.",
-        )
-        .child(
+        let appearance = widgets::group(theme, "Appearance", "").child(
             widgets::section_card(theme).mt_0().child(
                 widgets::card_row(theme, true)
                     .child(general_details(
@@ -151,7 +146,6 @@ impl ShortcutsPage {
             .flex()
             .flex_col()
             .gap(px(16.))
-            .mt(px(16.))
             .child(appearance)
             .child(notifications)
     }

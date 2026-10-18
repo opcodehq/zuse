@@ -3321,7 +3321,15 @@ impl AppearancePage {
                     div()
                         .flex_1()
                         .min_w(px(160.0))
-                        .child(widgets::row_title(theme, "Theme library")),
+                        .child(widgets::row_title(theme, "Custom themes"))
+                        .child(widgets::meta_line(
+                            theme,
+                            vec![
+                                div()
+                                    .child("Import a theme file, or link a folder that stays up to date.")
+                                    .into_any_element(),
+                            ],
+                        )),
                 )
                 .child(
                     widgets::text_action(theme, widgets::ActionTone::Solid, "Add theme")
@@ -3336,7 +3344,7 @@ impl AppearancePage {
         if !imported.is_empty() {
             rows.push(
                 div()
-                    .mx(px(16.0))
+                    .mx(px(12.0))
                     .pt(px(12.0))
                     .pb(px(4.0))
                     .border_t_1()
@@ -3355,7 +3363,7 @@ impl AppearancePage {
         if !linked.is_empty() {
             rows.push(
                 div()
-                    .mx(px(16.0))
+                    .mx(px(12.0))
                     .pt(px(12.0))
                     .pb(px(4.0))
                     .border_t_1()
@@ -3421,18 +3429,16 @@ impl Render for AppearancePage {
             .collect::<Vec<_>>();
 
         let mut theme_rows = Vec::new();
-        for (index, appearance_kind) in [Appearance::Light, Appearance::Dark]
-            .into_iter()
-            .enumerate()
-        {
+        for appearance_kind in [Appearance::Light, Appearance::Dark] {
             let label = if appearance_kind.is_light() {
                 "Light theme"
             } else {
                 "Dark theme"
             };
             let selector = self.render_theme_selector(appearance_kind, &current_themes, &theme, cx);
+            // The color scheme previews sit above these rows in the same card.
             theme_rows.push(
-                widgets::card_row(&theme, index == 0)
+                widgets::card_row(&theme, false)
                     .child(
                         div()
                             .flex_1()
@@ -3956,7 +3962,7 @@ impl Render for AppearancePage {
                             effective.label()
                         ),
                     )
-                    .mt_0()
+                    .mt(px(4.0))
                     .font_family(fixed.clone()),
                 );
             }
@@ -4017,37 +4023,56 @@ impl Render for AppearancePage {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::page_column()
-                                .child(widgets::page_header(&theme, "Appearance", None))
-                                .child(
-                                    widgets::section(
-                                        &theme,
-                                        "Color scheme",
-                                        widgets::option_card_row().children(cards),
-                                    )
-                                    .mt(px(24.0))
-                                    .gap(px(12.0)),
-                                )
-                                .child(
-                                    widgets::section_card(&theme)
-                                        .children(color_rows)
-                                        .mt(px(16.0)),
-                                )
-                                .child(widgets::section(
+                                .child(widgets::section_title(
                                     &theme,
-                                    "Material and background",
-                                    widgets::section_card(&theme).mt_0().children(settings_rows),
-                                ))
-                                .child(widgets::section(
-                                    &theme,
-                                    "Motion",
-                                    widgets::section_card(&theme).mt_0().children(motion_rows),
+                                    "Appearance",
+                                    "Themes, colors, fonts and motion for this app.",
                                 ))
                                 .child(
-                                    widgets::section_card(&theme)
-                                        .mt(px(32.0))
-                                        .children(library_rows),
+                                    widgets::section_stack()
+                                        .child(
+                                            widgets::group(
+                                                &theme,
+                                                "Theme",
+                                                "Follow your system, or pin a light or dark scheme.",
+                                            )
+                                            .child(
+                                                widgets::section_card(&theme)
+                                                    .mt_0()
+                                                    .child(
+                                                        div()
+                                                            .p(px(12.0))
+                                                            .child(
+                                                                widgets::option_card_row()
+                                                                    .children(cards),
+                                                            ),
+                                                    )
+                                                    .children(color_rows),
+                                            ),
+                                        )
+                                        .child(widgets::section(
+                                            &theme,
+                                            "Material and background",
+                                            widgets::section_card(&theme)
+                                                .mt_0()
+                                                .children(settings_rows),
+                                        ))
+                                        .child(widgets::section(
+                                            &theme,
+                                            "Motion",
+                                            widgets::section_card(&theme)
+                                                .mt_0()
+                                                .children(motion_rows),
+                                        ))
+                                        .child(widgets::section(
+                                            &theme,
+                                            "Theme library",
+                                            widgets::section_card(&theme)
+                                                .mt_0()
+                                                .children(library_rows),
+                                        ))
+                                        .child(font_section),
                                 )
-                                .child(font_section)
                                 .when_some(library_warning, |page, warning| {
                                     page.child(
                                         div()

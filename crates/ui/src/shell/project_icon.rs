@@ -68,6 +68,21 @@ const MONOGRAM_PALETTE: [(u32, u32); 8] = [
     (0xfdba74, 0xc2410c), // orange
 ];
 
+/// A stable tone from the monogram palette for `seed`, in the current
+/// appearance (the workspace switcher's square avatar).
+pub(super) fn monogram_tone(seed: &str, theme: &Theme) -> gpui::Hsla {
+    let hash = seed.bytes().fold(2166136261u32, |hash, byte| {
+        (hash ^ u32::from(byte)).wrapping_mul(16777619)
+    });
+    let (dark, light) = MONOGRAM_PALETTE[hash as usize % MONOGRAM_PALETTE.len()];
+    gpui::rgb(if theme.appearance.is_dark() {
+        dark
+    } else {
+        light
+    })
+    .into()
+}
+
 fn monogram(name: &str, seed: &str, selected: bool, theme: &Theme) -> AnyElement {
     // FNV-1a selects a stable entry from the curated palette.
     let hash = seed.bytes().fold(2166136261u32, |hash, byte| {
@@ -302,21 +317,6 @@ impl Shell {
         project_icon_frame(chat_id, &name, &device, size, art)
     }
 
-    /// A project group header's icon: the same artwork its rows would wear,
-    /// without the tooltip — the label beside it already names the project.
-    pub(super) fn render_project_group_icon(
-        &self,
-        chat_id: &str,
-        size: f32,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        div()
-            .size(px(size))
-            .flex_none()
-            .child(self.project_icon_art(chat_id, false, cx))
-            .into_any_element()
-    }
-
     /// Artwork for a chat's project, shared by every space of the project:
     /// the representative's name and color, read from this device's checkout
     /// when there is one (no round trip), else from the representative.
@@ -333,14 +333,92 @@ impl Shell {
             .find(|chat| chat.id == chat_id)
             .and_then(|chat| state.space_for_chat(chat))
             .cloned();
-        self.project_icons.render(
+        self.project_artwork(space.as_ref(), selected, cx)
+    }
+
+    /// A project's artwork: its GitHub owner's avatar when the repository is
+    /// hosted on github.com, over the repository's own icon (or monogram),
+    /// which shows while the avatar loads and whenever it can't be fetched.
+    pub(super) fn project_artwork(
+        &self,
+        space: Option<&zuse_protocol::Space>,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let avatar = space.and_then(|space| github_avatar_url(self.state.read(cx), space));
+        let fallback = self.project_icons.render(
             &self.state,
-            space.as_ref(),
+            space,
             self.active_sidebar_pin_profile_key(cx),
             selected,
             cx,
-        )
+        );
+        match avatar {
+            None => fallback,
+            Some(url) => div()
+                .relative()
+                .size_full()
+                .child(fallback)
+                .child(
+                    gpui::img(SharedString::from(url))
+                        .absolute()
+                        .inset_0()
+                        .size_full()
+                        .rounded(px(4.0))
+                        .object_fit(gpui::ObjectFit::Cover),
+                )
+                .into_any_element(),
+        }
     }
+}
+
+/// `owner` of a github.com repository path (`owner/repo…`), when it is a
+/// plausible account name.
+fn github_owner(path: &str) -> Option<&str> {
+    let mut parts = path.split('/');
+    let owner = parts.next()?;
+    let repository = parts.next()?;
+    let valid = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    (valid(owner) && !repository.is_empty() && !owner.starts_with('.')).then_some(owner)
+}
+
+/// The GitHub owner avatar for a project hosted on github.com. The owner
+/// comes from a remote-shaped repository identity (`github.com/owner/repo`),
+/// else from a pull request one of the project's sessions reported.
+pub(super) fn github_avatar_url(state: &AppState, space: &zuse_protocol::Space) -> Option<String> {
+    let members = state.project_members(space);
+    let owner = members
+        .iter()
+        .find_map(|member| {
+            member
+                .repository_id
+                .as_deref()
+                .and_then(|id| id.strip_prefix("github.com/"))
+                .and_then(github_owner)
+                .map(str::to_owned)
+        })
+        .or_else(|| {
+            let ids: std::collections::HashSet<&str> =
+                members.iter().map(|member| member.id.as_str()).collect();
+            state
+                .chats
+                .iter()
+                .filter(|chat| chat.space_id.as_deref().is_some_and(|id| ids.contains(id)))
+                .find_map(|chat| {
+                    let summary = state.change_request_for_chat(chat)?;
+                    summary
+                        .url
+                        .strip_prefix("https://github.com/")
+                        .and_then(github_owner)
+                        .map(str::to_owned)
+                })
+        })?;
+    Some(format!("https://github.com/{owner}.png?size=80"))
 }
 
 /// Shared artwork pipeline for sidebar and repository picker. Each owner keeps
@@ -443,6 +521,14 @@ mod tests {
         // A corrupt first match uses the default rather than showing unrelated lower-priority art.
         std::fs::write(temp.path().join("public/apple-touch-icon.png"), b"invalid").unwrap();
         assert!(load_local_icon(temp.path()).is_none());
+    }
+    #[test]
+    fn github_owner_accepts_account_paths_only() {
+        assert_eq!(github_owner("example/fieldnotes"), Some("example"));
+        assert_eq!(github_owner("opcodehq/zuse/pull/412"), Some("opcodehq"));
+        assert_eq!(github_owner("example"), None);
+        assert_eq!(github_owner("../etc/passwd"), None);
+        assert_eq!(github_owner("a b/repo"), None);
     }
     #[test]
     fn sidebar_project_icons_support_svg_and_ico() {

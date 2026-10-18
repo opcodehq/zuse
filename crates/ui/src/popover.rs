@@ -304,7 +304,7 @@ pub fn classify_key(key: &str, cmd: bool, ctrl: bool) -> MenuKey {
 /// Shared floating surface used by palettes, popovers, dropdowns and menus.
 /// Mount helpers supply the same 16px backdrop blur as the composer.
 /// Corner radius must match the frost wrapper's mask.
-pub const CARD_RADIUS: f32 = 12.0;
+pub const CARD_RADIUS: f32 = 14.0;
 
 pub const MENU_GAP: f32 = 2.0;
 /// The four-pixel inset of [`popover_card`] that [`menu_scroll_host`] /
@@ -319,13 +319,19 @@ pub fn surface_bg(theme: &Theme) -> gpui::Hsla {
     theme.surface_overlay.opacity(1.0)
 }
 
+/// The glass popover card: on dark themes a translucent elevated tone with a
+/// faint white sheen over the backdrop blur its mount helper paints, a
+/// hairline ring and a 1px top highlight; light themes keep the opaque
+/// popover tone with a border and drop shadow.
 pub fn popover_card(theme: &Theme) -> gpui::Div {
-    div()
-        .border_1()
-        .border_color(theme.border)
-        .rounded(px(CARD_RADIUS))
-        .when(!theme.is_frost(), |el| el.shadow_lg())
-        .bg(surface_bg(theme))
+    let card = div().border_1().rounded(px(CARD_RADIUS));
+    let card = if theme.floating_glass() {
+        card.border_color(gpui::hsla(0.0, 0.0, 1.0, 0.065))
+            .shadow(theme.popover_glass_shadows())
+    } else {
+        card.border_color(theme.border).shadow_lg()
+    };
+    card.bg(theme.popover_glass_fill())
         .p(px(CARD_INSET))
         .gap(px(MENU_GAP))
         .overflow_hidden()
@@ -486,7 +492,7 @@ fn frosted_menu(exit: Option<f32>, content: AnyElement) -> AnyElement {
     )
     .absolute()
     .inset_0();
-    crate::frost::frosted(
+    crate::frost::floating_glass(
         CARD_RADIUS,
         blur,
         div()
@@ -637,7 +643,8 @@ pub fn nested_menu(id: impl Into<SharedString>, content: AnyElement, left: bool)
     // clicks must reach sibling controls and its trigger; the top-level menu
     // still consumes dismissal clicks before they reach the app underneath.
     let content =
-        crate::frost::frosted(CARD_RADIUS, crate::frost::MENU_BLUR, content).into_any_element();
+        crate::frost::floating_glass(CARD_RADIUS, crate::frost::MENU_BLUR, content)
+            .into_any_element();
     div()
         .absolute()
         .top_0()

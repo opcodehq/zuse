@@ -1097,6 +1097,119 @@ impl Theme {
         ))
     }
 
+    /// Whether floating popovers and menus wear the glass material: a
+    /// translucent elevated tone over a backdrop blur. Dark appearances use
+    /// it whatever the window treatment — the blur is scene-level, so it needs
+    /// no compositor vibrancy. Light popovers stay opaque, as authored.
+    pub fn floating_glass(&self) -> bool {
+        matches!(self.appearance, Appearance::Dark)
+            && cfg!(any(
+                target_os = "macos",
+                target_os = "linux",
+                target_os = "windows"
+            ))
+    }
+
+    /// Coverage of the glass popover tint: 72% of the elevated tone, raised
+    /// only as far as text contrast needs over a bright scene underneath.
+    pub fn popover_glass_alpha(&self) -> f32 {
+        self.contrast_checked_tint_alpha(self.surface_raised, 0.72, self.adverse_backdrop())
+    }
+
+    /// Fill for glass popovers and menus: the elevated tone at
+    /// [`Self::popover_glass_alpha`] under a faint top-to-bottom white sheen.
+    /// Without [`Self::floating_glass`] it is the opaque overlay tone.
+    pub fn popover_glass_fill(&self) -> gpui::Background {
+        if !self.floating_glass() {
+            return self.surface_overlay.opacity(1.0).into();
+        }
+        let alpha = self.popover_glass_alpha();
+        let sheen = |strength: f32| {
+            flatten(hsla(0.0, 0.0, 1.0, strength), self.surface_raised).opacity(alpha)
+        };
+        gpui::linear_gradient(
+            180.0,
+            gpui::linear_color_stop(sheen(0.045), 0.0),
+            gpui::linear_color_stop(sheen(0.008), 1.0),
+        )
+    }
+
+    /// Edge treatment for glass popovers: a 1px top highlight and a soft
+    /// drop. A spread ring would paint under the whole translucent card, so
+    /// the hairline ring is the card's border instead.
+    pub fn popover_glass_shadows(&self) -> Vec<gpui::BoxShadow> {
+        vec![
+            gpui::BoxShadow::new(gpui::px(0.0), gpui::px(1.0), hsla(0.0, 0.0, 1.0, 0.09)).inset(),
+            gpui::BoxShadow::new(gpui::px(0.0), gpui::px(10.0), hsla(0.0, 0.0, 0.0, 0.45))
+                .blur_radius(gpui::px(28.0))
+                .spread_radius(gpui::px(-10.0)),
+        ]
+    }
+
+    /// The composer card's fill: a near-opaque glass plate (blur shows only
+    /// at the edges of what scrolls under it). Light keeps the card tone.
+    pub fn composer_glass_bg(&self) -> Hsla {
+        match self.appearance {
+            Appearance::Dark if self.variant_id.as_ref() == "zuse-dark" => {
+                hsla(120.0 / 360.0, 0.02, 0.10, 0.9)
+            }
+            Appearance::Dark => {
+                flatten(self.surface_raised.opacity(0.6), self.surface_card).opacity(0.9)
+            }
+            Appearance::Light => self.surface_card.opacity(0.94),
+        }
+    }
+
+    /// The composer card's edge: white at 8% on dark, a softened theme border
+    /// on light.
+    pub fn composer_glass_border(&self) -> Hsla {
+        match self.appearance {
+            Appearance::Dark => hsla(0.0, 0.0, 1.0, 0.08),
+            Appearance::Light => self.border.opacity(self.border.a * 0.7),
+        }
+    }
+
+    /// The composer card's small overlay shadow. It sits under a 90% fill,
+    /// so the part painted beneath the card stays imperceptible.
+    pub fn composer_glass_shadows(&self) -> Vec<gpui::BoxShadow> {
+        let alpha = match self.appearance {
+            Appearance::Dark => 0.72,
+            Appearance::Light => 0.12,
+        };
+        vec![
+            gpui::BoxShadow::new(gpui::px(0.0), gpui::px(4.0), hsla(0.0, 0.0, 0.0, alpha))
+                .blur_radius(gpui::px(12.0))
+                .spread_radius(gpui::px(-4.0)),
+        ]
+    }
+
+    /// The user message bubble's plate: Zuse Dark's authored bubble tone,
+    /// the shared translucent wash elsewhere.
+    pub fn user_bubble_fill(&self) -> Hsla {
+        match self.variant_id.as_ref() {
+            "zuse-dark" => hsla(132.0 / 360.0, 0.04, 0.11, 1.0),
+            _ => user_bubble_bg(),
+        }
+    }
+
+    /// The muted fill (chips, segmented tracks, toolbar washes).
+    pub fn muted_fill(&self) -> Hsla {
+        match self.variant_id.as_ref() {
+            "zuse-dark" => hsla(132.0 / 360.0, 0.05, 0.14, 1.0),
+            "zuse-light" => hsla(105.0 / 360.0, 0.18, 0.94, 1.0),
+            _ => flatten(self.text.opacity(0.04), self.surface_raised),
+        }
+    }
+
+    /// The neutral accent fill (active tabs, pressed ghost controls).
+    pub fn accent_fill(&self) -> Hsla {
+        match self.variant_id.as_ref() {
+            "zuse-dark" => hsla(130.0 / 360.0, 0.06, 0.165, 1.0),
+            "zuse-light" => hsla(106.0 / 360.0, 0.16, 0.89, 1.0),
+            _ => self.element_hover,
+        }
+    }
+
     /// Section-card fill (settings cards and similar in-panel cards). The
     /// opaque `surface` tone read as a harsh solid slab floating on the
     /// frosted blur (user report), so glass thins it to a translucent tint;
@@ -2819,7 +2932,10 @@ mod tests {
             assert!(light.glass_overlay().a < 1.0);
             assert_eq!(light.glass_overlay().a, 0.45);
             assert_eq!(light.input_glass_bg().a, 0.35);
-            assert_eq!(crate::popover::surface_bg(&dark).a, 0.15);
+            // Popovers carry their own glass recipe; the shared panel fill
+            // (palettes, dialogs, tooltips) is opaque.
+            assert_eq!(crate::popover::surface_bg(&dark).a, 1.0);
+            assert!(dark.floating_glass());
             assert_eq!(dark.for_popup().text_muted, dark.text.opacity(0.64));
             assert_eq!(dark.for_popup().text_faint, dark.text.opacity(0.48));
         } else {
@@ -2952,13 +3068,10 @@ mod tests {
                 continue;
             }
             let popup = theme.for_popup();
+            assert_eq!(crate::popover::surface_bg(&theme).a, 1.0);
+            assert_eq!(crate::popover::surface_bg(&popup).a, 1.0);
             if matches!(theme.appearance, Appearance::Light) {
-                assert_eq!(crate::popover::surface_bg(&theme).a, 0.45);
-                assert_eq!(crate::popover::surface_bg(&popup).a, 0.45);
                 assert_eq!(theme.input_glass_bg().a, 0.35);
-            } else {
-                assert_eq!(crate::popover::surface_bg(&theme).a, 0.15);
-                assert_eq!(crate::popover::surface_bg(&popup).a, 0.15);
             }
             // Text on transparent glass depends on the scene underneath. Test
             // the application's painted canvas rather than a solid black image.
@@ -2974,6 +3087,29 @@ mod tests {
                 painted_contrast(theme.text, input) >= 4.5,
                 "{} input text on app canvas",
                 variant.id
+            );
+        }
+    }
+
+    /// Dark popovers are glass under every window treatment: the 72% tint
+    /// stays translucent while keeping text readable over a white scene.
+    /// Light popovers stay opaque.
+    #[test]
+    fn dark_popovers_are_glass_and_light_popovers_opaque() {
+        for treatment in [SurfaceTreatment::Opaque, SurfaceTreatment::Frosted] {
+            let mut dark = Theme::dark();
+            dark.surface_treatment = treatment;
+            let alpha = dark.popover_glass_alpha();
+            assert!((0.72..1.0).contains(&alpha), "{alpha}");
+            let surface = flatten(dark.surface_raised.opacity(alpha), grey(0xff));
+            assert!(painted_contrast(dark.text, surface) >= 4.5);
+            assert!(painted_contrast(dark.text_muted, surface) >= 3.0);
+            let mut light = Theme::light();
+            light.surface_treatment = treatment;
+            assert!(!light.floating_glass());
+            assert_eq!(
+                light.popover_glass_fill(),
+                gpui::Background::from(light.surface_overlay.opacity(1.0))
             );
         }
     }

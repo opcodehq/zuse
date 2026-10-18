@@ -238,12 +238,14 @@ impl Render for FilesSettingsPage {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::page_column()
-                                .child(widgets::page_header(&theme, "Files", None))
-                                .child(
-                                    widgets::group(&theme, "Editor", "")
-                                        .mt(px(24.))
-                                        .child(card.mt_0()),
-                                ),
+                                .child(widgets::section_title(
+                                    &theme,
+                                    "Files",
+                                    "How the file editor saves, wraps and lists files.",
+                                ))
+                                .child(widgets::section_stack().child(
+                                    widgets::group(&theme, "Editor", "").child(card.mt_0()),
+                                )),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),

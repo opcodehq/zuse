@@ -408,7 +408,7 @@ impl Render for VoiceCard {
                 .child(control)
         };
         let conversation_card = widgets::section_card(&theme).child(host_row).child(
-            widgets::card_row(&theme, true)
+            widgets::card_row(&theme, false)
                 .child(
                     div()
                         .flex_1()
@@ -560,7 +560,7 @@ impl Render for VoiceCard {
         };
         let model_card = (self.cache_present && !downloading).then(|| {
             let remove_weak = cx.entity().downgrade();
-            widgets::section_card(&theme).child(
+            widgets::section_card(&theme).mt_0().child(
                 widgets::card_row(&theme, true)
                     .child(
                         div()
@@ -621,22 +621,30 @@ impl Render for VoiceCard {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::page_column()
-                                .child(widgets::page_header(&theme, "Voice", None))
+                                .child(widgets::section_title(
+                                    &theme,
+                                    "Voice",
+                                    "Talk to agents and dictate prompts with your voice.",
+                                ))
                                 .child(
-                                    widgets::group(&theme, "Voice conversation", "")
-                                        .mt(px(24.))
-                                        .child(conversation_card.mt_0()),
-                                )
-                                .child(
-                                    widgets::group(&theme, "Dictation", "").mt(px(20.)).child(
-                                        widgets::section_card(&theme)
-                                            .mt_0()
-                                            .child(dictation_row)
-                                            .children(microphone_row)
-                                            .child(shortcut_row),
-                                    ),
-                                )
-                                .children(model_card),
+                                    widgets::section_stack()
+                                        .child(
+                                            widgets::group(&theme, "Voice conversation", "")
+                                                .child(conversation_card.mt_0()),
+                                        )
+                                        .child(
+                                            widgets::group(&theme, "Dictation", "").child(
+                                                widgets::section_card(&theme)
+                                                    .mt_0()
+                                                    .child(dictation_row)
+                                                    .children(microphone_row)
+                                                    .child(shortcut_row),
+                                            ),
+                                        )
+                                        .children(model_card.map(|card| {
+                                            widgets::group(&theme, "Speech model", "").child(card)
+                                        })),
+                                ),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),

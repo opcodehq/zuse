@@ -603,8 +603,8 @@ impl Render for WorktreeSettingsCard {
         };
         // Match the text inset of the shared settings block rows.
         let detail = div()
-            .px(px(16.0))
-            .pb(px(16.0))
+            .px(px(12.0))
+            .pb(px(12.0))
             .when(self.browsing, |el| {
                 el.child(self.render_browser(&theme, cx))
             })

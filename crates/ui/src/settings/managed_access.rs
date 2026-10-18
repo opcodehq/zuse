@@ -1,6 +1,6 @@
 //! Account-managed computer settings; credentials remain in the engine.
 use super::{
-    access_widgets::{details, field, frame, header},
+    access_widgets::{details, field},
     widgets,
 };
 use crate::{
@@ -319,8 +319,8 @@ impl Render for ManagedAccessCard {
             "Link your account, then create a private invitation below to connect another device."
         };
         let busy = self.busy;
-        div().flex().flex_col().gap(px(20.)).mt(px(24.))
-            .child(frame(&theme).child(header(&theme,"Zuse Serve","Connect your computers across networks using your Zuse account."))
+        div().flex().flex_col().gap(px(16.))
+            .child(widgets::group_with_action(&theme,"Zuse Serve","Connect your computers across networks using your Zuse account.",Some(widgets::text_action(&theme,widgets::ActionTone::Quiet,"Refresh").id("refresh-managed-access").on_click(cx.listener(|this,_,_,cx|{if !this.busy {this.error=None;this.refresh(cx);cx.notify();}})).into_any_element()))
                 .child(widgets::section_card(&theme).mt(px(0.))
                     .child(widgets::card_row(&theme,true).child(details(&theme,"Zuse account",&self.account["user"]["email"].as_str().map(zuse_protocol::presentation::masked_email).unwrap_or_else(|| "Sign in to link this computer.".into())))
                         .child(widgets::text_action(&theme,widgets::ActionTone::Outlined,if busy {"Working…"}else if signed_in {"Sign out"}else{"Sign in"}).id("managed-account-sign-in")
@@ -336,10 +336,9 @@ impl Render for ManagedAccessCard {
                                 this.request(method,json!({"label":label}),cx);
                             }))))
                     .when(signed_in && !configured,|card|card.child(widgets::card_row(&theme,false).child(details(&theme,"Computer name","A name you recognize on your other devices.")).child(field(&theme,self.name.clone()))))
-                    .when_some(self.error.as_deref().or(self.host["error"].as_str()).or(self.account["error"].as_str()),|card,error|card.child(widgets::card_row(&theme,false).child(div().text_size(px(12.)).text_color(theme.danger).child(error.to_owned()))))
-                    .child(widgets::card_row(&theme,false).child(widgets::text_action(&theme,widgets::ActionTone::Quiet,"Refresh remote access").id("refresh-managed-access").on_click(cx.listener(|this,_,_,cx|{if !this.busy {this.error=None;this.refresh(cx);cx.notify();}}))))))
+                    .when_some(self.error.as_deref().or(self.host["error"].as_str()).or(self.account["error"].as_str()),|card,error|card.child(widgets::card_row(&theme,false).child(div().text_size(px(12.)).text_color(theme.danger).child(error.to_owned()))))))
             .when(signed_in,|view|view
-                .child(frame(&theme).child(header(&theme,"Account computers","Open a linked computer in its own Zuse window."))
+                .child(widgets::group(&theme,"Account computers","Open a linked computer in its own Zuse window.")
                     .child(widgets::section_card(&theme).mt(px(0.))
                         .when(self.environments.is_empty() && self.saved.is_empty(),|card|card.child(widgets::card_row(&theme,true).child(details(&theme,"No linked computers","Link this computer to get started."))))
                         .children(zuse_protocol::managed_connection::computer_rows(&self.environments,&self.saved).into_iter().enumerate().map(|(index,computer)|{
@@ -357,7 +356,7 @@ impl Render for ManagedAccessCard {
                                     .on_click(move|_,_,cx|{if let Some(controller)=controller.clone(){crate::open_account_window(crate::state::AccountTarget{controller,subject:subject.clone(),environment:environment.clone(),label:label.clone()},cx);}})))
                                 .when(remembered,|row|row.child(widgets::text_action(&theme,widgets::ActionTone::Quiet,"Forget saved").id(("forget-account-computer",index)).on_click(cx.listener(move|this,_,_,cx|this.request(methods::FORGET_ACCOUNT_ROUTE,json!({"environmentId":forget_id,"expectedSubject":forget_subject}),cx)))))
                         }))))
-                .child(frame(&theme).child(header(&theme,"Authorized account devices","Revoke a device that no longer needs account access."))
+                .child(widgets::group(&theme,"Authorized account devices","Revoke a device that no longer needs account access.")
                     .child(widgets::section_card(&theme).mt(px(0.))
                         .when(self.devices.is_empty(),|card|card.child(widgets::card_row(&theme,true).child(details(&theme,"No authorized devices","Devices appear here after they connect through your account."))))
                         .children(self.devices.iter().enumerate().map(|(index,device)|{

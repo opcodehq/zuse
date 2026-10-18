@@ -51,6 +51,10 @@ name = "new-project-fixture"
 required-features = ["project-palette-fixture"]
 
 [[example]]
+name = "ui-review-fixture"
+required-features = ["browser-fixture", "project-palette-fixture"]
+
+[[example]]
 name = "sidebar-fixture"
 required-features = ["project-palette-fixture"]
 

@@ -1579,7 +1579,7 @@ impl Pickers {
             return;
         }
         if kind == PickerKind::HarnessModel {
-            self.open_model_height = model_menu_height(self.setting_groups(cx).len());
+            self.open_model_height = model_menu_height(self.tray_group_count(cx));
             self.compact_model_list = true;
             self.compact_strip_viewed = None;
             self.effort_dragging = false;
@@ -3403,7 +3403,7 @@ impl Pickers {
         cx: &App,
     ) -> f32 {
         const GAP: f32 = 6.0;
-        let size = crate::typography::ui_rems(12.0).to_pixels(window.rem_size());
+        let size = crate::typography::ui_rems(11.0).to_pixels(window.rem_size());
         let mut font = window.text_style().font();
         font.weight = gpui::FontWeight::MEDIUM;
         let measure = |text: &SharedString| -> f32 {
@@ -3424,7 +3424,8 @@ impl Pickers {
             .ceil()
         };
         let label_width = if label_loading { 56.0 } else { measure(label) };
-        let mut width = 2.0 * 6.0 + 16.0 + GAP + label_width;
+        // Pill: 10px sides, 12px brand icon, label, 12px chevron.
+        let mut width = 2.0 * 10.0 + 12.0 + GAP + label_width + GAP + 12.0;
         if let Some(suffix) = suffix {
             width += GAP + measure(suffix);
         }
@@ -3475,6 +3476,12 @@ impl Pickers {
         let id: SharedString = format!("{base}-{}", cx.entity_id()).into();
         let open = self.open_kind() == Some(kind);
         let resizing = kind == PickerKind::HarnessModel && self.chip_resizing;
+        // The composer's model trigger is a filled pill (`h-7 rounded-full
+        // bg-muted/65 px-2.5 text-[11px]`, 12px brand icon, trailing caret);
+        // the footer and destination triggers stay quiet ghost chips.
+        let model = kind == PickerKind::HarnessModel;
+        let pill_rest = theme.muted_fill().opacity(0.65);
+        let pill_hover = theme.muted_fill();
         // Ghost pill (zuse composer/styles.tsx `pill`): `h-8 rounded-lg px-2.5
         // gap-1.5 text-[12px] font-medium text-muted-foreground`, icons size-4,
         // hover/open wash — no border, no caret; the actions row stays quiet.
@@ -3482,7 +3489,7 @@ impl Pickers {
             .relative()
             .child(self.measure_trigger(kind, cx))
             .id(id.clone())
-            .h(px(32.0))
+            .h(px(if model { 28.0 } else { 32.0 }))
             .max_w(px(248.0))
             // Shrinkable under row pressure — four footer chips share one
             // line; without min_w_0 they overflowed and painted overlapped.
@@ -3494,29 +3501,31 @@ impl Pickers {
             // The model trigger sits beside the right-hand composer actions.
             // Its own padding participates in that visible gap; footer and
             // destination triggers keep their wider independent hit areas.
-            .px(px(if kind == PickerKind::HarnessModel {
-                6.0
-            } else {
-                10.0
-            }))
-            .rounded(px(8.0))
-            .text_size(crate::typography::ui_rems(12.0))
+            .px(px(10.0))
+            .when(model, |el| el.rounded_full())
+            .when(!model, |el| el.rounded(px(8.0)))
+            .text_size(crate::typography::ui_rems(if model { 11.0 } else { 12.0 }))
             .font_weight(gpui::FontWeight::MEDIUM)
             // zuse composer/styles.tsx `pill`: `transition-colors` — the wash
             // and text brighten fade over 150ms.
             .text_color(motion::hover_blend(
                 &id,
-                if set {
+                if model {
+                    theme.text
+                } else if set {
                     theme.text.opacity(0.9)
                 } else {
                     theme.text_muted
                 },
                 theme.text,
             ))
-            .bg(if open {
-                theme.element_hover
-            } else {
-                motion::hover_blend(&id, gpui::transparent_black(), theme.element_hover)
+            .bg(match (model, open) {
+                (true, true) => pill_hover,
+                (true, false) => motion::hover_blend(&id, pill_rest, pill_hover),
+                (false, true) => theme.element_hover,
+                (false, false) => {
+                    motion::hover_blend(&id, gpui::transparent_black(), theme.element_hover)
+                }
             })
             .on_hover(motion::hover_listener(id.clone()))
             .cursor_pointer()
@@ -3541,7 +3550,7 @@ impl Pickers {
                 |el, (path, tint)| {
                     el.child(
                         crate::icons::icon(path)
-                            .size(px(16.0))
+                            .size(px(if model { 12.0 } else { 16.0 }))
                             .text_color(tint.unwrap_or(theme.text_muted)),
                     )
                 },
@@ -4389,7 +4398,7 @@ impl Pickers {
     /// Existing chats show only their own harness tab and models.
     fn render_harness_model_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let height = self.menu_geometry().height.min(self.open_model_height);
-        let (list_height, tray_height) = model_menu_budgets(height, self.setting_groups(cx).len());
+        let (list_height, tray_height) = model_menu_budgets(height, self.tray_group_count(cx));
 
         let theme = Theme::of(cx).for_popup();
 
@@ -4472,23 +4481,30 @@ impl Pickers {
         let mut tabs = div()
             .flex_none()
             .w(px(44.0))
-            .py(px(popover::CARD_INSET))
+            .p(px(6.0))
+            .border_r_1()
+            .border_color(theme.border.opacity(0.5))
+            .bg(theme.muted_fill().opacity(0.2))
             .flex()
             .flex_col()
             .items_center()
-            .gap(px(2.0));
+            .gap(px(4.0));
         tabs = tabs.child(
             div()
                 .id("model-tab-favorites")
                 .relative()
                 .w(px(32.0))
                 .h(px(32.0))
-                .rounded(px(popover::MENU_ITEM_RADIUS))
+                .flex_none()
+                .rounded(px(MODEL_ROW_RADIUS))
                 .flex()
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .when(!all_view, |el| el.hover(|s| s.bg(crate::theme::ink(0.06))))
+                .when(all_view, |el| model_selected(el, &theme))
+                .when(!all_view, |el| {
+                    el.hover(|s| s.bg(theme.muted_fill().opacity(0.6)))
+                })
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.setting_menu = None;
                     this.model_rail = ModelRail::All;
@@ -4503,14 +4519,14 @@ impl Pickers {
                 .child(
                     div()
                         .text_size(px(11.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(if all_view {
                             theme.text
                         } else {
                             theme.text_muted
                         })
                         .child("All"),
-                )
-                .when(all_view, |el| el.child(tab_indicator(theme.accent))),
+                ),
         );
         for (ix, descriptor) in descriptors.iter().enumerate() {
             let harness = descriptor.id;
@@ -4523,26 +4539,29 @@ impl Pickers {
                         .relative()
                         .w(px(32.0))
                         .h(px(32.0))
-                        .rounded(px(popover::MENU_ITEM_RADIUS))
+                        .flex_none()
+                        .rounded(px(MODEL_ROW_RADIUS))
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
-                        .when(!is_viewed, |el| el.hover(|s| s.bg(crate::theme::ink(0.06))))
+                        .when(is_viewed, |el| model_selected(el, &theme))
+                        .when(!is_viewed, |el| {
+                            el.hover(|s| s.bg(theme.muted_fill().opacity(0.6)))
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.setting_menu = None;
                             this.model_rail = ModelRail::Harness;
                             this.pick_harness(harness, cx);
                             cx.notify();
                         }))
-                        .child(crate::icons::icon(icon_path).size(px(16.0)).text_color(
+                        .child(crate::icons::icon(icon_path).size(px(14.0)).text_color(
                             tint.unwrap_or(if is_viewed {
                                 theme.text
                             } else {
                                 theme.text_muted
                             }),
-                        ))
-                        .when(is_viewed, |el| el.child(tab_indicator(theme.accent))),
+                        )),
                 );
         }
 
@@ -4551,26 +4570,34 @@ impl Pickers {
         //    viewed tab (user request; the old global search hid the rail).
         let search_row = div()
             .flex_none()
-            .h(px(40.0))
-            .px(px(10.0))
+            .p(px(10.0))
             .border_b_1()
-            .border_color(crate::theme::hairline(0.08))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8.0))
-            .child(
-                crate::icons::icon(crate::icons::MAGNIFER)
-                    .size(px(14.0))
-                    .flex_none()
-                    .text_color(theme.text_muted),
-            )
+            .border_color(theme.border.opacity(0.5))
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_size(crate::typography::ui_rems(13.0))
-                    .child(self.search.clone()),
+                    .h(px(32.0))
+                    .px(px(10.0))
+                    .rounded(px(MODEL_ROW_RADIUS))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.bg)
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        crate::icons::icon(crate::icons::MAGNIFER)
+                            .size(px(14.0))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .child(self.search.clone()),
+                    ),
             );
 
         // ── model rows: a VIRTUALIZED uniform list — only the visible slice
@@ -4657,9 +4684,6 @@ impl Pickers {
             .flex_none()
             .h(px(list_height))
             .py(px(popover::CARD_INSET))
-            // A whisper of wash keeps the scrolling band readable between
-            // the pinned chrome above and the traits tray below.
-            .bg(crate::theme::ink(0.02))
             .on_hover(cx.listener(Self::on_menu_list_hover))
             .child(match model_list {
                 Some(list) => {
@@ -4683,11 +4707,9 @@ impl Pickers {
         // ── traits tray: the reasoning ladder + model options PINNED under
         //    the list (the separate Traits popover folded in here — user
         //    request). Hidden entirely when the selected model has neither.
-        let has_tray = self.title.is_none()
-            && (!self.trait_ladder(cx).is_empty()
-                || self
-                    .selected_model(cx)
-                    .is_some_and(|m| !m.options.is_empty()));
+        // The effort slider carries reasoning; with nothing else to set, no
+        // empty tray band sits above it.
+        let has_tray = self.title.is_none() && self.tray_group_count(cx) > 0;
         let tray: Option<AnyElement> = has_tray.then(|| {
             let sections = self.render_traits_sections(cx);
             div()
@@ -4768,24 +4790,23 @@ impl Pickers {
         let compact = self.model_rail == ModelRail::Harness;
         let mut el = div()
             .id(("model-row", ix))
+            .min_h(px(32.0))
             .px(px(8.0))
-            .py(px(if compact { 5.0 } else { 6.0 }))
-            .rounded(px(popover::MENU_ITEM_RADIUS))
+            .py(px(if compact { 4.0 } else { 6.0 }))
+            .rounded(px(MODEL_ROW_RADIUS))
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(10.0))
+            .gap(px(8.0))
             .cursor_pointer();
         // ONE moving highlight (t3/Base-UI combobox): hovering moves the
         // keyboard cursor instead of painting its own wash, so hover + arrow
         // cursor can never wear two washes at once. Selection is the
         // distinct stronger treatment (wash + ring).
         if is_selected {
-            el = el
-                .bg(crate::theme::card_selected_bg())
-                .shadow(crate::theme::card_selected_shadows());
+            el = model_selected(el, &theme);
         } else if is_active {
-            el = el.bg(crate::theme::ink(0.05));
+            el = el.bg(theme.muted_fill().opacity(0.6));
         }
         el = el.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
             if *hovered && this.active != ix {
@@ -4812,7 +4833,7 @@ impl Pickers {
                         .flex_none()
                         .max_w_full()
                         .truncate()
-                        .text_size(crate::typography::ui_rems(12.5))
+                        .text_size(crate::typography::ui_rems(12.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.text)
                         .child(label),
@@ -4839,7 +4860,7 @@ impl Pickers {
                     div()
                         .w_full()
                         .truncate()
-                        .text_size(crate::typography::ui_rems(12.5))
+                        .text_size(crate::typography::ui_rems(12.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.text)
                         .child(label),
@@ -4890,6 +4911,9 @@ impl Pickers {
                 this.activate_model_index(ix, cx);
             }))
             .child(body);
+        if is_selected {
+            el = el.child(model_check(&theme));
+        }
         if ix < 9 {
             el = el.child(popover::kbd_hint(&theme, &format!("⌘{}", ix + 1)));
         }
@@ -5134,6 +5158,16 @@ impl Pickers {
             self.selected_model(cx),
             &self.explicit_options(cx),
         )
+    }
+
+    /// Settings the pinned tray lists: the effort slider owns reasoning (and
+    /// an effort-shaped option), so those never take a tray row.
+    fn tray_group_count(&self, cx: &App) -> usize {
+        let hidden = self.compact_hidden_options(cx);
+        self.setting_groups(cx)
+            .iter()
+            .filter(|group| Self::compact_option_visible(&group.id, &hidden))
+            .count()
     }
 
     fn scope_groups(&self, scope: SettingScope, cx: &App) -> Vec<SettingGroup> {
@@ -5937,20 +5971,6 @@ fn default_badge(theme: &Theme) -> gpui::Div {
 /// Brand mark + optional tint for a harness (the Claude mark keeps its brand
 /// orange even on the monochrome surface; the mock harness scripts
 /// Claude-flavoured runs, so it wears the Claude mark).
-/// The 2px underline marking the viewed top tab: sits on the tab row's
-/// bottom hairline (the tab is 32px tall inside a 40px row, so -4px lands
-/// exactly on the border), rounded like a capsule.
-fn tab_indicator(tint: gpui::Hsla) -> gpui::Div {
-    div()
-        .absolute()
-        .bottom(px(-4.0))
-        .left(px(6.0))
-        .right(px(6.0))
-        .h(px(2.0))
-        .rounded(px(1.0))
-        .bg(tint)
-}
-
 /// Flatten the picker's visible rows for one tab. The QUERY NEVER LEAVES THE
 /// VIEWED TAB (user request; the old global search spanned every harness and
 /// hid the rail): on a harness tab it ranks that harness's models only, on
@@ -6230,17 +6250,44 @@ fn offered_harnesses_impl(list: &[HarnessDescriptor], allow_mock: bool) -> Vec<H
 
 // Tabs and search consume 80px, with 2px reserved for the card border.
 // Keep one model row where possible; long option stacks scroll in the tray.
+/// The model card's fixed chrome: the bordered search header (10px padding
+/// around a 32px field, plus its hairline), the effort slider band and the
+/// card border.
+const MODEL_MENU_CHROME: f32 = 120.0;
+
+/// Model picker rows, rail items and the search field share one radius.
+const MODEL_ROW_RADIUS: f32 = 7.0;
+
+/// The selected model row / provider treatment: a lime-tinted wash and ring.
+fn model_selected<E: Styled>(el: E, theme: &Theme) -> E {
+    el.bg(theme.accent.opacity(0.12)).shadow(vec![gpui::BoxShadow {
+        color: theme.accent.opacity(0.2),
+        offset: gpui::point(px(0.0), px(0.0)),
+        blur_radius: px(0.0),
+        spread_radius: px(1.0),
+        inset: true,
+    }])
+}
+
+/// The lime check marking the selected model row.
+fn model_check(theme: &Theme) -> gpui::Svg {
+    crate::icons::icon(crate::icons::CHECK)
+        .size(px(14.0))
+        .flex_none()
+        .text_color(theme.accent)
+}
+
 fn model_menu_height(setting_count: usize) -> f32 {
     let tray = if setting_count == 0 {
         0.0
     } else {
         (setting_count as f32 * 32.0 + 7.0).min(236.0)
     };
-    100.0 + 216.0 + tray
+    MODEL_MENU_CHROME + 216.0 + tray
 }
 
 fn model_menu_budgets(height: f32, setting_count: usize) -> (f32, f32) {
-    let body = (height - 100.0).max(0.0);
+    let body = (height - MODEL_MENU_CHROME).max(0.0);
     let desired_tray = if setting_count == 0 {
         0.0
     } else {
@@ -6517,7 +6564,7 @@ impl Render for Pickers {
                     self.render_compact_menu(window, cx)
                 } else {
                     let content = self.render_harness_model_popover(cx);
-                    self.popover_frame_flush(304.0, content, cx)
+                    self.popover_frame_flush(380.0, content, cx)
                 };
                 Some((PickerKind::HarnessModel, menu))
             }
@@ -6580,7 +6627,13 @@ impl Render for Pickers {
                             .text_color(theme.accent),
                     ),
                 ))
-            });
+            })
+            .child(
+                crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
+                    .size(px(12.0))
+                    .ml_auto()
+                    .text_color(theme.text.opacity(0.6)),
+            );
         let model_chip = model_chip.w(px(chip_width));
         // Both presentations align to the chip's trailing edge beside Send.
         let model_chip = attach_overlay_end(
@@ -7204,7 +7257,7 @@ mod tests {
             pickers.config.harness = Some(HarnessId::Codex);
             pickers.config.model = Some("short".into());
             pickers.harnesses = Loadable::Ready(vec![descriptor(HarnessId::Codex, "Codex")]);
-            let mut long = bare_model("long", "A much longer model name");
+            let mut long = bare_model("long", "A longer model name");
             long.reasoning_levels = vec![ReasoningLevel::Low, ReasoningLevel::High];
             long.options.push(ModelOption {
                 id: "serviceTier".into(),
@@ -10081,5 +10134,53 @@ impl Pickers {
         ])).unwrap()));
         self.catalog_rev += 1;
         cx.notify();
+    }
+}
+
+#[cfg(feature = "browser-fixture")]
+impl Pickers {
+    /// Review fixture: a ready provider catalog, so the model picker renders
+    /// real rows without an engine behind it.
+    pub fn fixture_seed_catalog(&mut self, cx: &mut Context<Self>) {
+        let descriptor = |id, name: &str| HarnessDescriptor {
+            id,
+            name: name.into(),
+            installed: true,
+            can_install: false,
+            enabled: Some(true),
+            reasoning_levels: Vec::new(),
+            steering_mode: zuse_protocol::SteeringMode::StepBoundary,
+            supports_steering: false,
+        };
+        self.harnesses = Loadable::Ready(vec![
+            descriptor(HarnessId::ClaudeCode, "Claude Code"),
+            descriptor(HarnessId::Codex, "Codex"),
+        ]);
+        let model = |id: &str, label: &str| Model {
+            id: id.into(),
+            label: label.into(),
+            description: None,
+            reasoning_levels: vec![
+                ReasoningLevel::Low,
+                ReasoningLevel::Medium,
+                ReasoningLevel::High,
+            ],
+            options: Vec::new(),
+        };
+        self.apply_model_catalog(
+            HarnessId::ClaudeCode,
+            Loadable::Ready(vec![
+                model("claude-opus-4-1", "Claude Opus 4.1"),
+                model("claude-sonnet-4-6", "claude-sonnet-4-6"),
+                model("claude-sonnet-4-5", "Claude Sonnet 4.5"),
+                model("claude-haiku-4-5", "Claude Haiku 4.5"),
+            ]),
+            cx,
+        );
+        self.apply_model_catalog(
+            HarnessId::Codex,
+            Loadable::Ready(vec![model("gpt-5-codex", "GPT-5 Codex")]),
+            cx,
+        );
     }
 }

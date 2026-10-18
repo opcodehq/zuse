@@ -25,7 +25,13 @@ impl ChangeRequestBadgeTone {
     pub fn color(self, theme: &Theme) -> gpui::Hsla {
         match self {
             Self::Open => theme.success,
-            Self::Merged => theme.code_text,
+            // The conventional merged purple, deepened on light surfaces.
+            Self::Merged => gpui::rgb(if theme.appearance.is_dark() {
+                0xc084fc
+            } else {
+                0x9333ea
+            })
+            .into(),
             Self::Closed => theme.danger,
         }
     }
@@ -104,7 +110,22 @@ impl Render for ChangeRequestTooltip {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChangeRequestBadgeSurface {
     Sidebar,
+    /// Chromeless glyph + number inside a sidebar row's metadata line.
+    SidebarInline,
     Composer,
+}
+
+/// A session's branch glyph tone: its pull request's state when it has one
+/// (open, merged, closed), else the quiet muted tone.
+pub(crate) fn branch_state_color(
+    summary: Option<&ChangeRequestSummary>,
+    theme: &Theme,
+) -> gpui::Hsla {
+    match summary.map(|summary| summary.state) {
+        Some(ChangeRequestState::Open) => ChangeRequestBadgeTone::Open.color(theme),
+        Some(ChangeRequestState::Merged) => ChangeRequestBadgeTone::Merged.color(theme),
+        Some(ChangeRequestState::Closed) | None => theme.text_muted,
+    }
 }
 
 pub(crate) fn pull_request_badge(
@@ -192,6 +213,7 @@ fn render_badge_model(
     let color = model.tone.color(theme);
     let tooltip_model = model.clone();
     let composer = surface == ChangeRequestBadgeSurface::Composer;
+    let inline = surface == ChangeRequestBadgeSurface::SidebarInline;
     let accessible_label = format!("Open pull request {}: {}", model.number, model.title);
 
     div()
@@ -202,9 +224,15 @@ fn render_badge_model(
         .flex_row()
         .items_center()
         .gap(px(if composer { 5.0 } else { 3.0 }))
-        .px(px(if composer { 7.0 } else { 4.0 }))
+        .px(px(if composer {
+            7.0
+        } else if inline {
+            2.0
+        } else {
+            4.0
+        }))
         .rounded(px(if composer { 6.0 } else { 4.0 }))
-        .bg(color.opacity(0.08))
+        .bg(color.opacity(if inline { 0.0 } else { 0.08 }))
         .text_size(px(if composer { 11.0 } else { 10.0 }))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(color.opacity(0.85))

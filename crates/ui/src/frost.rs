@@ -25,13 +25,25 @@ pub fn frosted(corner_radius: f32, blur_radius: f32, child: impl IntoElement) ->
     Frosted {
         corner_radius,
         blur_radius,
+        floating: false,
         child: child.into_any_element(),
+    }
+}
+
+/// [`frosted`] for floating glass (popovers, menus, the composer card): also
+/// blurs on opaque window treatments wherever [`Theme::floating_glass`]
+/// holds, since those cards paint a translucent fill in every dark theme.
+pub fn floating_glass(corner_radius: f32, blur_radius: f32, child: impl IntoElement) -> Frosted {
+    Frosted {
+        floating: true,
+        ..frosted(corner_radius, blur_radius, child)
     }
 }
 
 pub struct Frosted {
     corner_radius: f32,
     blur_radius: f32,
+    floating: bool,
     child: AnyElement,
 }
 
@@ -79,7 +91,9 @@ impl Element for Frosted {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if Theme::of(cx).is_frost() {
+        let theme = Theme::of(cx);
+        let blur = theme.is_frost() || (self.floating && theme.floating_glass());
+        if blur {
             window.paint_layer(bounds, |window| {
                 window.paint_backdrop_blur(
                     bounds,

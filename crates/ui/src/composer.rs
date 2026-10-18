@@ -71,7 +71,7 @@ pub const ACTIONS_ROW_HEIGHT: f32 = 2.0 + 32.0 + ACTIONS_BOTTOM_PAD;
 /// The pill's 1px hairline, top + bottom (`rounded-[26px] border`).
 pub const PILL_BORDER_V: f32 = 2.0;
 /// Corner radius shared by the composer and the queue tray behind it.
-pub(crate) const COMPOSER_RADIUS: f32 = 26.0;
+pub(crate) const COMPOSER_RADIUS: f32 = 19.2;
 /// Expanded composer bounds: 120px when empty, 304px at the content cap.
 pub const COMPOSER_MIN_HEIGHT: f32 = TEXTAREA_MIN + ACTIONS_ROW_HEIGHT + PILL_BORDER_V;
 pub const COMPOSER_MAX_HEIGHT: f32 = TEXTAREA_MAX + ACTIONS_ROW_HEIGHT + PILL_BORDER_V;
@@ -5236,17 +5236,17 @@ impl Render for ComposerInput {
         }
         let theme = Theme::of(cx);
         let popup_theme = theme.for_popup();
-        let theme = if self.key_context == "PaletteSearch"
-            || self.accessibility_role == gpui::Role::SearchInput
-        {
-            &popup_theme
-        } else {
-            theme
-        };
-        let text_color = if self.content.is_empty() {
-            theme.text_faint
-        } else {
+        let search = self.key_context == "PaletteSearch"
+            || self.accessibility_role == gpui::Role::SearchInput;
+        let theme = if search { &popup_theme } else { theme };
+        // Placeholders read in the muted foreground; search fields a step
+        // quieter so the typed query stands apart.
+        let text_color = if !self.content.is_empty() {
             theme.text
+        } else if search {
+            theme.text_muted.opacity(0.7)
+        } else {
+            theme.text_muted
         };
         div()
             .id(("composer-input", cx.entity_id()))
@@ -9993,9 +9993,9 @@ impl Composer {
             .occlude()
             .rounded(px(COMPOSER_RADIUS))
             .border_1()
-            .border_color(theme.border)
-            .bg(theme.surface_card.opacity(1.0))
-            .when(!theme.is_frost(), |el| el.shadow_lg())
+            .border_color(theme.composer_glass_border())
+            .bg(theme.composer_glass_bg())
+            .shadow(theme.composer_glass_shadows())
             .flex()
             .flex_col()
             .child(
@@ -10100,7 +10100,7 @@ impl Composer {
                             .on_click(cx.listener(|this, _, _, cx| this.wizard_advance(cx))),
                     ),
             );
-        crate::frost::frosted(COMPOSER_RADIUS, crate::frost::MENU_BLUR, panel).into_any_element()
+        crate::frost::floating_glass(COMPOSER_RADIUS, 20.0, panel).into_any_element()
     }
 
     /// `refocus` returns focus to the editor afterwards. Enter/Space on the
@@ -10618,14 +10618,14 @@ impl Composer {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = Theme::of(cx);
-        // Zuse composer-actions.tsx: a size-7 filled circle — up-arrow to
-        // send/queue, a dark rounded square on the same light circle to stop.
+        // A 28px rounded key: the lime up-arrow to send/queue, a dark
+        // rounded square on a light key to stop.
         match mode {
             SendButtonMode::Stop => div()
                 .id("composer-stop")
-                .size(px(28.0))
+                .size(px(SEND_BUTTON_SIZE))
                 .flex_none()
-                .rounded_full()
+                .rounded(px(7.0))
                 .bg(theme.text)
                 .flex()
                 .items_center()
@@ -10657,33 +10657,45 @@ impl Composer {
     }
 }
 
-/// Neutral rounded send action, dimmed and inert while blocked.
+/// The rounded send key, muted and inert while blocked.
 pub(crate) fn send_circle(
     id: &'static str,
     blocked: bool,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
+    // A lime `rounded-md` key with the accent's own foreground arrow; an
+    // empty or blocked draft rests on the muted fill instead.
     div()
         .id(id)
         .debug_selector(move || id.into())
-        .size(px(28.0))
+        .size(px(SEND_BUTTON_SIZE))
         .flex_none()
         .relative()
-        .rounded_full()
-        .bg(theme.surface_raised)
+        .rounded(px(7.0))
         .flex()
         .items_center()
         .justify_center()
-        .when(blocked, |el| el.opacity(0.35))
+        .when(blocked, |el| el.bg(theme.muted_fill()))
         .when(!blocked, |el| {
-            el.cursor_pointer().hover(|s| s.opacity(0.85))
+            el.bg(theme.accent)
+                .border_1()
+                .border_color(theme.accent_strong.opacity(0.4))
+                .cursor_pointer()
+                .hover(|s| s.opacity(0.88))
         })
         .child(
             crate::icons::icon(crate::icons::ARROW_UP)
                 .size(px(14.0))
-                .text_color(theme.text),
+                .text_color(if blocked {
+                    theme.text_muted
+                } else {
+                    theme.on_accent
+                }),
         )
 }
+
+/// The Send / Stop key: a 28px square, matching the attach button.
+const SEND_BUTTON_SIZE: f32 = 28.0;
 
 /// The completion popups' floating rails run through
 /// [`crate::popover::rail`]: the shared `popup_bar` state plus whichever
@@ -11170,7 +11182,7 @@ impl Render for Composer {
             morph_t
         };
         let text_pt = morph_text_pad(layout_morph_t);
-        let surface_radius = COMPOSER_RADIUS - 4.0 * dock_amount;
+        let surface_radius = COMPOSER_RADIUS;
         let route_to_single_line =
             self.dock_frame.is_some_and(|frame| frame.active) && !session_expanded;
         let textarea_height = (pill_height
@@ -11233,13 +11245,13 @@ impl Render for Composer {
             .flex()
             .items_center()
             .justify_center()
-            .rounded_full()
+            .rounded(px(7.0))
             .cursor_pointer()
-            // zuse composer-actions.tsx attach: `transition-colors`.
+            // `size-7 rounded-md hover:bg-muted/60`, fading with `transition-colors`.
             .bg(motion::hover_blend(
                 &attach_hover_key,
-                gpui::transparent_black(),
-                crate::theme::ink(0.10),
+                theme.muted_fill().opacity(0.0),
+                theme.muted_fill().opacity(0.6),
             ))
             .on_hover(motion::hover_listener(attach_hover_key))
             .relative()
@@ -11300,11 +11312,8 @@ impl Render for Composer {
                         .items_center()
                         .justify_center()
                         .child(
-                            crate::icons::icon(crate::icons::PAPERCLIP)
-                                // Its painted bounds are centered in the 24px viewbox;
-                                // a larger glyph balances the brand icon without moving
-                                // it off-center inside the unchanged 28px hit target.
-                                .size(px(18.0))
+                            crate::icons::icon(crate::icons::PLUS)
+                                .size(px(16.0))
                                 .text_color(theme.text_muted.opacity(1.0 - voice_t))
                                 .with_transformation(gpui::Transformation::scale(gpui::size(
                                     scale, scale,
@@ -11337,9 +11346,8 @@ impl Render for Composer {
         let appshot_strip = self.render_appshot_strip(&theme, window, cx);
         let comments_chip = self.render_comments_chip(&theme, cx);
 
-        let pill_border = theme.composer_surface_border();
-        // Compensate for the transcript canvas beneath the frosted surface.
-        // Keep the opaque fallback when frost is disabled or unsupported.
+        let pill_border = theme.composer_glass_border();
+        // The glass card: a near-opaque tint over the blurred transcript.
         let pill = div()
             .on_mouse_down(
                 MouseButton::Left,
@@ -11355,8 +11363,8 @@ impl Render for Composer {
             .rounded(px(surface_radius))
             .border_1()
             .border_color(pill_border)
-            .bg(theme.surface_card.opacity(1.0))
-            .when(!theme.is_frost(), |el| el.shadow_lg());
+            .bg(theme.composer_glass_bg())
+            .shadow(theme.composer_glass_shadows());
         // The pill's bottom edge is stationary on screen (the composer sits at
         // the bottom of the shell column; growth moves the TOP edge), so the
         // controls pin to the bottom and only the text glides with the reveal
@@ -11591,7 +11599,7 @@ impl Render for Composer {
         let pill_surface = div()
             .relative()
             .id("composer-surface")
-            .child(crate::frost::frosted(surface_radius, 16.0, body))
+            .child(crate::frost::floating_glass(surface_radius, 20.0, body))
             .child({
                 let measured = self.surface_bounds.clone();
                 // All prepaint completes before any paint. The background

@@ -1,30 +1,6 @@
 //! Shared native remote-access card layout.
 use crate::{composer::ComposerInput, settings::widgets, theme::Theme};
 use gpui::{prelude::*, *};
-pub(super) fn header(theme: &Theme, title: &str, description: &str) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(2.))
-        .px(px(10.))
-        .py(px(8.))
-        .child(widgets::row_title(theme, title.to_owned()))
-        .child(
-            div()
-                .text_size(crate::typography::ui_rems(11.))
-                .line_height(crate::typography::ui_rems(16.))
-                .text_color(theme.text_muted)
-                .child(description.to_owned()),
-        )
-}
-pub(super) fn frame(theme: &Theme) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .p(px(4.))
-        .rounded(px(zuse_viewport::settings_style::FRAME_RADIUS))
-        .bg(theme.settings_frame_bg())
-}
 pub(super) fn field(theme: &Theme, input: Entity<ComposerInput>) -> Div {
     div()
         .flex_1()
@@ -48,6 +24,7 @@ pub(super) fn details(theme: &Theme, title: &str, description: &str) -> Div {
         .child(
             div()
                 .text_size(crate::typography::ui_rems(11.))
+                .line_height(crate::typography::ui_rems(16.))
                 .text_color(theme.text_muted)
                 .child(description.to_owned()),
         )

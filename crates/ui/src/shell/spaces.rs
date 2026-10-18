@@ -1284,13 +1284,14 @@ mod pinned_session_tests {
         let active = cx.debug_bounds("chat-older").unwrap();
         let archived = cx.debug_bounds("chat-archived").unwrap();
         assert_eq!(active.size, archived.size);
-        assert_eq!(cx.debug_bounds("chat-branch-archived").is_some(), !compact);
+        // Sidebar rows carry no branch line; the project line is the
+        // one-list card's second line.
+        assert!(cx.debug_bounds("chat-branch-archived").is_none());
         assert_eq!(
             cx.debug_bounds("chat-device-archived").is_some(),
             !compact && show_label
         );
         if compact {
-            assert!(cx.debug_bounds("chat-status-archived").is_some());
             let time = cx.debug_bounds("chat-time-archived").unwrap();
             cx.simulate_mouse_move(archived.center(), None, gpui::Modifiers::default());
             assert_eq!(cx.debug_bounds("chat-time-archived").unwrap(), time);
@@ -1344,9 +1345,10 @@ mod pinned_session_tests {
             });
         }
         if compact {
-            let status = cx.debug_bounds("chat-status-older").unwrap();
+            // Idle rows wear no status glyph; activity leads the title.
+            let status = cx.debug_bounds("chat-status-older");
             let time = cx.debug_bounds("chat-time-older").unwrap();
-            assert!(status.right() < time.left());
+            assert!(status.is_none_or(|status| status.right() < time.left()));
             let row = cx.debug_bounds("chat-older").unwrap();
             let title = cx.debug_bounds("chat-title-older").unwrap();
             cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
@@ -1357,7 +1359,7 @@ mod pinned_session_tests {
                 cx.debug_bounds("chat-title-older").unwrap().size.width,
                 title.size.width
             );
-            assert_eq!(cx.debug_bounds("chat-status-older").unwrap(), status);
+            assert_eq!(cx.debug_bounds("chat-status-older"), status);
             assert_eq!(cx.debug_bounds("chat-time-older").unwrap(), time);
         }
 
@@ -1376,7 +1378,7 @@ mod pinned_session_tests {
         assert_eq!(dragged_card.origin.x, source_bounds.origin.x);
         assert_eq!(
             f32::from(dragged_card.size.height),
-            super::super::sidebar_row_height(compact, show_label, true, false)
+            super::super::sidebar_row_height(compact, show_label, false)
         );
         // Even a sub-row move follows the pointer immediately, before a drop slot changes.
         let pointer = from + gpui::point(px(8.0), px(7.0));
@@ -2190,9 +2192,11 @@ const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 12] = [
 // handoff from its header without leaving dead space while collapsed.
 const SIDEBAR_SECTION_GAP: f32 = 12.0;
 pub(super) const SIDEBAR_DISCLOSURE_HEADER_HEIGHT: f32 = 28.0;
+/// Gap above each project group: projects read as one compact list.
+const SIDEBAR_PROJECT_GAP: f32 = 2.0;
+/// Repository avatars on project headings and one-list session rows.
+pub(super) const SIDEBAR_PROJECT_AVATAR_SIZE: f32 = 20.0;
 pub(super) const SIDEBAR_DISCLOSURE_BODY_INSET: f32 = 4.0;
-const SIDEBAR_DISCLOSURE_SECTION_HEIGHT: f32 =
-    SIDEBAR_SECTION_GAP + SIDEBAR_DISCLOSURE_HEADER_HEIGHT;
 /// The Archived shelf shows this many rows, then "Show more" pages by
 /// [`ARCHIVED_PAGE_ROWS`].
 const ARCHIVED_INITIAL_ROWS: usize = 10;
@@ -2279,9 +2283,90 @@ pub(super) fn sidebar_disclosure_header(
         .child(chevron)
 }
 
+/// A project group's heading: the repository avatar and name read as a
+/// list row (12px, near-foreground); the chevron and `+` appear on hover.
+pub(super) fn sidebar_project_header(
+    theme: &Theme,
+    icon: Option<AnyElement>,
+    label: SharedString,
+    count: Option<usize>,
+    action: Option<AnyElement>,
+    chevron: AnyElement,
+    group: SharedString,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .h(px(SIDEBAR_DISCLOSURE_HEADER_HEIGHT))
+        .px(px(Theme::SPACE_SM))
+        .rounded(px(7.0))
+        .cursor_pointer()
+        .hover(|el| el.bg(theme.glass_hover()))
+        .children(icon)
+        .child(super::sidebar_faded_label(
+            "sidebar-disclosure-label".into(),
+            false,
+            div()
+                .text_size(crate::typography::ui_rems(12.0))
+                .text_color(theme.text.opacity(0.85))
+                .child(label),
+        ))
+        .children(count.map(|count| sidebar_count_badge(theme, count)))
+        .child(div().flex_1())
+        .children(action)
+        .child(
+            div()
+                .flex_none()
+                .opacity(0.0)
+                .group_hover(group, |style| style.opacity(1.0))
+                .child(chevron),
+        )
+}
+
 /// Section header glyphs (chevron, `+`, `…`) share the label's muted tone.
 pub(super) fn sidebar_header_glyph(theme: &Theme) -> gpui::Hsla {
     theme.text_muted.opacity(0.5)
+}
+
+/// A 22px icon button in the sidebar's section heading (14px glyph).
+pub(super) fn sidebar_header_button(
+    id: &'static str,
+    glyph: &'static str,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    sidebar_header_button_tinted(id, glyph, theme.text_muted, theme)
+}
+
+/// [`sidebar_header_button`] with the glyph's resting tone.
+pub(super) fn sidebar_header_button_tinted(
+    id: &'static str,
+    glyph: &'static str,
+    color: gpui::Hsla,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let hover_text = theme.text;
+    div()
+        .id(id)
+        .group("sidebar-header-button")
+        .role(gpui::Role::Button)
+        .tab_index(0)
+        .size(px(22.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.0))
+        .cursor_pointer()
+        .hover(|el| el.bg(theme.glass_hover()))
+        .focus_visible(|el| el.border_1().border_color(theme.border_strong))
+        .child(
+            icon(glyph)
+                .size(px(14.0))
+                .text_color(color)
+                .group_hover("sidebar-header-button", move |el| el.text_color(hover_text)),
+        )
 }
 
 /// A collapsed section's session count, cut like the sidebar's pull-request
@@ -4386,9 +4471,10 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // Hidden from View → Show: keep the row's top breathing room only.
-        if !self.settings.sidebar_show_project_filter {
-            return div().flex_none().h(px(4.0)).into_any_element();
+        // The heading's folder button sets the filter; this row only stands
+        // while a project is selected, naming it and offering the way back.
+        if !self.settings.sidebar_show_project_filter || self.settings.space_filter.is_none() {
+            return div().flex_none().into_any_element();
         }
         let filter = self.settings.space_filter.clone();
         // The filtered project's artwork and name, as its dropdown row
@@ -4516,15 +4602,28 @@ impl Shell {
             .into_any_element()
     }
 
-    /// A quiet section heading switches navigation without a tab bar.
-    pub(super) fn render_sidebar_modes(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    /// The list's section heading: "Projects" when grouped by project, else
+    /// "Threads" (clicking it switches between the two), then the list's
+    /// controls — the project filter (one list), view options, New project
+    /// (project groups) and New chat.
+    pub(super) fn render_sidebar_modes(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let projects = self.settings.sidebar_organization == SidebarOrganization::ByProject;
+        let filter_button = (!projects && self.settings.sidebar_show_project_filter)
+            .then(|| self.render_spaces_filter_button(theme, cx));
+        let view_trigger = self.render_sidebar_view_trigger(theme, cx);
         div()
+            .flex_none()
             .flex()
             .items_center()
-            .mx(px(16.))
-            .mt(px(8.))
-            .mb(px(8.))
+            .gap(px(2.))
+            .pl(px(Theme::SPACE_SM + 2.0))
+            .pr(px(Theme::SPACE_SM))
+            .pt(px(10.))
+            .pb(px(4.))
             .child(
                 div()
                     .id("sidebar-view-switch")
@@ -4537,13 +4636,16 @@ impl Shell {
                     .cursor_pointer()
                     .flex()
                     .items_center()
-                    .gap(px(6.))
                     .py(px(4.))
-                    .text_size(px(12.))
+                    .text_size(crate::typography::ui_rems(12.))
                     .text_color(theme.text_muted)
                     .hover(|d| d.text_color(theme.text))
                     .child(if projects { "Projects" } else { "Threads" })
-                    .child(icon(icons::ALT_ARROW_DOWN).size(px(11.)))
+                    .tooltip(crate::settings::widgets::text_tooltip(if projects {
+                        "Show threads in one list"
+                    } else {
+                        "Group threads by project"
+                    }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.activate_sidebar_view_row(
                             if projects {
@@ -4555,7 +4657,68 @@ impl Shell {
                         )
                     })),
             )
+            .child(div().flex_1())
+            .children(filter_button)
+            .child(view_trigger)
+            .when(projects, |el| {
+                el.child(
+                    sidebar_header_button("sidebar-new-project", icons::FOLDER_WITH_FILES, theme)
+                        .aria_label("New project")
+                        .tooltip(crate::settings::widgets::text_tooltip("New project"))
+                        .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
+                )
+            })
+            .child(
+                sidebar_header_button("sidebar-new-chat", icons::PLUS, theme)
+                    .aria_label("New chat")
+                    .tooltip(crate::settings::widgets::text_tooltip(
+                        ShortcutId::NewSession.label(),
+                    ))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_new_session(None, cx))),
+            )
             .into_any_element()
+    }
+
+    /// The one-list project filter as a header icon: the funnel tints while
+    /// a project is selected, and opens the same searchable project menu.
+    fn render_spaces_filter_button(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let active = self.settings.space_filter.is_some();
+        let open = self.spaces_menu.is_open();
+        let trigger = sidebar_header_button_tinted(
+            "spaces-filter-button",
+            icons::FOLDER,
+            if active { theme.text } else { theme.text_muted },
+            theme,
+        )
+        .aria_label("Filter by project")
+        .aria_expanded(open)
+        .when(active || open, |el| el.bg(theme.glass_hover()))
+        .tooltip(crate::settings::widgets::text_tooltip("Filter by project"))
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, _| this.spaces_menu.note_trigger_press()),
+        )
+        .on_click(cx.listener(|this, _, window, cx| {
+            if this.spaces_menu.take_press_was_open() {
+                this.close_spaces_menu(cx);
+            } else {
+                this.open_spaces_menu(window, cx);
+            }
+        }));
+        if self.spaces_menu.get().is_some() {
+            let closing = self.spaces_menu.closing_since();
+            let menu = self.render_spaces_menu(theme, cx);
+            trigger
+                .relative()
+                .child(popover::anchored_menu_below_end(
+                    "spaces-filter-menu",
+                    menu,
+                    closing,
+                ))
+                .into_any_element()
+        } else {
+            trigger.into_any_element()
+        }
     }
 
     /// Open the sidebar's detailed organization and visibility options.
@@ -4572,7 +4735,7 @@ impl Shell {
             .aria_label("Sidebar view options")
             .aria_expanded(view_open)
             .track_focus(&view_focus)
-            .size(px(24.0))
+            .size(px(22.0))
             .flex_none()
             .flex()
             .items_center()
@@ -4626,17 +4789,19 @@ impl Shell {
             .tooltip_show_delay(std::time::Duration::from_millis(350))
             .child(
                 icon(icons::MORE_HORIZONTAL)
-                    .size(px(16.0))
+                    .size(px(14.0))
                     .text_color(theme.text_muted),
             );
         let view_trigger = if self.sidebar_view_menu.get().is_some() {
             let closing = self.sidebar_view_menu.closing_since();
             let menu = self.render_sidebar_view_menu(theme, cx);
-            view_trigger.relative().child(popover::anchored_menu_right(
-                "sidebar-view-options-menu",
-                menu,
-                closing,
-            ))
+            view_trigger
+                .relative()
+                .child(popover::anchored_menu_below_end(
+                    "sidebar-view-options-menu",
+                    menu,
+                    closing,
+                ))
         } else {
             view_trigger
         };
@@ -5091,8 +5256,11 @@ impl Shell {
             .device_name(&chat.device_id)
             .unwrap_or("Unknown device")
             .to_string();
-        // Unknown device → no fragment, same as the archived list.
+        // Unknown device → no fragment, same as the archived list. This
+        // device's sessions name only their project.
+        let local = state.local_device_id.as_deref() == Some(chat.device_id.as_str());
         let folder = match (project, state.device_name(&chat.device_id)) {
+            (Some(project), Some(_)) if local => project,
             (Some(project), Some(_)) => format!("{project} @ {device}"),
             (Some(project), None) => project,
             (None, Some(_)) => device.clone(),
@@ -5180,12 +5348,11 @@ impl Shell {
         let pinned_rows = rows;
         self.sidebar_pinned_heights = pinned_rows
             .iter()
-            .map(|row| {
+            .map(|_| {
                 sidebar_row_height(
                     self.settings.sidebar_compact,
                     self.settings.sidebar_show_project_label,
-                    row.branch.is_some(),
-                    row.change_request.is_some(),
+                    false,
                 )
             })
             .collect();
@@ -5282,11 +5449,15 @@ impl Shell {
                         .map_or_else(|| "regular".into(), |(key, _)| format!("regular:{key}"))
                 };
                 drag.source_index = index;
+                let nested = !(section_index == 0 && pinned_count > 0)
+                    && self.settings.sidebar_organization == SidebarOrganization::ByProject
+                    && group
+                        .as_ref()
+                        .is_some_and(|(key, _)| !key.starts_with("section:"));
                 drag.row_height = sidebar_row_height(
                     self.settings.sidebar_compact,
                     self.settings.sidebar_show_project_label,
-                    rows[index].branch.is_some(),
-                    rows[index].change_request.is_some(),
+                    nested,
                 );
                 // Move the vacant slot to the destination instead of keeping two
                 // holes. Sample layout and paint with the same reversible easing.
@@ -5414,8 +5585,7 @@ impl Shell {
                 let height = sidebar_row_height(
                     self.settings.sidebar_compact,
                     self.settings.sidebar_show_project_label,
-                    branch.is_some(),
-                    change_request.is_some(),
+                    project_group,
                 );
                 // Only rows a jump slot can reach wear a chip; row 10 onward
                 // keeps its time-ago.
@@ -5478,6 +5648,7 @@ impl Shell {
                     if is_moving { None } else { drag },
                     jump_label,
                     self.settings.sidebar_show_project_icon && !project_group,
+                    project_group,
                     None,
                     theme,
                     cx,
@@ -5609,52 +5780,28 @@ impl Shell {
             let chevron = self.sidebar_disclosure_chevron(&motion_key, !collapsed, theme);
             let toggle_key = collapse_key.clone();
             let toggle_motion_key = motion_key.clone();
-            let group_icon = header_icon_chat
-                .map(|chat_id| {
-                    self.render_project_group_icon(&chat_id, SIDEBAR_ACTIVE_HARNESS_ICON_SIZE, cx)
-                })
-                .or_else(|| {
-                    if !project_group || !self.settings.sidebar_show_project_icon {
-                        return None;
-                    }
-                    let space = self
-                        .state
-                        .read(cx)
-                        .spaces
-                        .iter()
-                        .find(|space| zuse_protocol::view::project_key(space) == key)
-                        .cloned();
-                    Some(
-                        div()
-                            .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
-                            .flex_none()
-                            .child(self.project_icons.render(
-                                &self.state,
-                                space.as_ref(),
-                                self.active_sidebar_pin_profile_key(cx),
-                                false,
-                                cx,
-                            ))
-                            .into_any_element(),
-                    )
-                })
-                .map(|artwork| {
-                    let git = project_group
-                        && self.state.read(cx).spaces.iter().any(|space| {
-                            zuse_protocol::view::project_key(space) == key && space.git_detected
-                        });
+            // Project groups lead with the repository's 20px avatar; device
+            // groups keep the plain disclosure heading.
+            let group_icon =
+                (project_group && self.settings.sidebar_show_project_icon).then(|| {
+                    let space = {
+                        let state = self.state.read(cx);
+                        header_icon_chat
+                            .as_ref()
+                            .and_then(|chat_id| state.chats.iter().find(|chat| &chat.id == chat_id))
+                            .and_then(|chat| state.space_for_chat(chat))
+                            .or_else(|| {
+                                state
+                                    .spaces
+                                    .iter()
+                                    .find(|space| zuse_protocol::view::project_key(space) == key)
+                            })
+                            .cloned()
+                    };
                     div()
-                        .flex()
-                        .items_center()
-                        .gap(px(5.))
-                        .child(artwork)
-                        .when(git, |d| {
-                            d.child(
-                                gpui::img(SharedString::from("plugin-icons/github.com"))
-                                    .size(px(13.))
-                                    .rounded(px(3.)),
-                            )
-                        })
+                        .size(px(SIDEBAR_PROJECT_AVATAR_SIZE))
+                        .flex_none()
+                        .child(self.project_artwork(space.as_ref(), false, cx))
                         .into_any_element()
                 });
             // A real project's group gets a hover-revealed `+` that opens a new
@@ -5707,14 +5854,26 @@ impl Shell {
                     )
                     .into_any_element()
             });
-            let header = sidebar_disclosure_header(
-                theme,
-                group_icon,
-                visible_label,
-                collapsed.then_some(row_count),
-                new_chat_button,
-                chevron,
-            )
+            let header = if project_group {
+                sidebar_project_header(
+                    theme,
+                    group_icon,
+                    visible_label,
+                    collapsed.then_some(row_count),
+                    new_chat_button,
+                    chevron,
+                    group_name.clone(),
+                )
+            } else {
+                sidebar_disclosure_header(
+                    theme,
+                    group_icon,
+                    visible_label,
+                    collapsed.then_some(row_count),
+                    new_chat_button,
+                    chevron,
+                )
+            }
             .group(group_name)
             .id(SharedString::from(format!("sidebar-group-{collapse_key}")))
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -5737,13 +5896,21 @@ impl Shell {
                 body_height,
                 body.into_any_element(),
             );
-            let height =
-                SIDEBAR_DISCLOSURE_SECTION_HEIGHT + if collapsed { 0.0 } else { body_height };
+            // Projects stack as a compact list; other groups keep the
+            // section rhythm.
+            let section_gap = if project_group {
+                SIDEBAR_PROJECT_GAP
+            } else {
+                SIDEBAR_SECTION_GAP
+            };
+            let height = section_gap
+                + SIDEBAR_DISCLOSURE_HEADER_HEIGHT
+                + if collapsed { 0.0 } else { body_height };
             let element = div()
                 .w_full()
                 .flex()
                 .flex_col()
-                .pt(px(SIDEBAR_SECTION_GAP))
+                .pt(px(section_gap))
                 .child(header)
                 .child(body)
                 .into_any_element();
@@ -5963,7 +6130,7 @@ impl Shell {
         // "Show more" matches the row slot: compact rows are 29px, so the
         // button shrinks with them instead of towering over the list.
         let more_height = if self.settings.sidebar_compact {
-            super::sidebar_row_height(true, true, false, false)
+            super::sidebar_row_height(true, true, false)
         } else {
             36.0
         };
@@ -5971,12 +6138,11 @@ impl Shell {
             + rows
                 .iter()
                 .take(shown)
-                .map(|row| {
+                .map(|_| {
                     sidebar_row_height(
                         self.settings.sidebar_compact,
                         self.settings.sidebar_show_project_label,
-                        row.branch.is_some(),
-                        row.change_request.is_some(),
+                        false,
                     )
                 })
                 .sum::<f32>()
@@ -6047,6 +6213,7 @@ impl Shell {
                         None,
                         None,
                         self.settings.sidebar_show_project_icon,
+                        false,
                         None,
                         theme,
                         cx,

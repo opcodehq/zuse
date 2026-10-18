@@ -23,7 +23,7 @@ fn row(
                 .child(widgets::row_title(theme, title.to_string()))
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::ui_rems(widgets::ROW_DESCRIPTION_SIZE))
                         .line_height(crate::typography::ui_rems(16.0))
                         .text_color(theme.text_muted)
                         .child(SharedString::from(description.to_string())),
@@ -190,6 +190,7 @@ impl ShortcutsPage {
             ));
         }
         let card = widgets::section_card(&theme)
+            .mt_0()
             .child(row(
                 &theme,
                 true,
@@ -221,10 +222,12 @@ impl ShortcutsPage {
                 "Destination",
                 destination_description,
                 destination.into_any_element(),
-            ))
+            ));
+        let permissions = widgets::section_card(&theme)
+            .mt_0()
             .child(row(
                 &theme,
-                false,
+                true,
                 "Window capture",
                 capabilities.capture_description(),
                 window_access.into_any_element(),
@@ -255,67 +258,67 @@ impl ShortcutsPage {
             .on_hover(cx.listener(Self::on_scroll_hovered))
             .on_drag_move(cx.listener(Self::on_bar_drag_move))
             .child(
-                crate::edge_fade::edge_faded(16.0, true, true, div()
-                    .id("appshots-settings-page")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll.scroll)
-                    .track_focus(&self.focus)
-                    .tab_group()
-                    .tab_index(0)
-                    .tab_stop(false)
-                    .on_key_down(|event, window, cx| {
-                        let key = &event.keystroke;
-                        if key.key == "tab"
-                            && !key.modifiers.control
-                            && !key.modifiers.alt
-                            && !key.modifiers.platform
-                        {
-                            if key.modifiers.shift {
-                                window.focus_prev(cx);
-                            } else {
-                                window.focus_next(cx);
+                crate::edge_fade::edge_faded(
+                    16.0,
+                    true,
+                    true,
+                    div()
+                        .id("appshots-settings-page")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll.scroll)
+                        .track_focus(&self.focus)
+                        .tab_group()
+                        .tab_index(0)
+                        .tab_stop(false)
+                        .on_key_down(|event, window, cx| {
+                            let key = &event.keystroke;
+                            if key.key == "tab"
+                                && !key.modifiers.control
+                                && !key.modifiers.alt
+                                && !key.modifiers.platform
+                            {
+                                if key.modifiers.shift {
+                                    window.focus_prev(cx);
+                                } else {
+                                    window.focus_next(cx);
+                                }
+                                cx.stop_propagation();
                             }
-                            cx.stop_propagation();
-                        }
-                    })
-                    .child(
-                        widgets::page_column()
-                            .child(widgets::page_header(&theme, "Appshots", None))
-                            .child(
-                                widgets::page_subtitle(&theme, capabilities.setup_description())
-                                    .line_height(px(20.0)),
-                            )
-                            .child(card)
-                            .child(
-                                div()
-                                    .min_h(px(20.0))
-                                    .mt(px(8.0))
-                                    .px(px(8.0))
-                                    .text_size(px(12.0))
-                                    .text_color(theme.text_muted)
-                                    .child(helper),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(12.0))
-                                    .pl(px(8.0))
-                                    .flex()
-                                    .flex_wrap()
-                                    .items_center()
-                                    .gap(px(12.0))
-                                    .child(
+                        })
+                        .child(
+                            widgets::page_column()
+                                .child(widgets::section_title(
+                                    &theme,
+                                    "Appshots",
+                                    "Capture an app window and attach it to a chat.",
+                                ))
+                                .child(
+                                    widgets::section_stack()
+                                        .child(widgets::group(&theme, "Capture", "").child(card))
+                                        .child(
+                                            widgets::group_with_action(
+                                                &theme,
+                                                "Permissions",
+                                                capabilities.setup_description(),
+                                                Some(refresh.into_any_element()),
+                                            )
+                                            .child(permissions),
+                                        ),
+                                )
+                                .when(!helper.is_empty(), |column| {
+                                    column.child(
                                         div()
-                                            .flex_1()
-                                            .text_size(px(12.0))
+                                            .mt(px(12.0))
+                                            .px(px(10.0))
+                                            .text_size(crate::typography::ui_rems(12.0))
                                             .text_color(theme.text_muted)
-                                            .child(
-                                                "Changed a permission? Check again after returning to Zuse.",
-                                            ),
+                                            .child(helper),
                                     )
-                                    .child(refresh),
-                            ),
-                    )).fade_overflow_y(&self.scroll.scroll),
+                                }),
+                        ),
+                )
+                .fade_overflow_y(&self.scroll.scroll),
             )
             .children(scrollbar)
             .into_any_element()

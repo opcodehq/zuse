@@ -379,14 +379,14 @@ impl Render for DevicesPage {
                 .into_any_element()
         };
         let local_block = (!local.is_empty()).then(|| {
-            let mut block = widgets::section_card(&theme).mt(px(8.0));
+            let mut block = widgets::section_card(&theme).mt_0();
             for (n, (ix, device)) in local.into_iter().enumerate() {
                 block = block.child(device_row(ix, device, n == 0));
             }
             block
         });
         let others_block = if others.is_empty() {
-            widgets::section_card(&theme).mt(px(8.0)).child(
+            widgets::section_card(&theme).mt_0().child(
                 widgets::card_row(&theme, true).child(
                     div()
                         .text_size(crate::typography::ui_rems(13.0))
@@ -397,7 +397,7 @@ impl Render for DevicesPage {
                 ),
             )
         } else {
-            let mut block = widgets::section_card(&theme).mt(px(8.0));
+            let mut block = widgets::section_card(&theme).mt_0();
             for (n, (ix, device)) in others.into_iter().enumerate() {
                 block = block.child(device_row(ix, device, n == 0));
             }
@@ -406,20 +406,13 @@ impl Render for DevicesPage {
         let card = div()
             .flex()
             .flex_col()
+            .gap(px(16.))
             .when_some(local_block, |el, block| {
-                el.child(
-                    widgets::group(&theme, "This computer", "")
-                        .mt(px(24.))
-                        .child(block.mt_0()),
-                )
+                el.child(widgets::group(&theme, "This computer", "").child(block))
             })
             // A local-only workspace never has other devices to list.
             .when(workspace_scope != Some(WorkspaceScope::Local), |el| {
-                el.child(
-                    widgets::group(&theme, "Other devices", "")
-                        .mt(px(24.))
-                        .child(others_block.mt_0()),
-                )
+                el.child(widgets::group(&theme, "Other devices", "").child(others_block))
             });
 
         let scrollbar = popover::rail(self, "devices-page-scrollbar", &theme, cx);
@@ -440,14 +433,17 @@ impl Render for DevicesPage {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::page_column()
-                                .child(widgets::page_header(&theme, "Remote access", None))
-                                .child(widgets::page_subtitle(
+                                .child(widgets::section_title(
                                     &theme,
+                                    "Remote access",
                                     devices_subtitle(workspace_scope),
                                 ))
-                                .child(self.managed.clone())
-                                .child(self.pairing.clone())
-                                .child(card),
+                                .child(
+                                    widgets::section_stack()
+                                        .child(self.managed.clone())
+                                        .child(self.pairing.clone())
+                                        .child(card),
+                                ),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),

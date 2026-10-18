@@ -1,7 +1,7 @@
 //! Alternate presentation of the same model and option mutations.
 use super::*;
 
-pub(super) const COMPACT_WIDTH: f32 = 360.0;
+pub(super) const COMPACT_WIDTH: f32 = 380.0;
 pub(super) const COMPACT_ROW_HEIGHT: f32 = 32.0;
 const COMPACT_LIST_ROWS: usize = 7;
 const THUMB_INSET: f32 = 12.0;
@@ -131,18 +131,15 @@ impl Pickers {
             .h(px(COMPACT_ROW_HEIGHT))
             .pl(px(8.0))
             .pr(px(4.0))
-            .rounded(px(popover::MENU_ITEM_RADIUS))
+            .rounded(px(MODEL_ROW_RADIUS))
             .flex()
             .items_center()
             .gap(px(8.0))
             .cursor_pointer()
             .text_color(theme.text)
-            .when(selected, |el| {
-                el.bg(crate::theme::card_selected_bg())
-                    .shadow(crate::theme::card_selected_shadows())
-            })
+            .when(selected, |el| model_selected(el, &theme))
             .when(!selected && self.active == ix, |el| {
-                el.bg(crate::theme::ink(0.05))
+                el.bg(theme.muted_fill().opacity(0.6))
             })
             .when(self.compact_keyboard && self.active == ix, |el| {
                 el.aria_active_descendant()
@@ -188,6 +185,7 @@ impl Pickers {
                         )
                     }),
             )
+            .when(selected, |el| el.child(model_check(&theme)))
             .child(
                 div()
                     .id(("model-star", ix))

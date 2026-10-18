@@ -1912,6 +1912,13 @@ impl Changes {
                                 }
                                 changes.error = None;
                                 if apply_diff_frame(&mut changes.diffs, value) {
+                                    // Sidebar rows label sessions with these sizes.
+                                    let diffs = &changes.diffs;
+                                    changes.state.update(cx, |state, cx| {
+                                        if state.publish_checkout_diff_stats(diffs) {
+                                            cx.notify();
+                                        }
+                                    });
                                     changes.sync(cx);
                                     cx.notify();
                                 }

@@ -1,5 +1,5 @@
 //! Native Devices cards use the profile-owned browser and pairing authorities.
-use super::access_widgets::{details, field, frame, header};
+use super::access_widgets::{details, field};
 use crate::{
     composer::ComposerInput,
     settings::widgets,
@@ -225,8 +225,9 @@ impl Render for PairingCard {
         let managed = self.status["managed"] == true;
         let busy = self.busy;
         let invite = self.invitation.clone();
-        div().flex().flex_col().gap(px(20.)).mt(px(24.))
-            .child(frame(&theme).child(header(&theme,"Access methods","Choose how your other devices connect to this engine."))
+        div().flex().flex_col().gap(px(16.))
+            .child(widgets::group_with_action(&theme,"Access methods","Choose how your other devices connect to this engine.",Some(widgets::text_action(&theme,widgets::ActionTone::Quiet,if self.advanced {"Hide advanced"} else {"Advanced"})
+                .id("advanced-connection-settings").on_click(cx.listener(|this,_,_,cx|{this.advanced=!this.advanced;cx.notify();})).into_any_element()))
                 .child(widgets::section_card(&theme).mt(px(0.))
                     .child(widgets::card_row(&theme,true).child(details(&theme,"Browser access",if running {self.status["origin"].as_str().unwrap_or("Running")}else{"Stopped. Start it to connect a browser or another Zuse app."}))
                         .when(!running,|row|row.child(widgets::text_action(&theme,widgets::ActionTone::Filled,if busy{"Working…"}else{"Start"}).id("start-browser-access").on_click(cx.listener(|this,_,_,cx|this.start(cx)))))
@@ -237,10 +238,8 @@ impl Render for PairingCard {
                         .child(widgets::card_row(&theme,false).child(details(&theme,"Public URL","Required for access from other devices. Use an HTTPS URL trusted by them.")).child(field(&theme,self.origin.clone())))
                         .child(widgets::card_row(&theme,false).child(details(&theme,"HTTPS certificate","Choose a certificate and matching private key for direct HTTPS."))
                             .child(div().flex_1().min_w(px(200.)).flex().flex_col().gap(px(8.)).child(field(&theme,self.certificate.clone())).child(field(&theme,self.key.clone())))))))
-            .child(widgets::text_action(&theme,widgets::ActionTone::Quiet,if self.advanced {"Hide advanced connection settings"} else {"Advanced connection settings"})
-                .id("advanced-connection-settings").on_click(cx.listener(|this,_,_,cx|{this.advanced=!this.advanced;cx.notify();})))
             .when(self.advanced, |view| view
-            .child(frame(&theme).child(header(&theme,"Relay access","Connect across networks through an outbound encrypted connection. Startup settings belong to this computer."))
+            .child(widgets::group(&theme,"Relay access","Connect across networks through an outbound encrypted connection. Startup settings belong to this computer.")
                 .child(widgets::section_card(&theme).mt(px(0.))
                     .child(widgets::card_row(&theme,true).child(details(&theme,"Relay",if relay_running {self.relay_status["origin"].as_str().unwrap_or("Running")}else{"Stopped"}))
                         .child(widgets::text_action(&theme,widgets::ActionTone::Outlined,if relay_running {"Stop relay"}else{"Start relay"}).id("native-relay-access")
@@ -260,7 +259,7 @@ impl Render for PairingCard {
                         .child(widgets::card_row(&theme,false).child(details(&theme,"Host credential","Choose the private token file issued by your relay operator on this engine’s computer.")).child(field(&theme,self.relay_credential.clone()))))
                     .when(relay_running,|card|card.child(widgets::card_row(&theme,false).child(details(&theme,"Transport",&format!("{} broker sockets · {} sessions. Refresh to update. Socket counts do not confirm application responsiveness.",self.relay_status["sockets"].as_u64().unwrap_or(0),self.relay_status["sessions"].as_u64().unwrap_or(0))))))))
             )
-            .child(frame(&theme).child(header(&theme,"Connect a device","Invitations grant access to this engine’s agents, files, terminals and settings."))
+            .child(widgets::group(&theme,"Connect a device","Invitations grant access to this engine’s agents, files, terminals and settings.")
                 .child(widgets::section_card(&theme).mt(px(0.))
                     .child(widgets::card_row(&theme,true).child(field(&theme,self.name.clone()))
                         .child(widgets::text_action(&theme,widgets::ActionTone::Filled,if busy{"Working…"}else{"Create invitation"}).id("native-create-invitation")
@@ -272,7 +271,7 @@ impl Render for PairingCard {
                             .child(widgets::text_action(&theme,widgets::ActionTone::Filled,"Copy invitation").id("native-copy-invitation").on_click(move|_,_,cx|{if let Ok(link)=copy.export_link(){cx.write_to_clipboard(ClipboardItem::new_string(link));}}))
                             .child(widgets::text_action(&theme,widgets::ActionTone::Outlined,"Open in browser").id("native-open-invitation").on_click(move|_,_,cx|{if let Ok(link)=target.export_link(){cx.open_url(&link);}})))
                     })))
-            .child(frame(&theme).child(header(&theme,"Connected devices","Revoke access when a device no longer needs this workspace."))
+            .child(widgets::group_with_action(&theme,"Connected devices","Revoke access when a device no longer needs this workspace.",Some(widgets::text_action(&theme,widgets::ActionTone::Quiet,"Refresh").id("native-refresh-pairings").on_click(cx.listener(|this,_,_,cx|this.refresh(cx))).into_any_element()))
                 .child(widgets::section_card(&theme).mt(px(0.))
                     .when(self.peers.is_empty(),|card|card.child(widgets::card_row(&theme,true).child(details(&theme,"No paired devices","Create an invitation to connect your first device."))))
                     .children(self.peers.iter().enumerate().map(|(index,peer)|{
@@ -281,10 +280,9 @@ impl Render for PairingCard {
                             .child(widgets::text_action(&theme,widgets::ActionTone::Quiet,"Revoke").id(("native-revoke-pairing",index))
                                 .on_click(cx.listener(move|this,_,_,cx|this.request(methods::REVOKE_PAIRING,json!({"pairId":id}),cx))))
                     }))))
-            .child(frame(&theme).child(header(&theme,"Use another computer","Open a paired workspace in a separate Zuse window. Work on this computer continues."))
+            .child(widgets::group(&theme,"Use another computer","Open a paired workspace in a separate Zuse window. Work on this computer continues.")
                 .child(widgets::section_card(&theme).mt(px(0.)).child(widgets::card_row(&theme,true).child(field(&theme,self.destination.clone()))
                     .child(widgets::text_action(&theme,widgets::ActionTone::Filled,"Open workspace").id("native-open-paired-workspace").on_click(cx.listener(|this,_,_,cx|this.open_destination(cx)))))))
             .when_some(self.error.clone(),|view,error|view.child(widgets::error_strip(&theme,error)))
-            .child(widgets::text_action(&theme,widgets::ActionTone::Quiet,"Refresh device access").id("native-refresh-pairings").on_click(cx.listener(|this,_,_,cx|this.refresh(cx))))
     }
 }

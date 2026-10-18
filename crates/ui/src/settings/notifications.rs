@@ -7,7 +7,6 @@
 
 use gpui::{Context, EventEmitter, SharedString, Window, div, prelude::*, px};
 
-use crate::icons;
 use crate::popover;
 use crate::settings::widgets;
 use crate::theme::Theme;
@@ -162,6 +161,9 @@ impl Render for NotificationsPage {
                 .flex_none()
                 .w(px(widgets::SWITCH_WIDTH))
                 .h(px(40.0))
+                // Lay out at the row's 28px control height; the extra target
+                // overhangs the row padding instead of growing the row.
+                .my(px(-6.0))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -302,7 +304,6 @@ impl Render for NotificationsPage {
             .child(
                 widgets::card_row(&theme, false)
                     .when(!desktop, |el| el.opacity(0.55))
-                    .child(widgets::row_tile(&theme, icons::REFRESH))
                     .child(
                         div()
                             .flex_1()
@@ -382,11 +383,16 @@ impl Render for NotificationsPage {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::page_column()
-                                .child(widgets::page_header(&theme, "Notifications", None))
+                                .child(widgets::section_title(
+                                    &theme,
+                                    "Notifications",
+                                    "Choose when Zuse alerts you about agent activity.",
+                                ))
                                 .child(
-                                    widgets::section(&theme, "Desktop", desktop_card).mt(px(24.0)),
-                                )
-                                .child(widgets::section(&theme, "Sounds", card)),
+                                    widgets::section_stack()
+                                        .child(widgets::section(&theme, "Desktop", desktop_card))
+                                        .child(widgets::section(&theme, "Sounds", card)),
+                                ),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),

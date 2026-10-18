@@ -191,6 +191,19 @@ pub const PROVIDERS: [(HarnessId, &str, &str); 9] = [
     (HarnessId::Hermes, "Hermes", "hermes auth add"),
 ];
 
+/// The agent's own CLI login, offered beside the Sign in button. Pure.
+pub fn cli_login_command(harness: HarnessId) -> Option<&'static str> {
+    match harness {
+        HarnessId::Codex => Some("codex login"),
+        HarnessId::Cursor => Some("cursor-agent login"),
+        HarnessId::Grok => Some("grok login"),
+        HarnessId::Devin => Some("devin auth login"),
+        HarnessId::Opencode => Some("opencode auth login"),
+        HarnessId::Hermes => Some("hermes auth add"),
+        _ => None,
+    }
+}
+
 /// Whether `harness` has an Accounts section (and sign-in flow). Pure.
 pub fn signs_in(harness: HarnessId) -> bool {
     PROVIDERS
@@ -608,6 +621,16 @@ impl AccountsPage {
             self.error = None;
             cx.notify();
         }
+    }
+
+    /// Review fixture: an empty, loaded account list (the sign-in state).
+    #[cfg(feature = "browser-fixture")]
+    pub(crate) fn fixture_seed(&mut self, cx: &mut Context<Self>) {
+        self.snapshot = Loadable::Ready(AgentAccountsSnapshot {
+            accounts: Vec::new(),
+            warnings: Vec::new(),
+        });
+        cx.notify();
     }
 
     #[cfg(test)]
@@ -1732,10 +1755,10 @@ impl AccountsPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let refreshing = self.refreshing || matches!(self.snapshot, Loadable::Loading);
-        let content: AnyElement =
-            match &self.snapshot {
-                Loadable::Idle | Loadable::Loading => self.render_embedded_skeleton(theme, cx),
-                Loadable::Error(message) => widgets::error_strip(theme, message.clone())
+        let content: AnyElement = match &self.snapshot {
+            Loadable::Idle | Loadable::Loading => self.render_embedded_skeleton(theme, cx),
+            Loadable::Error(message) => {
+                widgets::error_strip(theme, message.clone())
                     .mt(px(4.0))
                     .id("accounts-inline-retry")
                     .role(gpui::Role::Button)
@@ -1753,59 +1776,121 @@ impl AccountsPage {
                             .text_color(theme.text_muted)
                             .child(SharedString::from("Retry")),
                     )
-                    .into_any_element(),
-                Loadable::Ready(snapshot) => {
-                    let rows: Vec<_> = provider_accounts(snapshot, harness)
-                        .into_iter()
-                        .enumerate()
-                        .map(|(ix, account)| {
-                            self.render_account_row(account, ix, ix == 0, theme, now, cx)
-                        })
-                        .collect();
-                    let empty = rows.is_empty();
-                    // Adding is the list's last row, not a header button —
-                    // it sits where the next account will appear. A
-                    // one-login agent that is connected has nothing to add.
-                    let add_row = (empty || !keeps_one_login(harness)).then(|| {
-                        div()
-                            .py(px(8.0))
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .gap(px(4.0))
-                            .when(!empty, |el| {
-                                el.border_t_1().border_color(widgets::row_divider(theme))
-                            })
-                            .children(login_options(harness).into_iter().enumerate().map(
-                                |(ix, option)| {
-                                    let label = add_option_label(harness, option, empty);
-                                    widgets::action_button(theme, widgets::ActionTone::Quiet)
-                                        .id(("accounts-add", ix))
-                                        .when(ix == 0, |el| el.ml(px(-10.0)))
-                                        .role(gpui::Role::Button)
+                    .into_any_element()
+            }
+            Loadable::Ready(snapshot) => {
+                let rows: Vec<_> = provider_accounts(snapshot, harness)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ix, account)| {
+                        self.render_account_row(account, ix, ix == 0, theme, now, cx)
+                    })
+                    .collect();
+                let empty = rows.is_empty();
+                // Adding is the list's last row, not a header button —
+                // it sits where the next account will appear. A
+                // one-login agent that is connected has nothing to add.
+                // Nothing signed in yet: a clear primary sign-in, with
+                // the CLI's own login command as the alternative.
+                let sign_in = empty.then(|| {
+                    div()
+                        .py(px(8.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .child(
+                            div()
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme.text)
+                                .child("Sign in"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .items_center()
+                                .gap(px(10.0))
+                                .children(login_options(harness).into_iter().enumerate().map(
+                                    |(ix, option)| {
+                                        let label = match option.provider {
+                                            None => format!("Sign in to {}", option.label),
+                                            Some(_) => format!("Sign in with {}", option.label),
+                                        };
+                                        super::plugins::catalog_ui::primary_button(
+                                            theme,
+                                            ("accounts-sign-in", ix),
+                                        )
+                                        .text_size(crate::typography::ui_rems(11.0))
                                         .aria_label(label.clone())
-                                        .tab_index(0)
                                         .focus_visible(|s| s.border_2().border_color(theme.accent))
                                         .on_click(cx.listener(move |page, _, _, cx| {
                                             page.start_login(harness, option.provider, cx)
                                         }))
-                                        .child(
-                                            crate::icons::icon(crate::icons::PLUS)
-                                                .size(px(14.0))
-                                                .text_color(theme.text_muted),
-                                        )
                                         .child(SharedString::from(label))
-                                },
-                            ))
-                    });
+                                    },
+                                ))
+                                .when_some(cli_login_command(harness), |row, command| {
+                                    row.child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(4.0))
+                                            .text_size(crate::typography::ui_rems(10.0))
+                                            .text_color(theme.text_muted)
+                                            .child("or run")
+                                            .child(
+                                                div()
+                                                    .font_family(theme.font_mono.clone())
+                                                    .text_color(theme.text)
+                                                    .child(command),
+                                            ),
+                                    )
+                                }),
+                        )
+                });
+                let add_row = (!empty && !keeps_one_login(harness)).then(|| {
                     div()
+                        .py(px(8.0))
                         .flex()
-                        .flex_col()
-                        .children(rows)
-                        .children(add_row)
-                        .into_any_element()
-                }
-            };
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(px(4.0))
+                        .when(!empty, |el| {
+                            el.border_t_1().border_color(widgets::row_divider(theme))
+                        })
+                        .children(login_options(harness).into_iter().enumerate().map(
+                            |(ix, option)| {
+                                let label = add_option_label(harness, option, empty);
+                                widgets::action_button(theme, widgets::ActionTone::Quiet)
+                                    .id(("accounts-add", ix))
+                                    .when(ix == 0, |el| el.ml(px(-10.0)))
+                                    .role(gpui::Role::Button)
+                                    .aria_label(label.clone())
+                                    .tab_index(0)
+                                    .focus_visible(|s| s.border_2().border_color(theme.accent))
+                                    .on_click(cx.listener(move |page, _, _, cx| {
+                                        page.start_login(harness, option.provider, cx)
+                                    }))
+                                    .child(
+                                        crate::icons::icon(crate::icons::PLUS)
+                                            .size(px(14.0))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child(SharedString::from(label))
+                            },
+                        ))
+                });
+                div()
+                    .flex()
+                    .flex_col()
+                    .children(rows)
+                    .children(sign_in)
+                    .children(add_row)
+                    .into_any_element()
+            }
+        };
         div()
             .id("accounts-embedded")
             .w_full()
@@ -1940,19 +2025,25 @@ impl Render for AccountsPage {
                         _ => "accounts-skeleton-claude",
                     };
                     div()
-                        .mt(px(24.0))
                         .flex()
                         .flex_col()
+                        .p(px(4.0))
+                        .rounded(px(zuse_viewport::settings_style::FRAME_RADIUS))
+                        .bg(theme.settings_frame_bg())
                         .child(
                             div()
                                 .flex()
                                 .flex_row()
                                 .items_center()
                                 .gap(px(8.0))
+                                .px(px(10.0))
+                                .py(px(8.0))
                                 .child(provider_mark(harness, &theme))
                                 .child(
                                     div()
-                                        .text_size(crate::typography::ui_rems(14.0))
+                                        .text_size(crate::typography::ui_rems(
+                                            widgets::ROW_TITLE_SIZE,
+                                        ))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(theme.text)
                                         .child(SharedString::from(name)),
@@ -1962,7 +2053,7 @@ impl Render for AccountsPage {
                             // Ghost rows shaped like real ones (row two dimmed)
                             // so the card keeps its size while data develops.
                             widgets::section_card(&theme)
-                                .mt(px(8.0))
+                                .mt_0()
                                 .child(self.render_skeleton_row(
                                     (skeleton_id, 0),
                                     false,
@@ -2027,7 +2118,7 @@ impl Render for AccountsPage {
                         let add_id: SharedString = format!("add-account-{name}").into();
                         let empty = rows.is_empty();
                         let can_add = empty || !keeps_one_login(harness);
-                        let card = widgets::section_card(&theme).mt(px(8.0));
+                        let card = widgets::section_card(&theme).mt_0();
                         let empty_copy = match harness {
                             // Cursor's app login is SEPARATE from `cursor-agent
                             // login` — pointing at the CLI would send users to a
@@ -2045,8 +2136,8 @@ impl Render for AccountsPage {
                         let card = if empty {
                             card.child(
                                 div()
-                                    .px(px(16.0))
-                                    .py(px(16.0))
+                                    .px(px(12.0))
+                                    .py(px(10.0))
                                     .text_size(crate::typography::ui_rems(12.0))
                                     .text_color(theme.text_muted)
                                     .child(SharedString::from(empty_copy)),
@@ -2055,12 +2146,9 @@ impl Render for AccountsPage {
                             card.children(rows)
                         };
                         div()
-                            .mt(px(16.0))
-                            .p(px(16.0))
-                            .rounded(px(12.0))
-                            .bg(crate::theme::wash(0.035))
-                            .border_1()
-                            .border_color(theme.border)
+                            .p(px(4.0))
+                            .rounded(px(zuse_viewport::settings_style::FRAME_RADIUS))
+                            .bg(theme.settings_frame_bg())
                             .flex()
                             .flex_col()
                             .child(
@@ -2069,10 +2157,15 @@ impl Render for AccountsPage {
                                     .flex_row()
                                     .items_center()
                                     .gap(px(8.0))
+                                    .px(px(10.0))
+                                    .py(px(4.0))
+                                    .min_h(px(36.0))
                                     .child(provider_mark(harness, &theme))
                                     .child(
                                         div()
-                                            .text_size(crate::typography::ui_rems(14.0))
+                                            .text_size(crate::typography::ui_rems(
+                                                widgets::ROW_TITLE_SIZE,
+                                            ))
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .text_color(theme.text)
                                             .child(SharedString::from(name)),
@@ -2122,8 +2215,11 @@ impl Render for AccountsPage {
                             )
                             .children(provider_note(harness).map(|note| {
                                 div()
-                                    .mt(px(8.0))
-                                    .text_size(crate::typography::ui_rems(12.0))
+                                    .px(px(10.0))
+                                    .pb(px(8.0))
+                                    .text_size(crate::typography::ui_rems(
+                                        widgets::ROW_DESCRIPTION_SIZE,
+                                    ))
                                     .text_color(theme.text_muted)
                                     .child(SharedString::from(note))
                             }))
@@ -2148,15 +2244,17 @@ impl Render for AccountsPage {
                     .track_scroll(&self.scroll.scroll)
                     .child(
                         widgets::page_column()
-                            .child(
+                            .child(widgets::section_title_with_action(
+                                &theme,
+                                "Accounts",
+                                account_count,
+                                "Sign in to each provider and choose the account new sessions use.",
+                                Some(
                                 div()
                                     .flex()
                                     .flex_row()
-                                    .flex_wrap()
                                     .items_center()
-                                    .gap(px(10.0))
-                                    .child(widgets::page_header(&theme, "Accounts", account_count))
-                                    .child(div().flex_1())
+                                    .gap(px(8.0))
                                     .child(
                                         // `text-[12.5px]` + leading 16px Refresh icon,
                                         // dimmed while a refresh is in flight (zuse
@@ -2164,7 +2262,6 @@ impl Render for AccountsPage {
                                         widgets::ghost_action(&theme)
                                             .id("accounts-refresh")
                                             .flex_none()
-                                            .text_size(crate::typography::ui_rems(12.5))
                                             .when(refreshing, |el| el.opacity(0.5))
                                             .tab_index(0)
 .role(gpui::Role::Button)
@@ -2182,10 +2279,15 @@ impl Render for AccountsPage {
                                             )
                                             .child(SharedString::from("Refresh")),
                                     )
-                                    .child(self.render_device_switcher(&theme, cx)),
+                                    .child(self.render_device_switcher(&theme, cx))
+                                    .into_any_element(),
+                                ),
+                            ))
+                            .child(
+                                widgets::section_stack()
+                                    .children(self.plugins.clone())
+                                    .children(sections),
                             )
-                            .children(self.plugins.clone())
-                            .children(sections)
                             // Footer note (zuse: `mt-6 text-[12px] leading-relaxed
                             // text-muted-foreground/60`).
                             .child(

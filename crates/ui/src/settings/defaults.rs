@@ -636,7 +636,7 @@ impl Render for DefaultsPage {
             .child(widgets::card_row(&theme,false).child(details(&theme,"Default permission mode","How new chats handle tool calls. Each chat can override this from the composer.")).child(permission));
         let content = widgets::page_column()
             .child(widgets::section_title(&theme,"Default models","Choose how new chats start."))
-            .child(widgets::group(&theme,"Chat defaults","These choices apply when you start a new chat. You can still change either one from the composer.").mt(px(20.)).child(rows));
+            .child(widgets::section_stack().child(widgets::group(&theme,"Chat defaults","These choices apply when you start a new chat. You can still change either one from the composer.").child(rows)));
         let area = div()
             .id("default-models-page")
             .size_full()

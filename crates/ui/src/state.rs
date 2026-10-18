@@ -912,6 +912,9 @@ pub struct AppState {
     watch_tasks: Vec<Task<()>>,
     transcript_task: Option<Task<()>>,
     change_requests: ChangeRequestClientState,
+    /// Line totals of the checkout diffs the Changes pane has watched, kept
+    /// without their patches so sidebar rows can show a session's size.
+    pub checkout_diff_stats: Vec<CheckoutDiffStat>,
     change_request_tasks: HashMap<ChangeRequestWatchKey, Task<()>>,
     queue_task: Option<Task<()>>,
     change_requests_visible: bool,
@@ -1018,6 +1021,7 @@ impl AppState {
             watch_tasks: Vec::new(),
             transcript_task: None,
             change_requests: ChangeRequestClientState::default(),
+            checkout_diff_stats: Vec::new(),
             change_request_tasks: HashMap::new(),
             queue_task: None,
             change_requests_visible: true,
@@ -2418,6 +2422,57 @@ impl AppState {
     pub fn change_request_for_chat(&self, chat: &Chat) -> Option<&ChangeRequestSummary> {
         self.change_requests
             .change_request_for_chat(chat, &self.spaces)
+    }
+
+    /// A chat's last known diff size as (additions, deletions), resolved
+    /// like the Changes pane: checkout id first, then device + cwd, then cwd.
+    /// `None` until a diff for its checkout has been watched, or when clean.
+    pub fn diff_stat_for_chat(&self, chat: &Chat) -> Option<(u32, u32)> {
+        let stats = &self.checkout_diff_stats;
+        let found = chat
+            .checkout_id
+            .as_deref()
+            .and_then(|id| stats.iter().find(|stat| stat.checkout_id == id))
+            .or_else(|| {
+                let cwd = chat.cwd.as_deref()?;
+                stats
+                    .iter()
+                    .find(|stat| stat.device_id == chat.device_id && stat.cwd == cwd)
+                    .or_else(|| stats.iter().find(|stat| stat.cwd == cwd))
+            })?;
+        (found.additions > 0 || found.deletions > 0).then_some((found.additions, found.deletions))
+    }
+
+    /// Fold watched checkout diffs into [`Self::checkout_diff_stats`]. Entries
+    /// for checkouts outside this frame are kept as their last known size.
+    /// Returns whether anything changed.
+    pub fn publish_checkout_diff_stats(&mut self, diffs: &[zuse_protocol::CheckoutDiff]) -> bool {
+        let mut changed = false;
+        for diff in diffs {
+            let stat = CheckoutDiffStat {
+                checkout_id: diff.checkout_id.clone(),
+                device_id: diff.device_id.clone(),
+                cwd: diff.cwd.clone(),
+                additions: diff.additions,
+                deletions: diff.deletions,
+            };
+            match self
+                .checkout_diff_stats
+                .iter_mut()
+                .find(|existing| existing.checkout_id == stat.checkout_id)
+            {
+                Some(existing) if *existing == stat => {}
+                Some(existing) => {
+                    *existing = stat;
+                    changed = true;
+                }
+                None => {
+                    self.checkout_diff_stats.push(stat);
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     pub fn gate(&self) -> GatePhase {
@@ -6208,6 +6263,16 @@ impl AppState {
     pub fn fixture_attachment_engine(&mut self, engine: EngineHandle) {
         self.engine = Some(engine);
     }
+}
+
+/// One checkout's diff size, see [`AppState::checkout_diff_stats`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckoutDiffStat {
+    pub checkout_id: String,
+    pub device_id: String,
+    pub cwd: String,
+    pub additions: u32,
+    pub deletions: u32,
 }
 
 #[cfg(feature = "project-palette-fixture")]
