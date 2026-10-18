@@ -239,7 +239,11 @@ impl Render for FilesSettingsPage {
                         .child(
                             widgets::page_column()
                                 .child(widgets::page_header(&theme, "Files", None))
-                                .child(card),
+                                .child(
+                                    widgets::group(&theme, "Editor", "")
+                                        .mt(px(24.))
+                                        .child(card.mt_0()),
+                                ),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),

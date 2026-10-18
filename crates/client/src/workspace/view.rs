@@ -99,6 +99,7 @@ pub struct SessionRow {
     /// Oldest unadopted send from this device, if any.
     pub send_state: Option<SendState>,
     pub parent_chat_id: Option<String>,
+    pub thread_id: Option<String>,
     /// Sync room generation (2 = chat2; 1 = legacy, not dialable).
     pub room_gen: u32,
 }
@@ -412,6 +413,7 @@ fn hash_row(row: &SessionRow) -> u64 {
     }
     row.send_state.hash(&mut h);
     row.parent_chat_id.hash(&mut h);
+    row.thread_id.hash(&mut h);
     row.room_gen.hash(&mut h);
     h.finish()
 }
@@ -507,6 +509,7 @@ fn build_row(chat: &Chat, rc: &RowContext<'_>, cx: &DeriveContext<'_>) -> Arc<Se
         pull_request: change_request_for_chat(chat, cx.change_requests).cloned(),
         send_state,
         parent_chat_id: chat.parent_chat_id.clone(),
+        thread_id: chat.thread_id.clone(),
         room_gen: chat.room_gen.unwrap_or(1),
     };
     row.revision = hash_row(&row);
@@ -558,7 +561,7 @@ pub(crate) fn derive(
     let mut active: Vec<&Chat> = state
         .chats
         .iter()
-        .filter(|c| !c.archived && c.is_top_level())
+        .filter(|c| !c.archived && c.is_top_level() && c.thread_id.is_none())
         .filter(|c| {
             c.space_id
                 .as_deref()
@@ -665,7 +668,7 @@ pub(crate) fn derive(
     let mut archived_chats: Vec<&Chat> = state
         .chats
         .iter()
-        .filter(|c| c.archived && c.is_top_level())
+        .filter(|c| c.archived && c.is_top_level() && c.thread_id.is_none())
         .collect();
     sort_recency(&mut archived_chats);
     let archived: Vec<Arc<SessionRow>> = archived_chats.iter().map(|c| row(c)).collect();

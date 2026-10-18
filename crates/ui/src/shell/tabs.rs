@@ -1,9 +1,4 @@
-//! Session navigation — the horizontal tab strip is gone (wing 2026-08-10):
-//! the activity sidebar IS the session list, and the titlebar names the
-//! selected session (harness brand icon + title). A `+` new-session button
-//! lives in the titlebar's left control cluster while an existing session is
-//! selected. `UiSettings.open_tabs` is legacy — no longer read or written.
-
+//! Conversation tabs share a thread checkout and retain independent agent sessions.
 use super::*;
 
 const RIGHT_PANE_HEADER_CONTROLS_MIN_WIDTH: f32 = 8.0 + 4.0 + 4.0 + 28.0;
@@ -389,23 +384,136 @@ impl Shell {
     /// `[new-session +] [harness icon + session title] … [toggle-changes]`.
     /// Replaces the tab strip; inherits its titlebar duties (drag region,
     /// animated left inset, the toggle-changes button on git projects).
+    fn add_thread_conversation(&mut self, cx: &mut Context<Self>) {
+        if self.side_chat_creating {
+            return;
+        }
+        let state = self.state.read(cx);
+        let Some(selected) = state.selected_chat_row().filter(|chat| !chat.archived) else {
+            return;
+        };
+        let Some(engine) = state.engine().cloned() else {
+            return;
+        };
+        let root = selected.thread_id().to_owned();
+        let device = selected.device_id.clone();
+        self.side_chat_creating = true;
+        cx.spawn(async move |this, cx| {
+            let result = engine.client().call_as::<zuse_protocol::Chat>(methods::CREATE_THREAD_SESSION,
+                serde_json::json!({"chatId": uuid::Uuid::new_v4().to_string(), "threadId": root, "targetDeviceId": device})).await;
+            let _ = this.update(cx, |this, cx| {
+                this.side_chat_creating = false;
+                match result {
+                    Ok(chat) => {
+                        let id = chat.id.clone();
+                        this.state.update(cx, |state, _| {
+                            if !state.chats.iter().any(|row| row.id == id) { state.chats.push(chat); }
+                        });
+                        this.open_chat(id, cx);
+                    }
+                    Err(error) => this.composer.update(cx, |composer, cx| composer.show_error(error.to_string(), cx)),
+                }
+                cx.notify();
+            });
+        }).detach();
+        cx.notify();
+    }
+
+    fn render_thread_conversations(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx);
+        let state = self.state.read(cx);
+        let Some(selected) = state.selected_chat_row() else {
+            return Empty.into_any_element();
+        };
+        let root = selected.thread_id();
+        let mut rows: Vec<_> = state
+            .chats
+            .iter()
+            .filter(|chat| {
+                chat.thread_id() == root && chat.parent_chat_id.is_none() && !chat.archived
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|chat| (chat.id != root, chat.created_at));
+        div()
+            .flex()
+            .items_center()
+            .min_w_0()
+            .gap(px(4.))
+            .child(
+                div()
+                    .id("thread-conversations")
+                    .flex()
+                    .items_center()
+                    .min_w_0()
+                    .overflow_x_scroll()
+                    .gap(px(4.))
+                    .children(rows.into_iter().enumerate().map(|(index, chat)| {
+                        let active = chat.id == selected.id;
+                        let title = chat
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| format!("Chat {}", index + 1));
+                        let id = chat.id;
+                        div()
+                            .id(SharedString::from(format!("thread-conversation-{id}")))
+                            .role(gpui::Role::Tab)
+                            .aria_label(title.clone())
+                            .aria_selected(active)
+                            .cursor_pointer()
+                            .flex_none()
+                            .max_w(px(180.))
+                            .h(px(28.))
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(7.))
+                            .text_size(px(12.))
+                            .text_color(if active { theme.text } else { theme.text_muted })
+                            .when(active, |d| d.bg(theme.glass_hover()))
+                            .hover(|d| d.bg(theme.glass_hover()))
+                            .child(div().truncate().child(title))
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.open_chat(id.clone(), cx)),
+                            )
+                    })),
+            )
+            .when(!selected.archived, |d| {
+                d.child(
+                    div()
+                        .id("add-thread-conversation")
+                        .role(gpui::Role::Button)
+                        .aria_label("New chat in this thread")
+                        .size(px(26.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .text_color(theme.text_muted)
+                        .hover(|d| d.bg(theme.glass_hover()))
+                        .tooltip(crate::settings::widgets::text_tooltip(
+                            "New chat in this thread",
+                        ))
+                        .child(icon(icons::PLUS).size(px(14.)))
+                        .on_click(cx.listener(|this, _, _, cx| this.add_thread_conversation(cx))),
+                )
+            })
+            .into_any_element()
+    }
+
     pub(super) fn render_session_title_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         // The canvas titles as NOTHING (user request — a "New session"
         // header over the empty canvas was noise); the bar keeps its height,
         // drag region, and buttons. Where a session runs, and its side-chat
         // and project actions, live in the session card.
-        let (title, harness, on_canvas): (SharedString, Option<zuse_protocol::HarnessId>, bool) = {
+        let (harness, on_canvas) = {
             let state = self.state.read(cx);
             match state.selected_chat_row() {
-                Some(chat) => (
-                    SharedString::from(transcript::single_line(
-                        &chat.title.clone().unwrap_or_else(|| "New session".into()),
-                    )),
-                    chat.config.as_ref().map(|c| c.harness),
-                    false,
-                ),
-                None => (SharedString::from(""), None, true),
+                Some(chat) => (chat.config.as_ref().map(|c| c.harness), false),
+                None => (None, true),
             }
         };
 
@@ -649,7 +757,7 @@ impl Shell {
                                 } else {
                                     theme.text.opacity(0.85)
                                 })
-                                .child(title),
+                                .child(self.render_thread_conversations(cx)),
                         ),
                 )
             })

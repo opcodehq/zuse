@@ -54,6 +54,51 @@ impl WorkspaceView {
         window.focus(&self.input.focus_handle(cx), cx);
         cx.notify();
     }
+    pub(super) fn conversation_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(selected) = &self.selected else {
+            return Empty.into_any_element();
+        };
+        let root = selected["threadId"]
+            .as_str()
+            .or_else(|| selected["id"].as_str())
+            .unwrap_or_default();
+        let mut chats: Vec<_> = self
+            .chats
+            .iter()
+            .filter(|chat| {
+                chat["threadId"].as_str().or_else(|| chat["id"].as_str()) == Some(root)
+                    && chat["parentChatId"].is_null()
+                    && chat["archived"] != true
+            })
+            .collect();
+        chats.sort_by_key(|chat| {
+            (
+                chat["id"] != root,
+                chat["createdAt"].as_str().unwrap_or_default(),
+            )
+        });
+        row().w_full().min_w_0().h(px(36.)).px_3().gap_1()
+            .child(row().id("thread-conversations").min_w_0().overflow_x_scroll().gap_1()
+                .children(chats.into_iter().enumerate().map(|(index, chat)| {
+                    let active = chat["id"] == selected["id"];
+                    let chat = chat.clone();
+                    let title = chat["title"].as_str().map(str::to_owned).unwrap_or_else(|| format!("Chat {}", index+1));
+                    control(SharedString::from(format!("thread-conversation-{}", chat["id"].as_str().unwrap_or_default())), SharedString::from(title))
+                        .role(Role::Tab).aria_selected(active).max_w(px(180.)).flex_shrink_0()
+                        .when(active, |d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+                        .on_click(cx.listener(move |this, _, _, cx| { this.select(chat.clone(), cx); }))
+                })))
+            .when(selected["archived"] != true, |d| d.child(icon_button("add-thread-conversation", "plus", "New chat in this thread")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if !this.require_connection(cx) || this.file_navigation_blocked(cx) || this.queue_edit_navigation_blocked(cx) { return; }
+                    let Some(chat) = this.selected.clone() else { return; };
+                    let root = chat["threadId"].as_str().or_else(|| chat["id"].as_str()).unwrap_or_default();
+                    this.call(methods::CREATE_THREAD_SESSION, json!({"chatId":uuid::Uuid::new_v4().to_string(),"threadId":root,"targetDeviceId":chat["deviceId"]}));
+                    cx.notify();
+                }))))
+            .into_any_element()
+    }
+
     pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let query = if self.search_open {
             self.session_search.read(cx).value(cx).to_lowercase()
@@ -66,6 +111,7 @@ impl WorkspaceView {
             .filter(|c| {
                 c["archived"].as_bool().unwrap_or(false) == self.show_archive
                     && c["parentChatId"].is_null()
+                    && c["threadId"].is_null()
             })
             .filter(|c| {
                 query.is_empty()
@@ -131,38 +177,6 @@ impl WorkspaceView {
                         ),
                     ),
             )
-            .child(
-                row()
-                    .mx_3()
-                    .mt_2()
-                    .mb_3()
-                    .p_1()
-                    .gap_1()
-                    .rounded_lg()
-                    .bg(rgb(0x111111))
-                    .children(
-                        [
-                            (SidebarView::Threads, "Threads", "thread-view"),
-                            (SidebarView::Projects, "Projects", "project-view"),
-                        ]
-                        .into_iter()
-                        .map(|(view, name, id)| {
-                            control(id, name)
-                                .flex_1()
-                                .justify_center()
-                                .h(px(28.))
-                                .text_size(px(12.))
-                                .when(self.preferences.sidebar_view == view, |d| {
-                                    d.bg(rgb(0x2a2a2a)).text_color(rgb(TEXT))
-                                })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.preferences.sidebar_view = view;
-                                    this.save_preferences();
-                                    cx.notify();
-                                }))
-                        }),
-                    ),
-            )
             .when(self.search_open, |d| {
                 d.child(
                     row()
@@ -199,6 +213,23 @@ impl WorkspaceView {
                         })
                         .text_size(px(11.))
                         .text_color(rgb(FAINT)),
+                    )
+                    .child(
+                        icon_button(
+                            "sidebar-view-switch",
+                            "alt-arrow-down",
+                            "Switch threads and projects",
+                        )
+                        .size(px(20.))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.preferences.sidebar_view = if projects {
+                                SidebarView::Threads
+                            } else {
+                                SidebarView::Projects
+                            };
+                            this.save_preferences();
+                            cx.notify();
+                        })),
                     )
                     .child(
                         label(rows.len().to_string())

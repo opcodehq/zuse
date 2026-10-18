@@ -164,7 +164,6 @@ fn harness_update_label(status: &HarnessUpdateStatus, theme: &Theme) -> (SharedS
 
 pub struct HarnessesPage {
     plugins: Entity<super::plugins::PluginsCard>,
-    model_accounts: Entity<super::model_accounts::ModelAccountsCard>,
     custom_acp: Entity<super::custom_acp::CustomAcpCard>,
     _custom_changed: gpui::Subscription,
     state: Entity<AppState>,
@@ -201,13 +200,10 @@ impl HarnessesPage {
     }
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let plugins = cx.new(|cx| super::plugins::PluginsCard::new(state.clone(), cx));
-        let model_accounts =
-            cx.new(|cx| super::model_accounts::ModelAccountsCard::new(state.clone(), cx));
         let custom_acp = cx.new(|cx| super::custom_acp::CustomAcpCard::new(state.clone(), cx));
         let custom_changed = cx.subscribe(&custom_acp, |this: &mut Self, _, _, cx| this.load(cx));
         let mut page = Self {
             plugins,
-            model_accounts,
             custom_acp,
             _custom_changed: custom_changed,
             state,
@@ -953,55 +949,75 @@ impl HarnessesPage {
                 // The row's one update action sits inside the trigger, before
                 // the chevron, so it appearing never moves the chevron; the
                 // update policy lives in the expanded details.
-                let update_action = update.and_then(|status| {
-                    let (id, label, primary) = match status.phase {
-                        HarnessUpdatePhase::Available
-                        | HarnessUpdatePhase::ManualActionRequired
-                            if status.can_apply =>
-                        {
-                            ("harness-update", "Update", true)
-                        }
-                        HarnessUpdatePhase::WaitingForIdle
-                        | HarnessUpdatePhase::Preparing
-                        | HarnessUpdatePhase::Downloading => {
-                            ("harness-update-cancel", "Cancel", false)
-                        }
-                        _ => return None,
-                    };
-                    Some(
-                        div()
-                            .id((id, ix))
-                            .flex_none()
-                            .px(px(9.0))
-                            .py(px(5.0))
-                            .rounded(px(6.0))
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .cursor_pointer()
-                            .map(|button| {
-                                if primary {
-                                    button
-                                        .bg(theme.accent_wash)
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(theme.accent)
-                                        .hover(|style| style.bg(theme.accent.opacity(0.16)))
-                                } else {
-                                    button
-                                        .text_color(theme.text_muted)
-                                        .hover(|style| style.bg(crate::theme::ink(0.05)))
-                                }
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                // Inside the details trigger: act, don't expand.
-                                cx.stop_propagation();
-                                if primary {
-                                    this.apply_harness_update(harness, cx)
-                                } else {
-                                    this.cancel_harness_update(harness, cx)
-                                }
-                            }))
-                            .child(label),
-                    )
-                });
+                let update_action =
+                    update.and_then(|status| {
+                        let (id, label, primary) = match status.phase {
+                            HarnessUpdatePhase::Available
+                            | HarnessUpdatePhase::ManualActionRequired
+                                if status.can_apply =>
+                            {
+                                ("harness-update", "Update", true)
+                            }
+                            HarnessUpdatePhase::WaitingForIdle
+                            | HarnessUpdatePhase::Preparing
+                            | HarnessUpdatePhase::Downloading => {
+                                ("harness-update-cancel", "Cancel", false)
+                            }
+                            _ => return None,
+                        };
+                        Some(
+                            div()
+                                .id((id, ix))
+                                .flex_none()
+                                .size(px(26.0))
+                                .relative()
+                                .overflow_hidden()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .role(gpui::Role::Button)
+                                .aria_label(label)
+                                .tooltip(widgets::text_tooltip(label))
+                                .rounded(px(6.0))
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .cursor_pointer()
+                                .map(|button| {
+                                    if primary {
+                                        button
+                                            .bg(theme.accent_wash)
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(theme.accent)
+                                            .hover(|style| style.bg(theme.accent.opacity(0.16)))
+                                    } else {
+                                        button
+                                            .text_color(theme.text_muted)
+                                            .hover(|style| style.bg(crate::theme::ink(0.05)))
+                                    }
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    // Inside the details trigger: act, don't expand.
+                                    cx.stop_propagation();
+                                    if primary {
+                                        this.apply_harness_update(harness, cx)
+                                    } else {
+                                        this.cancel_harness_update(harness, cx)
+                                    }
+                                }))
+                                .when(primary, |button| {
+                                    button.child(div().absolute().inset_0().opacity(0.3).child(
+                                        zuse_viewport::styling::dither_background(true, true),
+                                    ))
+                                })
+                                .child(
+                                    crate::icons::icon(if primary {
+                                        crate::icons::REFRESH
+                                    } else {
+                                        crate::icons::CLOSE
+                                    })
+                                    .size(px(13.0)),
+                                ),
+                        )
+                    });
                 let header = widgets::card_row(&theme, ix == 0)
                     .py(px(8.))
                     .min_h(px(48.))
@@ -1352,7 +1368,7 @@ impl Render for HarnessesPage {
                                     .child(widgets::group_with_action(&theme, "Agent providers", "Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.", Some(div().flex().items_center().gap(px(6.)).child(check).child(switcher).into_any_element()))
                                         .children(update_error).child(body))
                                     .child(self.custom_acp.clone())
-                                    .child(self.model_accounts.clone())),
+),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),

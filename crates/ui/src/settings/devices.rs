@@ -407,13 +407,19 @@ impl Render for DevicesPage {
             .flex()
             .flex_col()
             .when_some(local_block, |el, block| {
-                el.child(widgets::section_label(&theme, "This device").mt(px(28.0)))
-                    .child(block)
+                el.child(
+                    widgets::group(&theme, "This computer", "")
+                        .mt(px(24.))
+                        .child(block.mt_0()),
+                )
             })
             // A local-only workspace never has other devices to list.
             .when(workspace_scope != Some(WorkspaceScope::Local), |el| {
-                el.child(widgets::section_label(&theme, "Other devices").mt(px(28.0)))
-                    .child(others_block)
+                el.child(
+                    widgets::group(&theme, "Other devices", "")
+                        .mt(px(24.))
+                        .child(others_block.mt_0()),
+                )
             });
 
         let scrollbar = popover::rail(self, "devices-page-scrollbar", &theme, cx);
@@ -434,7 +440,7 @@ impl Render for DevicesPage {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::page_column()
-                                .child(widgets::page_header(&theme, "Devices", None))
+                                .child(widgets::page_header(&theme, "Remote access", None))
                                 .child(widgets::page_subtitle(
                                     &theme,
                                     devices_subtitle(workspace_scope),

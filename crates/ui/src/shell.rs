@@ -1824,9 +1824,7 @@ fn sidebar_account_identity(
             };
             ("Local".into(), identity.into())
         }
-        Some(WorkspaceScope::Development) => {
-            ("Development".into(), "Authentication disabled".into())
-        }
+        Some(WorkspaceScope::Development) => ("Local".into(), "Stored on this device".into()),
         Some(WorkspaceScope::Synced) | None => match user {
             Some(user) => {
                 let name = user
@@ -11341,7 +11339,46 @@ impl Shell {
                 ))
                 .into_any_element()
         } else {
-            Empty.into_any_element()
+            let project = self
+                .state
+                .read(cx)
+                .selected_space_row()
+                .map(|space| space.display_name().to_owned());
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(12.))
+                .pb(px(80.))
+                .child(
+                    div()
+                        .text_size(px(24.))
+                        .line_height(px(32.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child(project.map_or_else(
+                            || "What should we build?".to_owned(),
+                            |name| format!("What should we build in {name}?"),
+                        )),
+                )
+                .child(
+                    div()
+                        .id("landing-without-project")
+                        .role(gpui::Role::Button)
+                        .cursor_pointer()
+                        .text_size(px(12.))
+                        .text_color(theme.text_muted)
+                        .hover(|d| d.text_color(theme.text))
+                        .child("Start without a project")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state
+                                .update(cx, |state, cx| state.select_space(None, cx));
+                            this.focus_composer(cx);
+                        })),
+                )
+                .into_any_element()
         };
 
         // Share the dock's choreography: release the bottom chip early on
@@ -14240,6 +14277,7 @@ mod tests {
             last_seen_at: None,
             room_gen: None,
             parent_chat_id: None,
+            thread_id: None,
         }
     }
 
@@ -17381,6 +17419,7 @@ mod exit_regressions {
                         harness_session_id: None,
                         harness_session_cwd: None,
                         parent_chat_id: None,
+                        thread_id: None,
                         space_id: Some("other".into()),
                         last_seen_at: None,
                         room_gen: None,

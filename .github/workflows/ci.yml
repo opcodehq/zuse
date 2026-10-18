@@ -56,6 +56,7 @@ jobs:
       - run: cargo test -p zuse-engine --test relay_access
       - run: cargo test -p zuse-engine --test durable_turn_review
       - run: cargo test -p zuse-engine --lib diff_sync::turn_snapshot
+      - run: cargo test -p zuse-engine --test thread_sessions
       - run: cargo test -p zuse-engine --test custom_acp
       - run: cargo test -p zuse-engine --lib registry::custom_acp::tests
       - run: cargo test -p zuse-protocol --lib custom_acp::tests

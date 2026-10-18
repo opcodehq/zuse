@@ -321,7 +321,8 @@ impl AccountUsage {
             .children(rows.iter().enumerate().map(|(ix, account)| {
                 let email: SharedString = account
                     .email
-                    .clone()
+                    .as_deref()
+                    .map(zuse_protocol::presentation::masked_email)
                     .or_else(|| account.display_name.clone())
                     .unwrap_or_else(|| "Unknown account".into())
                     .into();

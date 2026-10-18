@@ -2193,7 +2193,7 @@ impl AppState {
         let in_filter = self.project_filter(space_filter);
         self.overview_chats(now)
             .into_iter()
-            .filter(|(_, chat)| in_filter(chat))
+            .filter(|(_, chat)| chat.thread_id.is_none() && in_filter(chat))
             .collect()
     }
 
@@ -4184,6 +4184,7 @@ mod tests {
             harness_session_id: None,
             harness_session_cwd: None,
             parent_chat_id: None,
+            thread_id: None,
             space_id: None,
             last_seen_at: None,
             room_gen: None,

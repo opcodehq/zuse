@@ -475,6 +475,7 @@ pub const EASE_OUT_SOFT: CubicBezier = CubicBezier::new(0.2, 0.0, 0.0, 1.0);
 /// Selection indicator glide between the segments of a pill nav: 260ms.
 pub const INDICATOR_SLIDE: MotionSpec = MotionSpec::new(260, EASE_OUT_SOFT);
 /// Zuse loader pulse period: 2.4s.
+pub const LOGO_TRACE: MotionSpec = MotionSpec::new(1350, EASE);
 pub const ZUSE_PULSE: MotionSpec = MotionSpec::new(2400, EASE);
 /// Gradient matrix spinner wave period: 750ms.
 pub const GRADIENT_SPIN: MotionSpec = MotionSpec::new(750, EASE);

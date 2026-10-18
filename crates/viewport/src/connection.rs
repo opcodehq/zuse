@@ -118,11 +118,6 @@ impl WorkspaceView {
         self.recovery_request = None;
         self.input_pending.clear();
         self.input_submitted.clear();
-        self.model_fetch = None;
-        self.model_action = None;
-        if self.model_sign_in.take().is_some() {
-            self.model_error=Some("Connection interrupted during sign-in. Check linked accounts before starting again.".into());
-        }
         self.interrupt_pull_requests();
         self.git_requests.clear();
         self.git_controls
@@ -202,7 +197,6 @@ impl WorkspaceView {
         }
         self.refresh_worktree_settings();
         self.refresh_title_settings();
-        self.refresh_model_connections();
         if self.cloud_account["user"].is_object() {
             self.plugin_action(self.plugin_state.refresh());
         }

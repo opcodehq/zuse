@@ -346,7 +346,7 @@ impl DockState {
         let y = if self.frame.docked {
             viewport - height - reserved
         } else {
-            (viewport - height) * 0.5 + 8.0
+            (viewport - height - reserved - 24.0).max(0.0)
         };
         let bottom = self.position_at(0.0, y, reduced, now).1.value + height;
         (viewport - bottom).max(0.0)
@@ -649,7 +649,7 @@ impl Element for DockedComposer {
         let y = if docked {
             f32::from(bounds.top())
         } else {
-            (self.viewport_height - f32::from(bounds.size.height)) * 0.5 + 8.0
+            (self.viewport_height - f32::from(bounds.size.height) - 24.0).max(0.0)
         };
         let position = state.position_at(x, y, self.reduced, self.now);
         state.last_geometry = Some(self.now);

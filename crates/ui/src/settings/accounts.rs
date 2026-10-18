@@ -496,7 +496,6 @@ impl gpui::Global for AccountsSnapshotCache {}
 
 pub struct AccountsPage {
     plugins: Option<Entity<super::plugins::PluginsCard>>,
-    model_accounts: Option<Entity<super::model_accounts::ModelAccountsCard>>,
     state: Entity<AppState>,
     embedded: bool,
     embedded_harness: Option<HarnessId>,
@@ -554,10 +553,7 @@ impl AccountsPage {
         });
         let plugins =
             (!embedded).then(|| cx.new(|cx| super::plugins::PluginsCard::new(state.clone(), cx)));
-        let model_accounts = (!embedded)
-            .then(|| cx.new(|cx| super::model_accounts::ModelAccountsCard::new(state.clone(), cx)));
         let mut page = Self {
-            model_accounts,
             plugins,
             state,
             embedded,
@@ -1178,7 +1174,8 @@ impl AccountsPage {
     ) -> AnyElement {
         let email: SharedString = account
             .email
-            .clone()
+            .as_deref()
+            .map(zuse_protocol::presentation::masked_email)
             .or_else(|| account.display_name.clone())
             .unwrap_or_else(|| "Unknown account".into())
             .into();
@@ -2188,7 +2185,6 @@ impl Render for AccountsPage {
                                     .child(self.render_device_switcher(&theme, cx)),
                             )
                             .children(self.plugins.clone())
-                            .children(self.model_accounts.clone())
                             .children(sections)
                             // Footer note (zuse: `mt-6 text-[12px] leading-relaxed
                             // text-muted-foreground/60`).

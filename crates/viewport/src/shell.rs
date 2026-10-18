@@ -203,7 +203,7 @@ impl WorkspaceView {
             !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty();
         column()
             .w_full()
-            .max_w(px(896.))
+            .max_w(px(816.))
             .min_w_0()
             .self_center()
             .flex_shrink_0()
@@ -294,10 +294,10 @@ impl WorkspaceView {
                     .w_full()
                     .min_w_0()
                     .relative()
-                    .rounded(px(19.))
+                    .rounded(px(26.))
                     .border_1()
                     .border_color(rgb(0x30312b))
-                    .bg(rgb(0x181916))
+                    .bg(rgb(0x181a18))
                     .shadow_sm()
                     .when(self.model_picker, |d| {
                         d.child(self.composer_picker(cx, None))
@@ -372,13 +372,14 @@ impl WorkspaceView {
                             .px_3()
                             .pt_3()
                             .pb_2()
-                            .min_h(px(58.))
+                            .min_h(px(76.))
                             .child(self.input.clone()),
                     )
                     .child(
                         row()
                             .relative()
                             .px_2()
+                            .pt(px(6.))
                             .pb_2()
                             .gap_1()
                             .child(
@@ -575,25 +576,16 @@ impl WorkspaceView {
                     .child(label(if self.transcript_blocked() { "Loading saved conversation…" } else { "No messages in this archived chat." }).text_color(rgb(MUTED))))
             })
             .when(self.messages.is_empty() && !archived, |d| {
-                d.child(column().flex_1().justify_center().w_full().max_w(px(680.)).self_center().pb_8().gap_4()
-                    .child(icon("zuse-logo").size(px(32.)).text_color(rgb(MUTED)))
-                    .child(div().text_size(px(30.)).line_height(px(38.)).font_weight(FontWeight::MEDIUM).child("What would you like to build?"))
-                    .child(div().text_size(px(13.)).line_height(px(22.)).text_color(rgb(MUTED))
-                        .child("A fresh space for your next idea. Choose a project or start a conversation."))
-                    .child(row().mt_4().gap_3()
-                        .child(column().id("welcome-project").flex_1().min_w_0().p_4().gap_3().rounded_xl()
-                            .border_1().border_color(rgb(BORDER)).cursor_pointer().hover(|d|d.bg(rgb(RAISED)))
-                            .child(icon("folder").size(px(19.)).text_color(rgb(MUTED)))
-                            .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child("Work on a project"))
-                            .child(label(if self.account_remote { "Open a folder on the account computer" } else if self.paired { "Open a folder on your paired engine" } else { "Open a folder on this machine" }).text_size(px(11.)))
-                            .on_click(cx.listener(|this, _, _, cx|{this.project_picker = true; cx.notify();})))
-                        .child(column().id("welcome-agents").flex_1().min_w_0().p_4().gap_3().rounded_xl()
-                            .border_1().border_color(rgb(BORDER)).cursor_pointer().hover(|d|d.bg(rgb(RAISED)))
-                            .child(icon("settings-minimalistic").size(px(19.)).text_color(rgb(MUTED)))
-                            .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child("Connect your agents"))
-                            .child(label("Models, accounts, and tools").text_size(px(11.)))
-                            .on_click(cx.listener(|this, _, _, cx|{this.settings = true; cx.notify();}))))
-                    .child(label(if self.model_host.target.is_some() { "This chat runs on another computer." } else if self.account_remote { "Your agents run on the account computer." } else if self.paired { "Your agents run on your paired engine." } else { "Your agents run on this machine." }).mt_2().text_size(px(11.)).text_color(rgb(FAINT))))
+                let title = if self.project.is_some() {
+                    format!("What should we build in {}?", self.project_name())
+                } else {
+                    "What should we build?".to_owned()
+                };
+                d.child(column().flex_1().justify_center().items_center().w_full().gap_3()
+                    .child(div().text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::MEDIUM).child(title))
+                    .child(control("welcome-without-project", "Start without a project")
+                        .text_color(rgb(MUTED)).text_size(px(12.))
+                        .on_click(cx.listener(|this, _, _, cx| { this.project = None; cx.notify(); }))))
             })
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);
@@ -694,11 +686,51 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    fn plugin_catalog_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::plugin_catalog as catalog;
+        let signed_in = self.cloud_account["user"].is_object();
+        let items = catalog::catalog(
+            &self.plugin_state.snapshot,
+            &self.plugin_search.read(cx).value(cx),
+            self.plugin_connected_only,
+        );
+        let pages = items.len().div_ceil(40).max(1);
+        let page = self.plugin_catalog_page.min(pages - 1);
+        column().gap_3()
+            .child(row().gap_2()
+                .child(div().flex_1().min_w_0().px_3().py_2().rounded_lg().bg(crate::settings_style::frame_bg()).child(self.plugin_search.clone()))
+                .child(control("plugin-catalog-filter", if self.plugin_connected_only { "Connected" } else { "Browse all" })
+                    .on_click(cx.listener(|this, _, _, cx| { this.plugin_connected_only = !this.plugin_connected_only; this.plugin_catalog_page = 0; cx.notify(); }))))
+            .when(items.is_empty(), |d| d.child(label("No plugins match this view.")))
+            .child(row().flex_wrap().gap_3().children(items.into_iter().skip(page * 40).take(40).enumerate().map(|(index, definition)| {
+                let connected = catalog::connected(&self.plugin_state.snapshot, &definition.id);
+                let custom = definition.custom;
+                let remove_id = definition.id.clone();
+                catalog::tile(&definition, connected, rgb(TEXT).into(), rgb(MUTED).into(), crate::settings_style::frame_bg())
+                    .id(("plugin-catalog-item", index)).w(relative(if self.content_width < 650. { 1. } else { 0.48 }))
+                    .role(Role::Button).aria_label(format!("Connect {}", definition.name)).cursor_pointer().hover(|d| d.bg(rgb(RAISED)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if connected { return; }
+                        if !signed_in { this.call(methods::CLOUD_ACCOUNT_SIGN_IN, json!({})); cx.notify(); return; }
+                        if definition.api_key_header.is_some() { this.open_plugin_setup(crate::plugin_setup::SetupTarget::Catalog(definition.clone()), window, cx); }
+                        else { this.plugin_action(json!({"action":"connect","tenantId":this.plugin_state.snapshot["tenantId"],"pluginId":definition.id,"label":definition.name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":{"kind":"web"}})); }
+                        cx.notify();
+                    }))
+                    .when(custom && signed_in, |tile| tile.child(control(("remove-plugin-server", index), "Remove")
+                        .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.ask_plugin_removal(zuse_protocol::plugin_state::Removal::Server, &remove_id, cx); }))))
+            })))
+            .when(pages > 1, |d| d.child(row().justify_between()
+                .child(control("plugins-previous", "Previous").on_click(cx.listener(|this,_,_,cx| {this.plugin_catalog_page=this.plugin_catalog_page.saturating_sub(1);cx.notify();})))
+                .child(label(format!("{} / {pages}",page+1)))
+                .child(control("plugins-next", "Next").on_click(cx.listener(move |this,_,_,cx| {this.plugin_catalog_page=(this.plugin_catalog_page+1).min(pages-1);cx.notify();})))))
+            .into_any_element()
+    }
+
     pub(super) fn cloud_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         crate::settings_style::frame()
             .child(crate::settings_style::header(
-                "Zuse account & plugins",
-                "Connect your account and manage the tools shared across your agents.",
+                "Plugins",
+                "Connect your tools so agents can work across them in any chat.",
             ))
             .child(crate::settings_style::card().child(self.cloud_settings_contents(cx)))
             .into_any_element()
@@ -714,7 +746,7 @@ impl WorkspaceView {
         column().gap_3().p_3()
             .child(row().gap_3()
                 .child(column().flex_1().gap_1()
-                    .child(div().text_size(px(13.)).child(self.cloud_account["user"]["email"].as_str().unwrap_or("Connect your Zuse account").to_owned()))
+                    .child(div().text_size(px(13.)).child(self.cloud_account["user"]["email"].as_str().map(zuse_protocol::presentation::masked_email).unwrap_or_else(|| "Connect your Zuse account".to_owned())))
                     .child(label("Hosted connections are shared across your agents. Local agents work without signing in.")))
                 .child(control("cloud-sign-in",if signed_in {"Sign out"} else {"Sign in"})
 
@@ -722,7 +754,7 @@ impl WorkspaceView {
             .when_some(self.cloud_account["error"].as_str().map(str::to_owned),|d,e|d.child(label(e)))
             .when_some(self.cloud_account["login"]["url"].as_str().filter(|u|u.starts_with("https://")).map(str::to_owned),|d,url| {
                 d.child(row().gap_3().child(label(format!("Authorization code: {}",self.cloud_account["login"]["userCode"].as_str().unwrap_or_default())))
-                    .child(control("authorize-account","Open sign-in").on_click(move |_,_,cx|cx.open_url(&url))))
+                    .child(control("authorize-account","Continue in browser").on_click(move |_,_,cx|cx.open_url(&url))))
             })
             .when(signed_in,|d|d
                 .child(label("Workspace selection applies when a chat first uses plugins. Existing plugin sessions keep their workspace."))
@@ -745,17 +777,9 @@ impl WorkspaceView {
                         .child(control(("toggle-plugin",i),if enabled {"Disable"} else {"Enable"}).on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"setEnabled","tenantId":tenant,"connectionId":id,"enabled":!enabled}));cx.notify();})))
                         .child(control(("disconnect-plugin",i),"Disconnect").on_click(cx.listener(move|this,_,_,cx|this.ask_plugin_removal(zuse_protocol::plugin_state::Removal::Connection,&remove_id,cx))))
                 }))
-                .children(self.plugin_state.snapshot["catalog"].as_array().into_iter().flatten().enumerate().map(|(i,p)| {
-                    let plugin=p["id"].as_str().unwrap_or_default().to_owned();let name=p["name"].as_str().unwrap_or("Plugin").to_owned();let tenant=tenant.clone();let title=name.clone();let remove_id=plugin.clone();let custom=p["custom"]==true;
-                    row().gap_2().p_2().child(column().flex_1().gap_1().child(label(title)).child(label(p["description"].as_str().unwrap_or_default().to_owned())))
-                        .child(control(("connect-plugin",i),"Connect").on_click(cx.listener(move |this,_,window,cx|{
-                            let definition=this.plugin_state.snapshot["catalog"].as_array().into_iter().flatten().find(|p|p["id"]==plugin).cloned().and_then(|p|serde_json::from_value::<zuse_protocol::plugins::PluginDefinition>(p).ok());
-                            if let Some(definition)=definition.filter(|p|p.api_key_header.is_some()) { this.open_plugin_setup(crate::plugin_setup::SetupTarget::Catalog(definition),window,cx); }
-                            else {this.plugin_action(json!({"action":"connect","tenantId":tenant,"pluginId":plugin,"label":name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":if this.browser_local {json!({"kind":"desktop","port":0})} else {json!({"kind":"web"})}}));}
-                            cx.notify();})))
-                        .when(custom,|d|d.child(control(("remove-plugin-server",i),"Remove").on_click(cx.listener(move|this,_,_,cx|this.ask_plugin_removal(zuse_protocol::plugin_state::Removal::Server,&remove_id,cx)))))
-                })))
-            .when_some(self.plugin_state.attempt["authorizationUrl"].as_str().filter(|u|u.starts_with("https://")).map(str::to_owned),|d,url|d.child(control("authorize-plugin","Authorize connection").on_click(move |_,_,cx|cx.open_url(&url))))
+            )
+            .child(self.plugin_catalog_view(cx))
+            .when_some(self.plugin_state.attempt["authorizationUrl"].as_str().filter(|url|url.starts_with("https://")).map(str::to_owned), |d,url|d.child(control("authorize-hosted-plugin", "Continue in browser").on_click(move |_,_,cx|cx.open_url(&url))))
             .when(self.plugin_state.active_attempt(),|d| {
                 let attempt=self.plugin_state.attempt["id"].clone();let tenant=tenant.clone();
                 d.child(row().gap_3().child(label(self.plugin_state.attempt["state"].as_str().unwrap_or("Connecting").to_owned())).child(control("poll-plugin","Check connection").on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"poll","tenantId":tenant,"attemptId":attempt}));cx.notify();})))
@@ -1137,15 +1161,10 @@ impl WorkspaceView {
                                                 .rounded_md()
                                                 .cursor_pointer()
                                                 .hover(|d| d.bg(rgb(RAISED)))
-                                                .child(
-                                                    icon(if entry["kind"] == "directory" {
-                                                        "folder"
-                                                    } else {
-                                                        "file-code"
-                                                    })
-                                                    .size(px(14.))
-                                                    .text_color(rgb(FAINT)),
-                                                )
+                                                .child(crate::assets::file_icon(
+                                                    entry["path"].as_str().unwrap_or_default(),
+                                                    entry["kind"] == "directory",
+                                                ))
                                                 .child(
                                                     div()
                                                         .text_size(px(12.))
@@ -1355,7 +1374,12 @@ impl Render for WorkspaceView {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .when(!self.settings, |view| view.child(self.header(cx)))
+                    .when(!self.settings, |view| {
+                        view.child(self.header(cx))
+                            .when(self.selected.is_some(), |d| {
+                                d.child(self.conversation_tabs(cx))
+                            })
+                    })
                     .child(if self.settings {
                         self.settings_view(cx)
                     } else if self.project_picker {

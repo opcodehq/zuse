@@ -1,0 +1,146 @@
+[
+  {
+    "id": "linear",
+    "name": "Linear",
+    "description": "Find and update issues, projects, and documents.",
+    "domain": "linear.app",
+    "featured": true,
+    "category": "productivity"
+  },
+  {
+    "id": "notion",
+    "name": "Notion",
+    "description": "Notion's hosted MCP server lets agents search, create, and reorganize workspace content. The REST API underneath uses internal integrations with explicit…",
+    "domain": "notion.com",
+    "featured": true,
+    "category": "productivity"
+  },
+  {
+    "id": "sentry",
+    "name": "Sentry",
+    "description": "Sentry's hosted MCP server gives agents direct access to issues, events, releases, and Seer root-cause runs — the context a coding agent needs to fix what's…",
+    "domain": "sentry.io",
+    "featured": true,
+    "category": "observability"
+  },
+  {
+    "id": "atlassian",
+    "name": "Atlassian Rovo",
+    "description": "Atlassian’s Rovo MCP Server enables secure, permission-aware access to Jira and Confluence from external AI tools like Claude. It supports summarization…",
+    "domain": "atlassian.com",
+    "featured": true,
+    "category": "productivity"
+  },
+  {
+    "id": "asana",
+    "name": "Asana",
+    "description": "Access Asana’s Work Graph directly from Claude to search, create, update, and track tasks, projects, and goals. Coordinate work across teams while connecting…",
+    "domain": "asana.com",
+    "featured": true,
+    "category": "productivity"
+  },
+  {
+    "id": "canva",
+    "name": "Canva",
+    "description": "Browse, summarize, autofill, and even generate new Canva designs directly from Claude. Make Canva a native part of your AI workflow—an AI-powered design agent…",
+    "domain": "canva.com",
+    "featured": true,
+    "category": "design"
+  },
+  {
+    "id": "figma",
+    "name": "Figma",
+    "description": "Figma's REST API lets agents inspect files, comments, components, variables, projects, and webhooks. Its hosted MCP server supplies authenticated design…",
+    "domain": "figma.com",
+    "featured": true,
+    "category": "design"
+  },
+  {
+    "id": "hubspot",
+    "name": "HubSpot",
+    "description": "Chat with your HubSpot CRM data directly within Claude to get instant, personalized insights. Query key CRM objects like contacts, deals, companies, and…",
+    "domain": "hubspot.com",
+    "featured": true,
+    "category": "sales-and-marketing"
+  },
+  {
+    "id": "supabase",
+    "name": "Supabase",
+    "description": "Manage Supabase projects directly through Claude. Execute SQL queries on PostgreSQL databases, design and modify table schemas, deploy serverless edge…",
+    "domain": "supabase.com",
+    "featured": true,
+    "category": "code"
+  },
+  {
+    "id": "vercel",
+    "name": "Vercel",
+    "description": "Vercel's official MCP server covers documentation search, project management, and deployment analysis. The REST API and CLI give agents full control of the…",
+    "domain": "vercel.com",
+    "featured": true,
+    "category": "hosting"
+  },
+  {
+    "id": "context7",
+    "name": "Context7",
+    "description": "Context7 fetches up-to-date code examples and documentation right into your LLM's context. No tab-switching, no hallucinated APIs that don't exist, no…",
+    "domain": "context7.com",
+    "featured": true,
+    "category": "code"
+  },
+  {
+    "id": "granola",
+    "name": "Granola",
+    "description": "Connect Claude to your meeting history. Ask questions about your work and use your conversation context to get things done.",
+    "domain": "granola.ai",
+    "featured": true,
+    "category": "productivity"
+  },
+  {
+    "id": "miro",
+    "name": "Miro",
+    "description": "Access your board content and create content inside Miro from Claude. Use your teams workshops, technical specs and more in your AI workflows.",
+    "domain": "miro.com",
+    "featured": true,
+    "category": "code"
+  },
+  {
+    "id": "zapier",
+    "name": "Zapier",
+    "description": "Search knowledge across your apps and execute real-world actions by connecting Claude with the 8,000 apps on Zapier. Run workflows like sending emails…",
+    "domain": "zapier.com",
+    "featured": true,
+    "category": "productivity"
+  },
+  {
+    "id": "intercom",
+    "name": "Intercom",
+    "description": "The Intercom MCP Server gives your AI tools access to customer data—conversations, tickets, and user data. This lets teams across your business, not just…",
+    "domain": "intercom.com",
+    "featured": true,
+    "category": "communication"
+  },
+  {
+    "id": "box",
+    "name": "Box",
+    "description": "Ask questions about your enterprise content, get insights from unstructured data, automate content workflows, and access other features from the Box platform.",
+    "domain": "box.com",
+    "featured": false,
+    "category": "data"
+  },
+  {
+    "id": "gamma",
+    "name": "Gamma",
+    "description": "Transform ideas into presentations, documents, social media posts, and websites directly from Claude. Gamma generates beautifully designed content from…",
+    "domain": "gamma.app",
+    "featured": false,
+    "category": "productivity"
+  },
+  {
+    "id": "cloudflare",
+    "name": "Cloudflare Docs",
+    "description": "Search Cloudflare documentation from your agents.",
+    "domain": "cloudflare.com",
+    "featured": true,
+    "category": "developer-tools"
+  }
+]

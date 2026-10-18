@@ -1,5 +1,5 @@
 //! Account and hosted connections, backed by the engine's shared authority.
-use crate::{settings::widgets, state::AppState, theme::Theme};
+use crate::{composer::ComposerInput, settings::widgets, state::AppState, theme::Theme};
 use gpui::{Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*, px};
 use serde_json::{Value, json};
 use zuse_engine::account::AccountStatus;
@@ -9,6 +9,10 @@ use zuse_viewport::plugin_setup::{PluginSetup, SetupColors, SetupEvent, SetupTar
 pub struct PluginsCard {
     state: Entity<AppState>,
     account_only: bool,
+    search: Entity<ComposerInput>,
+    connected_only: bool,
+    catalog_page: usize,
+    _search: Subscription,
     account: AccountStatus,
     plugins: zuse_protocol::plugin_state::PluginState,
     error: Option<String>,
@@ -36,9 +40,22 @@ impl PluginsCard {
                 this.attach(cx);
             }
         });
+        let search = cx.new(|cx| {
+            ComposerInput::new("Search plugins", cx)
+                .with_single_line()
+                .with_tab_stop()
+        });
+        let search_events = cx.observe(&search, |this: &mut Self, _, cx| {
+            this.catalog_page = 0;
+            cx.notify();
+        });
         let mut card = Self {
             state,
             account_only: false,
+            search,
+            connected_only: false,
+            catalog_page: 0,
+            _search: search_events,
             account: AccountStatus::default(),
             plugins: Default::default(),
             error: None,
@@ -250,6 +267,14 @@ impl PluginsCard {
                             card.request(methods::PLUGINS, next, cx);
                         }
                     }
+                    Ok(value) if method == methods::CLOUD_ACCOUNT_SIGN_IN => {
+                        if let Some(url) = value["url"]
+                            .as_str()
+                            .filter(|url| url.starts_with("https://"))
+                        {
+                            cx.open_url(url);
+                        }
+                    }
                     Ok(_) => {}
                     Err(error) => {
                         card.error = Some(error.to_string());
@@ -266,6 +291,51 @@ impl PluginsCard {
         cx.notify();
     }
 }
+impl PluginsCard {
+    fn render_catalog(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        use zuse_viewport::plugin_catalog as catalog;
+        let signed_in = self.account.user.is_some();
+        let items = catalog::catalog(
+            &self.plugins.snapshot,
+            self.search.read(cx).text(),
+            self.connected_only,
+        );
+        let pages = items.len().div_ceil(40).max(1);
+        let page = self.catalog_page.min(pages - 1);
+        div().flex().flex_col().gap(px(12.))
+            .child(div().flex().items_center().gap(px(8.))
+                .child(div().flex_1().min_w_0().h(px(32.)).px(px(10.)).rounded(px(8.)).bg(theme.settings_frame_bg()).child(self.search.clone()))
+                .child(widgets::ghost_action(theme).id("plugin-catalog-filter").role(gpui::Role::Button)
+                    .child(if self.connected_only { "Connected" } else { "Browse all" })
+                    .on_click(cx.listener(|this, _, _, cx| { this.connected_only = !this.connected_only; this.catalog_page = 0; cx.notify(); }))))
+            .when(items.is_empty(), |d| d.child(widgets::row_title(theme, if self.connected_only { "No connected plugins yet." } else { "No plugins match your search." })))
+            .child(div().flex().flex_wrap().gap(px(12.)).children(items.into_iter().skip(page * 40).take(40).enumerate().map(|(index, definition)| {
+                let connected = catalog::connected(&self.plugins.snapshot, &definition.id);
+                let custom = definition.custom;
+                let remove_id = definition.id.clone();
+                let id = definition.id.clone();
+                let name = definition.name.clone();
+                catalog::tile(&definition, connected, theme.text, theme.text_muted, theme.settings_frame_bg())
+                    .id(("plugin-catalog-item", index)).w(gpui::relative(0.48)).role(gpui::Role::Button)
+                    .aria_label(format!("{} {name}", if connected { "Connected:" } else { "Connect" })).cursor_pointer()
+                    .hover(|d| d.bg(theme.glass_hover()))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if connected { return; }
+                        if !signed_in { this.request(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}), cx); return; }
+                        if definition.api_key_header.is_some() { this.open_setup(SetupTarget::Catalog(definition.clone()), window, cx); }
+                        else { this.request(methods::PLUGINS, json!({"action":"connect", "tenantId":this.plugins.snapshot["tenantId"], "pluginId":id,"label":name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":{"kind":"desktop","port":0}}), cx); }
+                    }))
+                    .when(custom && signed_in, |tile| tile.child(widgets::ghost_action(theme)
+                        .id(("remove-plugin-server", index)).role(gpui::Role::Button).child("Remove")
+                        .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.ask_removal(zuse_protocol::plugin_state::Removal::Server, &remove_id, cx); }))))
+            })))
+            .when(pages > 1, |d| d.child(div().flex().items_center().justify_between()
+                .child(widgets::ghost_action(theme).id("plugins-previous").child("Previous").on_click(cx.listener(|this,_,_,cx| {this.catalog_page=this.catalog_page.saturating_sub(1);cx.notify();})))
+                .child(format!("{} / {pages}",page+1))
+                .child(widgets::ghost_action(theme).id("plugins-next").child("Next").on_click(cx.listener(move|this,_,_,cx| {this.catalog_page=(this.catalog_page+1).min(pages-1);cx.notify();})))))
+    }
+}
+
 impl Render for PluginsCard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
@@ -275,9 +345,13 @@ impl Render for PluginsCard {
                 .account
                 .user
                 .as_ref()
-                .map(|user| user.name.clone().unwrap_or_else(|| user.email.clone()))
+                .map(|user| {
+                    user.name
+                        .clone()
+                        .unwrap_or_else(|| zuse_protocol::presentation::masked_email(&user.email))
+                })
                 .unwrap_or_else(|| "Not signed in".into());
-            let description = self.account.user.as_ref().map(|user|user.email.clone()).unwrap_or_else(||"You're using Zuse (Beta) locally without an account. Sign in to sync and unlock remote agents.".into());
+            let description = self.account.user.as_ref().map(|user|zuse_protocol::presentation::masked_email(&user.email)).unwrap_or_else(||"You're using Zuse (Beta) locally without an account. Sign in to sync and unlock remote agents.".into());
             let account = widgets::card_row(&theme, true)
                 .child(
                     div()
@@ -315,7 +389,7 @@ impl Render for PluginsCard {
                 );
             return widgets::group(&theme,"Account","Sign in to sync your account across devices and (soon) drive remote agents from your phone.")
                 .child(widgets::section_card(&theme).mt_0().child(account))
-                .when_some(self.account.login.clone(),|view,login|view.child(widgets::text_action(&theme,widgets::ActionTone::Outlined,"Open sign-in").id("general-open-login")
+                .when_some(self.account.login.clone(),|view,login|view.child(widgets::text_action(&theme,widgets::ActionTone::Outlined,"Continue in browser").id("general-open-login")
                     .on_click(move|_,_,cx|{if login.url.starts_with("https://"){cx.open_url(&login.url);}})))
                 .when_some(self.error.clone().or_else(||self.account.error.clone()),|view,error|view.child(widgets::error_strip(&theme,error)))
                 .into_any_element();
@@ -333,10 +407,10 @@ impl Render for PluginsCard {
         };
         div().flex().flex_col().gap(px(12.)).py(px(16.)).text_color(theme.text)
             .child(div().flex().items_center().gap(px(12.))
-                .child(div().flex_1().child("Zuse account & plugins"))
+                .child(div().flex_1().child("Plugins"))
                 .child(action("cloud-account-sign-in",if signed_in {"Sign out"} else {"Sign in"}).on_click(cx.listener(move |this,_,_,cx|this.request(if signed_in {methods::CLOUD_ACCOUNT_SIGN_OUT} else {methods::CLOUD_ACCOUNT_SIGN_IN},json!({}),cx)))))
-            .child(div().text_size(px(12.)).text_color(theme.text_muted).child(self.account.user.as_ref().map(|u|u.email.clone()).unwrap_or_else(||"Local agents work without a Zuse account. Sign in for hosted plugins.".into())))
-            .when_some(self.account.login.clone(),|d,login|d.child(div().flex().items_center().gap(px(12.)).child(format!("Authorization code: {}",login.user_code)).child(action("open-cloud-login","Open sign-in").on_click(move |_,_,cx|{if login.url.starts_with("https://"){cx.open_url(&login.url);}}))))
+            .child(div().text_size(px(12.)).text_color(theme.text_muted).child(self.account.user.as_ref().map(|u|zuse_protocol::presentation::masked_email(&u.email)).unwrap_or_else(||"Local agents work without a Zuse account. Sign in for hosted plugins.".into())))
+            .when_some(self.account.login.clone(),|d,login|d.child(div().flex().items_center().gap(px(12.)).child(format!("Authorization code: {}",login.user_code)).child(action("open-cloud-login","Continue in browser").on_click(move |_,_,cx|{if login.url.starts_with("https://"){cx.open_url(&login.url);}}))))
             .when_some(self.error.clone().or_else(||self.account.error.clone()),|d,error|d.child(div().text_size(px(12.)).text_color(theme.danger).child(error)))
             .when(signed_in,|d|d
                 .child(div().text_size(px(12.)).text_color(theme.text_muted).child("Workspace selection applies when a chat first uses plugins. Existing plugin sessions keep their workspace."))
@@ -360,16 +434,8 @@ impl Render for PluginsCard {
                         .child(widgets::ghost_action(&theme).id(("toggle-plugin",i)).child(if enabled {"Disable"} else {"Enable"}).on_click(cx.listener(move |this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"setEnabled","tenantId":tenant,"connectionId":id,"enabled":!enabled}),cx))))
                         .child(widgets::ghost_action(&theme).id(("disconnect-plugin",i)).tab_index(0).role(gpui::Role::Button).child("Disconnect").on_click(cx.listener(move|this,_,_,cx|this.ask_removal(zuse_protocol::plugin_state::Removal::Connection,&remove_id,cx))))
                 }))
-                .children(self.plugins.snapshot["catalog"].as_array().into_iter().flatten().enumerate().map(|(i,p)|{
-                    let id=p["id"].clone();let name=p["name"].as_str().unwrap_or("Plugin").to_owned();let tenant=tenant.clone();let remove_id=id.as_str().unwrap_or_default().to_owned();let custom=p["custom"]==true;
-                    div().flex().items_center().gap(px(12.)).child(div().flex_1().child(name.clone()))
-                        .child(widgets::ghost_action(&theme).id(("connect-plugin",i)).child("Connect").on_click(cx.listener(move |this,_,window,cx|{
-                            let definition=this.plugins.snapshot["catalog"].as_array().into_iter().flatten().find(|p|p["id"]==id).cloned().and_then(|p|serde_json::from_value::<zuse_protocol::plugins::PluginDefinition>(p).ok());
-                            if let Some(definition)=definition.filter(|p|p.api_key_header.is_some()) {this.open_setup(SetupTarget::Catalog(definition),window,cx);}
-                            else {this.request(methods::PLUGINS,json!({"action":"connect","tenantId":tenant,"pluginId":id,"label":name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":{"kind":"desktop","port":0}}),cx);}
-                        })))
-                        .when(custom,|d|d.child(widgets::ghost_action(&theme).id(("remove-plugin-server",i)).tab_index(0).role(gpui::Role::Button).child("Remove").on_click(cx.listener(move|this,_,_,cx|this.ask_removal(zuse_protocol::plugin_state::Removal::Server,&remove_id,cx)))))
-                })))
+            )
+            .child(self.render_catalog(&theme, cx))
             .when_some(self.plugins.attempt["authorizationUrl"].as_str().filter(|s|s.starts_with("https://")).map(str::to_owned),|d,url|d.child(action("authorize-hosted-plugin","Authorize connection").on_click(move |_,_,cx|cx.open_url(&url))))
             .when(self.plugins.active_attempt(),|d|{
                 let id=self.plugins.attempt["id"].clone();let tenant=tenant.clone();

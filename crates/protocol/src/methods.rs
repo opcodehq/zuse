@@ -37,6 +37,7 @@ pub const RELAY_COMMAND: &str = "RelayCommand";
 /// fresh chat2 socket, host nudge, drain pass, and a new delivery escort
 /// per pending command. Params `{chatId}`; IPC-only.
 pub const RETRY_DELIVERY: &str = "RetryDelivery";
+pub const CREATE_THREAD_SESSION: &str = "CreateThreadSession";
 pub const FORK_SIDE_CHAT: &str = "ForkSideChat";
 pub const WATCH_DOC_MESSAGES: &str = "WatchDocMessages";
 /// Explicit user navigation, `{chatId}`. Prioritizes this device's sync

@@ -7,7 +7,7 @@ macro_rules! assets {
     ($($name:literal),* $(,)?) => {
         impl AssetSource for Assets {
             fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-                if let Some(bytes) = zuse_icons::load(path) { return Ok(Some(Cow::Borrowed(bytes))); }
+                if let Some(bytes) = zuse_icons::load_file_icon(path).or_else(|| zuse_icons::load_plugin_icon(path).or_else(|| zuse_icons::load(path))) { return Ok(Some(Cow::Borrowed(bytes))); }
                 Ok(match path {
                     $(concat!("icons/",$name,".svg") => Some(Cow::Borrowed(include_bytes!(concat!("../../ui/assets/icons/",$name,".svg")).as_slice())),)*
                     _ => None,
@@ -72,4 +72,16 @@ pub(super) fn icon(name: &str) -> Svg {
         .text_color(crate::palette::rgb(0xa4a8a3))
         .size(gpui::px(16.))
         .flex_none()
+}
+
+pub(super) fn file_icon(path: &str, directory: bool) -> gpui::AnyElement {
+    use gpui::prelude::*;
+    if directory {
+        icon("folder").size(gpui::px(14.)).into_any_element()
+    } else {
+        gpui::img(SharedString::from(zuse_icons::file_icon_path(path)))
+            .size(gpui::px(14.))
+            .flex_none()
+            .into_any_element()
+    }
 }

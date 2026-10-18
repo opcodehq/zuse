@@ -62,6 +62,9 @@ pub(crate) struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(bytes) = zuse_icons::load_file_icon(path) {
+            return Ok(Some(Cow::Borrowed(bytes)));
+        }
         let Some(path) = path.strip_prefix(ASSET_PREFIX) else {
             return Ok(None);
         };
@@ -205,7 +208,12 @@ pub fn asset_path(identity: FileIconIdentity<'_>, appearance: Appearance) -> Sha
 /// embedded SVG through [`gpui::img`] rasterizes its authored fills into a
 /// polychrome image, preserving the VS Code theme artwork.
 pub fn icon(identity: FileIconIdentity<'_>, appearance: Appearance) -> Img {
-    img(asset_path(identity, appearance)).flex_none()
+    let path = if matches!(identity.kind, FileIconKind::File | FileIconKind::Symlink) {
+        SharedString::from(zuse_icons::file_icon_path(identity.name))
+    } else {
+        asset_path(identity, appearance)
+    };
+    img(path).flex_none()
 }
 
 /// A file-theme icon rasterized for painting straight into a text layout,

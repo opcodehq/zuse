@@ -27,6 +27,7 @@ pub struct PairingCard {
     destination: Entity<ComposerInput>,
     error: Option<String>,
     busy: bool,
+    advanced: bool,
     epoch: u64,
     load: Option<Task<()>>,
     action: Option<Task<()>>,
@@ -89,6 +90,7 @@ impl PairingCard {
             destination,
             error: None,
             busy: false,
+            advanced: false,
             epoch: 0,
             load: None,
             action: None,
@@ -230,11 +232,14 @@ impl Render for PairingCard {
                         .when(!running,|row|row.child(widgets::text_action(&theme,widgets::ActionTone::Filled,if busy{"Working…"}else{"Start"}).id("start-browser-access").on_click(cx.listener(|this,_,_,cx|this.start(cx)))))
                         .when(running&&managed,|row|row.child(widgets::text_action(&theme,widgets::ActionTone::Outlined,"Stop").id("stop-browser-access").on_click(cx.listener(|this,_,_,cx|this.request(methods::STOP_BROWSER_ACCESS,json!({}),cx)))))
                         .when(running&&!managed,|row|row.child(widgets::badge(&theme,"Server app"))))
-                    .when(!running,|card|card
+                    .when(!running && self.advanced,|card|card
                         .child(widgets::card_row(&theme,false).child(details(&theme,"Listen address","Use localhost for this computer, or a LAN address with HTTPS." )).child(field(&theme,self.listen.clone())))
                         .child(widgets::card_row(&theme,false).child(details(&theme,"Public URL","Required for access from other devices. Use an HTTPS URL trusted by them.")).child(field(&theme,self.origin.clone())))
                         .child(widgets::card_row(&theme,false).child(details(&theme,"HTTPS certificate","Choose a certificate and matching private key for direct HTTPS."))
                             .child(div().flex_1().min_w(px(200.)).flex().flex_col().gap(px(8.)).child(field(&theme,self.certificate.clone())).child(field(&theme,self.key.clone())))))))
+            .child(widgets::text_action(&theme,widgets::ActionTone::Quiet,if self.advanced {"Hide advanced connection settings"} else {"Advanced connection settings"})
+                .id("advanced-connection-settings").on_click(cx.listener(|this,_,_,cx|{this.advanced=!this.advanced;cx.notify();})))
+            .when(self.advanced, |view| view
             .child(frame(&theme).child(header(&theme,"Relay access","Connect across networks through an outbound encrypted connection. Startup settings belong to this computer."))
                 .child(widgets::section_card(&theme).mt(px(0.))
                     .child(widgets::card_row(&theme,true).child(details(&theme,"Relay",if relay_running {self.relay_status["origin"].as_str().unwrap_or("Running")}else{"Stopped"}))
@@ -254,6 +259,7 @@ impl Render for PairingCard {
                         .child(widgets::card_row(&theme,false).child(details(&theme,"Relay URL","Use your relay’s HTTPS origin. Leave both fields blank to resume the saved relay.")).child(field(&theme,self.relay_origin.clone())))
                         .child(widgets::card_row(&theme,false).child(details(&theme,"Host credential","Choose the private token file issued by your relay operator on this engine’s computer.")).child(field(&theme,self.relay_credential.clone()))))
                     .when(relay_running,|card|card.child(widgets::card_row(&theme,false).child(details(&theme,"Transport",&format!("{} broker sockets · {} sessions. Refresh to update. Socket counts do not confirm application responsiveness.",self.relay_status["sockets"].as_u64().unwrap_or(0),self.relay_status["sessions"].as_u64().unwrap_or(0))))))))
+            )
             .child(frame(&theme).child(header(&theme,"Connect a device","Invitations grant access to this engine’s agents, files, terminals and settings."))
                 .child(widgets::section_card(&theme).mt(px(0.))
                     .child(widgets::card_row(&theme,true).child(field(&theme,self.name.clone()))

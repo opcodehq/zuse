@@ -263,6 +263,14 @@ impl ManagedAccessCard {
                 card.busy = false;
                 let forgetting = method == methods::FORGET_ACCOUNT_ROUTE;
                 match result {
+                    Ok(value) if method == methods::CLOUD_ACCOUNT_SIGN_IN => {
+                        if let Some(url) = value["url"]
+                            .as_str()
+                            .filter(|url| url.starts_with("https://"))
+                        {
+                            cx.open_url(url);
+                        }
+                    }
                     Ok(value) if forgetting => {
                         card.saved = value["computers"].as_array().cloned().unwrap_or_default()
                     }
@@ -306,17 +314,15 @@ impl Render for ManagedAccessCard {
             "Starting remote access"
         };
         let description = if configured {
-            self.host["endpoint"]["httpBaseUrl"]
-                .as_str()
-                .unwrap_or("Create a private invitation below to connect another device.")
+            "Connect from your other signed-in computers, or share a private invitation below."
         } else {
             "Link your account, then create a private invitation below to connect another device."
         };
         let busy = self.busy;
         div().flex().flex_col().gap(px(20.)).mt(px(24.))
-            .child(frame(&theme).child(header(&theme,"Account remote access","Connect your computers across networks using your Zuse account."))
+            .child(frame(&theme).child(header(&theme,"Zuse Serve","Connect your computers across networks using your Zuse account."))
                 .child(widgets::section_card(&theme).mt(px(0.))
-                    .child(widgets::card_row(&theme,true).child(details(&theme,"Zuse account",self.account["user"]["email"].as_str().unwrap_or("Sign in to link this computer.")))
+                    .child(widgets::card_row(&theme,true).child(details(&theme,"Zuse account",&self.account["user"]["email"].as_str().map(zuse_protocol::presentation::masked_email).unwrap_or_else(|| "Sign in to link this computer.".into())))
                         .child(widgets::text_action(&theme,widgets::ActionTone::Outlined,if busy {"Working…"}else if signed_in {"Sign out"}else{"Sign in"}).id("managed-account-sign-in")
                             .on_click(cx.listener(move|this,_,_,cx|this.request(if signed_in{methods::CLOUD_ACCOUNT_SIGN_OUT}else{methods::CLOUD_ACCOUNT_SIGN_IN},json!({}),cx)))))
                     .when_some(self.account["login"]["url"].as_str().filter(|url|url.starts_with("https://")).map(str::to_owned),|card,url|card.child(widgets::card_row(&theme,false)

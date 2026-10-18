@@ -807,7 +807,6 @@ pub struct Pickers {
     compact_model_list: bool,
     /// The model list's provider tab strip: its sideways scroll, and the
     /// tab last brought into view as the list scrolled.
-    compact_strip_scroll: gpui::ScrollHandle,
     compact_strip_viewed: Option<usize>,
     effort_dragging: bool,
     compact_motion: compact::CompactMotion,
@@ -1083,7 +1082,6 @@ impl Pickers {
             chip_resizing: false,
             open_model_height: model_menu_height(0),
             compact_model_list: false,
-            compact_strip_scroll: gpui::ScrollHandle::new(),
             compact_strip_viewed: None,
             effort_dragging: false,
             compact_motion: compact::CompactMotion::default(),
@@ -1579,7 +1577,7 @@ impl Pickers {
         }
         if kind == PickerKind::HarnessModel {
             self.open_model_height = model_menu_height(self.setting_groups(cx).len());
-            self.compact_model_list = false;
+            self.compact_model_list = true;
             self.compact_strip_viewed = None;
             self.effort_dragging = false;
             self.compact_keyboard = false;
@@ -2500,7 +2498,7 @@ impl Pickers {
         }
         self.pick_model(row.model.id, cx);
         if self.compact_model_picker(cx) {
-            self.compact_model_list = false;
+            self.compact_model_list = true;
             self.focus_on_mount = true;
         }
     }
@@ -4383,18 +4381,11 @@ impl Pickers {
             .into_any_element()
     }
 
-    /// Model picker with favorites and harness tabs above a scoped search.
+    /// Model picker with a provider rail beside a scoped search.
     /// Existing chats show only their own harness tab and models.
     fn render_harness_model_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let compact = self.compact_model_picker(cx);
         let height = self.menu_geometry().height.min(self.open_model_height);
         let (list_height, tray_height) = model_menu_budgets(height, self.setting_groups(cx).len());
-        let list_height = if compact {
-            compact::compact_list_height(self.model_rows_len(cx))
-                .min((height - compact::LIST_HEADER - 2.0).max(0.0))
-        } else {
-            list_height
-        };
 
         let theme = Theme::of(cx).for_popup();
 
@@ -4435,7 +4426,7 @@ impl Pickers {
         let model_scroll = self.model_scroll.clone();
         let query = self.search.read(cx).text().trim().to_string();
         let searching = !query.is_empty();
-        let favorites_view = self.model_rail == ModelRail::Favorites;
+        let all_view = self.model_rail == ModelRail::All;
         let descriptors = self.rail_descriptors(cx);
         // No-agents empty state: the catalog loaded but offers nothing
         // runnable (every enabled harness is missing its CLI, or nothing is
@@ -4473,19 +4464,13 @@ impl Pickers {
         }
         let rows = self.model_rows(cx);
 
-        // ── tabs: the favorites star, then one brand icon per harness —
-        //    ACROSS THE TOP (user request; was a left rail). The
-        //    viewed tab wears a 2px accent bar sitting on the row's bottom
-        //    hairline. Tabs never hide: a live search only filters the
-        //    viewed tab's list, so switching tabs re-scopes the same query.
+        // Provider rail stays beside the searchable model list.
         let mut tabs = div()
             .flex_none()
-            .h(px(40.0))
-            .px(px(popover::CARD_INSET))
-            .border_b_1()
-            .border_color(crate::theme::hairline(0.08))
+            .w(px(44.0))
+            .py(px(popover::CARD_INSET))
             .flex()
-            .flex_row()
+            .flex_col()
             .items_center()
             .gap(px(2.0));
         tabs = tabs.child(
@@ -4499,12 +4484,10 @@ impl Pickers {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .when(!favorites_view, |el| {
-                    el.hover(|s| s.bg(crate::theme::ink(0.06)))
-                })
+                .when(!all_view, |el| el.hover(|s| s.bg(crate::theme::ink(0.06))))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.setting_menu = None;
-                    this.model_rail = ModelRail::Favorites;
+                    this.model_rail = ModelRail::All;
                     // Anchor on the selected row when it's starred, else
                     // the top — never a stray second highlight.
                     this.active = this.selected_model_index(cx);
@@ -4514,19 +4497,20 @@ impl Pickers {
                     cx.notify();
                 }))
                 .child(
-                    crate::icons::icon(crate::icons::STAR_BOLD)
-                        .size(px(15.0))
-                        .text_color(if favorites_view {
+                    div()
+                        .text_size(px(11.))
+                        .text_color(if all_view {
                             theme.text
                         } else {
                             theme.text_muted
-                        }),
+                        })
+                        .child("All"),
                 )
-                .when(favorites_view, |el| el.child(tab_indicator(theme.accent))),
+                .when(all_view, |el| el.child(tab_indicator(theme.accent))),
         );
         for (ix, descriptor) in descriptors.iter().enumerate() {
             let harness = descriptor.id;
-            let is_viewed = !favorites_view && effective == Some(harness);
+            let is_viewed = !all_view && effective == Some(harness);
             let (icon_path, tint) = harness_brand_icon(harness);
             tabs =
                 tabs.child(
@@ -4556,10 +4540,6 @@ impl Pickers {
                         ))
                         .when(is_viewed, |el| el.child(tab_indicator(theme.accent))),
                 );
-        }
-
-        if compact {
-            tabs = self.compact_model_back_header(cx);
         }
 
         // ── search row: icon + borderless input over a full-bleed hairline.
@@ -4625,10 +4605,10 @@ impl Pickers {
             Vec::new()
         } else if searching {
             vec![empty_list_note(&theme, "No models found")]
-        } else if favorites_view {
+        } else if all_view {
             vec![empty_list_note(
                 &theme,
-                "No starred models yet — hit a row's star",
+                "No models available for this agent.",
             )]
         } else {
             match effective_models {
@@ -4699,8 +4679,7 @@ impl Pickers {
         // ── traits tray: the reasoning ladder + model options PINNED under
         //    the list (the separate Traits popover folded in here — user
         //    request). Hidden entirely when the selected model has neither.
-        let has_tray = !compact
-            && self.title.is_none()
+        let has_tray = self.title.is_none()
             && (!self.trait_ladder(cx).is_empty()
                 || self
                     .selected_model(cx)
@@ -4721,14 +4700,24 @@ impl Pickers {
                 .into_any_element()
         });
 
+        let effort_slider = self.render_effort_slider(cx);
         div()
             .flex()
-            .flex_col()
+            .flex_row()
+            .min_w_0()
             .child(tabs)
-            .child(search_row)
-            .children(refresh_error)
-            .child(list_host)
-            .children(tray)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(search_row)
+                    .children(refresh_error)
+                    .child(list_host)
+                    .children(tray)
+                    .children(effort_slider),
+            )
             .into_any_element()
     }
 
@@ -5433,10 +5422,10 @@ impl Pickers {
             )
         };
         let mut rows = Vec::new();
-        let groups = self
-            .scope_groups(scope, cx)
-            .into_iter()
-            .filter(|g| tray || !is_toggle(g));
+        let groups = self.scope_groups(scope, cx).into_iter().filter(|g| {
+            (tray || !is_toggle(g))
+                && (!tray || Self::compact_option_visible(&g.id, &self.compact_hidden_options(cx)))
+        });
         for (ix, group) in groups.enumerate() {
             if tray
                 && self.compact_model_picker(cx)
@@ -6243,11 +6232,11 @@ fn model_menu_height(setting_count: usize) -> f32 {
     } else {
         (setting_count as f32 * 32.0 + 7.0).min(236.0)
     };
-    82.0 + 216.0 + tray
+    100.0 + 216.0 + tray
 }
 
 fn model_menu_budgets(height: f32, setting_count: usize) -> (f32, f32) {
-    let body = (height - 82.0).max(0.0);
+    let body = (height - 100.0).max(0.0);
     let desired_tray = if setting_count == 0 {
         0.0
     } else {

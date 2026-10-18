@@ -1619,6 +1619,7 @@ fn forwardable(method: &str) -> bool {
         method,
         methods::OPEN_VISUAL | methods::CONTROL_VISUAL | methods::DRAW_VISUAL
             | methods::FORK_SIDE_CHAT
+            | methods::CREATE_THREAD_SESSION
             | methods::LIST_HARNESSES
             | methods::INSTALL_HARNESS
             | methods::CANCEL_INSTALL
@@ -2887,6 +2888,33 @@ impl RpcService for EngineRpc {
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({ "outcome": outcome }))
+            }
+            methods::CREATE_THREAD_SESSION => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Params {
+                    chat_id: String,
+                    thread_id: String,
+                }
+                let p: Params = parse_params(params)?;
+                let _exclusive = self.sessions.archive_exclusive().await;
+                let source = self
+                    .workspace
+                    .chat(&p.thread_id)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?
+                    .ok_or_else(|| RpcError::Failed("Thread no longer exists.".into()))?;
+                if source.device_id != self.doc_host.device_id()
+                    || source.archived
+                    || source.parent_chat_id.is_some()
+                    || source.thread_id.is_some()
+                {
+                    return Err(RpcError::Failed("Open an active thread on its owning computer before adding a conversation.".into()));
+                }
+                let chat = self
+                    .workspace
+                    .create_thread_session(&source, &p.chat_id)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&chat)
             }
             methods::FORK_SIDE_CHAT => {
                 #[derive(Deserialize)]
@@ -6074,7 +6102,12 @@ impl EngineRpc {
         // Once admitted, finishing the journal transaction outlives a closed
         // renderer or a lost RPC response. A caller never replays the mutation.
         let this = self.clone();
-        let chat = chat_id.to_owned();
+        let chat = self
+            .workspace
+            .chat(chat_id)
+            .map_err(|e| RpcError::Failed(e.to_string()))?
+            .map(|chat| chat.thread_id().to_owned())
+            .unwrap_or_else(|| chat_id.to_owned());
         tokio::spawn(async move {
             let result = this.archive_chat_inner(&chat, archived).await;
             // Retained main/shared folders have no checkpoint phase write, but
@@ -6146,6 +6179,25 @@ impl EngineRpc {
             {
                 return Err(RpcError::Failed("The thread moved during restore. Its saved files are retained; refresh before continuing.".into()));
             }
+            for conversation in self
+                .workspace
+                .read_chats()
+                .map_err(failed)?
+                .iter()
+                .filter(|row| {
+                    row.thread_id.as_deref() == Some(chat.id.as_str())
+                        && row.device_id == chat.device_id
+                })
+            {
+                self.workspace
+                    .transition_archive(
+                        conversation,
+                        false,
+                        checkout_id.as_deref(),
+                        branch.as_deref(),
+                    )
+                    .map_err(failed)?;
+            }
             return Ok(outcome);
         }
         let chats = self.workspace.read_chats().map_err(failed)?;
@@ -6154,10 +6206,14 @@ impl EngineRpc {
             let before = family.len();
             for child in &chats {
                 if child.device_id == chat.device_id
-                    && child
+                    && (child
                         .parent_chat_id
                         .as_ref()
                         .is_some_and(|parent| family.contains(parent))
+                        || child
+                            .thread_id
+                            .as_ref()
+                            .is_some_and(|thread| family.contains(thread)))
                 {
                     family.insert(child.id.clone());
                 }

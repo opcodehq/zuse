@@ -4516,58 +4516,44 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Two persistent navigation views reuse the existing grouping state.
+    /// A quiet section heading switches navigation without a tab bar.
     pub(super) fn render_sidebar_modes(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let projects = self.settings.sidebar_organization == SidebarOrganization::ByProject;
         div()
             .flex()
-            .gap(px(4.))
-            .mx(px(12.))
+            .items_center()
+            .mx(px(16.))
             .mt(px(8.))
             .mb(px(8.))
-            .p(px(4.))
-            .rounded(px(8.))
-            .bg(theme.glass_hover().opacity(0.35))
-            .children(
-                [
-                    (
-                        SidebarViewRow::InOneList,
-                        SidebarOrganization::InOneList,
-                        "Threads",
-                    ),
-                    (
-                        SidebarViewRow::ByProject,
-                        SidebarOrganization::ByProject,
-                        "Projects",
-                    ),
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(index, (row, organization, name))| {
-                    let selected = self.settings.sidebar_organization == organization;
-                    div()
-                        .id(("sidebar-mode", index))
-                        .role(gpui::Role::Button)
-                        .aria_label(name)
-                        .flex_1()
-                        .h(px(28.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(6.))
-                        .text_size(px(12.))
-                        .text_color(if selected {
-                            theme.text
-                        } else {
-                            theme.text_muted
-                        })
-                        .when(selected, |d| d.bg(theme.glass_hover()))
-                        .hover(|d| d.bg(theme.glass_hover()))
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.activate_sidebar_view_row(row, cx)
-                        }))
-                        .child(name)
-                }),
+            .child(
+                div()
+                    .id("sidebar-view-switch")
+                    .role(gpui::Role::Button)
+                    .aria_label(if projects {
+                        "Projects, switch to threads"
+                    } else {
+                        "Threads, switch to projects"
+                    })
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .py(px(4.))
+                    .text_size(px(12.))
+                    .text_color(theme.text_muted)
+                    .hover(|d| d.text_color(theme.text))
+                    .child(if projects { "Projects" } else { "Threads" })
+                    .child(icon(icons::ALT_ARROW_DOWN).size(px(11.)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.activate_sidebar_view_row(
+                            if projects {
+                                SidebarViewRow::InOneList
+                            } else {
+                                SidebarViewRow::ByProject
+                            },
+                            cx,
+                        )
+                    })),
             )
             .into_any_element()
     }
@@ -5239,6 +5225,22 @@ impl Shell {
                 regular_groups.push((row.group.clone(), vec![row]));
             }
         }
+        if self.settings.sidebar_organization == SidebarOrganization::ByProject {
+            let state = self.state.read(cx);
+            for space in &state.spaces {
+                if zuse_protocol::projectless::is_projectless_cwd(Some(&space.path)) {
+                    continue;
+                }
+                let key = zuse_protocol::view::project_key(space);
+                let group = Some((key.clone(), space.display_name().to_owned()));
+                if !regular_groups
+                    .iter()
+                    .any(|(existing, _)| existing.as_ref().is_some_and(|(id, _)| id == &key))
+                {
+                    regular_groups.push((group, Vec::new()));
+                }
+            }
+        }
         // Sections keep their placed order, as Pinned does, not activity order.
         for ((_, rows), section) in custom_groups.iter_mut().zip(&custom_sections) {
             rows.sort_by_key(|row| section.session_ids.iter().position(|id| id == &row.chat.id));
@@ -5351,7 +5353,11 @@ impl Shell {
             }
         }
 
-        let selected = self.state.read(cx).selected_chat.clone();
+        let selected = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .map(|chat| chat.thread_id().to_owned());
         // Re-checked at render so the chips drop the FRAME a popover opens,
         // not on the next modifier event — the jumps are suppressed under it.
         let jump_hints = self.jump_hints && !self.overlay_owns_keyboard(cx);
@@ -5603,9 +5609,54 @@ impl Shell {
             let chevron = self.sidebar_disclosure_chevron(&motion_key, !collapsed, theme);
             let toggle_key = collapse_key.clone();
             let toggle_motion_key = motion_key.clone();
-            let group_icon = header_icon_chat.map(|chat_id| {
-                self.render_project_group_icon(&chat_id, SIDEBAR_ACTIVE_HARNESS_ICON_SIZE, cx)
-            });
+            let group_icon = header_icon_chat
+                .map(|chat_id| {
+                    self.render_project_group_icon(&chat_id, SIDEBAR_ACTIVE_HARNESS_ICON_SIZE, cx)
+                })
+                .or_else(|| {
+                    if !project_group || !self.settings.sidebar_show_project_icon {
+                        return None;
+                    }
+                    let space = self
+                        .state
+                        .read(cx)
+                        .spaces
+                        .iter()
+                        .find(|space| zuse_protocol::view::project_key(space) == key)
+                        .cloned();
+                    Some(
+                        div()
+                            .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
+                            .flex_none()
+                            .child(self.project_icons.render(
+                                &self.state,
+                                space.as_ref(),
+                                self.active_sidebar_pin_profile_key(cx),
+                                false,
+                                cx,
+                            ))
+                            .into_any_element(),
+                    )
+                })
+                .map(|artwork| {
+                    let git = project_group
+                        && self.state.read(cx).spaces.iter().any(|space| {
+                            zuse_protocol::view::project_key(space) == key && space.git_detected
+                        });
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(5.))
+                        .child(artwork)
+                        .when(git, |d| {
+                            d.child(
+                                gpui::img(SharedString::from("plugin-icons/github.com"))
+                                    .size(px(13.))
+                                    .rounded(px(3.)),
+                            )
+                        })
+                        .into_any_element()
+                });
             // A real project's group gets a hover-revealed `+` that opens a new
             // chat homed on it — on this device's checkout when it has one
             // (the project picker's local-first order), never silently on a
@@ -7742,6 +7793,7 @@ mod tests {
             harness_session_id: None,
             harness_session_cwd: None,
             parent_chat_id: None,
+            thread_id: None,
             space_id: None,
             last_seen_at: None,
             room_gen: None,

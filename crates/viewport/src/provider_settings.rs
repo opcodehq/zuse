@@ -52,6 +52,12 @@ impl WorkspaceView {
         }
         match method.as_str() {
             methods::START_AGENT_LOGIN => {
+                if let Some(url) = value["url"]
+                    .as_str()
+                    .filter(|url| url.starts_with("https://"))
+                {
+                    cx.open_url(url);
+                }
                 if let Some(input) = self.provider_codes.get(&provider) {
                     input.update(cx, |input, cx| input.set_value(String::new(), cx));
                 }
@@ -149,7 +155,7 @@ impl WorkspaceView {
                                     account
                                         .and_then(|account| account["email"].as_str())
                                         .map(str::to_owned),
-                                    |row, email| row.child(s::description_text(email)),
+                                    |row, email| row.child(s::description_text(zuse_protocol::presentation::masked_email(&email))),
                                 ),
                         );
                     let toggle_provider = id.clone();

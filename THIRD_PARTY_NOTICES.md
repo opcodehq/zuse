@@ -436,3 +436,12 @@ Native and browser control glyphs use Hugeicons. The bundled free vectors come f
 ## Managed remote connector
 
 Managed remote access downloads the unmodified cloudflared 2026.7.2 runtime from [Cloudflare's release](https://github.com/cloudflare/cloudflared/releases/tag/2026.7.2), with pinned SHA256 checksums for supported platforms. cloudflared is maintained by Cloudflare and contributors and licensed under [Apache-2.0](https://github.com/cloudflare/cloudflared/blob/2026.7.2/LICENSE). Its [source and notices](https://github.com/cloudflare/cloudflared/tree/2026.7.2) remain available with that release.
+
+## File tree icons
+
+The complete file icon set and filename/extension associations are adapted from
+`@pierre/trees` 1.0.0-beta.5, copyright Pierre Computer Company, under Apache-2.0.
+SVG colors are adapted to the application palette. The package license and notice
+are retained in `crates/icons/assets/files/LICENSE` and `NOTICE`.
+
+Plugin brand images are bundled from the same public integrations logo service used by the existing Zuse application (`https://integrations.sh/logo/`). Brand images identify their respective integrations; their trademarks remain with their owners.

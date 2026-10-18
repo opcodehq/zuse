@@ -798,7 +798,7 @@ impl RenderOnce for SwitchVisual {
         } else {
             gpui::white()
         };
-        let thumb_left = 2.0 + 14.0 * position;
+        let thumb_left = 2.0 + 12.0 * position;
         div()
             .relative()
             .w(px(SWITCH_WIDTH))
@@ -814,7 +814,7 @@ impl RenderOnce for SwitchVisual {
             .child(
                 div()
                     .absolute()
-                    .top(px(3.0))
+                    .top(px(2.0))
                     .left(px(thumb_left))
                     .size(px(SWITCH_THUMB_WIDTH))
                     .rounded_full()

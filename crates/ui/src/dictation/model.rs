@@ -622,12 +622,19 @@ impl Render for VoiceCard {
                         .child(
                             widgets::page_column()
                                 .child(widgets::page_header(&theme, "Voice", None))
-                                .child(conversation_card)
                                 .child(
-                                    widgets::section_card(&theme)
-                                        .child(dictation_row)
-                                        .children(microphone_row)
-                                        .child(shortcut_row),
+                                    widgets::group(&theme, "Voice conversation", "")
+                                        .mt(px(24.))
+                                        .child(conversation_card.mt_0()),
+                                )
+                                .child(
+                                    widgets::group(&theme, "Dictation", "").mt(px(20.)).child(
+                                        widgets::section_card(&theme)
+                                            .mt_0()
+                                            .child(dictation_row)
+                                            .children(microphone_row)
+                                            .child(shortcut_row),
+                                    ),
                                 )
                                 .children(model_card),
                         ),

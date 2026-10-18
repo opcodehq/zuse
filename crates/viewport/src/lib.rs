@@ -5,6 +5,7 @@ mod activity;
 pub mod assets;
 #[cfg(test)]
 mod attachment_tests;
+pub mod branding;
 mod browser;
 mod composer_alerts;
 mod connection;
@@ -16,7 +17,6 @@ pub mod git_controls;
 mod history;
 pub mod input;
 mod managed_access;
-mod model_accounts;
 mod model_catalog;
 mod model_config;
 mod model_picker;
@@ -24,6 +24,7 @@ mod navigation;
 mod notifications;
 mod pairing;
 pub mod palette;
+pub mod plugin_catalog;
 mod plugin_management;
 pub mod plugin_setup;
 mod previews;
@@ -197,6 +198,9 @@ pub struct WorkspaceView {
     sidebar_open: bool,
     search_open: bool,
     session_search: Entity<input::TextInput>,
+    plugin_search: Entity<input::TextInput>,
+    plugin_connected_only: bool,
+    plugin_catalog_page: usize,
     agent_picker: bool,
     preferences: zuse_protocol::presentation::WorkspacePreferences,
     preferences_loaded: bool,
@@ -259,16 +263,6 @@ pub struct WorkspaceView {
     plugin_request: Option<u64>,
     plugin_setup: Option<Entity<plugin_setup::PluginSetup>>,
     plugin_setup_events: Option<Subscription>,
-    model_connections: Value,
-    model_login: Value,
-    model_storage: &'static str,
-    model_fetch: Option<u64>,
-    model_sign_in: Option<u64>,
-    model_action: Option<u64>,
-    model_editing: Option<String>,
-    model_name: Entity<input::TextInput>,
-    model_callback: Entity<input::TextInput>,
-    model_error: Option<String>,
     model: Option<String>,
     model_picker: bool,
     picker_target: model_picker::PickerTarget,
@@ -298,6 +292,12 @@ impl WorkspaceView {
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         let project_input =
             cx.new(|cx| input::TextInput::new("Absolute project path on this machine", window, cx));
+        let plugin_search = cx.new(|cx| input::TextInput::new("Search plugins", window, cx));
+        cx.observe(&plugin_search, |this: &mut Self, _, cx| {
+            this.plugin_catalog_page = 0;
+            cx.notify();
+        })
+        .detach();
         let session_search = cx.new(|cx| input::TextInput::new("Search sessions…", window, cx));
         cx.observe(&session_search, |_, _, cx| cx.notify()).detach();
         let model_search = cx.new(|cx| input::TextInput::new("Search models…", window, cx));
@@ -381,9 +381,7 @@ impl WorkspaceView {
         let reasoning_focus = cx.focus_handle();
         let file_editor = cx.new(|cx| input::TextInput::code(window, cx));
         cx.observe(&file_editor, |_, _, cx| cx.notify()).detach();
-        let model_name = cx.new(|cx| input::TextInput::new("Connection name", window, cx));
-        let model_callback =
-            cx.new(|cx| input::TextInput::new("Paste the localhost callback URL", window, cx));
+
         let recovery_output = cx.new(|cx| {
             input::TextInput::multiline("Describe the result you inspected…", window, cx)
         });
@@ -534,6 +532,9 @@ impl WorkspaceView {
             sidebar_open: true,
             search_open: false,
             session_search,
+            plugin_search,
+            plugin_connected_only: false,
+            plugin_catalog_page: 0,
             agent_picker: false,
             preferences: Default::default(),
             preferences_loaded: false,
@@ -596,16 +597,6 @@ impl WorkspaceView {
             plugin_request: None,
             plugin_setup: None,
             plugin_setup_events: None,
-            model_connections: Value::Null,
-            model_login: Value::Null,
-            model_storage: "local",
-            model_fetch: None,
-            model_sign_in: None,
-            model_action: None,
-            model_editing: None,
-            model_name,
-            model_callback,
-            model_error: None,
             model: None,
             model_picker: false,
             picker_target: model_picker::PickerTarget::Composer,
@@ -860,9 +851,6 @@ impl WorkspaceView {
         if self.receive_provider_action(id, &frame, cx) {
             return;
         }
-        if self.receive_model_accounts(id, &frame, cx) {
-            return;
-        }
         if method == methods::WATCH_DOC_MESSAGES {
             self.receive_transcript(id, &frame, cx);
             return;
@@ -940,15 +928,28 @@ impl WorkspaceView {
         let value = frame.get("item").or_else(|| frame.get("ok"));
         if let Some(value) = value {
             match method.as_str() {
+                methods::CREATE_THREAD_SESSION => {
+                    if let Some(chat) = frame.get("ok").filter(|chat| chat["id"].is_string()) {
+                        if !self.chats.iter().any(|row| row["id"] == chat["id"]) {
+                            self.chats.push(chat.clone());
+                        }
+                        self.select(chat.clone(), cx);
+                    }
+                }
+
+                methods::CLOUD_ACCOUNT_SIGN_IN => {
+                    if let Some(url) = value["url"]
+                        .as_str()
+                        .filter(|url| url.starts_with("https://"))
+                    {
+                        cx.open_url(url);
+                    }
+                }
                 methods::CLOUD_ACCOUNT_STATUS => {
                     let changed = self.cloud_account["user"]["id"] != value["user"]["id"];
                     self.cloud_account = value.clone();
                     self.managed_account_updated(changed);
                     if changed {
-                        self.reset_model_connections();
-                        self.model_callback
-                            .update(cx, |input, cx| input.set_value(String::new(), cx));
-                        self.refresh_model_connections();
                         self.plugin_setup = None;
                         self.plugin_setup_events = None;
                         self.plugin_state = Default::default();

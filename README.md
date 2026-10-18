@@ -39,6 +39,8 @@ The command builds the browser and matching engine from the same checkout, then 
 
 Open the printed private link in a WebGPU-capable browser. Local development does not require a hosted Zuse account; the selected agent still needs its provider credentials.
 
+A thread can contain multiple conversations. Use the **+** beside its conversation tabs to start another chat in the same checkout, with its own history and agent session. Archiving or restoring the thread includes its conversations.
+
 Browser drafts are saved per engine and tab, including committed attachment references. Reopening a chat restores its unsent draft; interrupted sends and queue edits appear as recovery copies for review. Fresh sessions can recover saved copies from other tabs. Attachment copies retain their execution host, and storage failures show a retry control while preserving the live text.
 
 The browser’s **Settings → Providers** page includes installed versions, update actions and usage. Expand a provider to choose Notify, Auto when idle or Off, inspect progress, or copy a manual update command. The refresh control checks versions on the connected computer. Enable provider update notifications in General to show update notices above the composer.

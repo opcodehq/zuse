@@ -240,9 +240,17 @@ pub struct Chat {
     /// deleted) is tolerated rather than cascaded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_chat_id: Option<String>,
+    /// User conversation tab within a thread. The first conversation owns the
+    /// thread id; worker/side-chat ancestry stays in `parentChatId`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
 }
 
 impl Chat {
+    pub fn thread_id(&self) -> &str {
+        self.thread_id.as_deref().unwrap_or(&self.id)
+    }
+
     /// A session the user sees in chat lists: neither another chat's worker
     /// (`parent_chat_id`) nor a hidden voice orchestrator.
     pub fn is_top_level(&self) -> bool {

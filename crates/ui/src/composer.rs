@@ -10667,10 +10667,16 @@ pub(crate) fn send_circle(
         .size(px(28.0))
         .flex_none()
         .relative()
-        .rounded(px(6.))
+        .rounded(px(10.))
         .overflow_hidden()
-        .bg(theme.bg)
-        .child(zuse_viewport::styling::dither_background(true, !blocked))
+        .bg(theme.surface_raised)
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .opacity(0.32)
+                .child(zuse_viewport::styling::dither_background(true, !blocked)),
+        )
         .flex()
         .items_center()
         .justify_center()
@@ -11581,11 +11587,6 @@ impl Render for Composer {
                 })
             })
             .flatten();
-        let has_new_thread_git_selectors = self
-            .state
-            .read(cx)
-            .selected_space_row()
-            .is_some_and(|space| space.git_detected);
         // The file dropzone lives in the shell (the whole conversation column,
         // not just the pill — shell.rs `chat-dropzone`); drops land back here
         // via `add_paths`.
@@ -11621,15 +11622,20 @@ impl Render for Composer {
                 div()
                     .id("dock-target-selectors")
                     .absolute()
-                    .top(px(-28.0))
+                    .top(px(-34.0))
                     .left(px(Theme::SPACE_LG + 10.0))
                     .right(px(Theme::SPACE_LG + 10.0))
-                    .h(px(NEW_THREAD_SELECTOR_ROW_HEIGHT))
+                    .h(px(28.0))
                     .flex()
-                    .items_start()
-                    .justify_end()
+                    .items_center()
+                    .justify_start()
+                    .gap(px(10.0))
+                    .px(px(8.0))
+                    .rounded_t(px(14.0))
+                    .bg(theme.surface_card)
                     .opacity(new_thread_chrome_opacity)
-                    .children(new_thread_target_selectors),
+                    .children(new_thread_target_selectors)
+                    .children(new_thread_git_selectors),
             )
         } else if new_thread_chrome > 0.0 {
             container.child(
@@ -11639,10 +11645,15 @@ impl Render for Composer {
                     .mb(px(-Theme::SPACE_SM * (1.0 - new_thread_chrome)))
                     .px(px(10.0))
                     .flex()
-                    .items_start()
-                    .justify_end()
+                    .items_center()
+                    .justify_start()
+                    .gap(px(10.0))
+                    .px(px(8.0))
+                    .rounded_t(px(14.0))
+                    .bg(theme.surface_card)
                     .opacity(new_thread_chrome_opacity)
-                    .children(new_thread_target_selectors),
+                    .children(new_thread_target_selectors)
+                    .children(new_thread_git_selectors),
             )
         } else {
             container
@@ -11670,11 +11681,7 @@ impl Render for Composer {
         // old floating checkout/ref controls dissolve into the session footer.
         // Non-Git sessions grow the slot continuously from zero.
         let session_chrome = 1.0 - new_thread_chrome;
-        let bottom_slot = if has_new_thread_git_selectors || self.dock_frame.is_some() {
-            1.0
-        } else {
-            session_chrome
-        };
+        let bottom_slot = session_chrome;
         let container = if bottom_slot > 0.0 {
             let footer = (session_chrome_opacity > 0.0 && !self.side_chat).then(|| {
                 self.pickers
@@ -11701,18 +11708,6 @@ impl Render for Composer {
                     .mt(px(-Theme::SPACE_SM * (1.0 - bottom_slot)))
                     .mb(px(-Theme::SPACE_SM * bottom_slot))
                     .relative()
-                    .when(new_thread_chrome_opacity > 0.0, |slot| {
-                        slot.child(
-                            div()
-                                .absolute()
-                                .inset_0()
-                                .px(px(10.0))
-                                .flex()
-                                .items_center()
-                                .opacity(new_thread_chrome_opacity)
-                                .children(new_thread_git_selectors),
-                        )
-                    })
                     .when(session_chrome_opacity > 0.0, |slot| {
                         slot.child(
                             div()

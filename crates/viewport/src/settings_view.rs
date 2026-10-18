@@ -224,7 +224,6 @@ impl WorkspaceView {
             Section::Providers => column()
                 .gap_5()
                 .child(self.providers_settings(cx))
-                .child(self.model_accounts_settings(cx))
                 .child(self.usage_settings(cx))
                 .into_any_element(),
             Section::Devices => self.pairing_settings(cx),
@@ -363,8 +362,16 @@ impl WorkspaceView {
             );
             cx.notify();
         }));
+        let description = if signed_in {
+            user["email"]
+                .as_str()
+                .map(zuse_protocol::presentation::masked_email)
+                .unwrap_or_default()
+        } else {
+            "You're using Zuse locally. Sign in to sync and connect your tools.".to_owned()
+        };
         let account = s::setting_row(true)
-            .child(s::details(name.to_owned(), if signed_in {user["email"].as_str().unwrap_or("")}else{"You're using Zuse (Beta) locally without an account. Sign in to sync and unlock remote agents."}))
+            .child(s::details(name.to_owned(), description))
             .child(action);
         s::frame()
             .child(s::header("Account", "Sign in to sync your account across devices and (soon) drive remote agents from your phone."))

@@ -953,11 +953,14 @@ impl Render for ShortcutsPage {
                                     .child(div().mt(px(20.)).child(self.general_account.clone()))
                                     .child(self.general_preferences(&theme, cx))
                                     .child(
-                                        widgets::section_card(&theme)
-                                            .child(send_behavior_row)
-                                            .child(compact_mode_row)
-                                            .child(compact_model_picker_row)
-                                            .child(escape_behavior_row),
+                                        widgets::group(&theme, "Composer", "").mt(px(20.)).child(
+                                            widgets::section_card(&theme)
+                                                .mt_0()
+                                                .child(send_behavior_row)
+                                                .child(compact_mode_row)
+                                                .child(compact_model_picker_row)
+                                                .child(escape_behavior_row),
+                                        ),
                                     )
                                     .child(widgets::section(
                                         &theme,

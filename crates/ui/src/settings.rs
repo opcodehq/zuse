@@ -27,7 +27,6 @@ pub mod devices;
 pub mod files;
 pub mod harnesses;
 mod managed_access;
-pub mod model_accounts;
 pub mod notifications;
 pub mod pairing;
 pub mod plugins;

@@ -525,3 +525,11 @@ mod permission_tests {
         );
     }
 }
+
+/// A readable account label without exposing the full mailbox in the UI.
+pub fn masked_email(email: &str) -> String {
+    match email.split_once('@') {
+        Some((local, domain)) => format!("{}•••@{domain}", local.chars().next().unwrap_or('•')),
+        None => "•••".to_owned(),
+    }
+}

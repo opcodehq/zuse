@@ -1034,6 +1034,7 @@ impl WorkspaceHost {
                 space_id: space.as_ref().map(|s| s.id.clone()),
                 last_seen_at: None,
                 parent_chat_id: parent_chat_id.filter(|p| !p.trim().is_empty()),
+                thread_id: None,
             })
         })?;
         Ok(())
@@ -1202,6 +1203,47 @@ impl WorkspaceHost {
         Ok(self.mutate(|doc| doc.set_chat_archived(chat_id, archived))?)
     }
 
+    /// Fresh conversation in an existing thread's exact checkout. No history,
+    /// provider cursor or orchestration ancestry is copied into the new tab.
+    pub fn create_thread_session(&self, source: &Chat, id: &str) -> Result<Chat, EngineError> {
+        self.mutate(|doc| -> Result<Chat, EngineError> {
+            let current = doc
+                .chat(&source.id)?
+                .ok_or_else(|| EngineError::Other("Thread no longer exists.".into()))?;
+            if current.archived
+                || current.device_id != source.device_id
+                || current.cwd != source.cwd
+                || current.thread_id.is_some()
+                || current.parent_chat_id.is_some()
+            {
+                return Err(EngineError::Other(
+                    "Thread changed. Refresh before adding a conversation.".into(),
+                ));
+            }
+            if let Some(existing) = doc.chat(id)? {
+                if existing.thread_id.as_deref() == Some(source.id.as_str()) {
+                    return Ok(existing);
+                }
+                return Err(EngineError::Other(
+                    "Conversation id is already in use.".into(),
+                ));
+            }
+            let mut chat = current;
+            chat.id = id.to_owned();
+            chat.thread_id = Some(source.id.clone());
+            chat.room_gen = Some(2);
+            chat.title = None;
+            chat.last_message_preview = None;
+            chat.last_message_at = None;
+            chat.last_seen_at = None;
+            chat.harness_session_id = None;
+            chat.harness_session_cwd = None;
+            chat.created_at = Utc::now();
+            doc.upsert_chat(&chat)?;
+            Ok(chat)
+        })
+    }
+
     /// Publish archive state and restored checkout metadata under one ownership check.
     pub(crate) fn transition_archive(
         &self,
@@ -1246,7 +1288,18 @@ impl WorkspaceHost {
     /// Tombstone: removes the chats (and session-status) row; the per-chat session
     /// doc remains untouched.
     pub fn delete_chat(&self, chat_id: &str) -> Result<bool, EngineError> {
-        Ok(self.mutate(|doc| doc.delete_chat(chat_id))?)
+        Ok(self.mutate(|doc| -> Result<bool, zuse_doc::DocError> {
+            // Deleting a conversation never hides the other saved sessions.
+            for mut conversation in doc
+                .read_chats()?
+                .into_iter()
+                .filter(|chat| chat.thread_id.as_deref() == Some(chat_id))
+            {
+                conversation.thread_id = None;
+                doc.upsert_chat(&conversation)?;
+            }
+            doc.delete_chat(chat_id)
+        })?)
     }
 
     pub fn rename_device(&self, device_id: &str, name: &str) -> Result<bool, EngineError> {

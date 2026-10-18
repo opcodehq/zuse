@@ -94,7 +94,7 @@ pub fn dither_icon_action(
         .aria_label(label)
         .relative()
         .size(px(28.))
-        .rounded(px(6.))
+        .rounded(px(10.))
         .overflow_hidden()
         .flex()
         .items_center()
@@ -102,7 +102,13 @@ pub fn dither_icon_action(
         .bg(rgb(0x13150f))
         .when(!enabled, |d| d.opacity(0.45))
         .when(enabled, |d| d.cursor_pointer().hover(|d| d.opacity(0.95)))
-        .child(dither_background(primary, enabled))
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .opacity(0.32)
+                .child(dither_background(primary, enabled)),
+        )
         .child(
             svg()
                 .path(SharedString::from(format!("icons/{glyph}.svg")))
