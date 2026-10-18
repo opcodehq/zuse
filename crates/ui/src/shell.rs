@@ -4991,6 +4991,14 @@ impl Shell {
     }
 
     fn retry_engine(&mut self, cx: &mut Context<Self>) {
+        if self
+            .state
+            .read(cx)
+            .engine()
+            .is_some_and(|engine| engine.retry_connection())
+        {
+            return;
+        }
         AppState::bootstrap(self.state.clone(), self.boot.clone(), cx);
     }
 
@@ -12647,7 +12655,7 @@ impl Shell {
         let theme = Theme::of(cx).clone();
         let content: AnyElement = match phase {
             // Backend unreachable: quiet centered copy (zuse Gate `Failed`),
-            // plus a Retry affordance (the native engine doesn't self-redial).
+            // plus a Retry affordance (account sockets can also retry in place).
             GatePhase::Failed(error) => div()
                 .flex()
                 .flex_col()

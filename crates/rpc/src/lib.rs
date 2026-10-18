@@ -23,6 +23,7 @@ mod client;
 pub use chat_config::ChatConfigTarget;
 pub mod managed;
 mod paired;
+pub mod reconnect;
 pub use paired::connect_paired;
 pub mod device_room;
 mod server;

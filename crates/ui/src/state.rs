@@ -128,8 +128,14 @@ pub enum EngineMode {
 trait EngineBackend: Send + Sync {
     fn client(&self) -> &RpcClient;
     fn mode(&self) -> EngineMode;
-    fn connection_end(&self) -> Option<tokio_util::sync::CancellationToken> {
+    fn remote_status(&self) -> Option<tokio::sync::watch::Receiver<account_connection::Status>> {
         None
+    }
+    fn retry_connection(&self) -> bool {
+        false
+    }
+    fn connection_revision(&self) -> u64 {
+        0
     }
     async fn media_client(&self) -> Result<RpcClient, RpcError> {
         Err(RpcError::Failed("voice media unavailable".into()))
@@ -306,11 +312,21 @@ pub struct EngineHandle {
     inner: Arc<dyn EngineBackend>,
     engine_info: EngineInfo,
     deferred_state: Option<tokio::sync::watch::Receiver<DeferredEngineState>>,
+    connection_revision: u64,
 }
 
 impl EngineHandle {
     pub(crate) fn same_connection(&self, other: &Self) -> bool {
+        self.same_engine(other) && self.connection_revision == other.connection_revision
+    }
+    fn same_engine(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
+    }
+    /// A fresh binding key for cached view subscriptions, retaining the client.
+    fn current_connection(&self) -> Self {
+        let mut current = self.clone();
+        current.connection_revision = self.inner.connection_revision();
+        current
     }
 
     /// Probe the IPC port and connect (daemon listening) or embed (nothing there).
@@ -338,6 +354,7 @@ impl EngineHandle {
                 }),
                 engine_info,
                 deferred_state: None,
+                connection_revision: 0,
             });
         }
         // Invariant: at most one bootstrap in this process runs probe+embed at
@@ -498,6 +515,7 @@ impl EngineHandle {
             }),
             engine_info,
             deferred_state: Some(state_rx.clone()),
+            connection_revision: 0,
         };
         // Local, development, and already-resolved synced profiles need no
         // authentication UI while assembling. Keep the viewport Connecting
@@ -556,6 +574,7 @@ impl EngineHandle {
                         }),
                         engine_info,
                         deferred_state: Some(state_rx),
+                        connection_revision: 0,
                     })
                 }
                 Err(err) => {
@@ -592,7 +611,12 @@ impl EngineHandle {
                 capabilities: Vec::new(),
             },
             deferred_state: None,
+            connection_revision: 0,
         }
+    }
+
+    pub(crate) fn retry_connection(&self) -> bool {
+        self.inner.retry_connection()
     }
 
     pub fn client(&self) -> &RpcClient {
@@ -2628,6 +2652,41 @@ impl AppState {
         .detach();
     }
 
+    fn apply_remote_status(
+        &mut self,
+        active: &EngineHandle,
+        status: &account_connection::Status,
+    ) -> bool {
+        if self
+            .engine
+            .as_ref()
+            .is_none_or(|engine| !engine.same_engine(active))
+        {
+            return false;
+        }
+        let current = active.current_connection();
+        let ready = matches!(status, account_connection::Status::Ready);
+        let replaced = self
+            .engine
+            .as_ref()
+            .is_some_and(|old| !old.same_connection(&current));
+        // A UI thread may observe only Ready after both loss and recovery.
+        // The lease revision still retires old operations and alert baselines.
+        if (!ready || replaced) && matches!(self.connection, ConnectionStatus::Ready) {
+            self.connectivity_observed = false;
+            self.reset_configuration_transport();
+        }
+        self.connection=match status {
+            account_connection::Status::Ready=>ConnectionStatus::Ready,
+            account_connection::Status::Reconnecting=>ConnectionStatus::Failed("Reconnecting to the selected computer… Local edits are preserved; actions are not resent.".into()),
+            account_connection::Status::Blocked(message)=>ConnectionStatus::Failed(message.clone()),
+        };
+        if ready {
+            self.engine = Some(current);
+        }
+        true
+    }
+
     /// Wire the connected engine: mark Ready and start the standing watches.
     /// Methods the engine doesn't serve yet (chats/devices/auth land with the
     /// workspace doc in M4) fail their subscribe and are skipped gracefully.
@@ -2651,13 +2710,29 @@ impl AppState {
         if let Some(task) = spawn_deferred_engine_watch(cx, handle.clone()) {
             watch_tasks.push(task);
         }
-        if let Some(closed) = handle.inner.connection_end() {
-            watch_tasks.push(cx.spawn(async move|this,cx| {
-                closed.cancelled().await;
-                let _=this.update(cx,|state,cx| {
-                    state.connection=ConnectionStatus::Failed("The account connection closed. Reconnect to the selected computer; unsent edits are preserved.".into());
-                    cx.notify();
-                });
+        if let Some(mut status) = handle.inner.remote_status() {
+            let active = handle.clone();
+            watch_tasks.push(cx.spawn(async move |this, cx| {
+                loop {
+                    let snapshot = status.borrow_and_update().clone();
+                    if this
+                        .update(cx, |state, cx| {
+                            if !state.apply_remote_status(&active, &snapshot) {
+                                return;
+                            }
+                            if matches!(snapshot, account_connection::Status::Ready) {
+                                state.reconcile_configuration_watch(cx);
+                            }
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    if status.changed().await.is_err() {
+                        return;
+                    }
+                }
             }));
         }
         watch_tasks.extend([
@@ -3114,7 +3189,7 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
         loop {
             let mut rx = match handle
                 .client()
-                .subscribe(methods::WATCH_CHATS, serde_json::json!({}))
+                .subscribe_scoped(methods::WATCH_CHATS, serde_json::json!({}))
                 .await
             {
                 Ok(rx) => rx,
@@ -3269,7 +3344,7 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
         loop {
             let mut rx = match handle
                 .client()
-                .subscribe(method, serde_json::json!({}))
+                .subscribe_scoped(method, serde_json::json!({}))
                 .await
             {
                 Ok(rx) => rx,

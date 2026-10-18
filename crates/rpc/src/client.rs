@@ -25,7 +25,7 @@ enum Pending {
     },
 }
 
-struct Shared {
+pub(super) struct Shared {
     pending: Mutex<HashMap<u64, Pending>>,
 }
 
@@ -33,12 +33,81 @@ impl Shared {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Pending>> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
+    pub(super) fn interrupt(&self, reconnecting: bool) {
+        let drained: Vec<_> = self.lock().drain().map(|(_, p)| p).collect();
+        for entry in drained {
+            match entry {
+                Pending::Call(tx) => {
+                    let error = if reconnecting {
+                        RpcError::Transport("The connection closed before a reply arrived. This action may have completed; check its current state before retrying.".into())
+                    } else {
+                        RpcError::Closed
+                    };
+                    let _ = tx.send(Err(error));
+                }
+                Pending::CheckedStream {
+                    ready: Some(ready), ..
+                } => {
+                    let _ = ready.send(Err(RpcError::Closed));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+#[derive(Clone)]
+enum Outbound {
+    Fixed(super::reconnect::Session),
+    Reconnect(Arc<super::reconnect::State>),
+}
+impl Outbound {
+    fn snapshot(&self) -> Result<super::reconnect::Session, RpcError> {
+        match self {
+            Self::Fixed(out) => {
+                if out.retired.is_cancelled() {
+                    Err(RpcError::Closed)
+                } else {
+                    Ok(out.clone())
+                }
+            }
+            Self::Reconnect(state) => state.sender().ok_or_else(|| {
+                RpcError::Transport(
+                    "The remote engine is reconnecting. This request was not sent.".into(),
+                )
+            }),
+        }
+    }
+}
+pub(super) struct Incoming {
+    pub body: String,
+    pub retired: tokio_util::sync::CancellationToken,
+}
+enum Inbox {
+    Fixed {
+        input: mpsc::Receiver<String>,
+        retired: tokio_util::sync::CancellationToken,
+    },
+    Reconnect(mpsc::Receiver<Incoming>),
+}
+impl Inbox {
+    async fn recv(&mut self) -> Option<Incoming> {
+        match self {
+            Self::Fixed { input, retired } => match input.recv().await {
+                Some(body) => Some(Incoming {
+                    body,
+                    retired: retired.clone(),
+                }),
+                None => None,
+            },
+            Self::Reconnect(input) => input.recv().await,
+        }
+    }
 }
 
 /// A multiplexing RPC client over any string-frame duplex ([`crate::memory_client`] or
 /// [`connect_ws`]). Cheap to clone-by-Arc internally; use one per connection.
 pub struct RpcClient {
-    out: mpsc::Sender<String>,
+    out: Outbound,
     shared: Arc<Shared>,
     next_id: AtomicU64,
     reader: tokio::task::JoinHandle<()>,
@@ -46,6 +115,7 @@ pub struct RpcClient {
 
 /// Owned stream receiver whose drop immediately cancels the server task.
 pub struct RpcSubscription {
+    retired: tokio_util::sync::CancellationToken,
     id: u64,
     items: mpsc::Receiver<serde_json::Value>,
     out: mpsc::Sender<String>,
@@ -54,7 +124,7 @@ pub struct RpcSubscription {
 
 impl RpcSubscription {
     pub async fn recv(&mut self) -> Option<serde_json::Value> {
-        self.items.recv().await
+        tokio::select! {biased;_=self.retired.cancelled()=>None,item=self.items.recv()=>item}
     }
 }
 
@@ -103,15 +173,50 @@ impl Drop for PendingCancellation {
 
 impl RpcClient {
     /// Wrap an existing duplex: `out` carries client frames, `inbound` server frames.
-    pub fn new(out: mpsc::Sender<String>, mut inbound: mpsc::Receiver<String>) -> Self {
+    pub fn new(out: mpsc::Sender<String>, inbound: mpsc::Receiver<String>) -> Self {
         let shared = Arc::new(Shared {
             pending: Mutex::new(HashMap::new()),
         });
+        let retired = tokio_util::sync::CancellationToken::new();
+        Self::start(
+            Outbound::Fixed(super::reconnect::Session {
+                sender: out,
+                retired: retired.clone(),
+            }),
+            Inbox::Fixed {
+                input: inbound,
+                retired,
+            },
+            shared,
+        )
+    }
+    /// Preserve client identity across explicitly authenticated replacement sockets.
+    /// Pending requests fail at the boundary; this client never replays a frame.
+    pub fn reconnecting() -> (Self, super::reconnect::Control) {
+        let shared = Arc::new(Shared {
+            pending: Mutex::new(HashMap::new()),
+        });
+        let (input, inbound) = mpsc::channel(16);
+        let state = super::reconnect::State::new(Arc::downgrade(&shared), input);
+        let control = super::reconnect::Control::new(state.clone());
+        (
+            Self::start(
+                Outbound::Reconnect(state),
+                Inbox::Reconnect(inbound),
+                shared,
+            ),
+            control,
+        )
+    }
+    fn start(out: Outbound, mut inbound: Inbox, shared: Arc<Shared>) -> Self {
         let reader_shared = shared.clone();
         let reader_out = out.clone();
         let reader = tokio::spawn(async move {
             while let Some(payload) = inbound.recv().await {
-                for line in payload.lines() {
+                if payload.retired.is_cancelled() {
+                    continue;
+                }
+                for line in payload.body.lines() {
                     let line = line.trim();
                     if line.is_empty() {
                         continue;
@@ -123,28 +228,11 @@ impl RpcClient {
                             continue;
                         }
                     };
-                    route_frame(&reader_shared, &reader_out, frame).await;
+                    tokio::select! {biased;_=payload.retired.cancelled()=>break,_=route_frame(&reader_shared,&reader_out,frame)=>{}}
                 }
             }
             // Connection closed: fail everything still pending.
-            let drained: Vec<Pending> = {
-                let mut pending = reader_shared.lock();
-                pending.drain().map(|(_, p)| p).collect()
-            };
-            for entry in drained {
-                match entry {
-                    Pending::Call(tx) => {
-                        let _ = tx.send(Err(RpcError::Closed));
-                    }
-                    Pending::CheckedStream {
-                        ready: Some(ready), ..
-                    } => {
-                        let _ = ready.send(Err(RpcError::Closed));
-                    }
-                    Pending::Stream(_) | Pending::CheckedStream { ready: None, .. } => {}
-                }
-                // Stream item receivers end by sender drop.
-            }
+            reader_shared.interrupt(false);
         });
         Self {
             out,
@@ -179,20 +267,25 @@ impl RpcClient {
         params: serde_json::Value,
         cancel_on_drop: bool,
     ) -> Result<serde_json::Value, RpcError> {
+        let session = self.out.snapshot()?;
+        let out = session.sender;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.shared.lock().insert(id, Pending::Call(tx));
         let _cancel = cancel_on_drop.then(|| PendingCancellation {
             id,
-            out: self.out.clone(),
+            out: out.clone(),
             shared: self.shared.clone(),
         });
-        self.send(ClientFrame {
-            id,
-            method: Some(method.into()),
-            params,
-            cancel: false,
-        })
+        Self::send(
+            &out,
+            ClientFrame {
+                id,
+                method: Some(method.into()),
+                params,
+                cancel: false,
+            },
+        )
         .await
         .inspect_err(|_| {
             self.shared.lock().remove(&id);
@@ -217,15 +310,20 @@ impl RpcClient {
         method: &str,
         params: serde_json::Value,
     ) -> Result<mpsc::Receiver<serde_json::Value>, RpcError> {
+        let session = self.out.snapshot()?;
+        let out = session.sender;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel(STREAM_QUEUE_CAP);
         self.shared.lock().insert(id, Pending::Stream(tx));
-        self.send(ClientFrame {
-            id,
-            method: Some(method.into()),
-            params,
-            cancel: false,
-        })
+        Self::send(
+            &out,
+            ClientFrame {
+                id,
+                method: Some(method.into()),
+                params,
+                cancel: false,
+            },
+        )
         .await
         .inspect_err(|_| {
             self.shared.lock().remove(&id);
@@ -240,23 +338,29 @@ impl RpcClient {
         method: &str,
         params: serde_json::Value,
     ) -> Result<RpcSubscription, RpcError> {
+        let session = self.out.snapshot()?;
+        let out = session.sender;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel(STREAM_QUEUE_CAP);
         self.shared.lock().insert(id, Pending::Stream(tx));
         // Own cancellation before the send, including cancellation while the
         // outbound channel is backpressured.
         let subscription = RpcSubscription {
+            retired: session.retired,
             id,
             items: rx,
-            out: self.out.clone(),
+            out: out.clone(),
             shared: self.shared.clone(),
         };
-        self.send(ClientFrame {
-            id,
-            method: Some(method.into()),
-            params,
-            cancel: false,
-        })
+        Self::send(
+            &out,
+            ClientFrame {
+                id,
+                method: Some(method.into()),
+                params,
+                cancel: false,
+            },
+        )
         .await?;
         Ok(subscription)
     }
@@ -270,6 +374,8 @@ impl RpcClient {
         method: &str,
         params: serde_json::Value,
     ) -> Result<RpcSubscription, RpcError> {
+        let session = self.out.snapshot()?;
+        let out = session.sender;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (items_tx, items_rx) = mpsc::channel(STREAM_QUEUE_CAP);
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -281,17 +387,21 @@ impl RpcClient {
             },
         );
         let subscription = RpcSubscription {
+            retired: session.retired,
             id,
             items: items_rx,
-            out: self.out.clone(),
+            out: out.clone(),
             shared: self.shared.clone(),
         };
-        self.send(ClientFrame {
-            id,
-            method: Some(method.into()),
-            params,
-            cancel: false,
-        })
+        Self::send(
+            &out,
+            ClientFrame {
+                id,
+                method: Some(method.into()),
+                params,
+                cancel: false,
+            },
+        )
         .await
         .inspect_err(|_| {
             self.shared.lock().remove(&id);
@@ -300,20 +410,24 @@ impl RpcClient {
         Ok(subscription)
     }
 
-    async fn send(&self, frame: ClientFrame) -> Result<(), RpcError> {
+    async fn send(out: &mpsc::Sender<String>, frame: ClientFrame) -> Result<(), RpcError> {
         let json = serde_json::to_string(&frame)
             .map_err(|e| RpcError::Transport(format!("serialize frame: {e}")))?;
-        self.out.send(json).await.map_err(|_| RpcError::Closed)
+        out.send(json).await.map_err(|_| RpcError::Closed)
     }
 }
 
 impl Drop for RpcClient {
     fn drop(&mut self) {
+        match &self.out {
+            Outbound::Reconnect(state) => state.close(),
+            Outbound::Fixed(session) => session.retired.cancel(),
+        }
         self.reader.abort();
     }
 }
 
-async fn route_frame(shared: &Arc<Shared>, out: &mpsc::Sender<String>, frame: ServerFrame) {
+async fn route_frame(shared: &Arc<Shared>, out: &Outbound, frame: ServerFrame) {
     let id = frame.id;
     if let Some(err) = frame.err {
         let error = wire_error(err);
@@ -374,7 +488,9 @@ async fn route_frame(shared: &Arc<Shared>, out: &mpsc::Sender<String>, frame: Se
                 params: serde_json::Value::Null,
                 cancel: true,
             }) {
-                let _ = out.send(json).await;
+                if let Ok(out) = out.snapshot() {
+                    let _ = out.sender.send(json).await;
+                }
             }
         }
         return;

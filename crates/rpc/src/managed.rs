@@ -100,6 +100,15 @@ pub struct Connection {
 /// A socket remains bound to the selected environment. Reconnect is explicit;
 /// this transport never resends a canonical RPC frame after a connection loss.
 pub async fn connect(source: Arc<dyn GrantSource>) -> Result<Connection, RpcError> {
+    let channel = connect_channel(source).await?;
+    Ok(Connection {
+        client: RpcClient::new(channel.outgoing, channel.incoming),
+        closed: channel.closed,
+    })
+}
+pub async fn connect_channel(
+    source: Arc<dyn GrantSource>,
+) -> Result<crate::reconnect::Channel, RpcError> {
     let cancel = source.cancellation();
     let grant = get_grant(source.clone()).await?;
     let url = socket_url(&grant, source.environment())?;
@@ -216,8 +225,9 @@ pub async fn connect(source: Arc<dyn GrantSource>) -> Result<Connection, RpcErro
         };
         tokio::select! {biased;_=cancel.cancelled()=>{},_=lifetime=>{},_=exchange=>{}}
     });
-    Ok(Connection {
-        client: RpcClient::new(output, incoming),
+    Ok(crate::reconnect::Channel {
+        outgoing: output,
+        incoming,
         closed,
     })
 }
