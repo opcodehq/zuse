@@ -1,9 +1,11 @@
 //! Observe only this user's listeners. HTTP probes run only after project
 //! ownership has been established from the process's actual working directory
 //! and commands performing authentication have been excluded.
+#[cfg(target_os = "linux")]
+use std::net::IpAddr;
 use std::{
     collections::HashMap,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     time::Duration,
 };

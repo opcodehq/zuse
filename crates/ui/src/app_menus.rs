@@ -454,7 +454,7 @@ mod native_quit {
         let app = cx.to_async();
         REQUEST.with_borrow_mut(|request| {
             *request = Some(Box::new(move || {
-                let mut app = app.clone();
+                let app = app.clone();
                 executor
                     .spawn(async move {
                         let _ = app.update(request_quit);

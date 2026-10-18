@@ -1,6 +1,8 @@
 use std::{env, path::PathBuf, process::Command};
 
 fn main() {
+    // Legacy Objective-C macros expand this feature check in the calling crate.
+    println!("cargo:rustc-check-cfg=cfg(feature, values(\"cargo-clippy\"))");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rerun-if-changed=src/dictation/permission.m");
         let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
