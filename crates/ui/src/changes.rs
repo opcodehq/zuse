@@ -1635,6 +1635,7 @@ struct CommentDraft {
 /// The Changes pane entity. Lazy: no RPC until [`Changes::ensure_watch`] runs
 /// (the shell calls it when the pane first opens).
 pub struct Changes {
+    git_controls: Entity<crate::git_controls::GitPanel>,
     state: Entity<AppState>,
     diffs: Vec<CheckoutDiff>,
     started: bool,
@@ -1742,10 +1743,12 @@ impl Render for DiffHeaderTooltip {
 
 impl Changes {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let git_controls = cx.new(|cx| crate::git_controls::GitPanel::new(state.clone(), cx));
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.sync(cx));
         let settings = crate::settings::current(cx);
         let mode = DiffMode::from_split(settings.diff_split);
         Self {
+            git_controls,
             state,
             mode,
             wrap_lines: settings.diff_wrap,
@@ -5237,6 +5240,9 @@ impl Render for Changes {
                         .text_color(theme.warning)
                         .child(message),
                 )
+            })
+            .when(self.commit.is_none(), |d| {
+                d.child(self.git_controls.clone())
             })
             .child(content)
             .into_any_element()

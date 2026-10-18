@@ -111,6 +111,9 @@ impl WorkspaceView {
         if self.model_sign_in.take().is_some() {
             self.model_error=Some("Connection interrupted during sign-in. Check linked accounts before starting again.".into());
         }
+        self.git_requests.clear();
+        self.git_controls
+            .update(cx, |panel, cx| panel.disconnected(cx));
         self.plugin_request = None;
         self.plugin_state.interrupted();
         self.plugin_setup = None;

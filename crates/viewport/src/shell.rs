@@ -1168,6 +1168,15 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let target = self.selected.as_ref().and_then(|chat| {
+            Some(crate::git_controls::Target {
+                chat_id: chat["id"].as_str()?.into(),
+                cwd: chat["cwd"].as_str()?.into(),
+                device_id: chat["deviceId"].as_str()?.into(),
+                archived: chat["archived"] == true,
+            })
+        });
+
         let light = match self.preferences.appearance {
             zuse_protocol::presentation::AppearanceMode::Light => true,
             zuse_protocol::presentation::AppearanceMode::Dark => false,
@@ -1177,6 +1186,18 @@ impl Render for WorkspaceView {
             ),
         };
         crate::palette::set_light(light);
+        let colors = crate::plugin_setup::SetupColors {
+            text: rgb(0xe8e9e7).into(),
+            muted: rgb(0xa4a8a3).into(),
+            background: rgb(0x141414).into(),
+            border: rgb(0x343434).into(),
+            danger: rgb(0xe5a0a0).into(),
+        };
+        self.git_controls.update(cx, |panel, cx| {
+            panel.colors = colors;
+            panel.set_target(target, cx);
+        });
+
         let panel_width = if !self.right_open || self.settings || self.project_picker {
             0.
         } else if self.open_file.is_some() || self.right_tab == "history" {

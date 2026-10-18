@@ -10,6 +10,7 @@ mod connection;
 pub mod context_status;
 mod custom_acp;
 mod draft_journal;
+pub mod git_controls;
 mod history;
 pub mod input;
 mod model_accounts;
@@ -68,6 +69,9 @@ pub struct Transport {
 use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 
 pub struct WorkspaceView {
+    git_controls: Entity<git_controls::GitControls>,
+    git_requests: HashMap<u64, u64>,
+    _git_events: Subscription,
     workspace_focus: FocusHandle,
     input: Entity<input::TextInput>,
     requests: UnboundedSender<Value>,
@@ -333,6 +337,31 @@ impl WorkspaceView {
             },
         )
         .detach();
+        let colors = plugin_setup::SetupColors {
+            text: palette::rgb(0xe8e9e7).into(),
+            muted: palette::rgb(0xa4a8a3).into(),
+            background: palette::rgb(0x141414).into(),
+            border: palette::rgb(0x343434).into(),
+            danger: palette::rgb(0xe5a0a0).into(),
+        };
+        let git_controls = cx.new(|cx| git_controls::GitControls::new(colors, window, cx));
+        let git_events = cx.subscribe(
+            &git_controls,
+            |this, _, event: &git_controls::Request, cx| {
+                if !this.connected {
+                    this.git_controls.update(cx, |panel, cx| {
+                        panel.respond(
+                            event.id,
+                            Err("Reconnect before using Git controls.".into()),
+                            cx,
+                        )
+                    });
+                    return;
+                }
+                let id = this.call(event.method, event.params.clone());
+                this.git_requests.insert(id, event.id);
+            },
+        );
         let reasoning_focus = cx.focus_handle();
         let file_editor = cx.new(|cx| input::TextInput::code(window, cx));
         cx.observe(&file_editor, |_, _, cx| cx.notify()).detach();
@@ -569,6 +598,9 @@ impl WorkspaceView {
             attachments: vec![],
             uploading: 0,
             composer_generation: 0,
+            git_controls,
+            git_requests: HashMap::new(),
+            _git_events: git_events,
             _reader: reader,
         };
         view
@@ -700,6 +732,25 @@ impl WorkspaceView {
             return;
         }
         if self.receive_worktree_settings(id, &frame, cx) {
+            return;
+        }
+        if let Some(panel_id) = self.git_requests.get(&id).copied() {
+            if frame.get("ok").is_some() || frame.get("err").is_some() || frame["done"] == true {
+                self.git_requests.remove(&id);
+                self.pending.remove(&id);
+                let result = frame.get("ok").cloned().ok_or_else(|| {
+                    frame["err"]
+                        .as_str()
+                        .unwrap_or("Git response was interrupted.")
+                        .to_owned()
+                });
+                self.git_controls
+                    .update(cx, |panel, cx| panel.respond(panel_id, result, cx));
+                if method == methods::GIT_WORKSPACE_ACTION && frame.get("ok").is_some() {
+                    self.refresh_changes(cx);
+                    self.reset_history(cx);
+                }
+            }
             return;
         }
         if self.receive_thread_action(id, &frame, cx) {

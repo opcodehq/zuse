@@ -47,6 +47,7 @@ jobs:
       - run: cargo test -p zuse-engine --lib plugins::tests
       - run: cargo test -p zuse-engine --test pairing
       - run: cargo test -p zuse-engine --test browser_access
+      - run: cargo test -p zuse-engine --test git_workspace
       - run: cargo test -p zuse-engine --test relay_access
       - run: cargo test -p zuse-engine --test durable_turn_review
       - run: cargo test -p zuse-engine --lib diff_sync::turn_snapshot
@@ -110,6 +111,9 @@ jobs:
       - run: cargo check -p zuse -p zuse-cli -p zuse-relay -p zuse-remote
       - if: runner.os == 'Linux'
         run: cargo test -p zuse-viewport --lib history::tests
+      - name: Shared Git panel state
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib git_controls::tests
 
   browser:
     runs-on: ubuntu-24.04

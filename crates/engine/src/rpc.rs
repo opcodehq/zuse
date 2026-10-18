@@ -51,6 +51,7 @@
 //! whose checkout always lives on the routed target device.
 
 mod archive_review;
+mod git_workspace;
 mod voice_chat;
 mod voice_remote;
 use async_trait::async_trait;
@@ -1566,6 +1567,7 @@ fn forward_deadline(method: &str) -> std::time::Duration {
         // Leave headroom beyond the provider's 15-minute mutation timeout for
         // queueing, verification, and the relayed response itself.
         methods::APPLY_HARNESS_UPDATE => Duration::from_secs(20 * 60),
+        methods::GIT_WORKSPACE_ACTION | methods::GET_GIT_WORKSPACE => Duration::from_secs(180),
         methods::CREATE_WORKTREE => Duration::from_secs(120),
         // Allow the adapter discovery budget plus relay and shutdown overhead.
         methods::LIST_MODELS | methods::LIST_COMMANDS => Duration::from_secs(100),
@@ -1631,6 +1633,8 @@ fn forwardable(method: &str) -> bool {
             | methods::CLONE_REPO
             | methods::CREATE_REPO
             | methods::LIST_BRANCHES
+            | methods::GET_GIT_WORKSPACE
+            | methods::GIT_WORKSPACE_ACTION
             | methods::LIST_REFS
             | methods::LIST_GIT_HISTORY
             | methods::SEARCH_GIT_HISTORY
@@ -2179,6 +2183,12 @@ impl RpcService for EngineRpc {
             return AuthRpc::new(self.auth()?.clone())
                 .handle(method, params)
                 .await;
+        }
+        if matches!(
+            method,
+            methods::GET_GIT_WORKSPACE | methods::GIT_WORKSPACE_ACTION
+        ) {
+            return self.git_workspace(method, params).await;
         }
         let _filesystem_admission = if matches!(
             method,

@@ -12,6 +12,7 @@ pub mod custom_acp;
 pub mod device_paths;
 pub mod entities;
 pub mod file_mentions;
+pub mod git_workspace;
 pub mod input_answers;
 pub mod invocation;
 pub mod methods;

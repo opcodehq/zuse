@@ -195,6 +195,7 @@ impl WorkspaceView {
                 d.child(label(error).p_3())
             });
         if !matches!(self.review_scope, ReviewScope::Commit { .. }) {
+            view = view.child(self.git_controls.clone());
             view = view.child(
                 row()
                     .px_3()

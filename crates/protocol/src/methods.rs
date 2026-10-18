@@ -248,7 +248,8 @@ pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";
 /// Unknown methods and all actions keep their original delivery uncertainty.
 pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
     match method {
-        RELAY_ACCESS_STATUS
+        GET_GIT_WORKSPACE
+        | RELAY_ACCESS_STATUS
         | BROWSER_ACCESS_STATUS
         | LIST_PAIRINGS
         | CLOUD_ACCOUNT_STATUS
@@ -293,6 +294,7 @@ mod retry_tests {
             START_BROWSER_ACCESS,
             STOP_BROWSER_ACCESS,
             SELECT_PLUGIN_WORKSPACE,
+            GIT_WORKSPACE_ACTION,
             QUEUE_COMMAND,
             WRITE_WORKSPACE_FILE,
             SWITCH_REF,
@@ -336,3 +338,7 @@ pub const STOP_RELAY_ACCESS: &str = "StopRelayAccess";
 
 /// Explicit user selection for new agent plugin sessions; never retried as a read.
 pub const SELECT_PLUGIN_WORKSPACE: &str = "SelectPluginWorkspace";
+
+/// User-owned Git workflow; only the workspace read may reconnect automatically.
+pub const GET_GIT_WORKSPACE: &str = "GetGitWorkspace";
+pub const GIT_WORKSPACE_ACTION: &str = "GitWorkspaceAction";

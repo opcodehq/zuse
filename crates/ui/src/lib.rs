@@ -35,6 +35,7 @@ pub mod edge_fade;
 pub mod file_icons;
 pub mod files;
 pub mod frost;
+mod git_controls;
 mod glass;
 mod haptics;
 pub mod history;

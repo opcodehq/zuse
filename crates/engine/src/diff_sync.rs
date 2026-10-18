@@ -61,7 +61,7 @@ use crate::fs_watch::{FsWatch, FsWatchHub};
 use crate::repos::{CheckoutIdentity, Repos};
 use crate::workspace_host::WorkspaceHost;
 
-mod git_status;
+pub(crate) mod git_status;
 mod saved_turn;
 pub(crate) use saved_turn::capture_saved_turn_diff;
 mod turn_snapshot;

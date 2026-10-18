@@ -148,6 +148,8 @@ fn session_home_dir_with(
 }
 
 struct ReposInner {
+    git_workspace_gates:
+        tokio::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
     data_dir: PathBuf,
     device_id: String,
     worktrees: crate::worktree_settings::WorktreePreferences,
@@ -168,6 +170,18 @@ pub struct Repos {
 }
 
 impl Repos {
+    pub(crate) async fn git_workspace_gate(
+        &self,
+        id: &str,
+    ) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        self.inner
+            .git_workspace_gates
+            .lock()
+            .await
+            .entry(id.into())
+            .or_default()
+            .clone()
+    }
     pub(crate) fn data_dir(&self) -> &Path {
         &self.inner.data_dir
     }
@@ -210,6 +224,7 @@ impl Repos {
     ) -> Self {
         Self {
             inner: std::sync::Arc::new(ReposInner {
+                git_workspace_gates: Default::default(),
                 data_dir: data_dir.to_path_buf(),
                 device_id: device_id.to_string(),
                 worktrees: crate::worktree_settings::WorktreePreferences::open(

@@ -1227,6 +1227,28 @@ impl WorkspaceHost {
 
     // ── git metadata (diff-sync host writes) ────────────────────────────────
 
+    /// Publish a user Git action only while the thread still owns that checkout.
+    pub(crate) fn reconcile_git_branch(
+        &self,
+        expected: &Chat,
+        checkout: &str,
+        branch: &str,
+    ) -> Result<bool, EngineError> {
+        Ok(self.mutate(|doc| {
+            let Some(current) = doc.chat(&expected.id)? else {
+                return Ok(false);
+            };
+            if current.archived
+                || current.device_id != expected.device_id
+                || current.cwd != expected.cwd
+            {
+                return Ok(false);
+            }
+            doc.set_chat_checkout(&expected.id, checkout)?;
+            doc.set_chat_branch(&expected.id, branch)
+        })?)
+    }
+
     /// HEAD-watcher reconciliation: the branch checked out at the chat's cwd.
     pub fn set_chat_branch(&self, chat_id: &str, branch: &str) -> Result<bool, EngineError> {
         Ok(self.mutate(|doc| doc.set_chat_branch(chat_id, branch))?)

@@ -17,6 +17,9 @@ impl WorkspaceView {
     }
 
     pub(super) fn clear_workspace(&mut self, cx: &mut Context<Self>) {
+        for (id, _) in std::mem::take(&mut self.git_requests) {
+            self.cancel(id);
+        }
         self.reset_project_actions(cx);
         self.detach_browser_terminal(cx);
         for id in [
@@ -40,6 +43,8 @@ impl WorkspaceView {
         self.open_file = None;
         self.changes = Value::Null;
         self.changes_error = None;
+        self.git_controls
+            .update(cx, |panel, cx| panel.set_target(None, cx));
         self.reset_review();
         self.reset_history(cx);
         self.review_scope = Default::default();
