@@ -10,7 +10,7 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 | Claude/Codex/Cursor/OpenCode/Pi/ACP protocols | source | Audit capabilities; fixtures and live checks pending |
 | Gemini and Kiro CLI adapters | compiled | Registered on the shared ACP engine; CLI launch/model/effort and complete tool/turn lifecycle fixtures pass. Live logins, provider account settings and custom ACP parity remain pending. |
 | Zuse harness and multi-agent orchestration | source | Rust kernel, durable recovery, nested concurrent agents, mailboxes, shared budget/account broker, compaction, and bundled SDK transport are implemented and fixture-tested. Native file/process tools and their permission host also pass kernel integration fixtures. The engine model service consumes account storage and the shared broker/SDK bridge. A selectable Zuse provider/session adapter now connects this to the standard chat stream. User recovery RPCs and native/browser controls are implemented; live authorization and full application acceptance remain pending. See `harness.md`. |
-| Durable queues and steering | source | Reconcile with current Zuse queue/error/recovery semantics |
+| Durable queues and steering | compiled | Shared delivery policy, native/browser queue actions, drag ordering and modified submit are implemented. Focused protocol/engine tests and browser response fixtures pass; full live-provider and physical-platform acceptance remains pending. |
 | Executor v2 plugins | source | Hosted client is wired through shared engine identity, durable session bindings, provider-independent MCP discovery/call tools, and native/browser Settings. Native loopback OAuth confirmation is implemented. API-key/custom server forms compile in both frontends and pass the browser response fixture. Lifecycle controls and workspace-scoped reconciliation are implemented. Live account/tenant/plugin execution and complete UI/platform acceptance remain pending. |
 | Voice, interactive visuals, appearance | source | Native platform and browser capability integration pending |
 | GPUI Web/WASM | compiled | Shared editing engine, denser shell, project picker, file browsing/editing, queue controls, model picker, account usage, and PTY pane now compile for WASM. Earlier chat smoke passed; the expanded flows still need runtime acceptance. |
@@ -25,6 +25,8 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 | Browser deployment replacement | pending | Production-ready artifact and cutover configuration |
 
 ## Verification log
+
+- Browser workflow parity: thread rows and the header now expose rename, archive/restore, and confirmed deletion. Changes wait for engine receipts, duplicate writes are blocked, known active agent sessions block browser deletion, and interrupted actions are not replayed. Archive/restore retains the open thread and its draft. General Settings now includes engine-scoped worktree storage, a custom-location switch, host folder browsing, default reset, environment override handling, and readback after an unconfirmed save. Three focused GPUI state tests pass; the browser bundle is built at this milestone. Complete visual parity and physical/paired-host workflows are still pending.
 
 - Initial discovery: workspace has no prior commits or application files; existing application is available read-only in the sibling checkout.
 - Native source foundation imported with license attribution and renamed Rust packages; no runtime behavior has yet been claimed verified.

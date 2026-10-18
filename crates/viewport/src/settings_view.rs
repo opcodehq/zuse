@@ -66,6 +66,9 @@ impl WorkspaceView {
         self.completion_preset_menu = false;
         self.default_permission_menu = false;
         self.model_picker = false;
+        if section == Section::General {
+            self.refresh_worktree_settings();
+        }
         if section == Section::Devices {
             self.refresh_pairings();
         }
@@ -212,6 +215,7 @@ impl WorkspaceView {
                 .child(self.account_settings(cx))
                 .child(self.appearance_settings(cx))
                 .child(self.completion_sound_settings(cx))
+                .child(self.worktree_settings_card(cx))
                 .into_any_element(),
             Section::Defaults => self.default_model_settings(cx),
             Section::Providers => column()

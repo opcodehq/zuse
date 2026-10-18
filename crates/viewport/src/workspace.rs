@@ -218,15 +218,9 @@ impl WorkspaceView {
     }
 
     pub(super) fn archive(&mut self, cx: &mut Context<Self>) {
-        if self.queue_edit_navigation_blocked(cx) || self.model_navigation_blocked(cx) {
-            return;
-        }
-        if let Some(chat) = &self.selected {
-            self.call(
-                methods::MUTATE,
-                json!({"op":"setChatArchived","chatId":chat["id"],"archived":true}),
-            );
-            self.new_chat(cx);
+        if let Some(chat) = self.selected.clone() {
+            let archived = !chat["archived"].as_bool().unwrap_or(false);
+            self.change_thread(chat, thread_actions::ThreadChange::Archive(archived), cx);
         }
     }
 

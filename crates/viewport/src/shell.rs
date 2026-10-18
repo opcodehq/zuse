@@ -129,8 +129,29 @@ impl WorkspaceView {
             .child(div().flex_1())
             .when(self.selected.is_some(), |d| {
                 d.child(
-                    icon_button("archive-session", "archive-minimalistic", "Archive session")
-                        .on_click(cx.listener(|this, _, _, cx| this.archive(cx))),
+                    icon_button(
+                        "archive-session",
+                        "archive-minimalistic",
+                        if self
+                            .selected
+                            .as_ref()
+                            .is_some_and(|chat| chat["archived"] == true)
+                        {
+                            "Restore thread"
+                        } else {
+                            "Archive thread"
+                        },
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.archive(cx))),
+                )
+            })
+            .when_some(self.selected.clone(), |d, chat| {
+                d.child(
+                    icon_button("thread-actions", "more-horizontal", "Thread actions").on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.open_thread_actions(chat.clone(), window, cx);
+                        }),
+                    ),
                 )
             })
             .child(
@@ -1162,13 +1183,21 @@ impl Render for WorkspaceView {
                 }),
             )
             .on_action(cx.listener(Self::submit))
-            .on_action(
-                cx.listener(|this, _: &SearchSessions, window, cx| this.toggle_search(window, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &NewSession, window, cx| this.start_new_session(window, cx)),
-            )
+            .on_action(cx.listener(|this, _: &SearchSessions, window, cx| {
+                if this.thread_dialog.is_none() {
+                    this.toggle_search(window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NewSession, window, cx| {
+                if this.thread_dialog.is_none() {
+                    this.start_new_session(window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
+                if this.thread_dialog.is_some() {
+                    this.close_thread_dialog(window, cx);
+                    return;
+                }
                 if this.context_menu {
                     this.context_menu = false;
                     window.focus(&this.context_focus, cx);
@@ -1216,7 +1245,11 @@ impl Render for WorkspaceView {
                 window.focus(&this.input.focus_handle(cx), cx);
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &SaveFile, _, cx| this.save_file(cx)))
+            .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
+                if this.thread_dialog.is_none() {
+                    this.save_file(cx);
+                }
+            }))
             .size_full()
             .relative()
             .flex()
@@ -1252,6 +1285,9 @@ impl Render for WorkspaceView {
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {
                 d.child(self.preview_overlay(window, cx))
+            })
+            .when(self.thread_dialog.is_some(), |d| {
+                d.child(self.thread_dialog_view(cx))
             })
     }
 }

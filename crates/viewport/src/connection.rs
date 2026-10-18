@@ -38,6 +38,8 @@ impl WorkspaceView {
         }) {
             self.connection_notice=Some("An action may have completed before the connection closed. Check its current state before trying it again.".into());
         }
+        self.interrupt_worktree_settings();
+        self.interrupt_thread_action();
         self.interrupt_queue_edit(cx);
         self.interrupt_model_config(cx);
         self.provider_updates_watch = None;
@@ -164,6 +166,7 @@ impl WorkspaceView {
         self.refresh_model_config_watch();
         self.refresh_provider_updates();
         self.refresh_pairings();
+        self.refresh_worktree_settings();
         self.refresh_model_connections();
         if self.cloud_account["user"].is_object() {
             self.plugin_action(self.plugin_state.refresh());

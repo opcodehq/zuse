@@ -32,10 +32,12 @@ pub mod settings_style;
 mod settings_view;
 mod shell;
 pub mod styling;
+mod thread_actions;
 mod tool_results;
 mod transcript;
 mod workspace;
 mod workspace_review;
+mod worktree_settings;
 
 use futures::{
     StreamExt,
@@ -104,7 +106,12 @@ pub struct WorkspaceView {
     terminal_write: Option<(u64, String)>,
     error: Option<String>,
     show_archive: bool,
+    thread_dialog: Option<thread_actions::ThreadDialog>,
+    thread_action: Option<thread_actions::PendingThreadAction>,
+    thread_title: Entity<input::TextInput>,
+    thread_dialog_focus: FocusHandle,
     settings: bool,
+    worktree_settings: worktree_settings::WorktreeSettingsView,
     provider_expanded: Option<String>,
     provider_actions: HashMap<u64, String>,
     provider_logins: HashMap<String, Value>,
@@ -317,6 +324,15 @@ impl WorkspaceView {
             input::TextInput::multiline("Describe the result you inspected…", window, cx)
         });
         let input_text = cx.new(|cx| input::TextInput::multiline("Write an answer…", window, cx));
+        let thread_title = cx.new(|cx| input::TextInput::new("Thread name", window, cx));
+        cx.subscribe_in(
+            &thread_title,
+            window,
+            |this, _, _: &input::Submitted, _, cx| {
+                this.commit_thread_rename(cx);
+            },
+        )
+        .detach();
         let pairing_name = cx.new(|cx| input::TextInput::new("Device name", window, cx));
         let mut events = transport.events;
         let reader = cx.spawn(async move |this, cx| {
@@ -330,6 +346,7 @@ impl WorkspaceView {
                 cx.notify();
             });
         });
+        let worktree_settings = worktree_settings::WorktreeSettingsView::new(window, cx);
         let view = Self {
             workspace_focus,
             input,
@@ -374,7 +391,12 @@ impl WorkspaceView {
             terminal_write: None,
             error: None,
             show_archive: false,
+            thread_dialog: None,
+            thread_action: None,
+            thread_title,
+            thread_dialog_focus: cx.focus_handle(),
             settings: false,
+            worktree_settings,
             provider_expanded: None,
             provider_actions: HashMap::new(),
             provider_logins: HashMap::new(),
@@ -611,6 +633,12 @@ impl WorkspaceView {
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if method.is_empty() {
+            return;
+        }
+        if self.receive_worktree_settings(id, &frame, cx) {
+            return;
+        }
+        if self.receive_thread_action(id, &frame, cx) {
             return;
         }
         if self.receive_picker_catalog(id, &frame, cx) {
@@ -1080,6 +1108,9 @@ impl WorkspaceView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.thread_dialog.is_some() {
+            return;
+        }
         if self.settings {
             return;
         }

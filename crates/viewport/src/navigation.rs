@@ -436,6 +436,9 @@ impl WorkspaceView {
                         icon_button("settings", "settings-minimalistic", "Settings & usage")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.settings = !this.settings;
+                                if this.settings {
+                                    this.refresh_worktree_settings();
+                                }
                                 this.call(
                                     methods::LIST_AGENT_ACCOUNTS,
                                     json!({"forceUsage":false}),
@@ -534,6 +537,8 @@ impl WorkspaceView {
             .unwrap_or("No project");
         let harness = chat["config"]["harness"].as_str().unwrap_or("zuse");
         let value = chat.clone();
+        let context = chat.clone();
+        let actions = chat.clone();
         column()
             .id(SharedString::from(format!(
                 "chat-{}",
@@ -584,6 +589,24 @@ impl WorkspaceView {
                             .text_color(rgb(if selected { TEXT } else { 0xd0d0d0 }))
                             .child(chat["title"].as_str().unwrap_or("New thread").to_owned()),
                     )
+                    .child(
+                        icon_button(
+                            SharedString::from(format!(
+                                "thread-actions-{}",
+                                chat["id"].as_str().unwrap_or_default()
+                            )),
+                            "more-horizontal",
+                            "Thread actions",
+                        )
+                        .size(px(22.))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.open_thread_actions(actions.clone(), window, cx);
+                            },
+                        )),
+                    )
                     .when(active, |d| {
                         d.child(div().size(px(5.)).rounded_full().bg(rgb(
                             if status == "awaitingInput" {
@@ -614,6 +637,14 @@ impl WorkspaceView {
                             ),
                     )
                 },
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    this.open_thread_actions(context.clone(), window, cx);
+                }),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.select(value.clone(), cx);

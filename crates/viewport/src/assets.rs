@@ -59,7 +59,9 @@ assets!(
     "copy",
     "magnifer",
     "star",
-    "danger-triangle"
+    "danger-triangle",
+    "trash-bin-minimalistic",
+    "pen"
 );
 
 pub(super) fn icon(name: &str) -> Svg {
