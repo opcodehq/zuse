@@ -512,6 +512,10 @@ impl WorkspaceView {
     }
 
     fn transcript(&self, cx: &mut Context<Self>) -> AnyElement {
+        let archived = self
+            .selected
+            .as_ref()
+            .is_some_and(|chat| chat["archived"] == true);
         if !self.messages.is_empty()
             && self.transcript_scroll.max_offset().y + self.transcript_scroll.offset().y <= px(24.)
         {
@@ -527,7 +531,12 @@ impl WorkspaceView {
             .pt_6()
             .pb_8()
             .gap_8()
-            .when(self.messages.is_empty(), |d| {
+            .when(self.messages.is_empty() && archived, |d| {
+                d.child(column().flex_1().justify_center().items_center().gap_3()
+                    .child(icon("archive-minimalistic").size(px(24.)).text_color(rgb(MUTED)))
+                    .child(label(if self.transcript_blocked() { "Loading saved conversation…" } else { "No messages in this archived chat." }).text_color(rgb(MUTED))))
+            })
+            .when(self.messages.is_empty() && !archived, |d| {
                 d.child(column().flex_1().justify_center().w_full().max_w(px(680.)).self_center().pb_8().gap_4()
                     .child(icon("zuse-logo").size(px(32.)).text_color(rgb(MUTED)))
                     .child(div().text_size(px(30.)).line_height(px(38.)).font_weight(FontWeight::MEDIUM).child("What would you like to build?"))
@@ -793,6 +802,8 @@ impl WorkspaceView {
         column()
             .w(px(if self.open_file.is_some() {
                 400.
+            } else if self.right_tab == "history" {
+                400.
             } else if self.right_tab == "terminal" {
                 360.
             } else {
@@ -820,6 +831,7 @@ impl WorkspaceView {
                                 [
                                     ("files", "Files"),
                                     ("changes", "Changes"),
+                                    ("history", "History"),
                                     ("terminal", "Terminal"),
                                     ("actions", "Actions"),
                                     ("recovery", "Recovery"),
@@ -890,6 +902,7 @@ impl WorkspaceView {
                     )
                     .into_any_element(),
                 "changes" => self.workspace_changes_view(cx),
+                "history" => self.history_view(cx),
                 _ => self.files_view(cx),
             })
             .into_any_element()
@@ -1165,7 +1178,7 @@ impl Render for WorkspaceView {
         crate::palette::set_light(light);
         let panel_width = if !self.right_open || self.settings || self.project_picker {
             0.
-        } else if self.open_file.is_some() {
+        } else if self.open_file.is_some() || self.right_tab == "history" {
             400.
         } else if self.right_tab == "terminal" {
             360.

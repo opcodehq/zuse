@@ -223,6 +223,7 @@ impl WorkspaceView {
                 }
                 if selected {
                     self.selected.as_mut().unwrap()["archived"] = json!(archived);
+                    self.rebind_history_review(cx);
                     // Keep the archived conversation open and its unsent draft intact.
                     self.show_archive = archived;
                     // Archive mode changes editability even when the file's

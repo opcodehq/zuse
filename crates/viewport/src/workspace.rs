@@ -41,6 +41,8 @@ impl WorkspaceView {
         self.changes = Value::Null;
         self.changes_error = None;
         self.reset_review();
+        self.reset_history(cx);
+        self.review_scope = Default::default();
         self.terminal_last_seq = None;
         self.terminal_write = None;
         self.terminal_text.clear();
@@ -163,6 +165,7 @@ impl WorkspaceView {
                 self.load_directory(&dir);
             }
             "changes" if !self.cwd().is_empty() => self.refresh_changes(cx),
+            "history" if self.history.page.is_none() => self.refresh_history(cx),
             "terminal" if self.terminal_id.is_none() => {
                 if !self.restore_browser_terminal(cx) {
                     self.open_browser_terminal(cx);

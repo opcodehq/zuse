@@ -1,5 +1,6 @@
 //! Client presentation state shared without filesystem or rendering dependencies.
 mod effort;
+pub mod git_history;
 mod model_config;
 pub use model_config::RememberedModelConfig;
 mod queue;

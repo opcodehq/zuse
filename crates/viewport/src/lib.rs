@@ -10,6 +10,7 @@ mod connection;
 pub mod context_status;
 mod custom_acp;
 mod draft_journal;
+mod history;
 pub mod input;
 mod model_accounts;
 mod model_catalog;
@@ -208,6 +209,8 @@ pub struct WorkspaceView {
     content_width: f32,
     content_height: f32,
     right_tab: String,
+    history: history::History,
+    review_scope: workspace_review::ReviewScope,
     recovery: Option<zuse_protocol::recovery::RecoverySnapshot>,
     recovery_request: Option<u64>,
     recovery_selected: Option<usize>,
@@ -500,6 +503,8 @@ impl WorkspaceView {
             content_width: 768.,
             content_height: 880.,
             right_tab: "files".into(),
+            history: history::History::new(window, cx),
+            review_scope: Default::default(),
             recovery: None,
             recovery_request: None,
             recovery_selected: None,
@@ -675,6 +680,9 @@ impl WorkspaceView {
             return;
         }
         if self.receive_file_reconcile(id, &frame, cx) {
+            return;
+        }
+        if self.receive_history(id, &frame, cx) {
             return;
         }
         if self.receive_review(id, &frame, cx) {
@@ -865,6 +873,9 @@ impl WorkspaceView {
                             .cloned()
                         {
                             let host_changed = chat["deviceId"] != selected["deviceId"];
+                            let checkout_changed = host_changed || chat["cwd"] != selected["cwd"];
+                            let review_changed =
+                                checkout_changed || chat["archived"] != selected["archived"];
                             let mut chat = chat;
                             if !host_changed && self.model_confirmed {
                                 chat["config"] = selected["config"].clone();
@@ -879,6 +890,12 @@ impl WorkspaceView {
                                         .unwrap_or_default();
                             }
                             self.selected = Some(chat.clone());
+                            if review_changed {
+                                if checkout_changed {
+                                    self.review_scope = Default::default();
+                                }
+                                self.rebind_history_review(cx);
+                            }
                             if host_changed {
                                 self.interrupt_model_config(cx);
                                 self.refresh_model_config_watch();
@@ -1090,6 +1107,12 @@ impl WorkspaceView {
                 .unwrap_or(zuse_protocol::SandboxLevel::WorkspaceWrite);
         }
         self.load_directory("");
+        if self.right_open && self.right_tab == "history" {
+            self.refresh_history(cx);
+        }
+        if self.right_open && self.right_tab == "changes" {
+            self.refresh_changes(cx);
+        }
         self.settings = false;
         self.error = None;
         cx.notify();

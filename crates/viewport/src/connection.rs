@@ -122,6 +122,7 @@ impl WorkspaceView {
         self.interrupt_tool_results();
         self.interrupt_previews();
         self.interrupt_review();
+        self.interrupt_history();
         if had_pending || self.uploading > 0 {
             self.composer_generation = self.composer_generation.wrapping_add(1);
             self.uploading = 0;
@@ -195,6 +196,7 @@ impl WorkspaceView {
             if self.right_open {
                 match self.right_tab.as_str() {
                     "changes" => self.refresh_changes(cx),
+                    "history" => self.refresh_history(cx),
                     "recovery" => self.inspect_recovery(),
                     "actions" => self.refresh_project_actions(),
                     _ => {}

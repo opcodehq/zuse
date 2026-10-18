@@ -6,6 +6,26 @@ use crate::{
     tool_results::{ResultLine, diff_lines},
 };
 use std::sync::Arc;
+#[derive(Clone, Default)]
+pub(super) enum ReviewScope {
+    #[default]
+    WorkingTree,
+    Commit {
+        sha: String,
+        subject: String,
+    },
+}
+impl ReviewScope {
+    fn params(&self) -> Value {
+        match self {
+            Self::WorkingTree => json!({"mode":"workingTree"}),
+            Self::Commit { sha, .. } => json!({"mode":"commit","commitSha":sha}),
+        }
+    }
+    fn working(&self) -> bool {
+        matches!(self, Self::WorkingTree)
+    }
+}
 #[derive(Default)]
 pub(super) struct WorkspaceReview {
     request: Option<u64>,
@@ -35,11 +55,21 @@ impl WorkspaceView {
         }
         self.reset_review();
         self.changes_error = None;
-        let id=self.call(methods::GET_CHECKOUT_DIFF,json!({"cwd":self.cwd(),"mode":"workingTree","chatId":self.selected.as_ref().map(|c|c["id"].clone()),"targetDeviceId":self.selected.as_ref().map(|c|c["deviceId"].clone())}));
+        self.changes = Value::Null;
+        if !self.connected {
+            self.changes_error = Some("Reconnect to read changes.".into());
+            cx.notify();
+            return;
+        }
+        let mut params = self.review_scope.params();
+        params["cwd"] = json!(self.cwd());
+        params["chatId"] = json!(self.selected.as_ref().map(|c| c["id"].clone()));
+        params["targetDeviceId"] = json!(self.selected.as_ref().map(|c| c["deviceId"].clone()));
+        let id = self.call(methods::GET_CHECKOUT_DIFF, params);
         self.changes_request = Some(id);
         cx.notify();
     }
-    fn open_review(&mut self, path: String, cx: &mut Context<Self>) {
+    pub(super) fn open_review(&mut self, path: String, cx: &mut Context<Self>) {
         self.reset_review();
         self.review.path = Some(path.clone());
         if !self.changes["checkoutId"].is_string() {
@@ -47,7 +77,19 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
-        let id=self.call(methods::GET_CHECKOUT_FILE_DIFF_TEXT,json!({"checkoutId":self.changes["checkoutId"],"cwd":self.changes["cwd"],"path":path,"mode":"workingTree","diffChecksum":self.changes["checksum"],"chatId":self.selected.as_ref().map(|c|c["id"].clone()),"targetDeviceId":self.selected.as_ref().map(|c|c["deviceId"].clone())}));
+        if !self.connected {
+            self.review.error = Some("Reconnect to read this diff.".into());
+            cx.notify();
+            return;
+        }
+        let mut params = self.review_scope.params();
+        params["checkoutId"] = self.changes["checkoutId"].clone();
+        params["cwd"] = self.changes["cwd"].clone();
+        params["path"] = json!(path);
+        params["diffChecksum"] = self.changes["checksum"].clone();
+        params["chatId"] = json!(self.selected.as_ref().map(|c| c["id"].clone()));
+        params["targetDeviceId"] = json!(self.selected.as_ref().map(|c| c["deviceId"].clone()));
+        let id = self.call(methods::GET_CHECKOUT_FILE_DIFF_TEXT, params);
         self.review.request = Some(id);
         cx.notify();
     }
@@ -128,6 +170,8 @@ impl WorkspaceView {
                     .gap_2()
                     .child(label(if self.review.path.is_some() {
                         "File changes"
+                    } else if !self.review_scope.working() {
+                        "Commit changes"
                     } else if self
                         .selected
                         .as_ref()
@@ -146,6 +190,35 @@ impl WorkspaceView {
             .when_some(self.changes_error.clone(), |d, error| {
                 d.child(label(error).p_3())
             });
+        if let ReviewScope::Commit { sha, subject } = &self.review_scope {
+            view = view.child(
+                column()
+                    .px_3()
+                    .gap_2()
+                    .child(
+                        row()
+                            .gap_2()
+                            .child(control("back-to-history", "History").on_click(
+                                cx.listener(|this, _, _, cx| this.set_panel("history", cx)),
+                            ))
+                            .child(control("working-tree-scope", "Working tree").on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.review_scope = ReviewScope::WorkingTree;
+                                    this.refresh_changes(cx);
+                                }),
+                            )),
+                    )
+                    .child(
+                        label(format!(
+                            "{} · {}",
+                            sha.chars().take(8).collect::<String>(),
+                            subject
+                        ))
+                        .text_ellipsis()
+                        .text_size(px(11.)),
+                    ),
+            );
+        }
         if let Some(path) = &self.review.path {
             let path = path.clone();
             view = view
@@ -216,19 +289,22 @@ impl WorkspaceView {
             }
             view = view
                 .when(self.review.lines.is_empty(), |d| d.child(div().flex_1()))
-                .when(self.review.can_open && self.selected.is_some(), |d| {
-                    d.child(
-                        control("edit-reviewed-file", "Open in editor")
-                            .m_3()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if this.file_navigation_blocked(cx) {
-                                    return;
-                                }
-                                this.right_tab = "files".into();
-                                this.read_file(&path, false, cx);
-                            })),
-                    )
-                });
+                .when(
+                    self.review.can_open && self.selected.is_some() && self.review_scope.working(),
+                    |d| {
+                        d.child(
+                            control("edit-reviewed-file", "Open in editor")
+                                .m_3()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if this.file_navigation_blocked(cx) {
+                                        return;
+                                    }
+                                    this.right_tab = "files".into();
+                                    this.read_file(&path, false, cx);
+                                })),
+                        )
+                    },
+                );
         } else {
             let files = self.changes["files"].as_array();
             view = view
@@ -268,7 +344,16 @@ impl WorkspaceView {
                         .gap_1()
                         .when(
                             files.is_some_and(Vec::is_empty) && self.changes_request.is_none(),
-                            |d| d.child(label("No working tree changes").p_3()),
+                            |d| {
+                                d.child(
+                                    label(if self.review_scope.working() {
+                                        "No working tree changes"
+                                    } else {
+                                        "This commit has no file changes"
+                                    })
+                                    .p_3(),
+                                )
+                            },
                         )
                         .children(
                             files

@@ -23,6 +23,10 @@ pub fn rgb(value: u32) -> gpui::Rgba {
             0xa4a8a3 | 0xa3a3a3 | 0x929292 => 0x5a685b,
             0x6b716a | 0x777777 => 0x748175,
             0x89ca21 => 0x81bf1d,
+            0x291719 => 0xfbe8e8,
+            0x14291e => 0xe4f2e9,
+            0xe5a0a0 => 0xa33f42,
+            0x8ccca4 => 0x2c7149,
             value => value,
         }
     } else {
