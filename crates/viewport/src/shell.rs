@@ -828,17 +828,9 @@ impl WorkspaceView {
             .into_any_element()
     }
 
-    fn workspace_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn workspace_panel(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         column()
-            .w(px(if self.open_file.is_some() {
-                400.
-            } else if matches!(self.right_tab.as_str(), "history" | "pullRequests") {
-                400.
-            } else if self.right_tab == "terminal" {
-                360.
-            } else {
-                320.
-            }))
+            .w(px(width))
             .flex_shrink_0()
             .h_full()
             .border_l_1()
@@ -859,6 +851,7 @@ impl WorkspaceView {
                             .overflow_x_scroll()
                             .children(
                                 [
+                                    ("browser", "Browser"),
                                     ("files", "Files"),
                                     ("changes", "Changes"),
                                     ("history", "History"),
@@ -892,6 +885,7 @@ impl WorkspaceView {
                     ),
             )
             .child(match self.right_tab.as_str() {
+                "browser" => self.browser_view(cx),
                 "recovery" => self.recovery_view(cx),
                 "actions" => self.project_actions_view(cx),
                 "terminal" => column()
@@ -1199,6 +1193,7 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_browser_visibility();
         self.sync_browser_voice_visibility(cx);
         let target = self.selected.as_ref().and_then(|chat| {
             Some(crate::git_controls::Target {
@@ -1232,6 +1227,11 @@ impl Render for WorkspaceView {
 
         let panel_width = if !self.right_open || self.settings || self.project_picker {
             0.
+        } else if self.right_tab == "browser" {
+            (f32::from(window.viewport_size().width)
+                - if self.sidebar_open { 296. } else { 0. }
+                - 380.)
+                .clamp(300., 640.)
         } else if self.open_file.is_some()
             || matches!(self.right_tab.as_str(), "history" | "pullRequests")
         {
@@ -1370,7 +1370,7 @@ impl Render for WorkspaceView {
             )
             .when(
                 self.right_open && !self.settings && !self.project_picker,
-                |d| d.child(self.workspace_panel(cx)),
+                |d| d.child(self.workspace_panel(panel_width, cx)),
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {
                 d.child(self.preview_overlay(window, cx))

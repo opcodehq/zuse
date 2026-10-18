@@ -5,6 +5,7 @@ mod activity;
 pub mod assets;
 #[cfg(test)]
 mod attachment_tests;
+mod browser;
 mod composer_alerts;
 mod connection;
 pub mod context_status;
@@ -74,6 +75,7 @@ use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 
 pub struct WorkspaceView {
     voice: voice::Voice,
+    browser: browser::Browser,
     visuals: visuals::Visuals,
     git_controls: Entity<git_controls::GitControls>,
     pull_requests: pull_requests::PullRequests,
@@ -408,7 +410,9 @@ impl WorkspaceView {
             });
         });
         let worktree_settings = worktree_settings::WorktreeSettingsView::new(window, cx);
+        let browser = browser::Browser::new(window, cx);
         let view = Self {
+            browser,
             workspace_focus,
             input,
             requests: transport.requests,
@@ -665,6 +669,9 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if self.receive_browser(&frame, cx) {
+            return;
+        }
         if self.receive_voice_media(&frame, cx) {
             return;
         }
@@ -731,6 +738,9 @@ impl WorkspaceView {
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if method.is_empty() {
+            return;
+        }
+        if self.receive_browser_previews(id, &frame, cx) {
             return;
         }
         if self.receive_visual(id, &frame, cx) {
@@ -1175,6 +1185,7 @@ impl WorkspaceView {
         self.reset_inputs(cx);
         self.reset_tool_results();
         self.reset_visuals();
+        self.reset_browser(cx);
         self.reset_previews(cx);
         let projects = self.known_projects();
         let roots = projects
@@ -1214,6 +1225,9 @@ impl WorkspaceView {
                 .unwrap_or(zuse_protocol::SandboxLevel::WorkspaceWrite);
         }
         self.load_directory("");
+        if self.right_open && self.right_tab == "browser" {
+            self.watch_browser_previews();
+        }
         if self.right_open && self.right_tab == "history" {
             self.refresh_history(cx);
         }
@@ -1247,6 +1261,7 @@ impl WorkspaceView {
         self.reset_inputs(cx);
         self.reset_tool_results();
         self.reset_visuals();
+        self.reset_browser(cx);
         self.reset_previews(cx);
         self.selected = None;
         self.prefetch_model_catalogs();
@@ -1266,6 +1281,9 @@ impl WorkspaceView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.browser_input_focused(window, cx) {
+            return;
+        }
         if self.browser_voice_replaces_composer() {
             return;
         }

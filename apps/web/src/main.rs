@@ -3,6 +3,8 @@ mod attachments;
 #[cfg(target_family = "wasm")]
 mod audio;
 #[cfg(target_family = "wasm")]
+mod browser_frame;
+#[cfg(target_family = "wasm")]
 mod connection;
 #[cfg(target_family = "wasm")]
 mod drafts;

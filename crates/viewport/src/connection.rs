@@ -20,6 +20,7 @@ impl WorkspaceView {
         if frame["connection"] == "connected" {
             self.connection_epoch = frame["epoch"].as_u64().unwrap_or(0);
             self.connected = false;
+            self.reset_browser(cx);
             self.reset_visuals();
             self.disconnect_browser_voice(cx);
             self.workspace_synced = false;
@@ -53,6 +54,7 @@ impl WorkspaceView {
         self.provider_updates_cancel = None;
         self.provider_updates_confirmed = false;
         self.connected = false;
+        self.reset_browser(cx);
         self.reset_visuals();
         self.disconnect_browser_voice(cx);
         self.notification_baselines.clear();
@@ -153,6 +155,7 @@ impl WorkspaceView {
             self.status = "Engine identity changed · Reload when your local edits are safe".into();
             self.error=Some("This link now points to another engine. Your local draft and editor text have been preserved.".into());
             self.connected = false;
+            self.reset_browser(cx);
             self.reset_visuals();
             self.disconnect_browser_voice(cx);
             return;

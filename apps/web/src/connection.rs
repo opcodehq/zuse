@@ -48,6 +48,9 @@ async fn auth_status() -> Result<bool, ()> {
     }
 }
 fn local_action(frame: &Value, events: &Sender) -> bool {
+    if crate::browser_frame::handle(frame) {
+        return true;
+    }
     if crate::voice_media::handle(frame) {
         return true;
     }
@@ -192,6 +195,7 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             location.hostname().unwrap_or_default().as_str(),
             "localhost" | "127.0.0.1" | "[::1]" | "::1"
         );
+    crate::browser_frame::install(events.clone(), local);
     let _ = events.unbounded_send(json!({"browserLocal":local,"paired":paired,"pairingOrigin":target.as_ref().map(|target|target.origin().to_owned()).unwrap_or_else(||location.origin().unwrap_or_default())}));
     let scheme = if location.protocol().unwrap_or_default() == "https:" {
         "wss"

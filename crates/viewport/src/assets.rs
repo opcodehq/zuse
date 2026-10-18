@@ -31,6 +31,8 @@ assets!(
     "git-branch",
     "terminal",
     "arrow-up",
+    "arrow-right",
+    "arrow-up-right",
     "alt-arrow-down",
     "alt-arrow-left",
     "alt-arrow-right",

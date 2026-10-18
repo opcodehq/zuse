@@ -164,6 +164,7 @@ impl WorkspaceView {
         self.right_open = true;
         self.right_tab = tab.into();
         match tab {
+            "browser" => self.watch_browser_previews(),
             "recovery" => self.inspect_recovery(),
             "actions" => self.refresh_project_actions(),
             "files" => {
