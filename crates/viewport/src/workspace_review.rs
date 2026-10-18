@@ -103,9 +103,14 @@ impl WorkspaceView {
                 } else {
                     let old = value["oldText"].as_str().unwrap_or_default();
                     let new = value["newText"].as_str().unwrap_or_default();
-                    self.review.can_open = value["newText"].is_string();
+                    self.review.can_open = value["newText"].is_string()
+                        && !self
+                            .selected
+                            .as_ref()
+                            .is_some_and(|chat| chat["archived"] == true);
                     if old.lines().count().saturating_add(new.lines().count()) > 100_000 {
-                        self.review.notice=Some("This diff has too many lines for an inline preview. Open the file to inspect it.".into());
+                        self.review.notice =
+                            Some("This diff has too many lines for an inline preview.".into());
                     } else {
                         self.review.lines = Arc::new(diff_lines(old, new));
                     }
@@ -127,6 +132,12 @@ impl WorkspaceView {
                     .gap_2()
                     .child(label(if self.review.path.is_some() {
                         "File changes"
+                    } else if self
+                        .selected
+                        .as_ref()
+                        .is_some_and(|chat| chat["archived"] == true)
+                    {
+                        "Saved changes"
                     } else {
                         "Working tree"
                     }))

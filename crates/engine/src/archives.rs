@@ -1,5 +1,6 @@
 //! Durable checkout checkpoints. Conversation documents and branches are retained.
 use crate::EngineError;
+mod review;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -14,6 +15,7 @@ use std::{
 pub struct Archives {
     root: PathBuf,
     managed: PathBuf,
+    changes: std::sync::Arc<tokio::sync::watch::Sender<u64>>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -309,6 +311,7 @@ impl Archives {
         Self {
             root: data_dir.join("archives"),
             managed: data_dir.join("managed-worktrees"),
+            changes: std::sync::Arc::new(tokio::sync::watch::channel(0).0),
         }
     }
     fn record_path(&self, checkout: &Path) -> PathBuf {
@@ -358,7 +361,13 @@ impl Archives {
         let path = self.record_path(&record.checkout);
         tokio::task::spawn_blocking(move || durable_json(&path, &record))
             .await
-            .map_err(|err| error(err.to_string()))?
+            .map_err(|err| error(err.to_string()))??;
+        self.changes
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+        Ok(())
+    }
+    pub(crate) fn watch_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
     }
     pub(crate) async fn remember_path(
         &self,
@@ -1189,6 +1198,15 @@ mod tests {
         };
         assert_eq!(first["archive"]["storageReclaimed"], false);
         assert!(f.checkout.exists());
+        use futures::StreamExt;
+        let RpcReply::Stream(mut review_watch) = rpc
+            .handle(methods::WATCH_CHECKOUT_DIFFS, json!({"chatId":"first"}))
+            .await
+            .unwrap()
+        else {
+            panic!("expected review stream")
+        };
+        review_watch.next().await.unwrap();
         let RpcReply::Value(second) = rpc
             .handle(
                 methods::MUTATE,
@@ -1216,6 +1234,143 @@ mod tests {
                 .unwrap()
                 .contains(&json!("tracked.txt"))
         );
+        let RpcReply::Value(review) = rpc
+            .handle(
+                methods::GET_CHECKOUT_DIFF,
+                json!({"chatId":"first","cwd":first_checkout,"mode":"workingTree"}),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected saved diff")
+        };
+        assert!(review["patch"].as_str().unwrap().contains("+changed"));
+        assert!(
+            review["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file["path"] == "new.bin")
+        );
+        let file_request = json!({"chatId":"first","cwd":review["cwd"],"checkoutId":review["checkoutId"],"path":"tracked.txt","mode":"workingTree","diffChecksum":review["checksum"]});
+        let RpcReply::Value(source) = rpc
+            .handle(methods::GET_CHECKOUT_FILE_DIFF_TEXT, file_request.clone())
+            .await
+            .unwrap()
+        else {
+            panic!("expected saved source")
+        };
+        assert_eq!(source["oldText"], "original\n");
+        assert_eq!(source["newText"], "changed\n");
+        let mut stale = file_request.clone();
+        stale["diffChecksum"] = json!("old");
+        let RpcReply::Value(source) = rpc
+            .handle(methods::GET_CHECKOUT_FILE_DIFF_TEXT, stale)
+            .await
+            .unwrap()
+        else {
+            panic!("expected stale source")
+        };
+        assert_eq!(source["stale"], true);
+        let mut outside = file_request;
+        outside["path"] = json!("../outside");
+        assert!(
+            rpc.handle(methods::GET_CHECKOUT_FILE_DIFF_TEXT, outside)
+                .await
+                .is_err()
+        );
+        let mut mismatch = json!({"chatId":"first","cwd":f.repo,"mode":"workingTree"});
+        assert!(
+            rpc.handle(methods::GET_CHECKOUT_DIFF, mismatch.clone())
+                .await
+                .is_err()
+        );
+        mismatch["cwd"] = json!(first_checkout);
+        mismatch["mode"] = json!("branch");
+        mismatch["baseRef"] = json!("main");
+        let RpcReply::Value(branch) = rpc
+            .handle(methods::GET_CHECKOUT_DIFF, mismatch)
+            .await
+            .unwrap()
+        else {
+            panic!("expected branch diff")
+        };
+        assert!(branch["patch"].as_str().unwrap().contains("+changed"));
+        let RpcReply::Value(branches) = rpc
+            .handle(
+                methods::LIST_BRANCHES,
+                json!({"chatId":"first","repoPath":first_checkout}),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected branches")
+        };
+        assert!(branches.as_array().unwrap().contains(&json!("main")));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let frame = review_watch.next().await.unwrap();
+                assert!(frame.get("error").is_none(), "{frame}");
+                if frame
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|diff| diff["checksum"] == review["checksum"])
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("archive completion must wake an existing review viewer");
+        assert!(
+            !f.checkout.exists(),
+            "review must not recreate the checkout"
+        );
+        // Reusing the physical path must not replace the saved source of truth.
+        std::fs::create_dir(&f.checkout).unwrap();
+        std::fs::write(f.checkout.join("tracked.txt"), "unrelated newer folder").unwrap();
+        let RpcReply::Value(occupied) = rpc
+            .handle(
+                methods::GET_CHECKOUT_DIFF,
+                json!({"chatId":"first","cwd":first_checkout,"mode":"workingTree"}),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected saved diff")
+        };
+        assert_eq!(occupied["checksum"], review["checksum"]);
+        std::fs::remove_file(f.checkout.join("tracked.txt")).unwrap();
+        std::fs::remove_dir(&f.checkout).unwrap();
+        // Another checkout's current HEAD must not change this saved diff.
+        std::fs::write(f.repo.join("main-only.txt"), "new main work").unwrap();
+        text(&f.repo, &["add", "."]).await.unwrap();
+        text(
+            &f.repo,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@localhost",
+                "commit",
+                "-m",
+                "Advance main checkout",
+            ],
+        )
+        .await
+        .unwrap();
+        let RpcReply::Value(stable) = rpc
+            .handle(
+                methods::GET_CHECKOUT_DIFF,
+                json!({"chatId":"first","cwd":first_checkout,"mode":"workingTree"}),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected stable saved diff")
+        };
+        assert_eq!(stable["checksum"], review["checksum"]);
         assert!(core.workspace.chat("first").unwrap().unwrap().archived);
         assert!(
             core.doc_host

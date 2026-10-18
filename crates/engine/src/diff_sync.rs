@@ -1891,6 +1891,16 @@ pub async fn capture_commit_diff(
         .current_branch(root)
         .await
         .unwrap_or_else(|_| "HEAD".into());
+    capture_revision_diff(root, &base, sha, &branch).await
+}
+
+/// Bounded immutable tree-to-tree review, including reclaimed archive checkouts.
+pub(crate) async fn capture_revision_diff(
+    root: &Path,
+    base: &str,
+    sha: &str,
+    branch: &str,
+) -> Result<DiffSnapshot, EngineError> {
     let names = capture_git(
         root,
         &[
@@ -1950,6 +1960,8 @@ pub async fn capture_commit_diff(
     let mut hasher = Sha256::new();
     hasher.update(branch.as_bytes());
     hasher.update([0u8]);
+    hasher.update(base.as_bytes());
+    hasher.update([0u8]);
     hasher.update(sha.as_bytes());
     hasher.update([0u8]);
     hasher.update(patch.as_bytes());
@@ -1958,7 +1970,7 @@ pub async fn capture_commit_diff(
     hasher.update(if truncated { b"1" } else { b"0" });
     let checksum = crate::repos::hex(&hasher.finalize());
     Ok(DiffSnapshot {
-        branch,
+        branch: branch.to_owned(),
         head_sha: Some(sha.to_string()),
         git_status: None,
         patch,

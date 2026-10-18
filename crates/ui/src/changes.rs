@@ -1644,6 +1644,7 @@ pub struct Changes {
     /// carries the TARGET device's checkouts, so a selection change onto a
     /// chat hosted elsewhere tears the watch down and re-subscribes.
     watch_target: Option<String>,
+    watch_archive: Option<String>,
     watch_task: Option<Task<()>>,
     parsed: Option<ParsedDiff>,
     parse_task: Option<Task<()>>,
@@ -1752,6 +1753,7 @@ impl Changes {
             started: false,
             error: None,
             watch_target: None,
+            watch_archive: None,
             watch_task: None,
             parsed: None,
             parse_task: None,
@@ -1844,7 +1846,13 @@ impl Changes {
     /// content stays visible under an error banner meanwhile.
     pub fn ensure_watch(&mut self, cx: &mut Context<Self>) {
         let target = self.desired_target(cx);
-        if self.started && self.watch_target == target {
+        let archive = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .filter(|chat| chat.archived)
+            .map(|chat| chat.id.clone());
+        if self.started && self.watch_target == target && self.watch_archive == archive {
             return;
         }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
@@ -1859,17 +1867,22 @@ impl Changes {
         }
         self.started = true;
         self.watch_target = target.clone();
-        self.watch_task = Some(Self::spawn_watch(engine, target, cx));
+        self.watch_archive = archive.clone();
+        self.watch_task = Some(Self::spawn_watch(engine, target, archive, cx));
     }
 
     fn spawn_watch(
         engine: EngineHandle,
         target: Option<String>,
+        archive: Option<String>,
         cx: &mut Context<Self>,
     ) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
                 let mut params = serde_json::Map::new();
+                if let Some(id) = &archive {
+                    params.insert("chatId".into(), serde_json::Value::String(id.clone()));
+                }
                 if let Some(target) = &target {
                     params.insert(
                         "targetDeviceId".into(),
@@ -1887,6 +1900,13 @@ impl Changes {
                     Ok(mut rx) => {
                         while let Some(value) = rx.recv().await {
                             let alive = this.update(cx, |changes, cx| {
+                                if let Some(error) = value["error"].as_str() {
+                                    changes.error = Some(error.to_owned().into());
+                                    changes.diffs.clear();
+                                    changes.sync(cx);
+                                    cx.notify();
+                                    return;
+                                }
                                 changes.error = None;
                                 if apply_diff_frame(&mut changes.diffs, value) {
                                     changes.sync(cx);
@@ -1960,6 +1980,9 @@ impl Changes {
             return None;
         }
         let chat = self.state.read(cx).selected_chat_row()?;
+        if chat.archived {
+            return None;
+        }
         Some(DiscardWorkingTreeRequest {
             chat_id: chat.id.clone(),
             checkout_id: diff.checkout_id,
@@ -2009,9 +2032,17 @@ impl Changes {
             return;
         };
         self.branches_for = Some(key.clone());
+        let chat_id = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .map(|chat| chat.id.clone());
         self.branches_task = Some(cx.spawn(async move |this, cx| {
             let mut params = serde_json::Map::new();
             params.insert("repoPath".into(), serde_json::Value::String(cwd));
+            if let Some(id) = chat_id {
+                params.insert("chatId".into(), serde_json::Value::String(id));
+            }
             if let Some(target) = target {
                 params.insert("targetDeviceId".into(), serde_json::Value::String(target));
             }
@@ -3491,6 +3522,11 @@ impl Changes {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let collapsed = fold.collapsed;
+        let archived = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .is_some_and(|chat| chat.archived);
         let path = file.path.clone();
         let adds = file.additions;
         let dels = file.deletions;
@@ -3617,6 +3653,7 @@ impl Changes {
             .child(
                 div()
                     .id(("diff-open-file", ix))
+                    .when(archived, |el| el.opacity(0.35))
                     .flex_none()
                     .size(px(crate::surface_chrome::CONTROL_SIZE))
                     .flex()
@@ -3628,11 +3665,28 @@ impl Changes {
                         window.prevent_default();
                         cx.stop_propagation();
                     })
-                    .on_click(cx.listener(move |_, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
+                        if this
+                            .state
+                            .read(cx)
+                            .selected_chat_row()
+                            .is_some_and(|chat| chat.archived)
+                        {
+                            return;
+                        }
                         cx.emit(ChangesEvent::OpenFile(path.clone()));
                     }))
-                    .tooltip(|_, cx| cx.new(|_| DiffHeaderTooltip("Open in file browser")).into())
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| {
+                            DiffHeaderTooltip(if archived {
+                                "Unarchive to open working files"
+                            } else {
+                                "Open in file browser"
+                            })
+                        })
+                        .into()
+                    })
                     .tooltip_show_delay(Duration::from_millis(350))
                     .child(
                         crate::icons::icon(crate::icons::DOCUMENT)

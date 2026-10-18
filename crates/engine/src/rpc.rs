@@ -50,6 +50,7 @@
 //! handlers stay transport-agnostic. This includes the workspace file surface,
 //! whose checkout always lives on the routed target device.
 
+mod archive_review;
 mod voice_chat;
 mod voice_remote;
 use async_trait::async_trait;
@@ -3081,6 +3082,9 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&serde_json::json!({ "ok": true }))
             }
             methods::WATCH_CHECKOUT_DIFFS => {
+                if let Some(id) = params["chatId"].as_str() {
+                    return Ok(self.watch_archive_review(id.to_owned()));
+                }
                 Ok(RpcReply::Stream(watch_stream(self.diff_sync.watch_diffs())))
             }
             methods::WATCH_WORKSPACE_GIT_STATUS => {
@@ -3253,6 +3257,22 @@ impl RpcService for EngineRpc {
                     let mut p: P = parse_params(params)?;
                     p.cwd = crate::repos::resolve_chat_cwd(&p.cwd, &self.repos.scratch_root())
                         .map_err(RpcError::Failed)?;
+                    if let Some((chat, record)) =
+                        self.archived_review(p.chat_id.as_deref(), &p.cwd)?
+                    {
+                        let diff = self
+                            .archives
+                            .review_diff(
+                                &chat,
+                                &record,
+                                &p.mode,
+                                p.base_ref.as_deref(),
+                                p.commit_sha.as_deref(),
+                            )
+                            .await
+                            .map_err(|err| RpcError::Failed(err.to_string()))?;
+                        return RpcReply::value(&diff);
+                    }
                     let identity = self
                         .repos
                         .checkout_identity(std::path::Path::new(&p.cwd))
@@ -3400,6 +3420,16 @@ impl RpcService for EngineRpc {
                         parse_params(params)?;
                     p.cwd = crate::repos::resolve_chat_cwd(&p.cwd, &self.repos.scratch_root())
                         .map_err(RpcError::Failed)?;
+                    if let Some((chat, record)) =
+                        self.archived_review(p.chat_id.as_deref(), &p.cwd)?
+                    {
+                        let pair = self
+                            .archives
+                            .review_file(&chat, &record, &p)
+                            .await
+                            .map_err(|err| RpcError::Failed(err.to_string()))?;
+                        return RpcReply::value(&pair);
+                    }
                     let identity =
                         Box::pin(self.repos.checkout_identity(std::path::Path::new(&p.cwd)))
                             .await
@@ -3598,7 +3628,11 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&repo)
             }
             methods::LIST_BRANCHES => {
-                let p: RepoPathParams = parse_params(params)?;
+                let chat_id = params["chatId"].as_str().map(str::to_owned);
+                let mut p: RepoPathParams = parse_params(params)?;
+                if let Some((_, record)) = self.archived_review(chat_id.as_deref(), &p.repo_path)? {
+                    p.repo_path = record.repo.to_string_lossy().into_owned();
+                }
                 let branches = self
                     .repos
                     .branches(std::path::Path::new(&p.repo_path))
