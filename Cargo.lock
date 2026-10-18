@@ -13875,6 +13875,9 @@ dependencies = [
 [[package]]
 name = "zuse-orb"
 version = "0.25.0"
+dependencies = [
+ "web-time",
+]
 
 [[package]]
 name = "zuse-plugins"
@@ -14248,8 +14251,10 @@ dependencies = [
  "zuse-icons",
  "zuse-markdown",
  "zuse-model",
+ "zuse-orb",
  "zuse-protocol",
  "zuse-remote",
+ "zuse-voice-session",
 ]
 
 [[package]]
@@ -14318,6 +14323,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "web-time",
  "zuse-orb",
  "zuse-protocol",
  "zuse-rpc",

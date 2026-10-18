@@ -8,3 +8,4 @@ publish.workspace = true
 # The thinking-orb animation engine without a renderer: desktop paints its
 # frames through GPUI, mobile through Core Graphics, from identical geometry.
 [dependencies]
+web-time = "1.1"

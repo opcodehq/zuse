@@ -7,6 +7,8 @@ publish.workspace = true
 
 [dependencies]
 zuse-icons.workspace = true
+zuse-voice-session.workspace = true
+zuse-orb.workspace = true
 zuse-remote.workspace = true
 zuse-protocol.workspace = true
 zuse-model.workspace = true

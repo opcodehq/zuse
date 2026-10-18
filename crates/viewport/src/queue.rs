@@ -33,6 +33,9 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.browser_voice_replaces_composer() {
+            return;
+        }
         if secondary
             && self.queue_edit.is_none()
             && !self.settings

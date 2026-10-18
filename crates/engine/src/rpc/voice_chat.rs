@@ -80,7 +80,9 @@ impl EngineRpc {
         // The old segment stays until the new one holds a message: a failed
         // start may remove the empty successor, and then the next call
         // rotates again from here instead of losing the thread.
-        self.new_voice_chat(config, thread)
+        let successor = self.new_voice_chat(config, thread)?;
+        self.sessions.inherit_harness_session(&chat.id, &successor);
+        Ok(successor)
     }
 
     /// Removes this device's earlier segments of `current`'s Codex thread.

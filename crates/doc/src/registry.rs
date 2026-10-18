@@ -1479,9 +1479,26 @@ impl RegistryDoc {
         session_id: &str,
         cwd: &str,
     ) -> Result<bool, DocError> {
+        self.set_chat_owned_harness_session(chat_id, session_id, cwd, None)
+    }
+
+    /// Persist cursor and typed ownership together. The binding prevents an old
+    /// owner field from authorizing a cursor replaced by another writer.
+    pub fn set_chat_owned_harness_session(
+        &mut self,
+        chat_id: &str,
+        session_id: &str,
+        cwd: &str,
+        owner: Option<zuse_protocol::HarnessId>,
+    ) -> Result<bool, DocError> {
         if !self.row_exists(KIND_CHATS, chat_id) {
             return Ok(false);
         }
+        let ownership = owner.map(|harness| {
+            json!({
+                "sessionId": session_id, "cwd": cwd, "harness": harness,
+            })
+        });
         self.write(
             KIND_CHATS,
             chat_id,
@@ -1489,9 +1506,28 @@ impl RegistryDoc {
             fields([
                 ("harnessSessionId", json!(session_id)),
                 ("harnessSessionCwd", json!(cwd)),
+                ("harnessSessionOwner", json!(ownership)),
             ]),
         );
         Ok(true)
+    }
+
+    pub fn chat_harness_session_owner(
+        &self,
+        chat_id: &str,
+        session_id: &str,
+        cwd: &str,
+    ) -> Option<zuse_protocol::HarnessId> {
+        let row = self.overlay_row(KIND_CHATS, chat_id)?;
+        let binding = row.fields.get("harnessSessionOwner")?;
+        if row.fields.get("harnessSessionId")?.as_str()? != session_id
+            || row.fields.get("harnessSessionCwd")?.as_str()? != cwd
+            || binding.get("sessionId")?.as_str()? != session_id
+            || binding.get("cwd")?.as_str()? != cwd
+        {
+            return None;
+        }
+        serde_json::from_value(binding.get("harness")?.clone()).ok()
     }
 
     /// Host-side sidebar freshness: preview + timestamp of the latest message.
@@ -1792,3 +1828,37 @@ fn row_to<T: serde::de::DeserializeOwned>(row: &RegistryRow) -> Option<T> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod session_owner_tests {
+    use super::*;
+    use zuse_protocol::HarnessId;
+
+    #[test]
+    fn cursor_owner_survives_snapshot_and_cannot_authorize_a_replacement() {
+        let mut doc = RegistryDoc::new("host");
+        doc.claim_chat("chat", None, None, Utc::now());
+        doc.set_chat_owned_harness_session("chat", "opaque", "/project", Some(HarnessId::Codex))
+            .unwrap();
+        let mut restored = RegistryDoc::from_bytes(&doc.to_bytes().unwrap(), "host").unwrap();
+        assert_eq!(
+            restored.chat_harness_session_owner("chat", "opaque", "/project"),
+            Some(HarnessId::Codex)
+        );
+        assert_eq!(
+            restored.chat_harness_session_owner("chat", "opaque", "/other"),
+            None
+        );
+        restored
+            .set_chat_harness_session("chat", "replacement", "/project")
+            .unwrap();
+        assert_eq!(
+            restored.chat_harness_session_owner("chat", "replacement", "/project"),
+            None
+        );
+        assert_eq!(
+            restored.chat_harness_session_owner("chat", "opaque", "/project"),
+            None
+        );
+    }
+}

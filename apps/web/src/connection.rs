@@ -48,6 +48,9 @@ async fn auth_status() -> Result<bool, ()> {
     }
 }
 fn local_action(frame: &Value, events: &Sender) -> bool {
+    if crate::voice_media::handle(frame) {
+        return true;
+    }
     if crate::drafts::handle(frame, events) {
         return true;
     }
@@ -166,6 +169,7 @@ fn paired_target() -> Result<Option<PairedTarget>, String> {
 
 pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Sender) {
     crate::drafts::initialize().await;
+    crate::voice_media::install(events.clone());
     let target = match paired_target() {
         Ok(target) => target,
         Err(message) => {

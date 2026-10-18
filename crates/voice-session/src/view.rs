@@ -1,7 +1,8 @@
 //! What a client-media call shows: phase, live caption, levels and the orb's
 //! state, reduced from the owner stream. Renderer-agnostic so every platform
 //! presents the orchestrator the same way.
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 use zuse_orb::OrbState;
 use zuse_protocol::voice::*;
 

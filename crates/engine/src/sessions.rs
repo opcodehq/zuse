@@ -475,6 +475,27 @@ impl SessionsEngine {
         lock(&self.inner.statuses).get(chat_id).cloned()
     }
 
+    /// Carry only verified provider ownership into a fresh transcript segment.
+    pub(crate) fn inherit_harness_session(&self, source: &str, target: &str) {
+        let Some(ws) = self.inner.workspace() else {
+            return;
+        };
+        let Some((session, cwd)) = ws.chat_harness_session(source) else {
+            return;
+        };
+        if session.is_empty() {
+            return;
+        }
+        if let Some(owner) = self.inner.harness_session_owner(source, &session) {
+            self.inner.remember_owned_harness_session(
+                target,
+                &session,
+                cwd.as_deref().unwrap_or(""),
+                owner,
+            );
+        }
+    }
+
     /// Whether this harness takes a prompt *during* a turn, rather than only at
     /// the boundary between turns. The queue drain's central question: a
     /// mid-turn agent gets the message now, everything else holds it until the
@@ -1796,12 +1817,19 @@ impl Inner {
         cwd: &str,
         harness: HarnessId,
     ) {
-        self.remember_harness_session(chat_id, session_id, cwd);
-        if let Some(known) = lock(&self.harness_sessions)
-            .get_mut(chat_id)
-            .filter(|known| known.session_id == session_id)
-        {
-            known.harness = Some(harness);
+        if session_id.is_empty() {
+            return;
+        }
+        lock(&self.harness_sessions).insert(
+            chat_id.to_owned(),
+            HarnessSessionRef {
+                harness: Some(harness),
+                session_id: session_id.to_owned(),
+                cwd: cwd.to_owned(),
+            },
+        );
+        if let Some(ws) = self.workspace() {
+            ws.set_chat_owned_harness_session(chat_id, session_id, cwd, harness);
         }
     }
 
@@ -1811,11 +1839,19 @@ impl Inner {
     /// context instead of passing a foreign cursor to a different provider.
     fn resume_for_harness(&self, chat_id: &str, cwd: &str, harness: HarnessId) -> Option<String> {
         let session = self.resume_for(chat_id, cwd)?;
+        (self.harness_session_owner(chat_id, &session) == Some(harness)).then_some(session)
+    }
+
+    fn harness_session_owner(&self, chat_id: &str, session: &str) -> Option<HarnessId> {
         let cached = lock(&self.harness_sessions)
             .get(chat_id)
             .filter(|known| known.session_id == session)
             .and_then(|known| known.harness);
         let owner = cached
+            .or_else(|| {
+                self.workspace()?
+                    .chat_harness_session_owner(chat_id, session)
+            })
             .or_else(|| {
                 let mut alias = false;
                 for item in self.journal.events_rev(chat_id).ok()? {
@@ -1847,7 +1883,7 @@ impl Inner {
                 known.harness = Some(owner);
             }
         }
-        (owner == Some(harness)).then_some(session)
+        owner
     }
 
     // NB: there is deliberately no `forget_harness_session` anymore. The old
@@ -4737,6 +4773,58 @@ mod tests {
         .unwrap();
         received
     }
+    #[tokio::test]
+    async fn inherited_cursor_keeps_durable_owner_without_fabricating_events() {
+        let root = tempfile::tempdir().unwrap();
+        let core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(root.path()).unwrap(),
+            Arc::new(HarnessRegistry::new()),
+            HarnessId::Codex,
+            None,
+        )
+        .unwrap();
+        for chat in ["source", "successor", "unknown"] {
+            core.workspace
+                .create_chat(chat, None, Some(&core.device_id), None, None)
+                .unwrap();
+        }
+        core.workspace
+            .set_chat_owned_harness_session("source", "opaque", "", HarnessId::Codex);
+        core.sessions.inherit_harness_session("source", "successor");
+        lock(&core.sessions.inner.harness_sessions).clear();
+        let inner = &core.sessions.inner;
+        assert_eq!(
+            inner
+                .resume_for_harness("successor", "", HarnessId::Codex)
+                .as_deref(),
+            Some("opaque")
+        );
+        assert!(
+            inner
+                .resume_for_harness("successor", "", HarnessId::ClaudeCode)
+                .is_none()
+        );
+        assert!(
+            inner
+                .journal
+                .events_rev("successor")
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        core.workspace
+            .set_chat_harness_session("source", "untyped", "");
+        lock(&inner.harness_sessions).clear();
+        core.sessions.inherit_harness_session("source", "unknown");
+        assert!(core.workspace.chat_harness_session("unknown").is_none());
+        assert!(
+            inner
+                .resume_for_harness("source", "", HarnessId::Codex)
+                .is_none()
+        );
+        core.shutdown().await;
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn provider_switches_preserve_root_history_and_resume_only_the_owning_provider() {
         let root = tempfile::tempdir().unwrap();

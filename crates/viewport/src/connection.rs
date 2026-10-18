@@ -20,6 +20,7 @@ impl WorkspaceView {
         if frame["connection"] == "connected" {
             self.connection_epoch = frame["epoch"].as_u64().unwrap_or(0);
             self.connected = false;
+            self.disconnect_browser_voice(cx);
             self.workspace_synced = false;
             self.status = "Verifying engine…".into();
             self.call(methods::LOCAL_DEVICE, json!({}));
@@ -51,6 +52,7 @@ impl WorkspaceView {
         self.provider_updates_cancel = None;
         self.provider_updates_confirmed = false;
         self.connected = false;
+        self.disconnect_browser_voice(cx);
         self.notification_baselines.clear();
         self.workspace_synced = false;
         self.status = if frame["connection"] == "pairingRequired" {
@@ -149,6 +151,7 @@ impl WorkspaceView {
             self.status = "Engine identity changed · Reload when your local edits are safe".into();
             self.error=Some("This link now points to another engine. Your local draft and editor text have been preserved.".into());
             self.connected = false;
+            self.disconnect_browser_voice(cx);
             return;
         }
         let first_identity = self.device_id.is_none();

@@ -49,6 +49,8 @@ jobs:
       - run: cargo test -p zuse-engine --test browser_access
       - run: cargo test -p zuse-engine --lib source_control::tests::pr_
       - run: cargo test -p zuse-engine --test git_workspace
+      - run: cargo test -p zuse-doc --lib session_owner_tests
+      - run: cargo test -p zuse-engine --test voice_runtime
       - run: cargo test -p zuse-engine --test relay_access
       - run: cargo test -p zuse-engine --test durable_turn_review
       - run: cargo test -p zuse-engine --lib diff_sync::turn_snapshot
@@ -77,6 +79,7 @@ jobs:
       - run: cargo test -p zuse-providers --lib skills::tests
       - run: cargo test -p zuse-sync --lib tool_blobs
       - run: cargo test -p zuse-engine --lib doc_host::tool_result_tests
+      - run: cargo test -p zuse-voice-session -p zuse-orb
       - run: cargo test -p zuse-rpc --lib
       - run: cargo test -p zuse-engine --lib account::tests
       - run: cargo test -p zuse-engine --lib harness_models::tests
@@ -112,6 +115,9 @@ jobs:
       - run: cargo check -p zuse -p zuse-cli -p zuse-relay -p zuse-remote
       - if: runner.os == 'Linux'
         run: cargo test -p zuse-viewport --lib history::tests
+      - name: Browser voice lifecycle
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib voice::tests
       - name: Relay settings recovery
         if: runner.os == 'Linux'
         run: cargo test -p zuse-viewport --lib pairing::tests
@@ -142,6 +148,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: trunk@0.21.14
+      - run: node --test apps/web/tests/voice_media.mjs
       - run: bash scripts/build-web.sh
       - run: bash scripts/build-web.sh --features browser-input-fixture --dist ../../.context/browser-input-fixture-dist
       - run: cargo +nightly check -p zuse-remote --target wasm32-unknown-unknown

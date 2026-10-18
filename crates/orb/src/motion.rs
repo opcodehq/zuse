@@ -1,5 +1,5 @@
 //! Continuous animation time and bounded, independent audio envelopes.
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Default)]
 pub struct AnimationClock {

@@ -898,6 +898,34 @@ impl WorkspaceHost {
         }
     }
 
+    pub fn set_chat_owned_harness_session(
+        &self,
+        chat_id: &str,
+        session_id: &str,
+        cwd: &str,
+        owner: zuse_protocol::HarnessId,
+    ) {
+        if let Err(err) = self
+            .mutate(|doc| doc.set_chat_owned_harness_session(chat_id, session_id, cwd, Some(owner)))
+        {
+            tracing::warn!(chat = %chat_id, error = %err, "registry session ownership write failed");
+        }
+    }
+
+    pub fn chat_harness_session_owner(
+        &self,
+        chat_id: &str,
+        session_id: &str,
+    ) -> Option<zuse_protocol::HarnessId> {
+        let (stored, cwd) = self.chat_harness_session(chat_id)?;
+        if stored != session_id {
+            return None;
+        }
+        self.read(|doc| {
+            doc.chat_harness_session_owner(chat_id, session_id, cwd.as_deref().unwrap_or(""))
+        })
+    }
+
     /// The chat row's stored harness session `(session_id, cwd)`, if stamped.
     /// The empty-string tombstone passes through — callers must treat it as
     /// "explicitly no resume" (and must NOT fall back to older sources).

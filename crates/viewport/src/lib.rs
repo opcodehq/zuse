@@ -42,6 +42,8 @@ mod thread_actions;
 mod title_settings;
 mod tool_results;
 mod transcript;
+mod voice;
+mod voice_orb;
 mod workspace;
 mod workspace_review;
 mod worktree_settings;
@@ -70,6 +72,7 @@ pub struct Transport {
 use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 
 pub struct WorkspaceView {
+    voice: voice::Voice,
     git_controls: Entity<git_controls::GitControls>,
     pull_requests: pull_requests::PullRequests,
     git_requests: HashMap<u64, u64>,
@@ -601,6 +604,7 @@ impl WorkspaceView {
             attachments: vec![],
             uploading: 0,
             composer_generation: 0,
+            voice: voice::Voice::default(),
             git_controls,
             pull_requests,
             git_requests: HashMap::new(),
@@ -658,6 +662,9 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if self.receive_voice_media(&frame, cx) {
+            return;
+        }
         if self.receive_draft_journal(&frame, cx) {
             return;
         }
@@ -721,6 +728,9 @@ impl WorkspaceView {
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if method.is_empty() {
+            return;
+        }
+        if self.receive_voice_rpc(id, &frame, cx) {
             return;
         }
         if self.receive_project_actions(id, &frame, cx) {
@@ -1248,6 +1258,9 @@ impl WorkspaceView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.browser_voice_replaces_composer() {
+            return;
+        }
         if self.thread_dialog.is_some() {
             return;
         }

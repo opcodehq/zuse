@@ -8,6 +8,8 @@ mod connection;
 mod drafts;
 #[cfg(target_family = "wasm")]
 mod socket;
+#[cfg(target_family = "wasm")]
+mod voice_media;
 #[cfg(not(target_family = "wasm"))]
 fn main() {
     eprintln!("Build this target with scripts/build-web.sh");

@@ -1,6 +1,7 @@
 //! Renderer-agnostic orb playback: the continuous clock, audio-driven speed
 //! and state crossfades. Hosts decide when to tick and paint the frames.
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use crate::{
     REDUCED_MOTION_T,

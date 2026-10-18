@@ -127,6 +127,23 @@ impl WorkspaceView {
                 )
             })
             .child(div().flex_1())
+            .child(
+                icon_button("voice-call", "microphone", "Open or hide voice call").on_click(
+                    cx.listener(|this, _, _, cx| {
+                        if this.browser_voice_live() {
+                            this.toggle_browser_voice_stage(cx);
+                        } else {
+                            this.start_browser_voice(cx);
+                        }
+                    }),
+                ),
+            )
+            .when(self.browser_voice_live(), |d| {
+                d.child(
+                    control("end-voice-compact", "End voice")
+                        .on_click(cx.listener(|this, _, _, cx| this.end_browser_voice(None, cx))),
+                )
+            })
             .when(self.selected.is_some(), |d| {
                 d.child(
                     icon_button(
@@ -170,6 +187,9 @@ impl WorkspaceView {
     }
 
     fn composer(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.browser_voice_replaces_composer() {
+            return self.browser_voice_stage(cx);
+        }
         if self
             .selected
             .as_ref()
@@ -190,6 +210,24 @@ impl WorkspaceView {
             .px(px(if self.content_width < 500. { 12. } else { 24. }))
             .pb_3()
             .pt_2()
+            .when_some(self.voice.notice.clone(), |d, notice| {
+                d.child(
+                    row()
+                        .gap_2()
+                        .px_3()
+                        .py_2()
+                        .rounded_lg()
+                        .bg(rgb(0x291719))
+                        .child(label(notice).flex_1().min_w_0().text_color(rgb(0xe5a0a0)))
+                        .child(
+                            icon_button("dismiss-voice-notice", "close", "Dismiss voice message")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.voice.notice = None;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+            })
             .when(self.has_composer_notices(), |d| {
                 d.child(
                     column()
@@ -1170,6 +1208,7 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_browser_voice_visibility(cx);
         let target = self.selected.as_ref().and_then(|chat| {
             Some(crate::git_controls::Target {
                 chat_id: chat["id"].as_str()?.into(),

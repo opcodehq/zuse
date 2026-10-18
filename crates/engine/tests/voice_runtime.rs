@@ -8,7 +8,7 @@ use zuse_rpc::methods;
 fn native_package(root: &std::path::Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../harness/tests/fixtures");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../providers/tests/fixtures");
     let binary = root.join("bin/codex");
     let helper = root.join("codex-resources/voice/bin/codex-voice-host");
     std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
@@ -83,8 +83,12 @@ async fn remote_failed_prepare_after_rotation_preserves_thread_for_retry() {
             None,
         )
         .unwrap();
-    core.workspace
-        .set_chat_harness_session(&previous, "remembered-thread", "");
+    core.workspace.set_chat_owned_harness_session(
+        &previous,
+        "remembered-thread",
+        "",
+        HarnessId::Codex,
+    );
     // The engine's `ROTATE_AFTER`.
     const ROTATE_AFTER: usize = 1000;
     let doc = core.doc_host.open(&previous).unwrap();
