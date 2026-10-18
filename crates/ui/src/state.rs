@@ -451,6 +451,15 @@ impl EngineHandle {
                     if let Some(port) = served_ipc_port {
                         engine_runtime.core().sessions.set_ipc_port(port);
                     }
+                    engine_runtime
+                        .core()
+                        .managed_host
+                        .control()
+                        .restore_listener(
+                            &engine_runtime.core().browser_access.control(),
+                            service.clone(),
+                        )
+                        .await;
                     *runtime_for_boot.lock().await = Some(engine_runtime);
                     if service_for_boot.set(service).is_err() {
                         state_tx.send_replace(DeferredEngineState::Failed(

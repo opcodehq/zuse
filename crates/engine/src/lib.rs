@@ -599,6 +599,7 @@ impl EngineCore {
         // not release another queued command while credentials are draining.
         self.doc_host.pause_all_queues();
         self.account.retire();
+        self.managed_host.close().await;
         self.browser_access.close().await;
         self.relay_access.close().await;
         self.sessions.shutdown().await;
@@ -1017,6 +1018,15 @@ impl Engine {
         // Only a port this process actually serves goes to agents: the
         // injected MCP server must dial back into THIS engine.
         runtime.core().sessions.set_ipc_port(config.ipc_port);
+        runtime
+            .core()
+            .managed_host
+            .control()
+            .restore_listener(
+                &runtime.core().browser_access.control(),
+                runtime.core().rpc_service(),
+            )
+            .await;
 
         tokio::select! {
             result = shutdown_signal() => result?,

@@ -24,6 +24,9 @@ struct Fixture {
     refuse_once: AtomicBool,
     hold: AtomicBool,
     unlink_refuse: AtomicBool,
+    heartbeat_reject: AtomicBool,
+    heartbeats: AtomicUsize,
+    heartbeat_ports: StdMutex<Vec<u16>>,
     entered: Notify,
     release: Notify,
     nonces: StdMutex<HashSet<String>>,
@@ -76,7 +79,10 @@ async fn api(
 ) -> Response {
     let path = uri.path();
     let authorization = headers["authorization"].to_str().unwrap();
-    if let Some(token) = authorization.strip_prefix("Bearer ") {
+    if let Some(token) = authorization
+        .strip_prefix("Bearer ")
+        .filter(|t| t.starts_with("fixture."))
+    {
         let payload: Value = serde_json::from_slice(
             &URL_SAFE_NO_PAD
                 .decode(token.split('.').nth(1).unwrap())
@@ -119,6 +125,25 @@ async fn api(
             assert_eq!(body["origin"]["localHttpHost"], "127.0.0.1");
             assert_eq!(body["endpoint"]["httpBaseUrl"], "http://127.0.0.1:27656");
             json!({"environmentId":body["environmentId"],"endpoint":{"httpBaseUrl":"https://computer.example","wsBaseUrl":"wss://computer.example"},"apiIssuer":"https://account.example","environmentCredential":"private-host-credential","mintPublicKey":mint_jwk(),"tunnelHostname":"computer.example","connectorToken":"private-connector"})
+        }
+        (Method::POST, "/v1/environments/device_1/heartbeat") => {
+            assert_eq!(authorization, "Bearer private-host-credential");
+            state.heartbeats.fetch_add(1, Ordering::SeqCst);
+            if state.heartbeat_reject.load(Ordering::SeqCst) {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["origin"]["localHttpHost"], "127.0.0.1");
+            assert_eq!(
+                body["wireProtocolVersion"],
+                zuse_serve::managed::WIRE_VERSION
+            );
+            state
+                .heartbeat_ports
+                .lock()
+                .unwrap()
+                .push(body["origin"]["localHttpPort"].as_u64().unwrap() as u16);
+            json!({})
         }
         (Method::POST, "/v1/client/environment-unlink") => {
             if state.unlink_refuse.load(Ordering::SeqCst) {
@@ -438,4 +463,134 @@ async fn managed_host_persists_identity_checks_grants_and_disables_before_uncert
     assert!(!owner.control().status().configured);
     server.abort();
     let _ = server.await;
+}
+
+#[cfg(unix)]
+async fn wait_until(mut ready: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while !ready() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+#[cfg(unix)]
+async fn host_listener(
+    host: host::Host,
+    root: &std::path::Path,
+) -> (
+    u16,
+    CancellationToken,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
+    struct NoCalls;
+    #[async_trait::async_trait]
+    impl zuse_rpc::RpcService for NoCalls {
+        async fn handle(
+            &self,
+            method: &str,
+            _: Value,
+        ) -> std::result::Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+            Err(zuse_rpc::RpcError::UnknownMethod(method.into()))
+        }
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let stop = CancellationToken::new();
+    let server = zuse_serve::BrowserServer::new(Arc::new(NoCalls), "x".repeat(64), None)
+        .unwrap()
+        .with_managed_authority(Arc::new(host));
+    let task = tokio::spawn(server.serve_with_shutdown(
+        listener,
+        root.into(),
+        None,
+        stop.clone().cancelled_owned(),
+    ));
+    (port, stop, task)
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn connector_follows_real_listener_account_and_revocation_without_recreating_link() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let (api, api_task) = fixture().await;
+    let account = Account::fixture_signed_in(root.path(), api.origin.clone(), "user_a");
+    let client = AccountClient::new(account.clone()).unwrap();
+    let owner = host::Owner::open(root.path(), "device_1", client.clone());
+    let host = owner.control();
+    let binary = root.path().join("connector-fixture");
+    let launches = root.path().join("connector-fixture.launches");
+    std::fs::write(
+        &binary,
+        br#"#!/bin/sh
+printf '%s\n' started "$$" "$@" >> "${0}.launches"
+exec /bin/sleep 60
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    host.fixture_binary(binary.clone());
+    host.link("Build computer", 27656).await.unwrap();
+    let (port, stop, server) = host_listener(host.clone(), root.path()).await;
+    wait_until(|| {
+        host.status().tunnel_running
+            && std::fs::read_to_string(&launches).is_ok_and(|s| s.lines().count() >= 7)
+    })
+    .await;
+    let arguments = std::fs::read_to_string(&launches).unwrap();
+    assert!(!arguments.contains("private-connector"));
+    assert!(arguments.contains("--token-file"));
+    let token_path = arguments.lines().last().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(token_path).unwrap(),
+        "private-connector"
+    );
+    assert_eq!(
+        std::fs::metadata(token_path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(api.heartbeat_ports.lock().unwrap().contains(&port));
+    assert_eq!(host.status().local_port, Some(port));
+    assert!(host.status().last_heartbeat.is_some());
+    assert_eq!(api.heartbeats.load(Ordering::SeqCst), 1);
+    account.sign_out().unwrap();
+    wait_until(|| !host.status().tunnel_running && !std::path::Path::new(token_path).exists())
+        .await;
+    account.fixture_install("user_b");
+    assert!(!host.status().account_matches);
+    account.sign_out().unwrap();
+    account.fixture_install("user_a");
+    wait_until(|| {
+        std::fs::read_to_string(&launches)
+            .unwrap()
+            .matches("started")
+            .count()
+            == 2
+    })
+    .await;
+    stop.cancel();
+    server.await.unwrap().unwrap();
+    wait_until(|| !host.status().tunnel_running).await;
+    owner.close().await;
+    drop(owner);
+    api.heartbeat_reject.store(true, Ordering::SeqCst);
+    let owner = host::Owner::open(root.path(), "device_1", client);
+    let host = owner.control();
+    host.fixture_binary(binary);
+    let (_, stop, server) = host_listener(host.clone(), root.path()).await;
+    wait_until(|| !host.status().enabled).await;
+    assert!(host.status().configured && !host.status().tunnel_running);
+    assert_eq!(
+        std::fs::read_to_string(&launches)
+            .unwrap()
+            .matches("started")
+            .count(),
+        2
+    );
+    stop.cancel();
+    server.await.unwrap().unwrap();
+    owner.close().await;
+    api_task.abort();
+    let _ = api_task.await;
 }

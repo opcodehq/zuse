@@ -178,6 +178,9 @@ impl BrowserServer {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
+        if let Some(authority) = &self.managed {
+            authority.listener_opened(listener.local_addr()?, tls.is_none(), self.shutdown.clone());
+        }
         self.secure_transport |= tls.is_some();
         let shutdown = self.shutdown.clone();
         let _guard = shutdown.clone().drop_guard();

@@ -45,7 +45,7 @@ jobs:
       - run: cargo test -p zuse-remote
       - run: cargo test -p zuse-plugins
       - run: cargo test -p zuse-engine --lib plugins::tests
-      - run: cargo test -p zuse-engine --lib managed_access::tests
+      - run: cargo test -p zuse-engine --lib managed_access
       - run: cargo test -p zuse-engine --test pairing
       - run: cargo test -p zuse-engine --test browser_access
       - run: cargo test -p zuse-engine --lib source_control::tests::pr_

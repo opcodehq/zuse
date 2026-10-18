@@ -432,3 +432,7 @@ The Zuse harness bundles pinned AI SDK transport code for model requests. Direct
 ## Hugeicons controls
 
 Native and browser control glyphs use Hugeicons. The bundled free vectors come from `@hugeicons/core-free-icons` 4.2.1 (MIT), with their export mapping and package provenance in `crates/icons/`. The complete notice is retained in `crates/icons/LICENSE.Hugeicons`. Provider marks and file-identity artwork retain their existing notices. Licensed builds may prepare `@hugeicons-pro/core-solid-rounded` using the build operator's license; those source assets are kept in build output and are not part of this source distribution.
+
+## Managed remote connector
+
+Managed remote access downloads the unmodified cloudflared 2026.7.2 runtime from [Cloudflare's release](https://github.com/cloudflare/cloudflared/releases/tag/2026.7.2), with pinned SHA256 checksums for supported platforms. cloudflared is maintained by Cloudflare and contributors and licensed under [Apache-2.0](https://github.com/cloudflare/cloudflared/blob/2026.7.2/LICENSE). Its [source and notices](https://github.com/cloudflare/cloudflared/tree/2026.7.2) remain available with that release.

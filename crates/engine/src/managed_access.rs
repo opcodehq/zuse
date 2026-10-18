@@ -333,7 +333,7 @@ impl AccountClient {
             return Err(Error::Invalid);
         }
         let proof = identity.link_proof(&challenge.challenge, &challenge.api_issuer)?;
-        let body = json!({"challengeId":challenge.challenge_id,"proof":proof,"environmentId":identity.device(),"environmentPublicKey":identity.public_jwk(),"providerKind":"desktop","endpoint":endpoint,"label":label,"runtimeVersion":env!("CARGO_PKG_VERSION"),"managedTunnel":true,"origin":{"localHttpHost":"127.0.0.1","localHttpPort":port}});
+        let body = json!({"challengeId":challenge.challenge_id,"proof":proof,"environmentId":identity.device(),"environmentPublicKey":identity.public_jwk(),"providerKind":"desktop","endpoint":endpoint,"label":label,"runtimeVersion":env!("CARGO_PKG_VERSION"),"wireProtocolVersion":zuse_serve::managed::WIRE_VERSION,"capabilities":{"version":1,"features":[zuse_serve::managed::PROTOCOL]},"serviceState":"starting","managedTunnel":true,"origin":{"localHttpHost":"127.0.0.1","localHttpPort":port}});
         let result: LinkReceipt = self
             .bearer(
                 &lease,

@@ -11,6 +11,9 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use zeroize::{Zeroize, Zeroizing};
 use zuse_serve::managed::{Authority, Authorization};
+mod install;
+mod orphans;
+mod runtime;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -48,6 +51,7 @@ pub struct Status {
     pub local_port: Option<u16>,
     // Link provisioning does not prove connector or host reachability.
     pub tunnel_running: bool,
+    pub last_heartbeat: Option<i64>,
     pub error: Option<String>,
 }
 struct State {
@@ -55,6 +59,13 @@ struct State {
     key: Option<DecodingKey>,
     retired: CancellationToken,
     error: Option<String>,
+    runtime_error: Option<String>,
+    tunnel_running: bool,
+    last_heartbeat: Option<i64>,
+    listener: Option<(u16, CancellationToken)>,
+    runtime: Option<tokio::task::JoinHandle<()>>,
+    #[cfg(test)]
+    fixture_binary: Option<PathBuf>,
 }
 struct Shared {
     root: PathBuf,
@@ -63,6 +74,7 @@ struct Shared {
     gate: tokio::sync::Mutex<()>,
     state: Mutex<State>,
     closed: CancellationToken,
+    changed: tokio::sync::watch::Sender<()>,
 }
 #[derive(Clone)]
 pub struct Host(Arc<Shared>);
@@ -170,6 +182,10 @@ fn write_saved(root: &Path, saved: &Saved) -> Result<()> {
 }
 impl Owner {
     pub fn open(root: &Path, device: &str, client: AccountClient) -> Self {
+        let root = std::fs::canonicalize(root)
+            .or_else(|_| std::path::absolute(root))
+            .unwrap_or_else(|_| root.to_path_buf());
+        let root = root.as_path();
         let (saved, key, error) = match read_saved(root, device, client.account.api_url()) {
             Ok(saved) => {
                 let key = saved.as_ref().and_then(|s| decoding_key(s).ok());
@@ -187,8 +203,16 @@ impl Owner {
                 key,
                 retired: CancellationToken::new(),
                 error,
+                runtime_error: None,
+                tunnel_running: false,
+                last_heartbeat: None,
+                listener: None,
+                runtime: None,
+                #[cfg(test)]
+                fixture_binary: None,
             }),
             closed: CancellationToken::new(),
+            changed: tokio::sync::watch::channel(()).0,
         })))
     }
     pub fn control(&self) -> Host {
@@ -198,8 +222,47 @@ impl Owner {
         self.0.0.closed.cancel();
         lock(&self.0.0.state).retired.cancel();
     }
+    pub async fn close(&self) {
+        self.begin_close();
+        let task = lock(&self.0.0.state).runtime.take();
+        if let Some(mut task) = task {
+            if tokio::time::timeout(Duration::from_secs(5), &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+                let _ = task.await;
+            }
+        }
+    }
 }
 impl Host {
+    /// Restore the browser transport only for a saved, enabled link. Foreground
+    /// servers already own their listener and do not need this startup helper.
+    pub async fn restore_listener(
+        &self,
+        browser: &crate::browser_access::BrowserAccess,
+        service: Arc<dyn zuse_rpc::RpcService>,
+    ) {
+        let status = self.status();
+        if !status.configured || !status.enabled || browser.status().await.running {
+            return;
+        }
+        let options = crate::browser_access::Start {
+            listen: std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            public_origin: None,
+            tls_cert: None,
+            tls_key: None,
+            assets: None,
+        };
+        if browser.start(options, service).await.is_err() {
+            lock(&self.0.state).runtime_error=Some("The saved managed connection needs browser app files and an available loopback listener. Check the installation before restarting access.".into());
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn fixture_binary(&self, path: PathBuf) {
+        lock(&self.0.state).fixture_binary = Some(path);
+    }
     pub fn status(&self) -> Status {
         let state = lock(&self.0.state);
         let Some(saved) = &state.saved else {
@@ -223,8 +286,11 @@ impl Host {
             label: Some(saved.label.clone()),
             endpoint: Some(saved.endpoint.clone()),
             local_port: Some(saved.local_port),
-            tunnel_running: false,
-            error: state.error.clone(),
+            tunnel_running: state.tunnel_running
+                && account_matches
+                && !self.0.closed.is_cancelled(),
+            last_heartbeat: state.last_heartbeat,
+            error: state.error.clone().or_else(|| state.runtime_error.clone()),
         }
     }
     pub async fn link(&self, label: &str, port: u16) -> Result<Status> {
@@ -279,6 +345,7 @@ impl Host {
         state.saved = Some(saved);
         state.key = Some(key);
         drop(state);
+        self.0.changed.send_replace(());
         lease.check(&self.0.client.account)?;
         Ok(self.status())
     }
@@ -297,6 +364,7 @@ impl Host {
             let result = write_saved(&self.0.root, saved);
             let environment = saved.environment_id.clone();
             state.retired.cancel();
+            self.0.changed.send_replace(());
             result?;
             environment
         };
@@ -313,7 +381,10 @@ impl Host {
             .map_err(|_| Error::Storage)?;
         state.saved = None;
         state.key = None;
+        state.runtime_error = None;
+        state.last_heartbeat = None;
         drop(state);
+        self.0.changed.send_replace(());
         Ok(self.status())
     }
 }
@@ -325,6 +396,35 @@ struct Claims {
     exp: i64,
 }
 impl Authority for Host {
+    fn listener_opened(
+        &self,
+        address: std::net::SocketAddr,
+        local_http: bool,
+        closed: CancellationToken,
+    ) {
+        if !local_http
+            || address.ip() != std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+            || self.0.closed.is_cancelled()
+        {
+            return;
+        }
+        let mut state = lock(&self.0.state);
+        if state
+            .listener
+            .as_ref()
+            .is_some_and(|(port, stop)| !stop.is_cancelled() && *port != address.port())
+        {
+            return;
+        }
+        state.listener = Some((address.port(), closed));
+        if state.runtime.is_none() {
+            let host = self.clone();
+            state.runtime = Some(tokio::spawn(async move {
+                runtime::supervise(host).await;
+            }));
+        }
+        self.0.changed.send_replace(());
+    }
     fn valid_origin(&self, origin: &str) -> bool {
         if self.0.closed.is_cancelled() {
             return false;

@@ -19,11 +19,19 @@ use tokio_util::sync::CancellationToken;
 use zuse_rpc::{RpcError, RpcReply, RpcService};
 
 pub const PROTOCOL: &str = "zuse-rpc-json-v1";
+pub const WIRE_VERSION: u32 = 1;
 /// Implemented by the engine's account-bound host owner; transport holds no key.
 pub trait Authority: Send + Sync {
     fn authorize(&self, token: &str) -> Option<Authorization>;
     fn valid_origin(&self, _origin: &str) -> bool {
         false
+    }
+    fn listener_opened(
+        &self,
+        _address: std::net::SocketAddr,
+        _local_http: bool,
+        _closed: CancellationToken,
+    ) {
     }
 }
 /// Both account and host lifetimes must remain live for the entire connection.
