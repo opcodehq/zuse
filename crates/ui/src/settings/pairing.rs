@@ -156,10 +156,10 @@ impl PairingCard {
                             card.invitation=value["fragment"].as_str().and_then(|fragment|zuse_remote::Invitation::parse_fragment(fragment).ok())
                                 .and_then(|invitation|value["origin"].as_str().and_then(|origin|zuse_remote::PairedTarget::new(origin,invitation).ok()));
                             if card.invitation.is_none(){card.error=Some("The invitation was created, but its connection URL is unavailable. Start browser or relay access before sharing it.".into());}
-                        }else if matches!(method, methods::REVOKE_PAIRING | methods::START_RELAY_ACCESS | methods::STOP_RELAY_ACCESS){card.invitation=None;}
+                        }else if matches!(method, methods::REVOKE_PAIRING | methods::START_RELAY_ACCESS | methods::STOP_RELAY_ACCESS | methods::RESUME_RELAY_ACCESS | methods::SET_RELAY_AUTO_START){card.invitation=None;}
                         card.refresh(cx);
                     },
-                    Err(error)=>card.error=Some(error.to_string()),
+                    Err(error)=>{card.error=Some(error.to_string());card.refresh(cx);},
                 }
                 cx.notify();
             });
@@ -175,8 +175,17 @@ impl PairingCard {
         self.request(methods::START_BROWSER_ACCESS, params, cx);
     }
     fn start_relay(&mut self, cx: &mut Context<Self>) {
-        let params = json!({"origin":self.relay_origin.read(cx).text().trim(),"hostTokenFile":self.relay_credential.read(cx).text().trim()});
-        self.request(methods::START_RELAY_ACCESS, params, cx);
+        let origin = self.relay_origin.read(cx).text().trim().to_owned();
+        let credential = self.relay_credential.read(cx).text().trim().to_owned();
+        if self.relay_status["configured"] == true && origin.is_empty() && credential.is_empty() {
+            self.request(methods::RESUME_RELAY_ACCESS, json!({}), cx);
+        } else {
+            self.request(
+                methods::START_RELAY_ACCESS,
+                json!({"origin":origin,"hostTokenFile":credential}),
+                cx,
+            );
+        }
     }
     fn create(&mut self, cx: &mut Context<Self>) {
         let name = self.name.read(cx).text().trim().to_owned();
@@ -259,6 +268,7 @@ impl Render for PairingCard {
         let theme = Theme::of(cx).for_settings_surface();
         let running = self.status["running"] == true;
         let relay_running = self.relay_status["running"] == true;
+        let auto_start = self.relay_status["autoStart"] == true;
         let can_invite = running || relay_running;
         let managed = self.status["managed"] == true;
         let busy = self.busy;
@@ -275,13 +285,23 @@ impl Render for PairingCard {
                         .child(widgets::card_row(&theme,false).child(details(&theme,"Public URL","Required for access from other devices. Use an HTTPS URL trusted by them.")).child(field(&theme,self.origin.clone())))
                         .child(widgets::card_row(&theme,false).child(details(&theme,"HTTPS certificate","Choose a certificate and matching private key for direct HTTPS."))
                             .child(div().flex_1().min_w(px(200.)).flex().flex_col().gap(px(8.)).child(field(&theme,self.certificate.clone())).child(field(&theme,self.key.clone())))))))
-            .child(frame(&theme).child(header(&theme,"Relay access","Connect across networks through an outbound encrypted connection. Start explicitly for this engine session."))
+            .child(frame(&theme).child(header(&theme,"Relay access","Connect across networks through an outbound encrypted connection. Startup settings belong to this computer."))
                 .child(widgets::section_card(&theme).mt(px(0.))
                     .child(widgets::card_row(&theme,true).child(details(&theme,"Relay",if relay_running {self.relay_status["origin"].as_str().unwrap_or("Running")}else{"Stopped"}))
                         .child(widgets::text_action(&theme,widgets::ActionTone::Outlined,if relay_running {"Stop relay"}else{"Start relay"}).id("native-relay-access")
                             .on_click(cx.listener(move|this,_,_,cx|{if relay_running {this.request(methods::STOP_RELAY_ACCESS,json!({}),cx);}else{this.start_relay(cx);}}))))
+                    .child(widgets::card_row(&theme,false)
+                        .child(details(&theme,"Start when Zuse opens","Start relay once to save its configuration. Stopping now does not change this preference."))
+                        .child(widgets::toggle_switch(&theme,auto_start,"native-relay-auto-start")
+                            .id("native-relay-auto-start")
+                            .role(gpui::Role::Switch).tab_index(0)
+                            .aria_label("Start when Zuse opens")
+                            .aria_toggled(if auto_start { gpui::Toggled::True } else { gpui::Toggled::False })
+                            .cursor_pointer()
+                            .on_click(cx.listener(move|this,_,_,cx|this.request(methods::SET_RELAY_AUTO_START,json!({"enabled":!auto_start}),cx)))))
+                    .when_some(self.relay_status["error"].as_str(),|card,error|card.child(widgets::card_row(&theme,false).child(details(&theme,"Relay needs attention",error))))
                     .when(!relay_running,|card|card
-                        .child(widgets::card_row(&theme,false).child(details(&theme,"Relay URL","Use your relay’s HTTPS origin.")).child(field(&theme,self.relay_origin.clone())))
+                        .child(widgets::card_row(&theme,false).child(details(&theme,"Relay URL","Use your relay’s HTTPS origin. Leave both fields blank to resume the saved relay.")).child(field(&theme,self.relay_origin.clone())))
                         .child(widgets::card_row(&theme,false).child(details(&theme,"Host credential","Choose the private token file issued by your relay operator on this engine’s computer.")).child(field(&theme,self.relay_credential.clone()))))
                     .when(relay_running,|card|card.child(widgets::card_row(&theme,false).child(details(&theme,"Transport",&format!("{} broker sockets · {} sessions. Refresh to update. Socket counts do not confirm application responsiveness.",self.relay_status["sockets"].as_u64().unwrap_or(0),self.relay_status["sessions"].as_u64().unwrap_or(0))))))))
             .child(frame(&theme).child(header(&theme,"Connect a device","Invitations grant access to this engine’s agents, files, terminals and settings."))

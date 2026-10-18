@@ -200,6 +200,8 @@ async fn relay_controls_reject_foreign_targets_and_invalid_configuration_without
     for method in [
         methods::RELAY_ACCESS_STATUS,
         methods::START_RELAY_ACCESS,
+        methods::RESUME_RELAY_ACCESS,
+        methods::SET_RELAY_AUTO_START,
         methods::STOP_RELAY_ACCESS,
     ] {
         assert!(
@@ -222,5 +224,205 @@ async fn relay_controls_reject_foreign_targets_and_invalid_configuration_without
         );
     }
     assert_eq!(status(&client).await["running"], false);
+    core.shutdown().await;
+}
+
+fn local_core(root: &std::path::Path) -> EngineCore {
+    EngineCore::assemble_with_profile(
+        zuse_engine::EngineProfile::local(root).unwrap(),
+        Arc::new(HarnessRegistry::new()),
+        HarnessId::Mock,
+        None,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn saved_startup_survives_cold_core_reopen_and_broker_outage_without_new_grants() {
+    let root = tempfile::tempdir().unwrap();
+    let profile = root.path().join("engine");
+    let credential = root.path().join("private-host-token");
+    let secret = BrowserServer::random_token();
+    std::fs::write(&credential, &secret).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let origin = format!("http://{address}");
+    let stop = tokio_util::sync::CancellationToken::new();
+    let broker = tokio::spawn(
+        RelayBroker::new(HostToken::parse(secret.clone()).unwrap()).serve_with_shutdown(
+            listener,
+            root.path().into(),
+            None,
+            stop.clone().cancelled_owned(),
+        ),
+    );
+    let core = local_core(&profile);
+    let client = zuse_rpc::memory_client(core.rpc_service());
+    assert!(
+        client
+            .call(methods::SET_RELAY_AUTO_START, json!({"enabled":true}))
+            .await
+            .is_err()
+    );
+    client
+        .call(
+            methods::START_RELAY_ACCESS,
+            json!({"origin":origin,"hostTokenFile":credential}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status(&client).await["autoStart"], false);
+    client
+        .call(methods::SET_RELAY_AUTO_START, json!({"enabled":true}))
+        .await
+        .unwrap();
+    let invitation = client
+        .call(methods::CREATE_PAIRING, json!({"label":"Persisted client"}))
+        .await
+        .unwrap();
+    let target = zuse_remote::PairedTarget::new(
+        &origin,
+        zuse_remote::Invitation::parse_fragment(invitation["fragment"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let remote = paired(&target).await;
+    let device = remote.call(methods::LOCAL_DEVICE, json!({})).await.unwrap()["deviceId"].clone();
+    let file = profile.join("profiles/local/relay-access.json");
+    let bytes = std::fs::read(&file).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains(&secret));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    let stopped = client
+        .call(methods::STOP_RELAY_ACCESS, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(
+        stopped["autoStart"], true,
+        "stop preserves the next-launch choice"
+    );
+    assert_eq!(stopped["configured"], true);
+    drop(remote);
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+
+    let core = local_core(&profile);
+    let access = core.relay_access.control();
+    access.restore_on_startup(core.rpc_service()).await;
+    let client = zuse_rpc::memory_client(core.rpc_service());
+    let remote = paired(&target).await;
+    assert_eq!(
+        remote.call(methods::LOCAL_DEVICE, json!({})).await.unwrap()["deviceId"],
+        device
+    );
+    assert_eq!(status(&client).await["autoStart"], true);
+    stop.cancel();
+    broker.await.unwrap().unwrap();
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            remote.call(methods::LOCAL_DEVICE, json!({}))
+        )
+        .await
+        .unwrap()
+        .is_err()
+    );
+    drop(remote);
+    let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+    let stop = tokio_util::sync::CancellationToken::new();
+    let broker = tokio::spawn(
+        RelayBroker::new(HostToken::parse(secret).unwrap()).serve_with_shutdown(
+            listener,
+            root.path().into(),
+            None,
+            stop.clone().cancelled_owned(),
+        ),
+    );
+    let remote = paired(&target).await;
+    assert_eq!(
+        remote.call(methods::LOCAL_DEVICE, json!({})).await.unwrap()["deviceId"],
+        device
+    );
+    client
+        .call(methods::STOP_RELAY_ACCESS, json!({}))
+        .await
+        .unwrap();
+    std::fs::remove_file(&credential).unwrap();
+    access.restore_on_startup(core.rpc_service()).await;
+    let failed = status(&client).await;
+    assert_eq!(failed["running"], false);
+    assert_eq!(failed["autoStart"], true);
+    assert!(
+        failed["error"]
+            .as_str()
+            .unwrap()
+            .contains("Automatic relay startup failed")
+    );
+    assert!(!failed.to_string().contains("private-host-token"));
+    client
+        .call(methods::SET_RELAY_AUTO_START, json!({"enabled":false}))
+        .await
+        .unwrap();
+    assert_eq!(status(&client).await["autoStart"], false);
+    drop(remote);
+    core.shutdown().await;
+    drop(client);
+    drop(core);
+    let core = local_core(&profile);
+    core.relay_access
+        .control()
+        .restore_on_startup(core.rpc_service())
+        .await;
+    let client = zuse_rpc::memory_client(core.rpc_service());
+    assert_eq!(status(&client).await["running"], false);
+    assert_eq!(status(&client).await["autoStart"], false);
+    core.shutdown().await;
+    stop.cancel();
+    broker.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn malformed_or_foreign_saved_configuration_keeps_local_engine_available() {
+    let root = tempfile::tempdir().unwrap();
+    let store = root.path().join("profiles/local");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(
+        store.join("relay-access.json"),
+        serde_json::to_vec(&json!({
+            "version":1,"deviceId":"foreign","origin":"https://relay.example",
+            "hostTokenFile":"/private/credential","autoStart":true
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let core = local_core(root.path());
+    core.relay_access
+        .control()
+        .restore_on_startup(core.rpc_service())
+        .await;
+    let client = zuse_rpc::memory_client(core.rpc_service());
+    let state = status(&client).await;
+    assert_eq!(state["configured"], false);
+    assert_eq!(state["running"], false);
+    assert!(
+        state["error"]
+            .as_str()
+            .unwrap()
+            .contains("could not be loaded")
+    );
+    assert!(!state.to_string().contains("/private/credential"));
+    assert!(client.call(methods::LOCAL_DEVICE, json!({})).await.is_ok());
+    assert!(
+        client
+            .call(methods::RESUME_RELAY_ACCESS, json!({}))
+            .await
+            .is_err()
+    );
     core.shutdown().await;
 }

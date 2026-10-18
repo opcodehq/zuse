@@ -2006,7 +2006,11 @@ impl RpcService for EngineRpc {
         let failed = |error: crate::EngineError| RpcError::Failed(error.to_string());
         if matches!(
             method,
-            methods::RELAY_ACCESS_STATUS | methods::START_RELAY_ACCESS | methods::STOP_RELAY_ACCESS
+            methods::RELAY_ACCESS_STATUS
+                | methods::START_RELAY_ACCESS
+                | methods::STOP_RELAY_ACCESS
+                | methods::RESUME_RELAY_ACCESS
+                | methods::SET_RELAY_AUTO_START
         ) {
             if params
                 .get("targetDeviceId")
@@ -2021,19 +2025,46 @@ impl RpcService for EngineRpc {
                 .relay_access
                 .as_ref()
                 .ok_or_else(|| RpcError::Failed("Relay access is unavailable".into()))?;
-            return match method {
+            if method == methods::RELAY_ACCESS_STATUS {
+                return RpcReply::value(&access.status().await);
+            }
+            let access = access.clone();
+            let service: std::sync::Arc<dyn RpcService> = std::sync::Arc::new(self.clone());
+            let method = method.to_owned();
+            // Admitted control operations finish even if their caller disconnects.
+            return tokio::spawn(async move { match method.as_str() {
                 methods::RELAY_ACCESS_STATUS => RpcReply::value(&access.status().await),
                 methods::STOP_RELAY_ACCESS => RpcReply::value(&access.stop().await),
+                methods::RESUME_RELAY_ACCESS => {
+                    let status = access.resume(service.clone()).await
+                        .map_err(|_| RpcError::Failed("Could not resume relay access. Check the saved configuration and private credential file.".into()))?;
+                    RpcReply::value(&status)
+                }
+                methods::SET_RELAY_AUTO_START => {
+                    #[derive(Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct P {
+                        enabled: bool,
+                    }
+                    let mut params = params;
+                    if let Some(object) = params.as_object_mut() {
+                        object.remove("targetDeviceId");
+                    }
+                    let p: P = parse_params(params)?;
+                    let status = access.set_auto_start(p.enabled).await
+                        .map_err(|_|RpcError::Failed("Could not save relay startup. Configure relay access and check its private credential file.".into()))?;
+                    RpcReply::value(&status)
+                }
                 _ => {
                     let mut params = params;
                     if let Some(object) = params.as_object_mut() {
                         object.remove("targetDeviceId");
                     }
-                    let status = access.start(parse_params(params)?, std::sync::Arc::new(self.clone())).await
+                    let status = access.start(parse_params(params)?, service.clone()).await
                         .map_err(|_| RpcError::Failed("Could not start relay access. Check the relay URL and private host credential file.".into()))?;
                     RpcReply::value(&status)
                 }
-            };
+            }}).await.map_err(|_|RpcError::Failed("Relay control stopped unexpectedly. Refresh its status before trying again.".into()))?;
         }
         if matches!(
             method,

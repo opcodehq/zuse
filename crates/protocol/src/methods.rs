@@ -291,6 +291,10 @@ mod retry_tests {
         for method in [
             CREATE_PAIRING,
             REVOKE_PAIRING,
+            START_RELAY_ACCESS,
+            RESUME_RELAY_ACCESS,
+            SET_RELAY_AUTO_START,
+            STOP_RELAY_ACCESS,
             START_BROWSER_ACCESS,
             STOP_BROWSER_ACCESS,
             SELECT_PLUGIN_WORKSPACE,
@@ -333,6 +337,10 @@ pub const STOP_BROWSER_ACCESS: &str = "StopBrowserAccess";
 
 /// Profile-owned outbound relay; routing credentials never appear in status.
 pub const RELAY_ACCESS_STATUS: &str = "RelayAccessStatus";
+/// Resume the saved profile-local relay configuration; never automatically retry.
+pub const RESUME_RELAY_ACCESS: &str = "ResumeRelayAccess";
+/// Persist the next-launch preference; `{enabled}`. Does not start/stop a connector.
+pub const SET_RELAY_AUTO_START: &str = "SetRelayAutoStart";
 pub const START_RELAY_ACCESS: &str = "StartRelayAccess";
 pub const STOP_RELAY_ACCESS: &str = "StopRelayAccess";
 

@@ -150,6 +150,8 @@ async fn run() -> anyhow::Result<()> {
     println!("Agent tools listen on 127.0.0.1:{ipc_port}");
     println!("Open {origin}/#token={token}");
     if let Some((origin, host_token_file)) = relay {
+        // Explicit command-line configuration replaces saved startup settings.
+        runtime.core().relay_access.control().stop().await;
         if let Err(error) = runtime
             .core()
             .relay_access

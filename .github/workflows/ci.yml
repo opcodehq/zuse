@@ -112,6 +112,9 @@ jobs:
       - run: cargo check -p zuse -p zuse-cli -p zuse-relay -p zuse-remote
       - if: runner.os == 'Linux'
         run: cargo test -p zuse-viewport --lib history::tests
+      - name: Relay settings recovery
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib pairing::tests
       - name: Browser PR workflows
         if: runner.os == 'Linux'
         run: cargo test -p zuse-viewport --lib pull_requests::tests

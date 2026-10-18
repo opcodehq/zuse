@@ -83,24 +83,32 @@ impl WorkspaceView {
             self.relay_fetch = Some(self.call(methods::RELAY_ACCESS_STATUS, json!({})));
         }
     }
-    fn change_relay(&mut self, cx: &mut Context<Self>) {
+    fn send_relay_action(&mut self, method: &'static str, params: Value) {
         if !self.connected || self.relay_action.is_some() {
             return;
         }
-        // Retire an older status request before mutation so it cannot overwrite
-        // the receipt. Interrupted actions are never replayed on reconnect.
         if let Some(id) = self.relay_fetch.take() {
             self.cancel(id);
         }
+        self.relay_action = Some(self.call(method, params));
+    }
+    fn change_relay(&mut self, cx: &mut Context<Self>) {
+        let origin = self.relay_origin.read(cx).value(cx).trim().to_owned();
+        let credential = self.relay_credential.read(cx).value(cx).trim().to_owned();
         let (method, params) = if self.relay_status["running"] == true {
             (methods::STOP_RELAY_ACCESS, json!({}))
+        } else if self.relay_status["configured"] == true
+            && origin.is_empty()
+            && credential.is_empty()
+        {
+            (methods::RESUME_RELAY_ACCESS, json!({}))
         } else {
             (
                 methods::START_RELAY_ACCESS,
-                json!({"origin":self.relay_origin.read(cx).value(cx).trim(),"hostTokenFile":self.relay_credential.read(cx).value(cx).trim()}),
+                json!({"origin":origin,"hostTokenFile":credential}),
             )
         };
-        self.relay_action = Some(self.call(method, params));
+        self.send_relay_action(method, params);
     }
     pub(super) fn pairing_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let link = self
@@ -108,14 +116,23 @@ impl WorkspaceView {
             .as_ref()
             .map(|fragment| format!("{}/{}", self.pairing_origin, fragment));
         let relay_running = self.relay_status["running"] == true;
+        let auto_start = self.relay_status["autoStart"] == true;
         column().gap_5()
-            .child(s::frame().child(s::header("Relay access","Connect across networks through an outbound encrypted connection. Start explicitly for this engine session."))
+            .child(s::frame().child(s::header("Relay access","Connect across networks through an outbound encrypted connection. Startup settings belong to this computer."))
                 .child(s::card()
                     .child(s::setting_row(true).child(s::details("Relay",if relay_running {self.relay_status["origin"].as_str().unwrap_or("Running")}else{"Stopped"}))
                         .child(s::button("browser-relay-access",if self.relay_action.is_some(){"Working…"}else if relay_running{"Stop relay"}else{"Start relay"})
                             .on_click(cx.listener(|this,_,_,cx|{this.change_relay(cx);cx.notify();}))))
+                    .child(s::setting_row(false)
+                        .child(s::details("Start when Zuse opens", "Start relay once to save its configuration. Stopping now does not change this preference."))
+                        .child(s::toggle("browser-relay-auto-start",auto_start,"Start when Zuse opens")
+                            .on_click(cx.listener(move |this,_,_,cx| {
+                                this.send_relay_action(methods::SET_RELAY_AUTO_START,json!({"enabled":!auto_start}));
+                                cx.notify();
+                            }))))
+                    .when_some(self.relay_status["error"].as_str(),|card,error|card.child(s::setting_row(false).child(s::details("Relay needs attention",error))))
                     .when(!relay_running,|card|card
-                        .child(s::setting_row(false).child(s::details("Relay URL","Use your relay’s HTTPS origin.")).child(s::field().child(self.relay_origin.clone())))
+                        .child(s::setting_row(false).child(s::details("Relay URL","Use your relay’s HTTPS origin. Leave both fields blank to resume the saved relay.")).child(s::field().child(self.relay_origin.clone())))
                         .child(s::setting_row(false).child(s::details("Host credential","Private token file issued by your relay operator on the engine’s computer.")).child(s::field().child(self.relay_credential.clone()))))
                     .when(relay_running,|card|card.child(s::setting_row(false).child(s::details("Transport",format!("{} broker sockets · {} sessions. Refresh to update. Socket counts do not confirm application responsiveness.",self.relay_status["sockets"].as_u64().unwrap_or(0),self.relay_status["sessions"].as_u64().unwrap_or(0))))))))
             .child(s::frame()
@@ -151,5 +168,68 @@ impl WorkspaceView {
                 .child(s::card().child(s::setting_row(true).child(s::details("Forget paired access","This reloads the tab. Save local drafts first."))
                     .child(s::button("forget-browser-pairing","Forget pairing").on_click(cx.listener(|this,_,_,_|{let _=this.requests.unbounded_send(json!({"ui":"forgetPairing"}));})))))))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::prelude::v1::test;
+
+    #[gpui::test]
+    fn relay_startup_actions_retire_old_reads_and_reconcile_uncertainty_without_replay(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(initialize);
+        let (requests, mut calls) = futures::channel::mpsc::unbounded();
+        let (_, events) = futures::channel::mpsc::unbounded();
+        let window = cx.add_window(|window, cx| {
+            WorkspaceView::new(Transport { requests, events }, window, cx)
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.connected = true;
+                view.relay_status = json!({"running":false,"configured":true,"autoStart":false});
+                view.refresh_relay();
+                let stale = view.relay_fetch.unwrap();
+                view.send_relay_action(methods::SET_RELAY_AUTO_START, json!({"enabled":true}));
+                let action = view.relay_action.unwrap();
+                view.send_relay_action(methods::SET_RELAY_AUTO_START, json!({"enabled":true}));
+                assert!(view.relay_fetch.is_none());
+                view.receive(
+                    json!({"id":stale,"ok":{"configured":false,"autoStart":false}}),
+                    cx,
+                );
+                assert_eq!(view.relay_status["configured"], true);
+                view.receive(json!({"id":action,"err":"Receipt lost"}), cx);
+                assert!(view.relay_action.is_none());
+                let read = view.relay_fetch.unwrap();
+                view.receive(
+                    json!({"id":read,"ok":{"running":false,"configured":true,"autoStart":true}}),
+                    cx,
+                );
+                assert_eq!(view.relay_status["autoStart"], true);
+                view.change_relay(cx);
+                let resume = view.relay_action.unwrap();
+                view.receive(
+                    json!({"id":resume,"ok":{"running":true,"configured":true,"autoStart":true}}),
+                    cx,
+                );
+            })
+            .unwrap();
+        let mut writes = vec![];
+        while let Ok(frame) = calls.try_recv() {
+            if frame["method"] == methods::SET_RELAY_AUTO_START
+                || frame["method"] == methods::RESUME_RELAY_ACCESS
+                || frame["method"] == methods::START_RELAY_ACCESS
+            {
+                writes.push(frame);
+            }
+        }
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0]["method"], methods::SET_RELAY_AUTO_START);
+        assert_eq!(writes[0]["params"]["enabled"], true);
+        assert_eq!(writes[1]["method"], methods::RESUME_RELAY_ACCESS);
+        assert_eq!(writes[1]["params"], json!({}));
     }
 }

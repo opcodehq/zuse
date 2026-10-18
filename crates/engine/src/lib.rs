@@ -942,6 +942,11 @@ impl Engine {
             core.start_host_relay(&edge.url)
         });
 
+        core.relay_access
+            .control()
+            .restore_on_startup(core.rpc_service())
+            .await;
+
         Ok(EngineRuntime {
             core,
             host_relay: std::sync::Mutex::new(host_relay),
