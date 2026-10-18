@@ -2160,10 +2160,18 @@ impl RpcService for EngineRpc {
                         Some(access) => access.status().await.origin,
                         None => None,
                     };
-                    let origin = relay_origin.or(match &self.browser_access {
-                        Some(access) => access.status().await.origin,
-                        None => None,
-                    });
+                    let managed_origin = self
+                        .managed_host
+                        .as_ref()
+                        .map(|host| host.status())
+                        .filter(|status| status.enabled && status.account_matches)
+                        .and_then(|status| status.endpoint.map(|endpoint| endpoint.http_base_url));
+                    let origin = managed_origin
+                        .or(relay_origin)
+                        .or(match &self.browser_access {
+                            Some(access) => access.status().await.origin,
+                            None => None,
+                        });
                     RpcReply::value(
                         &serde_json::json!({"peer":peer,"fragment":fragment,"origin":origin}),
                     )
@@ -2417,6 +2425,7 @@ impl RpcService for EngineRpc {
                 }
             }
             methods::MANAGED_HOST_STATUS
+            | methods::WATCH_MANAGED_HOST
             | methods::LINK_MANAGED_HOST
             | methods::UNLINK_MANAGED_HOST => {
                 if params
@@ -2432,22 +2441,62 @@ impl RpcService for EngineRpc {
                     .managed_host
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Managed access is unavailable".into()))?;
+                if method == methods::WATCH_MANAGED_HOST {
+                    return Ok(RpcReply::Stream(Box::pin(
+                        host.watch().map(|status| serde_json::json!(status)),
+                    )));
+                }
                 let status = match method {
                     methods::MANAGED_HOST_STATUS => host.status(),
                     methods::LINK_MANAGED_HOST => {
                         let label = params["label"]
                             .as_str()
                             .ok_or_else(|| RpcError::BadParams("Enter a computer name".into()))?;
-                        let browser = self
-                            .browser_access
+                        let label = label.trim();
+                        if label.is_empty()
+                            || label.len() > 128
+                            || label.chars().any(char::is_control)
+                        {
+                            return Err(RpcError::BadParams(
+                                "Enter a computer name of 1–128 bytes without control characters"
+                                    .into(),
+                            ));
+                        }
+                        if host.status().configured {
+                            return Err(RpcError::Failed(
+                                "Unlink the saved computer before linking it again".into(),
+                            ));
+                        }
+                        if self
+                            .account
                             .as_ref()
-                            .ok_or_else(|| {
-                                RpcError::Failed(
-                                    "Start browser access before linking this computer".into(),
+                            .is_none_or(|account| account.status().user.is_none())
+                        {
+                            return Err(RpcError::Failed(
+                                "Sign in to your Zuse account first.".into(),
+                            ));
+                        }
+                        let access = self.browser_access.as_ref().ok_or_else(|| {
+                            RpcError::Failed(
+                                "Start browser access before linking this computer".into(),
+                            )
+                        })?;
+                        let mut browser = access.status().await;
+                        if !browser.running {
+                            browser = access
+                                .start(
+                                    crate::browser_access::Start {
+                                        listen: std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                                        public_origin: None,
+                                        tls_cert: None,
+                                        tls_key: None,
+                                        assets: None,
+                                    },
+                                    std::sync::Arc::new(self.clone()),
                                 )
-                            })?
-                            .status()
-                            .await;
+                                .await
+                                .map_err(|e| RpcError::Failed(e.to_string()))?;
+                        }
                         let listen = browser.listen
                             .filter(|address| browser.running && browser.local_http
                                 && address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))

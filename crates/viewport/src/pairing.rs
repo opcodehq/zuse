@@ -117,7 +117,7 @@ impl WorkspaceView {
             .map(|fragment| format!("{}/{}", self.pairing_origin, fragment));
         let relay_running = self.relay_status["running"] == true;
         let auto_start = self.relay_status["autoStart"] == true;
-        column().gap_5()
+        column().gap_5().child(self.managed_access_settings(cx))
             .child(s::frame().child(s::header("Relay access","Connect across networks through an outbound encrypted connection. Startup settings belong to this computer."))
                 .child(s::card()
                     .child(s::setting_row(true).child(s::details("Relay",if relay_running {self.relay_status["origin"].as_str().unwrap_or("Running")}else{"Stopped"}))

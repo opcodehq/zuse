@@ -15,6 +15,7 @@ mod environment;
 pub mod git_controls;
 mod history;
 pub mod input;
+mod managed_access;
 mod model_accounts;
 mod model_catalog;
 mod model_config;
@@ -75,6 +76,8 @@ pub struct Transport {
 use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 
 pub struct WorkspaceView {
+    managed_access: managed_access::ManagedAccess,
+    managed_name: Entity<input::TextInput>,
     voice: voice::Voice,
     environment: environment::Environment,
     browser: browser::Browser,
@@ -398,6 +401,7 @@ impl WorkspaceView {
         let relay_credential = cx.new(|cx| {
             input::TextInput::new("Host credential file on the engine computer", window, cx)
         });
+        let managed_name = cx.new(|cx| input::TextInput::new("Computer name", window, cx));
         let pairing_name = cx.new(|cx| input::TextInput::new("Device name", window, cx));
         let mut events = transport.events;
         let reader = cx.spawn(async move |this, cx| {
@@ -487,6 +491,8 @@ impl WorkspaceView {
             provider_updates_confirmed: false,
             provider_updates_error: None,
             paired: false,
+            managed_access: Default::default(),
+            managed_name,
             pairing_origin: String::new(),
             pairings: Value::Null,
             pairing_name,
@@ -829,6 +835,9 @@ impl WorkspaceView {
         if self.receive_recovery(id, &frame, cx) {
             return;
         }
+        if self.receive_managed_access(id, &frame, cx) {
+            return;
+        }
         if self.receive_pairing(id, &frame, cx) {
             return;
         }
@@ -924,6 +933,7 @@ impl WorkspaceView {
                 methods::CLOUD_ACCOUNT_STATUS => {
                     let changed = self.cloud_account["user"]["id"] != value["user"]["id"];
                     self.cloud_account = value.clone();
+                    self.managed_account_updated(changed);
                     if changed {
                         self.reset_model_connections();
                         self.model_callback

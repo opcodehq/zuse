@@ -229,6 +229,7 @@ pub const SET_HARNESS_UPDATE_POLICY: &str = "SetHarnessUpdatePolicy";
 /// Engine-owned Zuse account and managed Executor gateway.
 pub const LIST_ACCOUNT_ENVIRONMENTS: &str = "ListAccountEnvironments";
 pub const MANAGED_HOST_STATUS: &str = "ManagedHostStatus";
+pub const WATCH_MANAGED_HOST: &str = "WatchManagedHost";
 pub const LINK_MANAGED_HOST: &str = "LinkManagedHost";
 pub const UNLINK_MANAGED_HOST: &str = "UnlinkManagedHost";
 pub const LIST_ACCOUNT_DEVICES: &str = "ListAccountDevices";
@@ -264,6 +265,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | LIST_PAIRINGS
         | LIST_ACCOUNT_ENVIRONMENTS
         | MANAGED_HOST_STATUS
+        | WATCH_MANAGED_HOST
         | LIST_ACCOUNT_DEVICES
         | CLOUD_ACCOUNT_STATUS
         | LOCAL_DEVICE

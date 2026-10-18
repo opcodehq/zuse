@@ -132,6 +132,9 @@ jobs:
       - name: Relay settings recovery
         if: runner.os == 'Linux'
         run: cargo test -p zuse-viewport --lib pairing::tests
+      - name: Account remote settings recovery
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib managed_access::tests
       - name: Browser PR workflows
         if: runner.os == 'Linux'
         run: cargo test -p zuse-viewport --lib pull_requests::tests

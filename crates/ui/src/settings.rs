@@ -16,6 +16,7 @@ use gpui::{App, Global, Task};
 use serde::{Deserialize, Serialize};
 use zuse_protocol::{AuthState, WorkspaceScope};
 
+mod access_widgets;
 pub mod accounts;
 pub mod appearance;
 pub mod archived;
@@ -25,6 +26,7 @@ pub mod defaults;
 pub mod devices;
 pub mod files;
 pub mod harnesses;
+mod managed_access;
 pub mod model_accounts;
 pub mod notifications;
 pub mod pairing;

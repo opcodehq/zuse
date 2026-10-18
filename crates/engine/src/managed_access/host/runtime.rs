@@ -59,7 +59,18 @@ fn snapshot(host: &Host) -> Option<Config> {
     })
 }
 fn error(host: &Host, message: Option<&str>) {
-    lock(&host.0.state).runtime_error = message.map(str::to_owned);
+    let mut state = lock(&host.0.state);
+    if state.runtime_error.as_deref() != message {
+        state.runtime_error = message.map(str::to_owned);
+        host.notify_status();
+    }
+}
+fn running(host: &Host, value: bool) {
+    let mut state = lock(&host.0.state);
+    if state.tunnel_running != value {
+        state.tunnel_running = value;
+        host.notify_status();
+    }
 }
 fn disable(host: &Host, message: &str) {
     let mut state = lock(&host.0.state);
@@ -75,6 +86,7 @@ fn disable(host: &Host, message: &str) {
         "Managed access stopped, but its disabled state could not be saved. Fix profile storage before restarting.".into()
     });
     host.0.changed.send_replace(());
+    host.notify_status();
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -110,6 +122,7 @@ async fn beat(host: &Host, config: &Config) -> Result<()> {
         return Err(Error::Changed);
     }
     lock(&host.0.state).last_heartbeat = Some(chrono::Utc::now().timestamp_millis());
+    host.notify_status();
     Ok(())
 }
 fn backoff(failures: u32) -> Duration {
@@ -246,7 +259,7 @@ async fn connector(
             .spawn();
         match spawn {
             Ok(mut child) => {
-                lock(&host.0.state).tunnel_running = true;
+                running(host, true);
                 tokio::select! {biased;
                     _=stop.cancelled()=>{terminate(&mut child).await;break;},
                     _=child.wait()=>{},
@@ -254,7 +267,7 @@ async fn connector(
             }
             Err(_) => {}
         }
-        lock(&host.0.state).tunnel_running = false;
+        running(host, false);
         if started.elapsed() > Duration::from_secs(60) {
             failures = 0;
         }
@@ -265,7 +278,7 @@ async fn connector(
         );
         tokio::select! {biased;_=stop.cancelled()=>break,_=tokio::time::sleep(backoff(failures))=>{}}
     }
-    lock(&host.0.state).tunnel_running = false;
+    running(host, false);
     // Drop removes this launch's credential file only after its child has exited.
     drop(token);
 }
@@ -380,7 +393,7 @@ pub(super) async fn supervise(host: Host) {
             if !finished {
                 let _ = tokio::time::timeout(Duration::from_secs(4), &mut task).await;
             }
-            lock(&host.0.state).tunnel_running = false;
+            running(&host, false);
             if finished && !config.retired.is_cancelled() && !host.0.closed.is_cancelled() {
                 tokio::select! {biased;_=host.0.closed.cancelled()=>break,_=tokio::time::sleep(Duration::from_secs(5))=>{}}
             }

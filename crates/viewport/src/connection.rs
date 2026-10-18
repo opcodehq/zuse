@@ -125,6 +125,7 @@ impl WorkspaceView {
         self.plugin_state.interrupted();
         self.plugin_setup = None;
         self.plugin_setup_events = None;
+        self.interrupt_managed_access();
         self.pairing_fetch = None;
         self.relay_fetch = None;
         self.relay_action = None;
@@ -188,6 +189,9 @@ impl WorkspaceView {
         self.refresh_model_config_watch();
         self.refresh_provider_updates();
         self.refresh_pairings();
+        if self.settings && self.settings_section == settings_view::Section::Devices {
+            self.refresh_managed_access();
+        }
         self.refresh_worktree_settings();
         self.refresh_title_settings();
         self.refresh_model_connections();

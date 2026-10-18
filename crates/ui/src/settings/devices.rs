@@ -65,6 +65,7 @@ pub struct DevicesPage {
     state: Entity<AppState>,
     scroll: widgets::PageScroll,
     pairing: Entity<crate::settings::pairing::PairingCard>,
+    managed: Entity<crate::settings::managed_access::ManagedAccessCard>,
     rename: Option<RenameDialog>,
     /// Device id whose id-chip shows "Copied" right now.
     copied: Option<String>,
@@ -72,13 +73,24 @@ pub struct DevicesPage {
     task: Option<Task<()>>,
     copy_task: Option<Task<()>>,
     _observe: Subscription,
+    _managed: Subscription,
 }
 
 impl DevicesPage {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let observe = cx.observe(&state, |_, _, cx| cx.notify());
         let pairing = cx.new(|cx| crate::settings::pairing::PairingCard::new(state.clone(), cx));
+        let managed =
+            cx.new(|cx| crate::settings::managed_access::ManagedAccessCard::new(state.clone(), cx));
+        let managed_events = cx.subscribe(
+            &managed,
+            |this: &mut Self, _, _: &crate::settings::managed_access::AccessChanged, cx| {
+                this.pairing.update(cx, |card, cx| card.refresh(cx));
+            },
+        );
         Self {
+            _managed: managed_events,
+            managed,
             pairing,
             state,
             scroll: widgets::PageScroll::default(),
@@ -427,6 +439,7 @@ impl Render for DevicesPage {
                                     &theme,
                                     devices_subtitle(workspace_scope),
                                 ))
+                                .child(self.managed.clone())
                                 .child(self.pairing.clone())
                                 .child(card),
                         ),

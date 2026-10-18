@@ -72,6 +72,7 @@ impl WorkspaceView {
         }
         if section == Section::Devices {
             self.refresh_pairings();
+            self.refresh_managed_access();
         }
         if matches!(section, Section::Providers | Section::Usage) {
             self.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":false}));

@@ -337,6 +337,7 @@ async fn engine_account_discovery_rejects_foreign_targets_without_breaking_engin
         methods::LIST_ACCOUNT_DEVICES,
         methods::REVOKE_ACCOUNT_DEVICE,
         methods::MANAGED_HOST_STATUS,
+        methods::WATCH_MANAGED_HOST,
         methods::LINK_MANAGED_HOST,
         methods::UNLINK_MANAGED_HOST,
     ] {
@@ -593,4 +594,61 @@ exec /bin/sleep 60
     owner.close().await;
     api_task.abort();
     let _ = api_task.await;
+}
+
+#[tokio::test]
+async fn managed_invitation_origin_and_status_stream_follow_the_linked_account() {
+    use futures::StreamExt;
+    let root = tempfile::tempdir().unwrap();
+    let (api, server) = fixture().await;
+    let core = crate::EngineCore::assemble_with_profile(
+        crate::EngineProfile::local(root.path()).unwrap(),
+        Arc::new(crate::HarnessRegistry::new()),
+        zuse_protocol::HarnessId::Mock,
+        None,
+    )
+    .unwrap();
+    let account = Account::fixture_signed_in(root.path(), api.origin.clone(), "user_a");
+    let client = AccountClient::new(account.clone()).unwrap();
+    let owner = host::Owner::open(root.path(), &core.device_id, client.clone());
+    let host = owner.control();
+    let mut status = Box::pin(host.watch());
+    assert!(!status.next().await.unwrap().configured);
+    host.link("Build computer", 27656).await.unwrap();
+    assert!(status.next().await.unwrap().configured);
+    let service = (*core.rpc_service())
+        .clone()
+        .with_managed_host(host)
+        .with_managed_access(client)
+        .with_account(account.clone(), core.plugins.clone());
+    let rpc = zuse_rpc::memory_client(Arc::new(service));
+    let mut watch = rpc
+        .subscribe_scoped(zuse_rpc::methods::WATCH_MANAGED_HOST, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(watch.recv().await.unwrap()["accountMatches"], true);
+    let invitation = rpc
+        .call(
+            zuse_rpc::methods::CREATE_PAIRING,
+            json!({"label":"Test device"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invitation["origin"], "https://computer.example");
+    account.sign_out().unwrap();
+    assert_eq!(watch.recv().await.unwrap()["accountMatches"], false);
+    let invitation = rpc
+        .call(
+            zuse_rpc::methods::CREATE_PAIRING,
+            json!({"label":"Another device"}),
+        )
+        .await
+        .unwrap();
+    assert!(invitation["origin"].is_null());
+    drop(watch);
+    drop(owner);
+    assert!(status.next().await.is_none());
+    core.shutdown().await;
+    server.abort();
+    let _ = server.await;
 }

@@ -1,4 +1,5 @@
 //! Native Devices cards use the profile-owned browser and pairing authorities.
+use super::access_widgets::{details, field, frame, header};
 use crate::{
     composer::ComposerInput,
     settings::widgets,
@@ -96,7 +97,7 @@ impl PairingCard {
         card.refresh(cx);
         card
     }
-    fn refresh(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
         let Some(engine) = self.engine.clone() else {
             return;
         };
@@ -211,57 +212,6 @@ impl PairingCard {
         }
         cx.notify();
     }
-}
-fn header(theme: &Theme, title: &str, description: &str) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(2.))
-        .px(px(10.))
-        .py(px(8.))
-        .child(widgets::row_title(theme, title.to_owned()))
-        .child(
-            div()
-                .text_size(crate::typography::ui_rems(11.))
-                .line_height(crate::typography::ui_rems(16.))
-                .text_color(theme.text_muted)
-                .child(description.to_owned()),
-        )
-}
-fn frame(theme: &Theme) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .p(px(4.))
-        .rounded(px(zuse_viewport::settings_style::FRAME_RADIUS))
-        .bg(theme.settings_frame_bg())
-}
-fn field(theme: &Theme, input: Entity<ComposerInput>) -> Div {
-    div()
-        .flex_1()
-        .min_w(px(180.))
-        .px(px(10.))
-        .py(px(4.))
-        .rounded(px(6.))
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.input_glass_bg())
-        .child(input)
-}
-fn details(theme: &Theme, title: &str, description: &str) -> Div {
-    div()
-        .flex_1()
-        .min_w(px(160.))
-        .flex()
-        .flex_col()
-        .gap(px(2.))
-        .child(widgets::row_title(theme, title.to_owned()))
-        .child(
-            div()
-                .text_size(crate::typography::ui_rems(11.))
-                .text_color(theme.text_muted)
-                .child(description.to_owned()),
-        )
 }
 impl Render for PairingCard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

@@ -75,6 +75,7 @@ struct Shared {
     state: Mutex<State>,
     closed: CancellationToken,
     changed: tokio::sync::watch::Sender<()>,
+    status_changed: tokio::sync::watch::Sender<()>,
 }
 #[derive(Clone)]
 pub struct Host(Arc<Shared>);
@@ -213,6 +214,7 @@ impl Owner {
             }),
             closed: CancellationToken::new(),
             changed: tokio::sync::watch::channel(()).0,
+            status_changed: tokio::sync::watch::channel(()).0,
         })))
     }
     pub fn control(&self) -> Host {
@@ -237,6 +239,30 @@ impl Owner {
     }
 }
 impl Host {
+    fn notify_status(&self) {
+        self.0.status_changed.send_replace(());
+    }
+    pub fn watch(&self) -> impl futures::Stream<Item = Status> + Send + 'static {
+        let host = self.clone();
+        let changes = self.0.status_changed.subscribe();
+        let account = self.0.client.account.watch();
+        futures::stream::unfold(
+            (host, changes, account, true),
+            |(host, mut changes, mut account, first)| async move {
+                if !first {
+                    if host.0.closed.is_cancelled() {
+                        return None;
+                    }
+                    tokio::select! {
+                        _=host.0.closed.cancelled()=>{},
+                        result=changes.changed()=>{if result.is_err(){return None;}},
+                        result=account.changed()=>{if result.is_err(){return None;}},
+                    }
+                }
+                Some((host.status(), (host, changes, account, false)))
+            },
+        )
+    }
     /// Restore the browser transport only for a saved, enabled link. Foreground
     /// servers already own their listener and do not need this startup helper.
     pub async fn restore_listener(
@@ -346,6 +372,7 @@ impl Host {
         state.key = Some(key);
         drop(state);
         self.0.changed.send_replace(());
+        self.notify_status();
         lease.check(&self.0.client.account)?;
         Ok(self.status())
     }
@@ -365,6 +392,7 @@ impl Host {
             let environment = saved.environment_id.clone();
             state.retired.cancel();
             self.0.changed.send_replace(());
+            self.notify_status();
             result?;
             environment
         };
@@ -385,6 +413,7 @@ impl Host {
         state.last_heartbeat = None;
         drop(state);
         self.0.changed.send_replace(());
+        self.notify_status();
         Ok(self.status())
     }
 }
