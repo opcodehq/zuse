@@ -43,6 +43,8 @@ jobs:
       - run: cargo test -p zuse-cli --test startup
       - run: cargo test -p zuse-relay --test startup
       - run: cargo test -p zuse-remote
+      - run: cargo test -p zuse-plugins
+      - run: cargo test -p zuse-engine --lib plugins::tests
       - run: cargo test -p zuse-engine --test pairing
       - run: cargo test -p zuse-engine --test browser_access
       - run: cargo test -p zuse-engine --test relay_access

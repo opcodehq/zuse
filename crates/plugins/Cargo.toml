@@ -15,3 +15,7 @@ thiserror.workspace = true
 futures.workspace = true
 tokio-util.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+rcgen = "0.14"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

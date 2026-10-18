@@ -575,13 +575,27 @@ impl WorkspaceView {
     }
 
     fn plugin_action(&mut self, request: Value) {
+        self.plugin_request_with(methods::PLUGINS, request);
+    }
+    fn plugin_select_workspace(&mut self, tenant: Value) {
+        self.plugin_request_with(
+            methods::SELECT_PLUGIN_WORKSPACE,
+            json!({"action":"list","tenantId":tenant}),
+        );
+    }
+    fn plugin_request_with(&mut self, method: &'static str, request: Value) {
         if self.plugin_request.is_some() {
             return;
         }
         if !self.connected {
             return;
         }
-        let request = match self.plugin_state.begin(request) {
+        let prepared = if method == methods::SELECT_PLUGIN_WORKSPACE {
+            self.plugin_state.begin_workspace_selection(request)
+        } else {
+            self.plugin_state.begin(request)
+        };
+        let request = match prepared {
             Ok(request) => request,
             Err(error) => {
                 self.plugin_state.notice = Some(error.into());
@@ -590,7 +604,7 @@ impl WorkspaceView {
         };
         self.plugin_setup = None;
         self.plugin_setup_events = None;
-        self.plugin_request = Some(self.call(methods::PLUGINS, request));
+        self.plugin_request = Some(self.call(method, request));
     }
 
     fn call(&mut self, method: &str, params: Value) -> u64 {
@@ -744,7 +758,10 @@ impl WorkspaceView {
             self.receive_transcript(id, &frame, cx);
             return;
         }
-        if method == methods::PLUGINS {
+        if matches!(
+            method.as_str(),
+            methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE
+        ) {
             self.receive_plugins(id, &frame, cx);
             return;
         }

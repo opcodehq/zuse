@@ -4,10 +4,10 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::{Client, Url};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
-use zuse_protocol::plugins::{PluginRequest, PluginResponse, PluginToolRequest};
+use zuse_protocol::plugins::{PluginRequest, PluginResponse, PluginTenant, PluginToolRequest};
 
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
@@ -27,6 +27,8 @@ pub enum PluginError {
     InvalidResponse,
     #[error("Plugin service URL must be an HTTPS base URL.")]
     InvalidEndpoint,
+    #[error("Choose a valid plugin workspace belonging to this account.")]
+    InvalidWorkspace,
     #[error("Plugin calls require session permission.")]
     PermissionRequired,
 }
@@ -89,7 +91,14 @@ impl PluginClient {
         request: &PluginRequest,
         cancel: &CancellationToken,
     ) -> Result<PluginResponse, PluginError> {
-        self.post("/v1/plugins", request, cancel).await
+        let tenant = request.tenant_id();
+        let response = self.post("/v1/plugins", tenant, request, cancel).await?;
+        if let PluginResponse::Snapshot { tenant_id, .. } = &response {
+            if tenant.is_some_and(|expected| expected != tenant_id) {
+                return Err(PluginError::InvalidResponse);
+            }
+        }
+        Ok(response)
     }
 
     /// The gateway passes a permission receipt for a call only after its session
@@ -100,28 +109,113 @@ impl PluginClient {
         permitted: bool,
         cancel: &CancellationToken,
     ) -> Result<serde_json::Value, PluginError> {
+        self.tools_in_tenant(
+            &format!("personal:{}", self.subject),
+            request,
+            permitted,
+            cancel,
+        )
+        .await
+    }
+
+    /// Tenant is bound by the engine session, never supplied by an agent tool.
+    pub async fn tools_in_tenant(
+        &self,
+        tenant: &str,
+        request: &PluginToolRequest,
+        permitted: bool,
+        cancel: &CancellationToken,
+    ) -> Result<serde_json::Value, PluginError> {
         if request.invokes_external_tool() && !permitted {
             return Err(PluginError::PermissionRequired);
         }
-        self.post("/v1/plugins/tools", request, cancel).await
+        self.post("/v1/plugins/tools", Some(tenant), request, cancel)
+            .await
+    }
+
+    /// Discover content workspaces using the hosted account's membership API.
+    pub async fn workspaces(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<PluginTenant>, PluginError> {
+        #[derive(Deserialize)]
+        struct Organization {
+            id: String,
+            name: String,
+            role: String,
+        }
+        let read = async {
+            let credential = self.credentials.current().await?;
+            if credential.subject != self.subject.as_ref() {
+                return Err(PluginError::AccountChanged);
+            }
+            if credential.access_token.is_empty() {
+                return Err(PluginError::SignedOut);
+            }
+            let response = self
+                .http
+                .get(
+                    self.endpoint
+                        .join("/v1/organizations")
+                        .map_err(|_| PluginError::InvalidEndpoint)?,
+                )
+                .bearer_auth(credential.access_token)
+                .send()
+                .await
+                .map_err(|_| PluginError::Unavailable)?;
+            let organizations: Vec<Organization> = match self.decode(response).await {
+                // Older deployments or disabled organization rollout still support Personal.
+                Err(PluginError::Rejected(403 | 404)) => vec![],
+                result => result?,
+            };
+            if organizations.len() > 1024 {
+                return Err(PluginError::InvalidResponse);
+            }
+            let mut tenants = vec![PluginTenant {
+                id: format!("personal:{}", self.subject),
+                kind: "personal".into(),
+                name: "Personal".into(),
+            }];
+            for org in organizations
+                .into_iter()
+                .filter(|org| matches!(org.role.as_str(), "admin" | "member"))
+            {
+                let id = format!("organization:{}", org.id);
+                scoped_route("/v1/plugins", Some(&id), &self.subject)?;
+                if !tenants.iter().any(|tenant| tenant.id == id) {
+                    tenants.push(PluginTenant {
+                        id,
+                        kind: "organization".into(),
+                        name: org.name,
+                    });
+                }
+            }
+            if self.credentials.current().await?.subject != self.subject.as_ref() {
+                return Err(PluginError::AccountChanged);
+            }
+            Ok(tenants)
+        };
+        tokio::select! { biased; _ = cancel.cancelled() => Err(PluginError::Cancelled), result = read => result }
     }
 
     async fn post<I: Serialize + ?Sized, O: DeserializeOwned>(
         &self,
         path: &str,
+        tenant: Option<&str>,
         input: &I,
         cancel: &CancellationToken,
     ) -> Result<O, PluginError> {
         tokio::select! {
             biased;
             _ = cancel.cancelled() => Err(PluginError::Cancelled),
-            result = self.post_inner(path, input) => result,
+            result = self.post_inner(path, tenant, input) => result,
         }
     }
 
     async fn post_inner<I: Serialize + ?Sized, O: DeserializeOwned>(
         &self,
         path: &str,
+        tenant: Option<&str>,
         input: &I,
     ) -> Result<O, PluginError> {
         let credentials = self.credentials.current().await?;
@@ -131,18 +225,27 @@ impl PluginClient {
         if credentials.access_token.is_empty() {
             return Err(PluginError::SignedOut);
         }
+        let (path, workspace) = scoped_route(path, tenant, &self.subject)?;
         let url = self
             .endpoint
-            .join(path)
+            .join(&path)
             .map_err(|_| PluginError::InvalidEndpoint)?;
         let response = self
             .http
             .post(url)
             .bearer_auth(credentials.access_token)
+            .header("x-zuse-workspace", workspace)
             .json(input)
             .send()
             .await
             .map_err(|_| PluginError::Unavailable)?;
+        self.decode(response).await
+    }
+
+    async fn decode<O: DeserializeOwned>(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<O, PluginError> {
         if !response.status().is_success() {
             return Err(PluginError::Rejected(response.status().as_u16()));
         }
@@ -169,3 +272,38 @@ impl PluginClient {
         serde_json::from_slice(&body).map_err(|_| PluginError::InvalidResponse)
     }
 }
+
+/// Versioned routes prevent an older API from ignoring organization scope and
+/// silently executing a tool against Personal. The API still authorizes membership.
+fn scoped_route(
+    path: &str,
+    tenant: Option<&str>,
+    subject: &str,
+) -> Result<(String, String), PluginError> {
+    match tenant {
+        None => Ok((path.into(), "personal".into())),
+        Some(tenant) if tenant.strip_prefix("personal:") == Some(subject) => {
+            Ok((path.into(), "personal".into()))
+        }
+        Some(tenant) => {
+            let id = tenant
+                .strip_prefix("organization:")
+                .ok_or(PluginError::InvalidWorkspace)?;
+            if id.is_empty()
+                || id.len() > 128
+                || !id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            {
+                return Err(PluginError::InvalidWorkspace);
+            }
+            Ok((
+                format!("/v1/organization-workspaces/{id}{path}"),
+                tenant.into(),
+            ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

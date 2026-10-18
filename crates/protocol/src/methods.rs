@@ -292,6 +292,7 @@ mod retry_tests {
             REVOKE_PAIRING,
             START_BROWSER_ACCESS,
             STOP_BROWSER_ACCESS,
+            SELECT_PLUGIN_WORKSPACE,
             QUEUE_COMMAND,
             WRITE_WORKSPACE_FILE,
             SWITCH_REF,
@@ -332,3 +333,6 @@ pub const STOP_BROWSER_ACCESS: &str = "StopBrowserAccess";
 pub const RELAY_ACCESS_STATUS: &str = "RelayAccessStatus";
 pub const START_RELAY_ACCESS: &str = "StartRelayAccess";
 pub const STOP_RELAY_ACCESS: &str = "StopRelayAccess";
+
+/// Explicit user selection for new agent plugin sessions; never retried as a read.
+pub const SELECT_PLUGIN_WORKSPACE: &str = "SelectPluginWorkspace";

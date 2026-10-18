@@ -40,6 +40,7 @@ pub struct PluginState {
     pub notice: Option<String>,
     pending: Option<Pending>,
     attempt_tenant: Option<String>,
+    selection_uncertain: bool,
 }
 impl PluginState {
     pub fn tenant(&self) -> Option<&str> {
@@ -53,13 +54,30 @@ impl PluginState {
             && self.attempt_tenant.as_deref() == self.tenant()
     }
     pub fn refresh(&self) -> Value {
-        Self::list(self.tenant())
+        Self::list(if self.selection_uncertain {
+            None
+        } else {
+            self.tenant()
+        })
     }
     fn list(tenant: Option<&str>) -> Value {
         match tenant {
             Some(tenant) => json!({"action":"list","tenantId":tenant}),
             None => json!({"action":"list"}),
         }
+    }
+    pub fn begin_workspace_selection(&mut self, request: Value) -> Result<Value, &'static str> {
+        if self.active_attempt() {
+            return Err("Finish or cancel the current plugin sign-in first.");
+        }
+        if request["action"] != "list"
+            || request["tenantId"].as_str().is_none_or(|id| id.is_empty())
+        {
+            return Err("Choose a plugin workspace.");
+        }
+        let request = self.begin(request)?;
+        self.pending.as_mut().unwrap().action = "selectWorkspace".into();
+        Ok(request)
     }
     pub fn begin(&mut self, mut request: Value) -> Result<Value, &'static str> {
         if self.pending.is_some() {
@@ -83,7 +101,7 @@ impl PluginState {
         ) {
             return Err("Choose a supported plugin action.");
         }
-        if action == "list" && request["tenantId"].is_null() {
+        if action == "list" && request["tenantId"].is_null() && !self.selection_uncertain {
             if let Some(tenant) = self.tenant() {
                 request["tenantId"] = json!(tenant);
             }
@@ -124,7 +142,7 @@ impl PluginState {
             .map_err(|_| "The plugin service returned an invalid response. Refresh connections.")?;
         match decoded {
             PluginResponse::Snapshot { ref tenant_id, .. } => {
-                if pending.action != "list"
+                if !matches!(pending.action.as_str(), "list" | "selectWorkspace")
                     || pending
                         .tenant
                         .as_deref()
@@ -142,6 +160,7 @@ impl PluginState {
                 if changed {
                     self.notice = None;
                 }
+                self.selection_uncertain = false;
                 self.snapshot = response.clone();
                 self.pending = None;
                 Ok(None)
@@ -197,7 +216,14 @@ impl PluginState {
     }
     pub fn failed(&mut self) -> Option<Value> {
         let pending = self.pending.take()?;
-        if pending.action == "list" {
+        if pending.action == "selectWorkspace" {
+            self.selection_uncertain = true;
+            self.notice = Some(
+                "Workspace selection could not be confirmed. Refreshing the saved selection."
+                    .into(),
+            );
+            Some(self.refresh())
+        } else if pending.action == "list" {
             None
         } else {
             self.notice = Some(
@@ -208,7 +234,8 @@ impl PluginState {
         }
     }
     pub fn interrupted(&mut self) {
-        if self.pending.take().is_some() {
+        if let Some(pending) = self.pending.take() {
+            self.selection_uncertain |= pending.action == "selectWorkspace";
             self.notice = Some(
                 "Connection interrupted. Check refreshed connections before trying an action again.".into(),
             );
@@ -429,5 +456,32 @@ mod tests {
         assert!(state.apply(&attempt("second", "connected")).is_err());
         assert_eq!(state.attempt["id"], "first");
         state.failed();
+    }
+    #[test]
+    fn uncertain_workspace_selection_reads_saved_default_without_replaying_selection() {
+        let mut state = loaded();
+        state
+            .begin_workspace_selection(json!({"action":"list","tenantId":"personal:owner"}))
+            .unwrap();
+        let read = state.failed().unwrap();
+        assert_eq!(read, json!({"action":"list"}));
+        assert_eq!(state.tenant(), Some("organization:team"));
+        assert_eq!(state.begin(read.clone()).unwrap(), read);
+        state.apply(&snapshot("personal:owner")).unwrap();
+        assert_eq!(state.tenant(), Some("personal:owner"));
+        state
+            .begin_workspace_selection(json!({"action":"list","tenantId":"organization:team"}))
+            .unwrap();
+        state.interrupted();
+        assert_eq!(state.refresh(), json!({"action":"list"}));
+        assert_eq!(
+            state.begin(state.refresh()).unwrap(),
+            json!({"action":"list"})
+        );
+        state.apply(&snapshot("organization:team")).unwrap();
+        assert_eq!(
+            state.refresh(),
+            json!({"action":"list","tenantId":"organization:team"})
+        );
     }
 }

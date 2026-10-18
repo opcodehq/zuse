@@ -696,6 +696,7 @@ impl WorkspaceView {
                     .child(control("authorize-account","Open sign-in").on_click(move |_,_,cx|cx.open_url(&url))))
             })
             .when(signed_in,|d|d
+                .child(label("Workspace selection applies when a chat first uses plugins. Existing plugin sessions keep their workspace."))
                 .child(control("add-plugin-server","Add MCP server").on_click(cx.listener(|this,_,window,cx|this.open_plugin_setup(crate::plugin_setup::SetupTarget::Server,window,cx))))
                 .when(self.plugin_state.snapshot["canManage"]==false,|d|d.child(label("Only workspace administrators can manage these connections.")))
                 .when_some(self.plugin_setup.clone(),|d,form|d.child(form))
@@ -707,7 +708,7 @@ impl WorkspaceView {
                 .child(row().child(label("Connected plugins")).child(div().flex_1()).child(control("refresh-plugins",if busy {"Loading…"} else {"Refresh"}).on_click(cx.listener(|this,_,_,cx|{this.plugin_action(json!({"action":"list"}));cx.notify();}))))
                 .children(self.plugin_state.snapshot["tenants"].as_array().into_iter().flatten().enumerate().map(|(i,t)| {
                     let id=t["id"].clone();
-                    control(("plugin-tenant",i),t["name"].as_str().unwrap_or("Workspace").to_owned()).when(t["id"]==self.plugin_state.snapshot["tenantId"],|d|d.bg(crate::settings_style::frame_bg())).on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"list","tenantId":id}));cx.notify();}))
+                    control(("plugin-tenant",i),t["name"].as_str().unwrap_or("Workspace").to_owned()).when(t["id"]==self.plugin_state.snapshot["tenantId"],|d|d.bg(crate::settings_style::frame_bg())).on_click(cx.listener(move |this,_,_,cx|{this.plugin_select_workspace(id.clone());cx.notify();}))
                 }))
                 .children(self.plugin_state.snapshot["connections"].as_array().into_iter().flatten().enumerate().map(|(i,c)| {
                     let id=c["id"].as_str().unwrap_or_default().to_owned();let tenant=tenant.clone();let enabled=c["enabled"]!=false;let remove_id=id.clone();

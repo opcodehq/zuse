@@ -74,6 +74,22 @@ pub enum PluginRequest {
     },
 }
 
+impl PluginRequest {
+    pub fn tenant_id(&self) -> Option<&str> {
+        match self {
+            Self::List { tenant_id } => tenant_id.as_deref(),
+            Self::Connect { tenant_id, .. }
+            | Self::AddServer { tenant_id, .. }
+            | Self::RemoveServer { tenant_id, .. }
+            | Self::Poll { tenant_id, .. }
+            | Self::Cancel { tenant_id, .. }
+            | Self::Complete { tenant_id, .. }
+            | Self::Disconnect { tenant_id, .. }
+            | Self::SetEnabled { tenant_id, .. } => Some(tenant_id),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase")]
 pub enum PluginToolRequest {

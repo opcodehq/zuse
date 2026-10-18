@@ -203,8 +203,13 @@ impl PluginsCard {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
-        let params = if method == methods::PLUGINS {
-            match self.plugins.begin(params) {
+        let params = if matches!(method, methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE) {
+            let prepared = if method == methods::SELECT_PLUGIN_WORKSPACE {
+                self.plugins.begin_workspace_selection(params)
+            } else {
+                self.plugins.begin(params)
+            };
+            match prepared {
                 Ok(request) => request,
                 Err(error) => {
                     self.error = Some(error.into());
@@ -228,7 +233,12 @@ impl PluginsCard {
                 }
                 card.busy = false;
                 match result {
-                    Ok(value) if method == methods::PLUGINS => {
+                    Ok(value)
+                        if matches!(
+                            method,
+                            methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE
+                        ) =>
+                    {
                         let next = match card.plugins.apply(&value) {
                             Ok(next) => next,
                             Err(error) => {
@@ -243,7 +253,7 @@ impl PluginsCard {
                     Ok(_) => {}
                     Err(error) => {
                         card.error = Some(error.to_string());
-                        if method == methods::PLUGINS {
+                        if matches!(method, methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE) {
                             if let Some(next) = card.plugins.failed() {
                                 card.request(methods::PLUGINS, next, cx);
                             }
@@ -329,6 +339,7 @@ impl Render for PluginsCard {
             .when_some(self.account.login.clone(),|d,login|d.child(div().flex().items_center().gap(px(12.)).child(format!("Authorization code: {}",login.user_code)).child(action("open-cloud-login","Open sign-in").on_click(move |_,_,cx|{if login.url.starts_with("https://"){cx.open_url(&login.url);}}))))
             .when_some(self.error.clone().or_else(||self.account.error.clone()),|d,error|d.child(div().text_size(px(12.)).text_color(theme.danger).child(error)))
             .when(signed_in,|d|d
+                .child(div().text_size(px(12.)).text_color(theme.text_muted).child("Workspace selection applies when a chat first uses plugins. Existing plugin sessions keep their workspace."))
                 .child(action("add-hosted-server","Add MCP server").on_click(cx.listener(|this,_,window,cx|this.open_setup(SetupTarget::Server,window,cx))))
                 .when(self.plugins.snapshot["canManage"]==false,|d|d.child(widgets::row_title(&theme,"Only workspace administrators can manage these connections.")))
                 .when_some(self.setup.clone(),|d,form|d.child(form))
@@ -340,7 +351,7 @@ impl Render for PluginsCard {
                 .child(action("refresh-hosted-plugins",if self.busy {"Loading…"} else {"Refresh plugins"}).on_click(cx.listener(|this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"list"}),cx))))
                 .children(self.plugins.snapshot["tenants"].as_array().into_iter().flatten().enumerate().map(|(i,t)|{
                     let id=t["id"].clone();
-                    widgets::ghost_action(&theme).id(("plugin-tenant",i)).when(t["id"]==self.plugins.snapshot["tenantId"],|d|d.text_color(theme.accent)).child(SharedString::from(t["name"].as_str().unwrap_or("Workspace").to_owned())).on_click(cx.listener(move |this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"list","tenantId":id}),cx)))
+                    widgets::ghost_action(&theme).id(("plugin-tenant",i)).when(t["id"]==self.plugins.snapshot["tenantId"],|d|d.text_color(theme.accent)).child(SharedString::from(t["name"].as_str().unwrap_or("Workspace").to_owned())).on_click(cx.listener(move |this,_,_,cx|this.request(methods::SELECT_PLUGIN_WORKSPACE,json!({"action":"list","tenantId":id}),cx)))
                 }))
                 .children(self.plugins.snapshot["connections"].as_array().into_iter().flatten().enumerate().map(|(i,c)|{
                     let id=c["id"].clone();let tenant=tenant.clone();let enabled=c["enabled"]!=false;let remove_id=id.as_str().unwrap_or_default().to_owned();

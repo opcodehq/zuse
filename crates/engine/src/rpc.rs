@@ -2339,16 +2339,27 @@ impl RpcService for EngineRpc {
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({"ok":true}))
             }
-            methods::PLUGINS => {
+            methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE => {
+                if params
+                    .get("targetDeviceId")
+                    .filter(|v| !v.is_null())
+                    .is_some_and(|v| v.as_str() != Some(self.doc_host.device_id()))
+                {
+                    return Err(RpcError::BadParams(
+                        "Plugin settings belong to the connected profile".into(),
+                    ));
+                }
                 let gateway = self
                     .plugins
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Plugin service is unavailable.".into()))?;
                 let request = parse_params(params)?;
-                let response = gateway
-                    .request(&request)
-                    .await
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let response = if method == methods::SELECT_PLUGIN_WORKSPACE {
+                    gateway.select_workspace(&request).await
+                } else {
+                    gateway.request(&request).await
+                }
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&response)
             }
             methods::PLUGIN_TOOLS => {

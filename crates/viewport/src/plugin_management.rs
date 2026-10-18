@@ -100,4 +100,48 @@ mod tests {
         );
         assert_eq!(plugin_calls[2], json!({"action":"list"}));
     }
+    #[gpui::test]
+    fn workspace_selection_uses_a_mutation_and_reconciles_its_uncertain_receipt(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(initialize);
+        let (requests, mut received) = futures::channel::mpsc::unbounded();
+        let (_events, frames) = futures::channel::mpsc::unbounded();
+        let window = cx.add_window(|window, cx| {
+            WorkspaceView::new(
+                Transport {
+                    requests,
+                    events: frames,
+                },
+                window,
+                cx,
+            )
+        });
+        window.update(cx, |view, _, cx| {
+            view.connected = true;
+            view.plugin_state.snapshot = json!({"tenantId":"personal:owner","canManage":true});
+            view.plugin_select_workspace(json!("organization:team"));
+            let select = view.plugin_request.unwrap();
+            view.receive(json!({"id":select,"err":"Receipt lost","done":true}),cx);
+            let read = view.plugin_request.unwrap();
+            assert_ne!(select,read);
+            view.receive(json!({"id":read,"ok":{"kind":"snapshot","tenantId":"organization:team","tenants":[],"endpoint":"unused","catalog":[],"connections":[]}}),cx);
+            assert_eq!(view.plugin_state.tenant(),Some("organization:team"));
+            assert!(view.plugin_request.is_none());
+        }).unwrap();
+        let mut calls = vec![];
+        while let Ok(request) = received.try_recv() {
+            if matches!(
+                request["method"].as_str(),
+                Some(methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE)
+            ) {
+                calls.push(request);
+            }
+        }
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["method"], methods::SELECT_PLUGIN_WORKSPACE);
+        assert_eq!(calls[0]["params"]["tenantId"], "organization:team");
+        assert_eq!(calls[1]["method"], methods::PLUGINS);
+        assert_eq!(calls[1]["params"], json!({"action":"list"}));
+    }
 }
