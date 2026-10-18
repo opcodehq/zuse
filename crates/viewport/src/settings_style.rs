@@ -233,3 +233,29 @@ pub fn toggle(id: impl Into<ElementId>, checked: bool, label: &str) -> Stateful<
                 })),
         )
 }
+
+/// Compact choice used by appearance and motion settings.
+pub fn choice(id: impl Into<ElementId>, label: &'static str, selected: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::RadioButton)
+        .aria_label(label)
+        .aria_selected(selected)
+        .aria_toggled(if selected {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .tab_index(0)
+        .on_key_down(contain_activation)
+        .cursor_pointer()
+        .h(px(28.))
+        .px(px(10.))
+        .rounded(px(7.))
+        .text_size(px(12.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(if selected { TEXT } else { MUTED }))
+        .when(selected, |view| view.bg(frame_bg()))
+        .focus_visible(|style| style.bg(frame_bg()))
+        .child(label)
+}

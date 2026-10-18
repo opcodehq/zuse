@@ -21,6 +21,7 @@ struct Visual {
     error: Option<String>,
     busy: bool,
     queued_slider: Option<(String, Value, Value)>,
+    slider_target: Option<(String, f64)>,
     canvases: HashMap<String, CanvasView>,
     started: Instant,
 }
@@ -89,6 +90,7 @@ impl WorkspaceView {
                 error: None,
                 busy: false,
                 queued_slider: None,
+                slider_target: None,
                 canvases: HashMap::new(),
                 started: Instant::now(),
             },
@@ -153,17 +155,24 @@ impl WorkspaceView {
         let Some((handler, kind)) = input(node) else {
             return;
         };
-        if kind == "Slider"
-            && argument["value"]
-                .as_f64()
-                .is_some_and(|value| Some(value) == node["kind"]["Slider"]["value"].as_f64())
-        {
-            return;
+        if kind == "Slider" {
+            view.slider_target = argument["value"].as_f64().map(|value| (path.into(), value));
         }
         if view.busy {
             if kind == "Slider" {
                 view.queued_slider = Some((path.into(), argument, node.clone()));
             }
+            return;
+        }
+        if kind != "Slider" {
+            view.slider_target = None;
+        }
+        if kind == "Slider"
+            && argument["value"]
+                .as_f64()
+                .is_some_and(|value| Some(value) == node["kind"]["Slider"]["value"].as_f64())
+        {
+            view.slider_target = None;
             return;
         }
         let Some(lease) = view.lease.clone() else {
@@ -226,6 +235,7 @@ impl WorkspaceView {
                 view.error=Some(if owner {"Visual session ended. Reopen it to start again."}else{"The control response was interrupted. Reopen the visual before trying again."}.into());
                 view.busy = false;
                 view.queued_slider = None;
+                view.slider_target = None;
             }
             let requests: Vec<_> = self
                 .visuals
@@ -264,6 +274,7 @@ impl WorkspaceView {
                 view.canvases.clear();
                 collect_canvases(&view.tree, "", &mut view.canvases);
                 let next = view.queued_slider.take();
+                view.slider_target = None;
                 let revision = view.revision;
                 if let Some((path, argument, previous)) = next {
                     if at(&view.tree, &path).is_some_and(|node| same_slider(node, &previous)) {
@@ -281,6 +292,7 @@ impl WorkspaceView {
                 );
                 view.busy = false;
                 view.queued_slider = None;
+                view.slider_target = None;
                 let owner = view.owner;
                 self.visuals.requests.remove(&owner);
                 self.cancel(owner);
@@ -330,7 +342,25 @@ impl WorkspaceView {
                     }),
                 )
             });
-        let mut frame = column().w_full().min_w_0().gap_3().py_3().child(heading);
+        let mut frame = column()
+            .id(SharedString::from(format!("visual-{id}")))
+            .tab_group()
+            .tab_stop(false)
+            .on_key_down(|event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "tab" {
+                    if event.keystroke.modifiers.shift {
+                        window.focus_prev(cx);
+                    } else {
+                        window.focus_next(cx);
+                    }
+                    cx.stop_propagation();
+                }
+            })
+            .w_full()
+            .min_w_0()
+            .gap_3()
+            .py_3()
+            .child(heading);
         if let Some(view) = view {
             if let Some(error) = &view.error {
                 frame = frame.child(label(error.clone())).child(
@@ -378,6 +408,14 @@ impl WorkspaceView {
         let clickable = |element: Stateful<Div>, argument: Value, cx: &mut Context<Self>| {
             let (id, path) = (id.to_owned(), path.to_owned());
             element
+                .tab_index(0)
+                .tab_stop(!busy)
+                .focus_visible(|style| style.bg(rgb(0x89ca21).opacity(0.12)))
+                .on_key_down(|event: &KeyDownEvent, _, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        cx.stop_propagation();
+                    }
+                })
                 .opacity(if busy { 0.65 } else { 1. })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
@@ -420,6 +458,8 @@ impl WorkspaceView {
                     clickable(
                         stack
                             .id(SharedString::from(format!("{id}-{path}")))
+                            .role(Role::Button)
+                            .aria_label("Interactive group")
                             .cursor_pointer(),
                         json!({"kind":"none"}),
                         cx,
@@ -528,6 +568,11 @@ impl WorkspaceView {
                     row()
                         .id(SharedString::from(format!("{id}-{path}")))
                         .role(Role::Switch)
+                        .aria_toggled(if checked {
+                            Toggled::True
+                        } else {
+                            Toggled::False
+                        })
                         .aria_label(value["label"].as_str().unwrap_or("Toggle").to_owned())
                         .cursor_pointer()
                         .gap_2()
@@ -551,6 +596,9 @@ impl WorkspaceView {
                 )
             }
             "Tabs" => row()
+                .id(SharedString::from(format!("{id}-{path}-tabs")))
+                .role(Role::TabList)
+                .aria_label("Visual tabs")
                 .gap_2()
                 .flex_wrap()
                 .children(
@@ -565,6 +613,8 @@ impl WorkspaceView {
                                     SharedString::from(format!("{id}-{path}-{option}")),
                                     option.to_owned(),
                                 )
+                                .role(Role::Tab)
+                                .aria_selected(value["value"] == option)
                                 .when(value["value"] == option, |d| {
                                     d.bg(rgb(0x32372f)).text_color(rgb(TEXT))
                                 }),
@@ -577,49 +627,109 @@ impl WorkspaceView {
                 .into_any_element(),
             "Slider" => self.visual_slider(id, path, value, revision, busy, cx),
             "Table" => {
-                let columns = value["columns"].as_array().cloned().unwrap_or_default();
-                column()
-                    .gap_2()
-                    .child(
-                        row().gap_3().children(
-                            columns
-                                .iter()
-                                .map(|v| {
-                                    label(v["label"].as_str().unwrap_or_default().to_owned())
-                                        .flex_1()
-                                })
-                                .collect::<Vec<_>>(),
-                        ),
-                    )
-                    .children(
-                        value["rows"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .enumerate()
-                            .map(|(r, cells)| {
-                                row().gap_3().items_start().children(
-                                    cells
-                                        .as_array()
-                                        .into_iter()
-                                        .flatten()
-                                        .enumerate()
-                                        .map(|(c, cell)| {
-                                            div().flex_1().min_w_0().child(self.visual_node(
-                                                id,
-                                                &format!("{path}/{r}/{c}"),
-                                                cell,
-                                                revision,
-                                                busy,
-                                                cx,
-                                            ))
-                                        })
-                                        .collect::<Vec<_>>(),
-                                )
+                let columns = value["columns"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                let rows = value["rows"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+                let count = columns.len().max(
+                    rows.iter()
+                        .filter_map(Value::as_array)
+                        .map(Vec::len)
+                        .max()
+                        .unwrap_or(0),
+                );
+                let cell = |index: usize| {
+                    let column = columns.get(index).unwrap_or(&Value::Null);
+                    let base = div().min_w_0().px_2().py_2().flex();
+                    let base =
+                        if let Some(width) = column["width"].as_f64().filter(|v| v.is_finite()) {
+                            base.flex_none().w(px((width as f32).clamp(0., 4096.)))
+                        } else {
+                            base.flex_1().flex_basis(px(0.))
+                        };
+                    match column["align"].as_str() {
+                        Some("Center") => base.justify_center(),
+                        Some("End") => base.justify_end(),
+                        _ => base,
+                    }
+                };
+                let mut table = column()
+                    .id(SharedString::from(format!("{id}-{path}-table")))
+                    .role(Role::Table)
+                    .w_full();
+                if columns
+                    .iter()
+                    .any(|c| c["label"].as_str().is_some_and(|s| !s.is_empty()))
+                {
+                    table = table.child(
+                        row()
+                            .id(SharedString::from(format!("{id}-{path}-header")))
+                            .role(Role::Row)
+                            .items_stretch()
+                            .children(
+                                (0..count)
+                                    .map(|c| {
+                                        cell(c)
+                                            .id(SharedString::from(format!(
+                                                "{id}-{path}-header-{c}"
+                                            )))
+                                            .role(Role::ColumnHeader)
+                                            .child(
+                                                label(
+                                                    columns
+                                                        .get(c)
+                                                        .and_then(|c| c["label"].as_str())
+                                                        .unwrap_or_default()
+                                                        .to_owned(),
+                                                )
+                                                .font_weight(FontWeight::MEDIUM),
+                                            )
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ),
+                    );
+                }
+                for (r, cells) in rows.iter().enumerate() {
+                    if r > 0 || !columns.is_empty() {
+                        table = table.child(div().h(px(1.)).w_full().bg(rgb(BORDER)));
+                    }
+                    table = table.child(
+                        row()
+                            .id(SharedString::from(format!("{id}-{path}-row-{r}")))
+                            .role(Role::Row)
+                            .items_stretch()
+                            .when(value["hover"] == true, |view| {
+                                view.hover(|style| style.bg(rgb(crate::shell::RAISED)))
                             })
-                            .collect::<Vec<_>>(),
-                    )
-                    .into_any_element()
+                            .children(
+                                (0..count)
+                                    .map(|c| {
+                                        let content = cells
+                                            .get(c)
+                                            .map(|node| {
+                                                self.visual_node(
+                                                    id,
+                                                    &format!("{path}/{r}/{c}"),
+                                                    node,
+                                                    revision,
+                                                    busy,
+                                                    cx,
+                                                )
+                                            })
+                                            .unwrap_or_else(|| div().into_any_element());
+                                        cell(c)
+                                            .id(SharedString::from(format!(
+                                                "{id}-{path}-cell-{r}-{c}"
+                                            )))
+                                            .role(Role::Cell)
+                                            .child(content)
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ),
+                    );
+                }
+                table.into_any_element()
             }
             "Chart" => chart(value),
             "Link" => {
@@ -628,6 +738,9 @@ impl WorkspaceView {
                     SharedString::from(format!("{id}-{path}")),
                     value["label"].as_str().unwrap_or("Open link").to_owned(),
                 )
+                .tab_index(0)
+                .role(Role::Link)
+                .focus_visible(|style| style.bg(rgb(0x89ca21).opacity(0.12)))
                 .text_color(rgb(0x89ca21))
                 .on_click(move |_, _, cx| {
                     if url.starts_with("https://") || url.starts_with("http://") {
@@ -652,8 +765,8 @@ impl WorkspaceView {
         }
         container.into_any_element()
     }
-    fn refresh_visual_draws(&mut self, _cx: &mut Context<Self>) {
-        if !self.connected || self.settings || self.project_picker {
+    fn refresh_visual_draws(&mut self, cx: &mut Context<Self>) {
+        if !self.connected || !self.environment.visible || self.settings || self.project_picker {
             return;
         }
         let now = Instant::now();
@@ -692,6 +805,7 @@ impl WorkspaceView {
                 let signature = (width, height, pointer);
                 if canvas.signature.as_ref() == Some(&signature)
                     && (!canvas.animate
+                        || cx.reduce_motion()
                         || now.duration_since(canvas.requested) < Duration::from_millis(100))
                 {
                     continue;
@@ -777,12 +891,27 @@ impl WorkspaceView {
         });
         if value["on_click"].is_u64() {
             let (id, path, bounds) = (id.to_owned(), path.to_owned(), canvas.bounds.clone());
-            area = area.cursor_pointer().on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+            area = area
+                .cursor_pointer()
+                .tab_index(0)
+                .role(Role::Button)
+                .aria_label("Interactive canvas")
+                .focus_visible(|style| style.bg(rgb(0x89ca21).opacity(0.12)))
+                .on_key_down(|event: &KeyDownEvent, _, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        cx.stop_propagation();
+                    }
+                })
+                .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
                     let b = bounds.get();
-                    let x = f32::from(event.position.x - b.left()).clamp(0., 2048.);
-                    let y = f32::from(event.position.y - b.top()).clamp(0., height);
+                    let p = if matches!(event, ClickEvent::Keyboard(_)) {
+                        b.center()
+                    } else {
+                        event.position()
+                    };
+                    let x = f32::from(p.x - b.left()).clamp(0., f32::from(b.size.width).min(2048.));
+                    let y = f32::from(p.y - b.top()).clamp(0., height);
                     this.visual_control(
                         &id,
                         &path,
@@ -790,10 +919,11 @@ impl WorkspaceView {
                         json!({"kind":"point","value":[x,y]}),
                         cx,
                     );
-                }),
-            );
+                }));
+        } else {
+            area = area.on_click(|_, _, cx| cx.stop_propagation());
         }
-        area = area.on_click(|_, _, cx| cx.stop_propagation());
+
         column()
             .child(area)
             .when_some(canvas.error.clone(), |d, error| d.child(label(error)))
@@ -822,6 +952,32 @@ impl WorkspaceView {
             cx,
         );
     }
+    fn visual_slider_key(&mut self, spec: &SliderDrag, key: &str, cx: &mut Context<Self>) -> bool {
+        let Some(view) = self.visuals.views.get(&spec.visual) else {
+            return false;
+        };
+        let Some(node) = at(&view.tree, &spec.path) else {
+            return false;
+        };
+        let current = view
+            .slider_target
+            .as_ref()
+            .filter(|(path, _)| path == &spec.path)
+            .map(|(_, value)| *value)
+            .or_else(|| node["kind"]["Slider"]["value"].as_f64())
+            .unwrap_or(spec.min);
+        let next = match key {
+            "right" | "up" => current + spec.step,
+            "left" | "down" => current - spec.step,
+            "pageup" => current + 10. * spec.step,
+            "pagedown" => current - 10. * spec.step,
+            "home" => spec.min,
+            "end" => spec.max,
+            _ => return false,
+        };
+        self.visual_drag_value(spec, next.clamp(spec.min, spec.max), cx);
+        true
+    }
     fn visual_slider(
         &self,
         id: &str,
@@ -846,6 +1002,7 @@ impl WorkspaceView {
         let bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
         let measured = bounds.clone();
         let press = spec.clone();
+        let keys = spec.clone();
         column()
             .gap_1()
             .child(
@@ -860,6 +1017,22 @@ impl WorkspaceView {
                 div()
                     .id(SharedString::from(format!("{id}-{path}")))
                     .role(Role::Slider)
+                    .tab_index(0)
+                    .aria_numeric_value(current)
+                    .aria_min_numeric_value(min)
+                    .aria_max_numeric_value(max)
+                    .aria_numeric_value_step(step)
+                    .aria_value(format_number(current, &value["format"]))
+                    .focus_visible(|style| style.bg(rgb(0x89ca21).opacity(0.12)))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.modifiers.modified() {
+                            return;
+                        }
+                        if this.visual_slider_key(&keys, &event.keystroke.key, cx) {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }))
                     .aria_label(value["label"].as_str().unwrap_or("Value").to_owned())
                     .cursor_pointer()
                     .h(px(28.))
@@ -1428,6 +1601,51 @@ mod tests {
             100.,
         );
         assert_eq!(marks.len(), 2);
+    }
+    #[gpui::test]
+    fn reduced_canvases_and_keyboard_sliders_preserve_latest_intent(cx: &mut TestAppContext) {
+        cx.update(initialize);
+        let (requests, mut rx) = futures::channel::mpsc::unbounded();
+        let (_, events) = futures::channel::mpsc::unbounded();
+        let window = cx.add_window(|window, cx| {
+            WorkspaceView::new(Transport { requests, events }, window, cx)
+        });
+        window.update(cx,|view,_,cx|{
+            view.connected=true;view.selected=Some(json!({"id":"chat","deviceId":"host"}));
+            view.open_visual("visual".into(),cx);let owner=view.visuals.views["visual"].owner;
+            let slider=json!({"kind":{"Slider":{"label":"Scale","on_change":1,"value":2.0,"min":1.0,"max":5.0,"step":1.0}},"key":"scale"});
+            view.receive(json!({"id":owner,"item":{"version":wire::VERSION,"lease":"owned","revision":0,"tree":slider}}),cx);
+            let spec=SliderDrag{visual:"visual".into(),path:"".into(),min:1.,max:5.,step:1.};
+            assert!(view.visual_slider_key(&spec,"right",cx));
+            assert!(view.visual_slider_key(&spec,"right",cx));
+            assert!(view.visual_slider_key(&spec,"left",cx));
+            assert!(view.visual_slider_key(&spec,"left",cx));
+            assert_eq!(view.visuals.views["visual"].queued_slider.as_ref().unwrap().1["value"],2.0);
+            let mut updated=slider;updated["kind"]["Slider"]["value"]=json!(3.0);
+            view.receive(json!({"id":owner,"item":{"version":wire::VERSION,"lease":"owned","revision":1,"tree":updated}}),cx);
+            assert_eq!(view.visuals.views["visual"].slider_target.as_ref().unwrap().1,2.0);
+            let canvas=json!({"kind":{"Canvas":{"draw":2,"height":100.0,"animate":true}}});
+            view.receive(json!({"id":owner,"item":{"version":wire::VERSION,"lease":"owned","revision":2,"tree":canvas}}),cx);
+            let c=view.visuals.views.get_mut("visual").unwrap().canvases.get_mut("").unwrap();
+            c.bounds.set(Bounds::new(point(px(0.),px(0.)),size(px(200.),px(100.))));c.painted.set(Some(Instant::now()));
+            c.signature=Some((200.,100.,None));c.requested=Instant::now()-Duration::from_secs(1);
+            cx.set_reduce_motion(true);view.refresh_visual_draws(cx);assert!(!view.visuals.views["visual"].canvases[""].pending);
+            view.environment.visible=false;cx.set_reduce_motion(false);view.refresh_visual_draws(cx);assert!(!view.visuals.views["visual"].canvases[""].pending);
+            view.environment.visible=true;view.refresh_visual_draws(cx);assert!(view.visuals.views["visual"].canvases[""].pending);
+            view.reset_visuals();
+        }).unwrap();
+        let mut controls = vec![];
+        let mut draws = 0;
+        while let Ok(frame) = rx.try_recv() {
+            if frame["method"] == methods::CONTROL_VISUAL {
+                controls.push(frame["params"]["argument"]["value"].clone());
+            }
+            if frame["method"] == methods::DRAW_VISUAL {
+                draws += 1;
+            }
+        }
+        assert_eq!(controls, vec![json!(3.0), json!(2.0)]);
+        assert_eq!(draws, 1);
     }
     #[gpui::test]
     fn visual_controls_keep_host_revision_and_navigation_ownership(cx: &mut TestAppContext) {

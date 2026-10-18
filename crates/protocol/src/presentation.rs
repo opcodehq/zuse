@@ -2,6 +2,7 @@
 mod effort;
 pub mod git_history;
 mod model_config;
+pub mod motion;
 pub use model_config::RememberedModelConfig;
 mod queue;
 pub use effort::{EffortSetting, EffortStop, ModelEffort, model_effort, model_effort_option};
@@ -125,6 +126,8 @@ pub struct DefaultModelSelection {
 pub struct WorkspacePreferences {
     pub sidebar_view: SidebarView,
     pub appearance: AppearanceMode,
+    pub reduce_motion: motion::ReduceMotion,
+    pub pause_animations_in_background: bool,
     pub completion_sound: crate::completion_sound::CompletionSoundPreferences,
     pub provider_update_notifications: bool,
     pub default_permission_mode: PermissionMode,

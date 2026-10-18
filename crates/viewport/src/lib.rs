@@ -11,6 +11,7 @@ mod connection;
 pub mod context_status;
 mod custom_acp;
 mod draft_journal;
+mod environment;
 pub mod git_controls;
 mod history;
 pub mod input;
@@ -75,6 +76,7 @@ use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 
 pub struct WorkspaceView {
     voice: voice::Voice,
+    environment: environment::Environment,
     browser: browser::Browser,
     visuals: visuals::Visuals,
     git_controls: Entity<git_controls::GitControls>,
@@ -412,6 +414,7 @@ impl WorkspaceView {
         let worktree_settings = worktree_settings::WorktreeSettingsView::new(window, cx);
         let browser = browser::Browser::new(window, cx);
         let view = Self {
+            environment: Default::default(),
             browser,
             workspace_focus,
             input,
@@ -669,6 +672,9 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if self.receive_environment(&frame, cx) {
+            return;
+        }
         if self.receive_browser(&frame, cx) {
             return;
         }

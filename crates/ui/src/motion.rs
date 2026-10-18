@@ -38,7 +38,7 @@ use gpui::{
     Animation, AnimationElement, App, ElementId, EntityId, Global, Hsla, IntoElement, Rgba,
     SharedString, Styled, Window, px,
 };
-use serde::{Deserialize, Serialize};
+pub use zuse_protocol::presentation::motion::{ReduceMotion, resolve};
 
 pub use gpui::AnimationExt;
 
@@ -1141,29 +1141,6 @@ pub fn reduced_motion(cx: &App) -> bool {
     cx.reduce_motion()
 }
 
-/// The user's reduced-motion preference. Persisted in `ui-settings.json`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ReduceMotion {
-    /// Follow the OS accessibility setting.
-    #[default]
-    System,
-    On,
-    Off,
-}
-
-impl ReduceMotion {
-    pub const ALL: [Self; 3] = [Self::System, Self::On, Self::Off];
-
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::System => "System",
-            Self::On => "On",
-            Self::Off => "Off",
-        }
-    }
-}
-
 /// Inputs to the global flag: the persisted choices, plus what the OS and the
 /// main window last reported. Kept apart so a system change while the user has
 /// pinned On/Off still lands, and takes effect when they return to System.
@@ -1179,21 +1156,6 @@ impl Global for MotionState {}
 fn state_mut(cx: &mut App) -> Option<&mut MotionState> {
     cx.has_global::<MotionState>()
         .then(|| cx.global_mut::<MotionState>())
-}
-
-/// Combine the preference with the OS setting and window focus.
-pub fn resolve(
-    preference: ReduceMotion,
-    system: bool,
-    pause_in_background: bool,
-    active: bool,
-) -> bool {
-    let reduced = match preference {
-        ReduceMotion::System => system,
-        ReduceMotion::On => true,
-        ReduceMotion::Off => false,
-    };
-    reduced || (pause_in_background && !active)
 }
 
 /// Install the motion state and set the flag before the first window opens,

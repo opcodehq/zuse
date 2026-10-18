@@ -380,20 +380,7 @@ impl WorkspaceView {
                     .into_iter()
                     .enumerate()
                     .map(|(index, mode)| {
-                        row()
-                            .id(("general-theme", index))
-                            .role(Role::Button)
-                            .aria_label(mode.label())
-                            .aria_selected(selected == mode)
-                            .cursor_pointer()
-                            .h(px(28.))
-                            .px(px(10.))
-                            .rounded(px(7.))
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(if selected == mode { TEXT } else { MUTED }))
-                            .when(selected == mode, |view| view.bg(rgb(BG)))
-                            .child(mode.label())
+                        s::choice(("general-theme", index), mode.label(), selected == mode)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.preferences.appearance = mode;
                                 this.save_preferences();
@@ -401,20 +388,37 @@ impl WorkspaceView {
                             }))
                     }),
             );
+        let motion = row()
+            .id("reduce-motion-options")
+            .role(Role::RadioGroup)
+            .aria_label("Reduce motion")
+            .gap_1()
+            .children(
+                zuse_protocol::presentation::motion::ReduceMotion::ALL
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, mode)| {
+                        s::choice(
+                            ("reduce-motion", i),
+                            mode.label(),
+                            self.preferences.reduce_motion == mode,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.preferences.reduce_motion = mode;
+                            this.save_preferences();
+                            cx.notify();
+                        }))
+                    }),
+            );
+        let paused = self.preferences.pause_animations_in_background;
         s::frame()
-            .child(s::header(
-                "Appearance",
-                "Choose the app theme, or follow your system setting.",
-            ))
-            .child(
-                s::card().child(
-                    s::setting_row(true)
-                        .child(s::details(
-                            "Theme",
-                            "Choose the app theme, or follow your system setting.",
-                        ))
-                        .child(choices),
-                ),
+            .child(s::header("Appearance", "Choose the app theme and animation behavior."))
+            .child(s::card()
+                .child(s::setting_row(false).child(s::details("Theme", "Choose the app theme, or follow your system setting.")).child(choices))
+                .child(s::setting_row(false).child(s::details("Reduce motion", "Follow system motion preferences, keep animations still, or allow motion.")).child(motion))
+                .child(s::setting_row(true).child(s::details("Pause animations in background", "Keep animations still while the app is out of focus."))
+                    .child(s::toggle("pause-animations-background",paused,"Pause animations in background").tab_index(0)
+                        .on_click(cx.listener(|this,_,_,cx|{this.preferences.pause_animations_in_background=!this.preferences.pause_animations_in_background;this.save_preferences();cx.notify();}))))
             )
             .into_any_element()
     }

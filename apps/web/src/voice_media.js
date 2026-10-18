@@ -16,7 +16,6 @@ function close(scope) {
   for (const timer of scope.timers) clearTimeout(timer);
   for (const track of scope.stream?.getTracks() || []) track.stop();
   scope.pc?.close();
-  if(scope.motion)scope.motion.removeEventListener('change',scope.motionChanged);
   for (const node of scope.nodes) { try { node.disconnect(); } catch {} }
   if (scope.ctx) void scope.ctx.close().catch(() => {});
   if (current === scope) current = undefined;
@@ -104,10 +103,7 @@ export function voiceMediaCommand(serialized) {
           const timer=setTimeout(()=>{scope.timers.delete(timer);if(!scope.closed&&scope.pc.connectionState==='disconnected')fail(scope,new Error('Connection lost'));},3000);scope.timers.add(timer);
         }
       };
-      const motion=matchMedia('(prefers-reduced-motion: reduce)');
-      scope.motion=motion;scope.motionChanged=()=>message(scope,'motion',{reduced:motion.matches});
-      motion.addEventListener('change',scope.motionChanged);
-      message(scope,'prepared',{reduced:motion.matches});
+      message(scope,'prepared');
     })().catch(error => fail(scope,error));
     return;
   }

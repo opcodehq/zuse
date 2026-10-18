@@ -9,6 +9,8 @@ mod connection;
 #[cfg(target_family = "wasm")]
 mod drafts;
 #[cfg(target_family = "wasm")]
+mod environment;
+#[cfg(target_family = "wasm")]
 mod socket;
 #[cfg(target_family = "wasm")]
 mod voice_media;
@@ -97,6 +99,7 @@ mod browser {
                 }
             }
         }
+        super::environment::install(events.clone());
         spawn_local(super::connection::run(outbound, events));
         let application = gpui_platform::application()
             .with_assets(zuse_viewport::assets::Assets)

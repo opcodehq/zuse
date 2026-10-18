@@ -1193,6 +1193,7 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_motion(cx);
         self.sync_browser_visibility();
         self.sync_browser_voice_visibility(cx);
         let target = self.selected.as_ref().and_then(|chat| {

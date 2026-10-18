@@ -9,9 +9,10 @@ return function()
   ui.tabs { options = { "Weekly", "Monthly" }, value = s.tab, on_change = function(v) s.tab = v end },
   ui.slider { label = "Scale", value = s.scale, min = 1, max = 5, step = 1, on_change = function(v) s.scale = v end },
   ui.chart { type = "bar", height = 140, x = { "Mon", "Tue", "Wed", "Thu" }, series = { { name = "Activity", values = { 2*s.scale, 3*s.scale, (s.count+1)*s.scale, 4*s.scale } } } },
-  ui.canvas { height = 80, animate = false, on_click = function(x,y) s.count += 10 end, draw = function(g,w,h,t)
+  ui.canvas { height = 80, animate = true, on_click = function(x,y) s.count += 10 end, draw = function(g,w,h,t)
     g:line(0,h/2,w,h/2,{color="accent",width=2,dash=6})
     g:text(w/2,10,"Canvas interactions: "..tostring(s.count),{align="center"})
   end },
+  ui.table { hover = true, columns = { {label="Region", width=180}, {label="Latency", align="end"} }, rows = { {"US East", "182 ms"}, {"Europe"} } },
  }
 end

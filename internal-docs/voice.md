@@ -10,7 +10,7 @@ The browser requests audio capture, immediately disables its tracks, and prepare
 
 Each callback and signaling receipt is bound to the initiating attempt, RPC and host lease. A canceled permission prompt, delayed SDP, obsolete ownership event or lost acknowledgement cannot activate a later call. Setup stages and media reports have receipt deadlines; unrelated RPC responses remain available to their owners. Owner loss, disconnection, page exit and hangup close tracks, peer connections, nodes and pending listeners. The JavaScript adapter also has an independent capture watchdog: host report acknowledgements renew a 15-second active lease, so capture closes if the UI stops processing host receipts. No call is automatically replayed after reconnect.
 
-The shared orb uses the browser monotonic clock and honors reduced motion. Hidden stages pause animation updates. Native builds retain the existing async orchestrator API and share presentation state without pulling native audio/async dependencies into WASM.
+The shared orb uses the browser monotonic clock and the same System/On/Off and background-pause policy as the rest of the application. The browser uses one page environment observer for voice and visuals. Hidden stages and hidden documents pause orb animation updates while call ownership and media continue. Native builds retain the existing async orchestrator API and share presentation state without pulling native audio/async dependencies into WASM.
 
 ## Conversation continuity
 

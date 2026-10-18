@@ -40,7 +40,6 @@ struct Call {
     sequence: u64,
     view: VoiceView,
     orb: Entity<super::voice_orb::VoiceOrb>,
-    reduced: bool,
 }
 #[derive(Default)]
 pub(super) struct Voice {
@@ -105,7 +104,6 @@ impl WorkspaceView {
             sequence: 0,
             view: VoiceView::new(),
             orb: cx.new(super::voice_orb::VoiceOrb::new),
-            reduced: false,
         });
         self.voice_request(
             Request::Capabilities,
@@ -234,9 +232,6 @@ impl WorkspaceView {
                 cx,
             );
             return true;
-        }
-        if event["kind"] == "motion" || event["kind"] == "prepared" {
-            call.reduced = event["reduced"].as_bool().unwrap_or(false);
         }
         match (call.step, event["kind"].as_str().unwrap_or("")) {
             (Step::Media, "prepared") => {
@@ -496,7 +491,10 @@ impl WorkspaceView {
     }
     pub(super) fn sync_browser_voice_visibility(&mut self, cx: &mut Context<Self>) {
         if let Some(call) = &self.voice.call {
-            let visible = self.voice.stage_open && !self.settings && !self.project_picker;
+            let visible = self.environment.visible
+                && self.voice.stage_open
+                && !self.settings
+                && !self.project_picker;
             call.orb.update(cx, |orb, cx| {
                 if orb.visible != visible {
                     orb.visible = visible;
@@ -513,12 +511,13 @@ impl WorkspaceView {
         let Some(call) = &self.voice.call else {
             return div().into_any_element();
         };
+        let reduced = cx.reduce_motion();
         call.orb.update(cx, |orb, cx| {
             if orb.update(
                 call.view.orb_state(),
                 call.view.microphone_level(),
                 call.view.speaker_level(),
-                call.reduced,
+                reduced,
             ) {
                 cx.notify();
             }
@@ -644,10 +643,7 @@ mod tests {
                     view.voice.call.as_ref().unwrap().requests.is_empty(),
                     "permission must precede host preparation"
                 );
-                view.receive(
-                    json!({"voiceMedia":{"attempt":key,"kind":"prepared","reduced":true}}),
-                    cx,
-                );
+                view.receive(json!({"voiceMedia":{"attempt":key,"kind":"prepared"}}), cx);
                 let id = request(view, |r| matches!(r, Request::Prepare));
                 view.receive(json!({"id":id,"ok":prepared()}), cx);
                 let owner = view.voice.call.as_ref().unwrap().owner.unwrap();

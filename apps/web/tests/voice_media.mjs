@@ -22,7 +22,7 @@ class Peer extends EventTarget {
 }
 const document=new EventTarget();const window=new EventTarget();
 Object.assign(window,{isSecureContext:true,RTCPeerConnection:Peer,AudioContext:Context});
-Object.assign(globalThis,{window,document,RTCPeerConnection:Peer,AudioContext:Context,matchMedia:()=>Object.assign(new EventTarget(),{matches:false})});
+Object.assign(globalThis,{window,document,RTCPeerConnection:Peer,AudioContext:Context});
 const devices={getUserMedia:async()=>stream()};Object.defineProperty(globalThis,'navigator',{value:{mediaDevices:devices},configurable:true});
 media.installVoiceMedia(serialized=>events.push(JSON.parse(serialized).voiceMedia));
 const command=(action,attempt,value={})=>media.voiceMediaCommand(JSON.stringify({action,attempt,value}));
