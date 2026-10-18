@@ -59,3 +59,5 @@ pub mod provider_setup;
 
 pub mod completion_sound;
 pub mod notifications;
+
+pub mod plugin_setup;

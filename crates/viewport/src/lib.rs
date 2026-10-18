@@ -15,6 +15,7 @@ mod navigation;
 mod notifications;
 mod pairing;
 pub mod palette;
+pub mod plugin_setup;
 mod previews;
 mod provider_settings;
 mod provider_updates;
@@ -206,6 +207,8 @@ pub struct WorkspaceView {
     plugins: Value,
     plugin_attempt: Value,
     plugin_request: Option<u64>,
+    plugin_setup: Option<Entity<plugin_setup::PluginSetup>>,
+    plugin_setup_events: Option<Subscription>,
     model_connections: Value,
     model_login: Value,
     model_storage: &'static str,
@@ -472,6 +475,8 @@ impl WorkspaceView {
             plugins: Value::Null,
             plugin_attempt: Value::Null,
             plugin_request: None,
+            plugin_setup: None,
+            plugin_setup_events: None,
             model_connections: Value::Null,
             model_login: Value::Null,
             model_storage: "local",
@@ -506,6 +511,11 @@ impl WorkspaceView {
         if self.plugin_request.is_some() {
             return;
         }
+        if request["action"] != "list" && self.plugins["canManage"] == false {
+            return;
+        }
+        self.plugin_setup = None;
+        self.plugin_setup_events = None;
         self.plugin_request = Some(self.call(methods::PLUGINS, request));
     }
 
@@ -708,6 +718,8 @@ impl WorkspaceView {
                         self.model_callback
                             .update(cx, |input, cx| input.set_value(String::new(), cx));
                         self.refresh_model_connections();
+                        self.plugin_setup = None;
+                        self.plugin_setup_events = None;
                         self.plugins = Value::Null;
                         self.plugin_attempt = Value::Null;
                         self.plugin_request = None;

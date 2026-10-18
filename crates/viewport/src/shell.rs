@@ -704,6 +704,9 @@ impl WorkspaceView {
                     .child(control("authorize-account","Open sign-in").on_click(move |_,_,cx|cx.open_url(&url))))
             })
             .when(signed_in,|d|d
+                .child(control("add-plugin-server","Add MCP server").on_click(cx.listener(|this,_,window,cx|this.open_plugin_setup(crate::plugin_setup::SetupTarget::Server,window,cx))))
+                .when(self.plugins["canManage"]==false,|d|d.child(label("Only workspace administrators can manage these connections.")))
+                .when_some(self.plugin_setup.clone(),|d,form|d.child(form))
                 .child(row().child(label("Connected plugins")).child(div().flex_1()).child(control("refresh-plugins",if busy {"Loading…"} else {"Refresh"}).on_click(cx.listener(|this,_,_,cx|{this.plugin_action(json!({"action":"list"}));cx.notify();}))))
                 .children(self.plugins["tenants"].as_array().into_iter().flatten().enumerate().map(|(i,t)| {
                     let id=t["id"].clone();
@@ -717,7 +720,11 @@ impl WorkspaceView {
                 .children(self.plugins["catalog"].as_array().into_iter().flatten().enumerate().map(|(i,p)| {
                     let plugin=p["id"].as_str().unwrap_or_default().to_owned();let name=p["name"].as_str().unwrap_or("Plugin").to_owned();let tenant=tenant.clone();let title=name.clone();
                     row().gap_2().p_2().child(column().flex_1().gap_1().child(label(title)).child(label(p["description"].as_str().unwrap_or_default().to_owned())))
-                        .child(control(("connect-plugin",i),"Connect").on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"connect","tenantId":tenant,"pluginId":plugin,"label":name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":if this.browser_local {json!({"kind":"desktop","port":0})} else {json!({"kind":"web"})}}));cx.notify();})))
+                        .child(control(("connect-plugin",i),"Connect").on_click(cx.listener(move |this,_,window,cx|{
+                            let definition=this.plugins["catalog"].as_array().into_iter().flatten().find(|p|p["id"]==plugin).cloned().and_then(|p|serde_json::from_value::<zuse_protocol::plugins::PluginDefinition>(p).ok());
+                            if let Some(definition)=definition.filter(|p|p.api_key_header.is_some()) { this.open_plugin_setup(crate::plugin_setup::SetupTarget::Catalog(definition),window,cx); }
+                            else {this.plugin_action(json!({"action":"connect","tenantId":tenant,"pluginId":plugin,"label":name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":if this.browser_local {json!({"kind":"desktop","port":0})} else {json!({"kind":"web"})}}));}
+                            cx.notify();})))
                 })))
             .when_some(self.plugin_attempt["authorizationUrl"].as_str().filter(|u|u.starts_with("https://")).map(str::to_owned),|d,url|d.child(control("authorize-plugin","Authorize connection").on_click(move |_,_,cx|cx.open_url(&url))))
             .when(self.plugin_attempt["id"].is_string(),|d| {

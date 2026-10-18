@@ -105,6 +105,8 @@ impl WorkspaceView {
             self.model_error=Some("Connection interrupted during sign-in. Check linked accounts before starting again.".into());
         }
         self.plugin_request = None;
+        self.plugin_setup = None;
+        self.plugin_setup_events = None;
         self.pairing_fetch = None;
         self.pairing_action = None;
         self.terminal_watch = None;

@@ -4,6 +4,7 @@ use gpui::{Context, Entity, SharedString, Subscription, Task, Window, div, prelu
 use serde_json::{Value, json};
 use zuse_engine::account::AccountStatus;
 use zuse_rpc::methods;
+use zuse_viewport::plugin_setup::{PluginSetup, SetupColors, SetupEvent, SetupTarget};
 
 pub struct PluginsCard {
     state: Entity<AppState>,
@@ -16,6 +17,8 @@ pub struct PluginsCard {
     busy: bool,
     watch: Option<Task<()>>,
     action: Option<Task<()>>,
+    setup: Option<Entity<PluginSetup>>,
+    setup_events: Option<Subscription>,
     _state: Subscription,
 }
 impl PluginsCard {
@@ -26,6 +29,8 @@ impl PluginsCard {
                 this.action = None;
                 this.busy = false;
                 this.epoch = this.epoch.wrapping_add(1);
+                this.setup = None;
+                this.setup_events = None;
                 this.account = AccountStatus::default();
                 this.snapshot = Value::Null;
                 this.attempt = Value::Null;
@@ -44,6 +49,8 @@ impl PluginsCard {
             busy: false,
             watch: None,
             action: None,
+            setup: None,
+            setup_events: None,
             _state: subscription,
         };
         card.attach(cx);
@@ -75,6 +82,8 @@ impl PluginsCard {
                                     != account.user.as_ref().map(|u| &u.id);
                                 card.account = account;
                                 if changed {
+                                    card.setup = None;
+                                    card.setup_events = None;
                                     card.epoch = card.epoch.wrapping_add(1);
                                     card.snapshot = Value::Null;
                                     card.attempt = Value::Null;
@@ -105,13 +114,75 @@ impl PluginsCard {
             }
         }));
     }
+    fn open_setup(&mut self, target: SetupTarget, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy || self.account.user.is_none() || self.snapshot["canManage"] == false {
+            return;
+        }
+        let Some(tenant) = self.snapshot["tenantId"].as_str().map(str::to_owned) else {
+            return;
+        };
+        let expected = tenant.clone();
+        let epoch = self.epoch;
+        let theme = Theme::of(cx).for_settings_surface();
+        let colors = SetupColors {
+            text: theme.text,
+            muted: theme.text_muted,
+            background: theme.surface_card,
+            border: theme.border,
+            danger: theme.danger,
+        };
+        let form = cx.new(|cx| {
+            PluginSetup::new(
+                tenant,
+                target,
+                zuse_protocol::plugins::PluginReturnTo::Desktop { port: 0 },
+                colors,
+                window,
+                cx,
+            )
+        });
+        self.setup_events = Some(cx.subscribe(&form, move |this, _, event, cx| {
+            match event {
+                SetupEvent::Cancel => {
+                    this.setup = None;
+                    this.setup_events = None;
+                }
+                SetupEvent::Submit(request) => {
+                    if this.busy
+                        || this.epoch != epoch
+                        || this.account.user.is_none()
+                        || this.snapshot["tenantId"] != expected
+                        || this.snapshot["canManage"] == false
+                    {
+                        return;
+                    }
+                    this.setup = None;
+                    this.setup_events = None;
+                    if let Ok(value) = serde_json::to_value(request) {
+                        this.request(methods::PLUGINS, value, cx);
+                    }
+                }
+            }
+            cx.notify();
+        }));
+        self.setup = Some(form);
+        cx.notify();
+    }
     fn request(&mut self, method: &'static str, params: Value, cx: &mut Context<Self>) {
         if self.busy {
+            return;
+        }
+        if method == methods::PLUGINS
+            && params["action"] != "list"
+            && self.snapshot["canManage"] == false
+        {
             return;
         }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
+        self.setup = None;
+        self.setup_events = None;
         self.busy = true;
         self.error = None;
         let epoch = self.epoch;
@@ -219,6 +290,9 @@ impl Render for PluginsCard {
             .when_some(self.account.login.clone(),|d,login|d.child(div().flex().items_center().gap(px(12.)).child(format!("Authorization code: {}",login.user_code)).child(action("open-cloud-login","Open sign-in").on_click(move |_,_,cx|{if login.url.starts_with("https://"){cx.open_url(&login.url);}}))))
             .when_some(self.error.clone().or_else(||self.account.error.clone()),|d,error|d.child(div().text_size(px(12.)).text_color(theme.danger).child(error)))
             .when(signed_in,|d|d
+                .child(action("add-hosted-server","Add MCP server").on_click(cx.listener(|this,_,window,cx|this.open_setup(SetupTarget::Server,window,cx))))
+                .when(self.snapshot["canManage"]==false,|d|d.child(widgets::row_title(&theme,"Only workspace administrators can manage these connections.")))
+                .when_some(self.setup.clone(),|d,form|d.child(form))
                 .child(action("refresh-hosted-plugins",if self.busy {"Loading…"} else {"Refresh plugins"}).on_click(cx.listener(|this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"list"}),cx))))
                 .children(self.snapshot["tenants"].as_array().into_iter().flatten().enumerate().map(|(i,t)|{
                     let id=t["id"].clone();
@@ -233,7 +307,11 @@ impl Render for PluginsCard {
                 .children(self.snapshot["catalog"].as_array().into_iter().flatten().enumerate().map(|(i,p)|{
                     let id=p["id"].clone();let name=p["name"].as_str().unwrap_or("Plugin").to_owned();let tenant=tenant.clone();
                     div().flex().items_center().gap(px(12.)).child(div().flex_1().child(name.clone()))
-                        .child(widgets::ghost_action(&theme).id(("connect-plugin",i)).child("Connect").on_click(cx.listener(move |this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"connect","tenantId":tenant,"pluginId":id,"label":name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":{"kind":"desktop","port":0}}),cx))))
+                        .child(widgets::ghost_action(&theme).id(("connect-plugin",i)).child("Connect").on_click(cx.listener(move |this,_,window,cx|{
+                            let definition=this.snapshot["catalog"].as_array().into_iter().flatten().find(|p|p["id"]==id).cloned().and_then(|p|serde_json::from_value::<zuse_protocol::plugins::PluginDefinition>(p).ok());
+                            if let Some(definition)=definition.filter(|p|p.api_key_header.is_some()) {this.open_setup(SetupTarget::Catalog(definition),window,cx);}
+                            else {this.request(methods::PLUGINS,json!({"action":"connect","tenantId":tenant,"pluginId":id,"label":name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":{"kind":"desktop","port":0}}),cx);}
+                        })))
                 })))
             .when_some(self.attempt["authorizationUrl"].as_str().filter(|s|s.starts_with("https://")).map(str::to_owned),|d,url|d.child(action("authorize-hosted-plugin","Authorize connection").on_click(move |_,_,cx|cx.open_url(&url))))
             .when(self.attempt["id"].is_string(),|d|{
