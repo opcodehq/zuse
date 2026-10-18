@@ -140,6 +140,7 @@ impl WorkspaceView {
             self.cancel(id);
         }
         self.interrupt_queue_edit(cx);
+        self.prefetch_model_catalogs();
         self.stop_transcript();
         // Until the new snapshot arrives, old approval cards must not submit
         // answers to a different host. Canceled subscription frames are ignored.
@@ -155,6 +156,6 @@ impl WorkspaceView {
         self.reset_previews(cx);
         self.refresh_queue_snapshot(&chat);
         self.begin_transcript(cx);
-        self.connection_notice = Some("This chat moved to another computer. Its queue and transcript are refreshing. Check any action already sent before trying it again.".into());
+        self.connection_notice = Some("This chat moved to another computer. Check any action already sent before trying it again.".into());
     }
 }

@@ -427,7 +427,7 @@ impl WorkspaceView {
                     .and_then(|catalog| catalog.models.iter().find(|model| model.id == *id))
             })
             .map(|model| model.label.as_str())
-            .or_else(|| model.map(String::as_str))
+            .or_else(|| model.map(String::as_str).filter(|id| *id != "default"))
             .unwrap_or("Agent default")
             .to_owned();
         let trigger = column()
@@ -472,6 +472,9 @@ impl WorkspaceView {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_model_picker(window, cx);
                         this.model_picker_default = this.model_picker;
+                        if this.model_picker {
+                            this.load_picker_catalogs(false);
+                        }
                         this.default_permission_menu = false;
                         if !this.model_picker {
                             window.focus(&this.default_model_focus, cx);

@@ -562,14 +562,7 @@ impl WorkspaceView {
                                 .text_ellipsis()
                                 .text_size(px(10.))
                                 .text_color(rgb(FAINT))
-                                .child(format!(
-                                    "{project} · {}",
-                                    if self.paired {
-                                        "Paired engine"
-                                    } else {
-                                        "This device"
-                                    }
-                                )),
+                                .child(format!("{project} · {}", self.chat_host_label(chat))),
                         )
                         .child(label(age.clone()).text_size(px(10.)).text_color(rgb(FAINT))),
                 )

@@ -9,6 +9,7 @@ pub mod context_status;
 mod draft_journal;
 pub mod input;
 mod model_accounts;
+mod model_catalog;
 mod model_config;
 mod model_picker;
 mod navigation;
@@ -158,6 +159,7 @@ pub struct WorkspaceView {
     default_model_focus: FocusHandle,
     default_permission_active: usize,
     picker_catalog: zuse_protocol::presentation::PickerCatalog,
+    model_host: model_catalog::ModelHost,
     picker_scope: Option<String>,
     model_search: Entity<input::TextInput>,
     picker_active: Option<zuse_protocol::presentation::ModelSelection>,
@@ -425,6 +427,7 @@ impl WorkspaceView {
             default_model_focus: cx.focus_handle(),
             default_permission_active: 0,
             picker_catalog: Default::default(),
+            model_host: Default::default(),
             picker_scope: None,
             model_search,
             picker_active: None,
@@ -751,30 +754,34 @@ impl WorkspaceView {
                         .into_iter()
                         .filter(|p| p["id"] != "mock")
                         .collect();
-                    let preferred = previous.or_else(|| {
-                        self.selected
-                            .as_ref()
-                            .and_then(|c| c["config"]["harness"].as_str())
-                            .map(str::to_owned)
-                    });
-                    if let Some(index) =
-                        preferred.and_then(|id| self.providers.iter().position(|p| p["id"] == id))
-                    {
-                        self.provider_index = index;
-                    } else {
-                        self.provider_index = 0;
+                    let preferred = self
+                        .selected
+                        .as_ref()
+                        .and_then(|c| c["config"]["harness"].as_str())
+                        .map(str::to_owned)
+                        .or(previous);
+                    if self.model_host.target.is_none() {
+                        if let Some(index) = preferred
+                            .and_then(|id| self.providers.iter().position(|p| p["id"] == id))
+                        {
+                            self.provider_index = index;
+                        } else {
+                            self.provider_index = 0;
+                        }
+                        if initial
+                            || (self.selected.is_none()
+                                && self
+                                    .providers
+                                    .get(self.provider_index)
+                                    .is_none_or(|provider| {
+                                        provider["enabled"] == false
+                                            || provider["installed"] == false
+                                    }))
+                        {
+                            self.apply_default_model();
+                        }
                     }
-                    if initial
-                        || (self.selected.is_none()
-                            && self
-                                .providers
-                                .get(self.provider_index)
-                                .is_none_or(|provider| {
-                                    provider["enabled"] == false || provider["installed"] == false
-                                }))
-                    {
-                        self.apply_default_model();
-                    }
+                    self.prefetch_model_catalogs();
                 }
                 methods::WATCH_CHATS => {
                     self.workspace_synced = true;
@@ -995,12 +1002,17 @@ impl WorkspaceView {
         self.project =
             (!identity.path.is_empty()).then(|| json!({"path":identity.path,"name":identity.name}));
         self.selected = Some(chat);
+        self.prefetch_model_catalogs();
         self.begin_transcript(cx);
         self.refresh_model_config_watch();
         self.restore_draft(cx);
         if let Some(chat) = &self.selected {
             if let Some(harness) = chat["config"]["harness"].as_str() {
-                if let Some(index) = self.providers.iter().position(|p| p["id"] == harness) {
+                if let Some(index) = self
+                    .composer_providers()
+                    .iter()
+                    .position(|p| p["id"] == harness)
+                {
                     self.provider_index = index;
                 }
             }
@@ -1041,6 +1053,7 @@ impl WorkspaceView {
         self.reset_tool_results();
         self.reset_previews(cx);
         self.selected = None;
+        self.prefetch_model_catalogs();
         self.refresh_model_config_watch();
         self.sandbox = self.preferences.default_permission_mode.sandbox();
         self.model = None;
@@ -1125,8 +1138,8 @@ impl WorkspaceView {
             cx.notify();
             return;
         };
-        let Some(provider) = self.providers.get(self.provider_index).cloned() else {
-            self.error = Some("Set up an agent in Settings first.".into());
+        let Some(provider) = self.composer_provider().cloned() else {
+            self.error = Some(if self.model_host.target.is_some() && self.model_host.confirmed {"This chat’s agent is unavailable on its execution host. Check that computer’s agent setup before sending."} else if self.model_host.target.is_some() {"Wait for agents on this chat’s execution host to refresh. Open the model picker to retry."} else {"Set up an agent in Settings first."}.into());
             cx.notify();
             return;
         };

@@ -89,9 +89,10 @@ impl WorkspaceView {
             )
             .child(
                 icon(provider_icon(
-                    self.providers
-                        .get(self.provider_index)
-                        .and_then(|p| p["id"].as_str())
+                    self.selected
+                        .as_ref()
+                        .and_then(|chat| chat["config"]["harness"].as_str())
+                        .or_else(|| self.composer_provider().and_then(|p| p["id"].as_str()))
                         .unwrap_or_default(),
                 ))
                 .size(px(15.))
@@ -112,10 +113,17 @@ impl WorkspaceView {
             )
             .when(self.content_width > 660. && self.selected.is_some(), |d| {
                 d.child(
-                    label(format!("{} · This device", self.project_name()))
-                        .text_size(px(11.))
-                        .text_color(rgb(FAINT))
-                        .text_ellipsis(),
+                    label(format!(
+                        "{} · {}",
+                        self.project_name(),
+                        self.selected
+                            .as_ref()
+                            .map(|chat| self.chat_host_label(chat))
+                            .unwrap_or("This device")
+                    ))
+                    .text_size(px(11.))
+                    .text_color(rgb(FAINT))
+                    .text_ellipsis(),
                 )
             })
             .child(div().flex_1())
@@ -141,7 +149,7 @@ impl WorkspaceView {
     }
 
     fn composer(&self, cx: &mut Context<Self>) -> AnyElement {
-        let provider = self.providers.get(self.provider_index);
+        let provider = self.composer_provider();
         let working = self.is_working();
         let has_draft =
             !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty();
@@ -563,7 +571,7 @@ impl WorkspaceView {
                             .child(div().text_size(px(12.)).font_weight(FontWeight::MEDIUM).child("Connect your agents"))
                             .child(label("Models, accounts, and tools").text_size(px(11.)))
                             .on_click(cx.listener(|this, _, _, cx|{this.settings = true; cx.notify();}))))
-                    .child(label(if self.paired { "Your agents run on your paired engine." } else { "Your agents run on this machine." }).mt_2().text_size(px(11.)).text_color(rgb(FAINT))))
+                    .child(label(if self.model_host.target.is_some() { "This chat runs on another computer." } else if self.paired { "Your agents run on your paired engine." } else { "Your agents run on this machine." }).mt_2().text_size(px(11.)).text_color(rgb(FAINT))))
             })
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);

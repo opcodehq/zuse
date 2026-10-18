@@ -67,9 +67,7 @@ impl WorkspaceView {
     }
     fn current_model_config(&self) -> Option<RememberedModelConfig> {
         Some(RememberedModelConfig {
-            provider: self.providers.get(self.provider_index)?["id"]
-                .as_str()?
-                .into(),
+            provider: self.composer_provider()?["id"].as_str()?.into(),
             model: self.model.clone(),
             reasoning: self.reasoning,
             model_options: self.model_options.clone(),
@@ -77,7 +75,7 @@ impl WorkspaceView {
     }
     pub(super) fn restore_model_choices(&mut self) {
         let Some(provider) = self
-            .providers
+            .composer_providers()
             .get(self.provider_index)
             .and_then(|provider| provider["id"].as_str())
         else {
@@ -99,7 +97,7 @@ impl WorkspaceView {
     }
     pub(super) fn sync_model_from_chat(&mut self, chat: &Value) {
         if let Some(index) = self
-            .providers
+            .composer_providers()
             .iter()
             .position(|provider| provider["id"] == chat["config"]["harness"])
         {
@@ -111,6 +109,7 @@ impl WorkspaceView {
             .as_object()
             .cloned()
             .unwrap_or_default();
+        self.prefetch_model_catalogs();
     }
     pub(super) fn reconcile_model_config(&mut self, chat: &Value) {
         if !self.model_confirmed && self.model_save.is_none() && !self.model_dirty {

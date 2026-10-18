@@ -94,7 +94,7 @@ impl WorkspaceView {
         let previous = chat["config"].clone();
         let mut config = previous.clone();
         if !config.is_object() {
-            let Some(provider) = self.providers.get(self.provider_index) else {
+            let Some(provider) = self.composer_provider() else {
                 return;
             };
             config = json!({"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options});

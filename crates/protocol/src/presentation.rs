@@ -188,6 +188,7 @@ pub struct ProviderCatalog {
     pub error: Option<String>,
     pub request: Option<u64>,
     pub loaded: bool,
+    pub stale: bool,
 }
 #[derive(Default)]
 pub struct PickerCatalog {
@@ -212,6 +213,7 @@ impl PickerCatalog {
             return false;
         }
         catalog.request = None;
+        catalog.stale = false;
         match result {
             Ok(models) => {
                 catalog.models = models;
@@ -225,9 +227,15 @@ impl PickerCatalog {
     pub fn contains_request(&self, id: u64) -> bool {
         self.requests.contains_key(&id)
     }
+    pub fn retire(&mut self) -> Vec<u64> {
+        let ids = self.requests.keys().copied().collect();
+        *self = Self::default();
+        ids
+    }
     pub fn interrupted(&mut self) {
         self.requests.clear();
         for catalog in self.providers.values_mut() {
+            catalog.stale = true;
             if catalog.request.take().is_some() {
                 catalog.error =
                     Some("Connection interrupted. Refresh to check available models.".into());

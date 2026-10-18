@@ -38,15 +38,15 @@ impl WorkspaceView {
         }
     }
     pub(super) fn selected_model(&self) -> Option<&Model> {
-        let provider = self.providers.get(self.provider_index)?["id"].as_str()?;
-        let models = &self.picker_catalog.providers.get(provider)?.models;
+        let provider = self.composer_provider()?["id"].as_str()?;
+        let models = &self.composer_catalog().providers.get(provider)?.models;
         let id = self.model.as_deref().unwrap_or("default");
         models.iter().find(|m| m.id == id)
     }
     pub(super) fn picker_label(&self) -> String {
         self.selected_model()
             .map(|m| m.label.clone())
-            .or_else(|| self.model.clone())
+            .or_else(|| self.model.clone().filter(|id| id != "default"))
             .unwrap_or_else(|| "Agent default".into())
     }
     pub(super) fn open_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -61,6 +61,7 @@ impl WorkspaceView {
                 self.refresh_model_config_watch();
             }
             self.picker_scope = None;
+            self.picker_anchors.clear();
             self.model_search
                 .update(cx, |input, cx| input.set_value(String::new(), cx));
             window.focus(&self.model_search.focus_handle(cx), cx);
@@ -93,37 +94,17 @@ impl WorkspaceView {
             cx,
         );
     }
-    pub(super) fn load_picker_catalogs(&mut self, force: bool) {
-        if !self.connected {
-            return;
-        }
-        let providers = self
-            .providers
-            .iter()
-            .filter(|p| p["installed"] != false && p["enabled"] != false)
-            .filter_map(|p| p["id"].as_str().map(str::to_owned))
-            .collect::<Vec<_>>();
-        for provider in providers {
-            let existing = self.picker_catalog.providers.get(&provider);
-            if existing
-                .is_some_and(|c| c.request.is_some() || (!force && (c.loaded || c.error.is_some())))
-            {
-                continue;
-            }
-            let id = self.call(
-                methods::LIST_MODELS,
-                json!({"harness":provider,"force":force}),
-            );
-            self.picker_catalog.begin(&provider, id);
-        }
-    }
     pub(super) fn receive_picker_catalog(
         &mut self,
         id: u64,
         frame: &Value,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.picker_catalog.contains_request(id) {
+        if self.receive_host_catalog(id, frame, cx) {
+            return true;
+        }
+        let local = self.picker_catalog.contains_request(id);
+        if !local && !self.model_host.catalog.contains_request(id) {
             return false;
         }
         let result = if let Some(error) = frame["err"].as_str() {
@@ -131,17 +112,17 @@ impl WorkspaceView {
         } else if let Some(value) = frame.get("ok") {
             serde_json::from_value(value.clone())
                 .map_err(|_| "The agent returned an invalid model catalog.".into())
+        } else if frame["done"] == true {
+            Err("The agent closed its model catalog without a result.".into())
         } else {
             return true;
         };
-        self.picker_catalog.complete(id, result);
-        for (provider, catalog) in &self.picker_catalog.providers {
-            for model in &catalog.models {
-                self.picker_anchors
-                    .entry(format!("{provider}:{}", model.id))
-                    .or_insert_with(|| ScrollAnchor::for_handle(self.picker_scroll.clone()));
-            }
+        if local {
+            self.picker_catalog.complete(id, result);
+        } else {
+            self.model_host.catalog.complete(id, result);
         }
+        self.sync_picker_anchors();
         self.pending.remove(&id);
         if self.selected.is_none() {
             self.restore_model_choices();
@@ -151,7 +132,11 @@ impl WorkspaceView {
         true
     }
     fn choose_model(&mut self, provider: String, model: Option<String>, cx: &mut Context<Self>) {
-        let Some(index) = self.providers.iter().position(|p| p["id"] == provider) else {
+        let Some(index) = self
+            .picker_providers()
+            .iter()
+            .position(|p| p["id"] == provider)
+        else {
             return;
         };
         if self.model_picker_default {
@@ -204,7 +189,7 @@ impl WorkspaceView {
         let provider_id = provider.to_owned();
         let model_id = model.id.clone();
         let active_chat = self
-            .providers
+            .picker_providers()
             .get(self.provider_index)
             .is_some_and(|p| p["id"] == provider)
             && (self.model.as_deref() == Some(&model.id)
@@ -328,13 +313,13 @@ impl WorkspaceView {
                 .as_deref()
                 .unwrap_or_default()
         } else {
-            self.providers
+            self.picker_providers()
                 .get(self.provider_index)
                 .and_then(|p| p["id"].as_str())
                 .unwrap_or_default()
         };
         let total = self
-            .picker_catalog
+            .active_picker_catalog()
             .providers
             .iter()
             .filter(|(provider, _)| self.model_provider_allowed(provider))
@@ -408,7 +393,7 @@ impl WorkspaceView {
                             })),
                     )
                     .children(
-                        self.providers
+                        self.picker_providers()
                             .iter()
                             .enumerate()
                             .filter(|(_, p)| {
@@ -423,7 +408,7 @@ impl WorkspaceView {
                             .map(|(i, p)| {
                                 let provider = p["id"].as_str().unwrap_or_default().to_owned();
                                 let live = self
-                                    .picker_catalog
+                                    .active_picker_catalog()
                                     .providers
                                     .get(&provider)
                                     .is_some_and(|c| c.loaded && c.error.is_none());
@@ -500,6 +485,35 @@ impl WorkspaceView {
                                 )),
                             ),
                     )
+                    .when(
+                        !self.model_picker_default
+                            && self.model_host.request.is_some()
+                            && !self.model_host.confirmed,
+                        |d| {
+                            d.child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(MUTED))
+                                    .child("Loading agents from the execution host…"),
+                            )
+                        },
+                    )
+                    .when(!self.model_picker_default, |d| {
+                        d.when_some(self.model_host.error.clone(), |d, error| {
+                            d.child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(MUTED))
+                                    .child(format!(
+                                        "Execution host: {error} Use Refresh to try again."
+                                    )),
+                            )
+                        })
+                    })
                     .child(
                         column()
                             .id("model-results")
@@ -530,7 +544,7 @@ impl WorkspaceView {
                                             self.model_provider_allowed(&choice.provider)
                                         })
                                         .filter_map(|choice| {
-                                            self.picker_catalog
+                                            self.active_picker_catalog()
                                                 .providers
                                                 .get(&choice.provider)
                                                 .and_then(|c| {
@@ -564,7 +578,7 @@ impl WorkspaceView {
                                 },
                             )
                             .children(
-                                self.providers
+                                self.picker_providers()
                                     .iter()
                                     .filter(|p| {
                                         self.model_provider_allowed(
@@ -585,7 +599,8 @@ impl WorkspaceView {
                                     .map(|p| {
                                         let provider = p["id"].as_str().unwrap_or_default();
                                         let name = p["name"].as_str().unwrap_or(provider);
-                                        let catalog = self.picker_catalog.providers.get(provider);
+                                        let catalog =
+                                            self.active_picker_catalog().providers.get(provider);
                                         let matches = catalog
                                             .into_iter()
                                             .flat_map(|c| c.models.iter())
@@ -744,13 +759,13 @@ impl WorkspaceView {
                 .as_deref()
                 .unwrap_or_default()
         } else {
-            self.providers
+            self.picker_providers()
                 .get(self.provider_index)
                 .and_then(|p| p["id"].as_str())
                 .unwrap_or_default()
         };
         let mut matches = Vec::new();
-        for provider in &self.providers {
+        for provider in self.picker_providers() {
             let id = provider["id"].as_str().unwrap_or_default();
             if !self.model_provider_allowed(id) {
                 continue;
@@ -767,7 +782,7 @@ impl WorkspaceView {
             {
                 continue;
             }
-            if let Some(catalog) = self.picker_catalog.providers.get(id) {
+            if let Some(catalog) = self.active_picker_catalog().providers.get(id) {
                 for model in &catalog.models {
                     if query.is_empty()
                         || [
