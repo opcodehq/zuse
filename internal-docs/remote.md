@@ -35,7 +35,7 @@ Paired origins require HTTPS; HTTP is accepted only on localhost for development
 ## Integration still required
 
 - Persisted target selection and physical acceptance of connection management across desktop windows.
-- Encrypted end-to-end heartbeat acceptance across an untrusted broker. Current control-frame heartbeats detect link failure; they do not establish application responsiveness through a broker. Paired mode rejects plaintext RPC and does not fall back after authentication failure.
+- Full browser and physical-device stalled-broker acceptance. Encrypted end-to-end challenges are implemented and verified through the shared state, native adversarial endpoint, actual direct/relay sessions and compiled browser periodic exchange described below. Paired mode rejects plaintext RPC and does not fall back after authentication failure.
 - Host identity pinning and complete connection-target selection. Pairing secrets stay outside relay URLs, logs and ordinary settings metadata.
 - Physical Mac/Linux and browser acceptance, revoked and expired keys, broker outages, profile/account changes and deployment packaging. A trusted application bundle remains necessary for browser-held capabilities.
 
@@ -67,11 +67,11 @@ The foreground server advertises the broker origin for invitations while its loc
 
 Three actual-socket relay scenarios cover concurrent native clients, 180 KB payloads, canonical subscriptions, profile routing rejection, revocation, connector process-task replacement, shutdown, unauthorized host registration, wrong pairing keys and rejected plaintext. The full transport suite remains a regression gate for the shared direct/relay session. Evidence: `.context/relay-transport-tests.log`.
 
-Still pending: per-account host credential provisioning/rotation, encrypted end-to-end heartbeats, broker restart/outage acceptance through browser and physical Mac/Linux clients, and production deployment. The global operator token is suitable for an operator-controlled relay; it is not a tenant authorization service. Control-frame pings are not proof that an untrusted broker can reach the execution host.
+Still pending: per-account host credential provisioning/rotation, broker restart/outage acceptance through browser and physical Mac/Linux clients, and production deployment. The global operator token is suitable for an operator-controlled relay; it is not a tenant authorization service. Control-frame pings are not proof that an untrusted broker can reach the execution host.
 
 Connector cancellation is also a canonical RPC lifetime gate. Request tasks now have a connection-owned drop guard, so aborting the dispatcher cancels its subscriptions. Reusing a request ID cancels the previous task. The connector-replacement scenario asserts that its subscription guard is released; it failed before this fix (`.context/relay-cancellation-regression-before.log`) and passes afterward in the transport suite. Shared host writes have a 30-second deadline.
 
-The current connector keeps four sockets per grant. Burst media/uploads can exhaust those slots; queued connection admission remains an acceptance gap alongside end-to-end heartbeats.
+The current connector keeps four sockets per grant. Burst media/uploads can exhaust those slots; queued connection admission remains an acceptance gap alongside physical/browser outage acceptance.
 
 ## Settings-owned outbound relay
 
@@ -83,4 +83,15 @@ Starting relay access saves the validated origin and absolute credential-file pa
 
 Runtime assembly restores an enabled configuration once after building the RPC service. A malformed/foreign saved record or missing credential leaves the engine running and exposes a sanitized Settings error. Disabling startup still works if the credential has disappeared. Shutdown cancels/drains the connector without changing the preference. Explicit server relay flags replace an automatically restored connector and save the supplied configuration. Settings controls serialize admission; admitted RPC mutations complete after their caller disconnects. Browser uncertain receipts reconcile with status reads instead of replaying a mutation.
 
-Host credentials remain operator-issued private files. Automatic account credential provisioning/rotation, encrypted end-to-end heartbeat, queued media admission and physical outage recovery remain open. Real-broker cold-core and outage recovery checks establish native encrypted reconnection, not physical/browser acceptance or broker trust. Refresh status after reconnecting.
+Host credentials remain operator-issued private files. Automatic account credential provisioning/rotation, queued media admission and physical outage recovery remain open. Real-broker cold-core and outage recovery checks establish native encrypted reconnection, not physical/browser acceptance or broker trust. Refresh status after reconnecting.
+
+
+## Encrypted host heartbeat
+
+Native and browser paired clients now confirm application responsiveness before exposing a connection. After the Noise handshake they send an encrypted transport message with the byte prefix `\0zuse-paired-heartbeat-v1:`, a request byte `0` and a fresh 16-byte random challenge. The host replies through the same channel with type byte `1` and the exact challenge. These fixed-size controls are disjoint from JSON RPC, never reach chat dispatch, and confirm the client's possession of its pairing secret. Live authorization, revocation and engine shutdown still gate the host session.
+
+The initial reply has a ten-second deadline. After each matching reply the client waits twenty seconds before a new challenge; its reply deadline is sixty seconds. Unsolicited, reflected, malformed, stale or late replies fail the connection. Ordinary RPC traffic and WebSocket pongs cannot acknowledge a pending challenge. The native and WASM adapters use the same state machine with elapsed monotonic time. A browser suspended beyond its deadline reconnects with fresh keys through the existing interrupted-request policy; uncertain mutations are not replayed. New clients require a host supporting these controls and report a confirmation failure for an older host. Updated hosts continue accepting older clients' existing JSON application proof.
+
+Once a host receives heartbeat controls, ninety seconds without a complete authenticated client message closes that session; WebSocket pings do not extend it. Full encrypted writes and incoming dispatch backpressure have bounded deadlines, so a stalled recipient cannot indefinitely occupy the exchange loop. Relay Settings socket counts continue to describe transport ownership, rather than claim that an execution host answered a challenge.
+
+The milestone passes two shared challenge-state regressions, a native endpoint that completes Noise but supplies only link pongs, and the actual direct/relay suites. A fresh compiled WASM browser pairing confirms the initial challenge and a later periodic binary exchange on one stable connection, clears its invitation fragment and persists the confirmed grant. No plaintext paired frames or screenshot fixtures are used. Physical desktop runtime, suspended-tab recovery and a rendered browser stalled-broker scenario remain separate acceptance gates.

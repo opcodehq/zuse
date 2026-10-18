@@ -14337,6 +14337,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "web-time",
  "zuse-protocol",
  "zuse-remote",
  "zuse-viewport",

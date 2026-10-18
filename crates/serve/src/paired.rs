@@ -81,7 +81,7 @@ async fn message<R, W, E>(
     channel: &mut SecureChannel,
     reader: &mut R,
     writer: &mut W,
-) -> Result<String, ()>
+) -> Result<Vec<u8>, ()>
 where
     R: Stream<Item = Result<Message, E>> + Unpin,
     W: Sink<Message> + Unpin,
@@ -89,7 +89,7 @@ where
     loop {
         let record = binary(reader, writer).await?;
         if let Some(bytes) = channel.open(&record).map_err(|_| ())? {
-            return String::from_utf8(bytes).map_err(|_| ());
+            return Ok(bytes);
         }
     }
 }
@@ -138,18 +138,25 @@ pub(crate) async fn session<S, E>(
         )
         .await
         .map_err(|_| ())??;
-        if !valid_first(&first) {
-            return Err(());
-        }
+        let control = zuse_remote::heartbeat::response(&first).map_err(|_| ())?;
+        let first = if control.is_some() {
+            None
+        } else {
+            let first = String::from_utf8(first).map_err(|_| ())?;
+            if !valid_first(&first) {
+                return Err(());
+            }
+            Some(first)
+        };
         authority.confirm(&credentials).map_err(|_| ())?;
-        Ok::<_, ()>((channel, first))
+        Ok::<_, ()>((channel, first, control))
     };
     let authenticated = tokio::select! { biased;
         _ = server.shutdown.cancelled() => return,
         _ = credentials.revoked() => return,
         result = authenticate => result,
     };
-    let Ok((mut channel, first)) = authenticated else {
+    let Ok((mut channel, first, control)) = authenticated else {
         return;
     };
     let (out_tx, mut out_rx) = mpsc::channel::<String>(16);
@@ -164,20 +171,33 @@ pub(crate) async fn session<S, E>(
     ));
     {
         let exchange = async {
-            in_tx.send(first).await.map_err(|_| ())?;
+            let mut heartbeat_peer = control.is_some();
+            let mut last_encrypted = tokio::time::Instant::now();
+            if let Some(control) = control {
+                encrypted(&mut channel, &mut writer, &control).await?;
+            }
+            if let Some(first) = first {
+                in_tx.send(first).await.map_err(|_| ())?;
+            }
             loop {
                 tokio::select! {
+                    _ = tokio::time::sleep_until(last_encrypted + Duration::from_secs(90)), if heartbeat_peer => return Err(()),
                     data = out_rx.recv() => {
                         let Some(data) = data else { return Ok::<_, ()>(()); };
-                        for record in channel.seal(data.as_bytes()).map_err(|_| ())? {
-                            send(&mut writer, Message::Binary(record.into())).await?;
-                        }
+                        encrypted(&mut channel, &mut writer, data.as_bytes()).await?;
                     },
                     frame = reader.next() => match frame {
                         Some(Ok(Message::Binary(record))) => {
                             if let Some(bytes) = channel.open(&record).map_err(|_| ())? {
-                                let payload = String::from_utf8(bytes).map_err(|_| ())?;
-                                in_tx.send(payload).await.map_err(|_| ())?;
+                                last_encrypted = tokio::time::Instant::now();
+                                if let Some(reply) = zuse_remote::heartbeat::response(&bytes).map_err(|_|())? {
+                                    if !credentials.is_live() { return Err(()); }
+                                    heartbeat_peer = true;
+                                    encrypted(&mut channel, &mut writer, &reply).await?;
+                                } else {
+                                    let payload = String::from_utf8(bytes).map_err(|_| ())?;
+                                    tokio::time::timeout(Duration::from_secs(30),in_tx.send(payload)).await.map_err(|_|())?.map_err(|_| ())?;
+                                }
                             }
                         },
                         Some(Ok(Message::Ping(data))) => send(&mut writer, Message::Pong(data)).await?,
@@ -203,4 +223,19 @@ async fn send<W: Sink<Message> + Unpin>(writer: &mut W, message: Message) -> Res
         .await
         .map_err(|_| ())?
         .map_err(|_| ())
+}
+
+async fn encrypted<W: Sink<Message> + Unpin>(
+    channel: &mut SecureChannel,
+    writer: &mut W,
+    payload: &[u8],
+) -> Result<(), ()> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for record in channel.seal(payload).map_err(|_| ())? {
+            send(writer, Message::Binary(record.into())).await?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| ())?
 }

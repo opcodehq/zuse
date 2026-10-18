@@ -3,6 +3,7 @@
 //! Noise provides the handshake, key exchange, encryption and nonce sequencing.
 //! This module only bounds and reassembles application messages into Noise records.
 mod channel;
+pub mod heartbeat;
 mod invitation;
 mod target;
 pub use channel::{
@@ -25,6 +26,8 @@ pub enum Error {
     Limit,
     #[error("Invalid paired message framing")]
     Framing,
+    #[error("Paired host did not confirm responsiveness. Reconnect or update the host.")]
+    Heartbeat,
     #[error("Paired connection is closed")]
     Closed,
 }

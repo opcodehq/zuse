@@ -337,3 +337,51 @@ async fn native_paired_client_uses_canonical_calls_stream_cancellation_and_revoc
     drop(client);
     host.stop().await;
 }
+
+#[tokio::test]
+async fn encrypted_heartbeat_confirms_pairing_without_dispatching_chat_rpc() {
+    let host = Host::new().await;
+    let (mut socket, mut channel) = host.connect().await;
+    let mut heartbeat = zuse_remote::heartbeat::Heartbeat::new();
+    let zuse_remote::heartbeat::Action::Send(payload) = heartbeat.poll(0).unwrap() else {
+        panic!("challenge missing")
+    };
+    for record in channel.seal(&payload).unwrap() {
+        socket.send(Message::Binary(record)).await.unwrap();
+    }
+    let bytes = receive(&mut socket).await;
+    let confirmation = channel.open(&bytes).unwrap().unwrap();
+    assert!(heartbeat.consume(&confirmation, 1).unwrap());
+    assert_eq!(
+        host.calls.load(Ordering::SeqCst),
+        0,
+        "heartbeat stays outside application dispatch"
+    );
+    assert!(host.authority.list().unwrap()[0].paired_at.is_some());
+    send(
+        &mut socket,
+        &mut channel,
+        json!({"id":1,"method":"Echo","params":{"after":"heartbeat"}}),
+    )
+    .await;
+    assert_eq!(
+        reply(&mut socket, &mut channel).await["ok"]["after"],
+        "heartbeat"
+    );
+    // A transport pong cannot keep an abandoned authenticated client alive.
+    tokio::time::pause();
+    socket.send(Message::Ping(vec![])).await.unwrap();
+    tokio::time::advance(Duration::from_secs(91)).await;
+    tokio::time::resume();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(3), socket.next())
+            .await
+            .unwrap()
+        {
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+            None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+            _ => panic!("Expected idle heartbeat peer to close"),
+        }
+    }
+    host.stop().await;
+}

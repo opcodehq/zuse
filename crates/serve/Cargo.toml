@@ -25,6 +25,7 @@ base64 = "0.22"
 zuse-protocol.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
 
 tempfile.workspace = true

@@ -9,7 +9,10 @@ use std::{
 };
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_sys::{MessageEvent, WebSocket};
-use zuse_remote::{Invitation, MAX_MESSAGE_BYTES, MAX_RECORD_BYTES, SecureChannel};
+use zuse_remote::{
+    Invitation, MAX_MESSAGE_BYTES, MAX_RECORD_BYTES, SecureChannel,
+    heartbeat::{Action, Heartbeat},
+};
 
 // WebSocket.send rejects views backed by shared WASM memory. Own a normal JS
 // buffer for the browser call; do not pass a borrowed Rust slice directly.
@@ -29,6 +32,8 @@ pub(super) struct Socket {
     incoming: mpsc::Receiver<Incoming>,
     closed: Rc<Cell<bool>>,
     channel: Option<SecureChannel>,
+    heartbeat: Option<Heartbeat>,
+    clock: web_time::Instant,
     _open: Closure<dyn FnMut()>,
     _close: Closure<dyn FnMut()>,
     _error: Closure<dyn FnMut()>,
@@ -98,6 +103,8 @@ impl Socket {
             incoming,
             closed,
             channel: None,
+            heartbeat: None,
+            clock: web_time::Instant::now(),
             _open: open,
             _close: close,
             _error: error,
@@ -126,8 +133,80 @@ impl Socket {
                     .finish(&reply)
                     .map_err(|_| "Paired authentication failed")?,
             );
+            owner.clock = web_time::Instant::now();
+            owner.heartbeat = Some(Heartbeat::new());
+            owner.poll_heartbeat()?;
+            let confirmation = async {
+                loop {
+                    let Incoming::Binary(record) = owner.raw().await? else {
+                        return Err(
+                            "Paired host did not confirm responsiveness. Update the host.".into(),
+                        );
+                    };
+                    let payload = owner
+                        .channel
+                        .as_mut()
+                        .unwrap()
+                        .open(&record)
+                        .map_err(|_| "Paired host authentication failed")?;
+                    if let Some(payload) = payload {
+                        let now = owner.clock.elapsed().as_millis() as u64;
+                        if owner
+                            .heartbeat
+                            .as_mut()
+                            .unwrap()
+                            .consume(&payload, now)
+                            .map_err(
+                                |_| "Paired host did not confirm responsiveness. Update the host.",
+                            )?
+                        {
+                            return Ok::<_, String>(());
+                        }
+                        return Err("Paired host sent an invalid confirmation".into());
+                    }
+                }
+            };
+            futures::select_biased! {
+                result = confirmation.fuse() => result?,
+                _ = super::connection::delay(zuse_remote::heartbeat::INITIAL_TIMEOUT_MS as u32).fuse() => return Err("Paired host did not confirm responsiveness. Update the host.".into()),
+            }
         }
         Ok(owner)
+    }
+    fn poll_heartbeat(&mut self) -> Result<Option<u64>, String> {
+        loop {
+            let Some(heartbeat) = &mut self.heartbeat else {
+                return Ok(None);
+            };
+            match heartbeat
+                .poll(self.clock.elapsed().as_millis() as u64)
+                .map_err(|error| error.to_string())?
+            {
+                Action::Send(payload) => self.send_secure(&payload)?,
+                Action::Wait(ms) => return Ok(Some(ms)),
+                Action::Expired => return Err("Paired engine stopped responding".into()),
+            }
+        }
+    }
+    fn send_secure(&mut self, payload: &[u8]) -> Result<(), String> {
+        if self.closed.get() || self.socket.ready_state() != WebSocket::OPEN {
+            return Err("Paired connection closed".into());
+        }
+        if self.socket.buffered_amount() as usize + payload.len() > 20 * 1024 * 1024 {
+            self.closed.set(true);
+            let _ = self.socket.close();
+            return Err("Paired connection is too slow".into());
+        }
+        for record in self
+            .channel
+            .as_mut()
+            .ok_or("Paired channel unavailable")?
+            .seal(payload)
+            .map_err(|_| "Paired message could not be encrypted")?
+        {
+            binary(&self.socket, &record).map_err(|_| "Paired connection closed")?;
+        }
+        Ok(())
     }
     async fn raw(&mut self) -> Result<Incoming, String> {
         if self.closed.get() {
@@ -148,13 +227,8 @@ impl Socket {
             let _ = self.socket.close();
             return Err("Engine connection is too slow".into());
         }
-        if let Some(channel) = &mut self.channel {
-            for record in channel
-                .seal(text.as_bytes())
-                .map_err(|_| "Paired message could not be encrypted")?
-            {
-                binary(&self.socket, &record).map_err(|_| "Paired connection closed")?;
-            }
+        if self.channel.is_some() {
+            self.send_secure(text.as_bytes())?;
         } else {
             self.socket
                 .send_with_str(text)
@@ -164,7 +238,15 @@ impl Socket {
     }
     pub async fn receive(&mut self) -> Result<String, String> {
         loop {
-            let frame = self.raw().await?;
+            let wait = self.poll_heartbeat()?;
+            let frame = if let Some(ms) = wait {
+                futures::select_biased! {
+                    frame = self.raw().fuse() => frame?,
+                    _ = super::connection::delay(ms as u32).fuse() => continue,
+                }
+            } else {
+                self.raw().await?
+            };
             match (&mut self.channel, frame) {
                 (None, Incoming::Text(text)) => return Ok(text),
                 (Some(channel), Incoming::Binary(bytes)) => {
@@ -172,6 +254,14 @@ impl Socket {
                         .open(&bytes)
                         .map_err(|_| "Paired authentication failed")?
                     {
+                        if let Some(heartbeat) = &mut self.heartbeat {
+                            if heartbeat
+                                .consume(&message, self.clock.elapsed().as_millis() as u64)
+                                .map_err(|error| error.to_string())?
+                            {
+                                continue;
+                            }
+                        }
                         return String::from_utf8(message)
                             .map_err(|_| "Invalid engine message".into());
                     }
