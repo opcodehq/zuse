@@ -170,6 +170,13 @@ impl WorkspaceView {
     }
 
     fn composer(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|chat| chat["archived"] == true)
+        {
+            return self.archived_thread_footer(cx);
+        }
         let provider = self.composer_provider();
         let working = self.is_working();
         let has_draft =
@@ -177,6 +184,7 @@ impl WorkspaceView {
         column()
             .w_full()
             .max_w(px(896.))
+            .min_w_0()
             .self_center()
             .flex_shrink_0()
             .px(px(if self.content_width < 500. { 12. } else { 24. }))
@@ -245,6 +253,8 @@ impl WorkspaceView {
             })
             .child(
                 column()
+                    .w_full()
+                    .min_w_0()
                     .relative()
                     .rounded(px(19.))
                     .border_1()
@@ -800,28 +810,35 @@ impl WorkspaceView {
                     .gap_1()
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .children(
-                        [
-                            ("files", "Files"),
-                            ("changes", "Changes"),
-                            ("terminal", "Terminal"),
-                            ("recovery", "Recovery"),
-                        ]
-                        .into_iter()
-                        .map(|(tab, name)| {
-                            control(SharedString::from(format!("panel-{tab}")), name)
-                                .px_1()
-                                .gap_1()
-                                .text_size(px(11.))
-                                .when(self.right_tab == tab, |s| {
-                                    s.text_color(rgb(TEXT)).bg(rgb(RAISED))
-                                })
-                                .on_click(
-                                    cx.listener(move |this, _, _, cx| this.set_panel(tab, cx)),
-                                )
-                        }),
+                    .child(
+                        row()
+                            .id("workspace-panel-tabs")
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_x_scroll()
+                            .children(
+                                [
+                                    ("files", "Files"),
+                                    ("changes", "Changes"),
+                                    ("terminal", "Terminal"),
+                                    ("actions", "Actions"),
+                                    ("recovery", "Recovery"),
+                                ]
+                                .into_iter()
+                                .map(|(tab, name)| {
+                                    control(SharedString::from(format!("panel-{tab}")), name)
+                                        .px_1()
+                                        .gap_1()
+                                        .text_size(px(11.))
+                                        .when(self.right_tab == tab, |s| {
+                                            s.text_color(rgb(TEXT)).bg(rgb(RAISED))
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.set_panel(tab, cx)
+                                        }))
+                                }),
+                            ),
                     )
-                    .child(div().flex_1())
                     .child(
                         icon_button("close-panel", "close", "Close workspace panel").on_click(
                             cx.listener(|this, _, _, cx| {
@@ -833,7 +850,9 @@ impl WorkspaceView {
             )
             .child(match self.right_tab.as_str() {
                 "recovery" => self.recovery_view(cx),
+                "actions" => self.project_actions_view(cx),
                 "terminal" => column()
+                    .child(self.terminal_tabs_view(cx))
                     .when(self.terminal_id.is_none(), |d| {
                         d.child(
                             control("open-browser-terminal", "Open terminal")
@@ -1205,10 +1224,11 @@ impl Render for WorkspaceView {
                     return;
                 }
                 if this.settings {
-                    if this.model_picker && this.model_picker_default {
+                    if this.model_picker && this.picker_in_settings() {
+                        let target = this.picker_target;
                         this.model_picker = false;
-                        this.model_picker_default = false;
-                        window.focus(&this.default_model_focus, cx);
+                        this.picker_target = model_picker::PickerTarget::Composer;
+                        this.return_model_picker_focus(target, window, cx);
                     } else if this.default_permission_menu {
                         this.default_permission_menu = false;
                         window.focus(&this.default_permission_focus, cx);
@@ -1218,7 +1238,7 @@ impl Render for WorkspaceView {
                     } else {
                         this.settings = false;
                         this.model_picker = false;
-                        this.model_picker_default = false;
+                        this.picker_target = model_picker::PickerTarget::Composer;
                         window.focus(&this.input.focus_handle(cx), cx);
                     }
                     cx.notify();

@@ -213,6 +213,8 @@ impl WorkspaceView {
             self.cancel(id);
         }
         self.interrupt_queue_edit(cx);
+        self.reset_project_actions(cx);
+        self.detach_browser_terminal(cx);
         self.prefetch_model_catalogs();
         self.stop_transcript();
         // Until the new snapshot arrives, old approval cards must not submit

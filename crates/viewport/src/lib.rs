@@ -21,6 +21,7 @@ pub mod palette;
 mod plugin_management;
 pub mod plugin_setup;
 mod previews;
+mod project_actions;
 mod provider_settings;
 mod provider_updates;
 mod questions;
@@ -32,7 +33,9 @@ pub mod settings_style;
 mod settings_view;
 mod shell;
 pub mod styling;
+mod terminals;
 mod thread_actions;
+mod title_settings;
 mod tool_results;
 mod transcript;
 mod workspace;
@@ -103,6 +106,11 @@ pub struct WorkspaceView {
     file_reconcile: Option<u64>,
     file_reconnect_needed: bool,
     terminal_last_seq: Option<u64>,
+    terminal_host: Option<String>,
+    terminal_tabs: Vec<terminals::TerminalTab>,
+    terminal_open: Option<terminals::OpeningTerminal>,
+    terminal_closing: HashMap<u64, terminals::TerminalTab>,
+    project_actions: project_actions::ProjectActionsView,
     terminal_write: Option<(u64, String)>,
     error: Option<String>,
     show_archive: bool,
@@ -112,6 +120,7 @@ pub struct WorkspaceView {
     thread_dialog_focus: FocusHandle,
     settings: bool,
     worktree_settings: worktree_settings::WorktreeSettingsView,
+    title_settings: title_settings::TitleSettingsView,
     provider_expanded: Option<String>,
     provider_actions: HashMap<u64, String>,
     provider_logins: HashMap<String, Value>,
@@ -233,7 +242,7 @@ pub struct WorkspaceView {
     model_error: Option<String>,
     model: Option<String>,
     model_picker: bool,
-    model_picker_default: bool,
+    picker_target: model_picker::PickerTarget,
     terminal_id: Option<String>,
     terminal_watch: Option<u64>,
     terminal_text: String,
@@ -388,6 +397,11 @@ impl WorkspaceView {
             file_reconcile: None,
             file_reconnect_needed: false,
             terminal_last_seq: None,
+            terminal_host: None,
+            terminal_tabs: vec![],
+            terminal_open: None,
+            terminal_closing: HashMap::new(),
+            project_actions: project_actions::ProjectActionsView::default(),
             terminal_write: None,
             error: None,
             show_archive: false,
@@ -397,6 +411,7 @@ impl WorkspaceView {
             thread_dialog_focus: cx.focus_handle(),
             settings: false,
             worktree_settings,
+            title_settings: title_settings::TitleSettingsView::new(window, cx),
             provider_expanded: None,
             provider_actions: HashMap::new(),
             provider_logins: HashMap::new(),
@@ -518,7 +533,7 @@ impl WorkspaceView {
             model_error: None,
             model: None,
             model_picker: false,
-            model_picker_default: false,
+            picker_target: model_picker::PickerTarget::Composer,
             terminal_id: None,
             terminal_watch: None,
             terminal_text: String::new(),
@@ -633,6 +648,18 @@ impl WorkspaceView {
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if method.is_empty() {
+            return;
+        }
+        if self.receive_project_actions(id, &frame, cx) {
+            return;
+        }
+        if self.receive_terminal_close(id, &frame, cx) {
+            return;
+        }
+        if self.receive_terminal_open(id, &frame, cx) {
+            return;
+        }
+        if self.receive_title_settings(id, &frame, cx) {
             return;
         }
         if self.receive_worktree_settings(id, &frame, cx) {
@@ -959,14 +986,6 @@ impl WorkspaceView {
                 methods::GET_CHECKOUT_DIFF if self.changes_request == Some(id) => {
                     self.changes = value.clone()
                 }
-                methods::OPEN_TERMINAL => {
-                    if let Some(terminal) = value["id"].as_str() {
-                        self.terminal_id = Some(terminal.into());
-                        let watch =
-                            self.call(methods::SUBSCRIBE_TERMINAL, json!({"terminalId":terminal}));
-                        self.terminal_watch = Some(watch);
-                    }
-                }
                 methods::WRITE_TERMINAL
                     if self
                         .terminal_write
@@ -1005,6 +1024,7 @@ impl WorkspaceView {
         if self.file_navigation_blocked(cx)
             || self.queue_edit_navigation_blocked(cx)
             || self.model_navigation_blocked(cx)
+            || self.project_action_navigation_blocked(cx)
         {
             return false;
         }
@@ -1013,7 +1033,7 @@ impl WorkspaceView {
         self.attachments.clear();
         self.uploading = 0;
         self.stop_transcript();
-        self.clear_workspace();
+        self.clear_workspace(cx);
         let queue_watch = self.call(
             methods::WATCH_QUEUE,
             zuse_protocol::presentation::chat_request(&chat, json!({})),
@@ -1077,6 +1097,7 @@ impl WorkspaceView {
         if self.file_navigation_blocked(cx)
             || self.queue_edit_navigation_blocked(cx)
             || self.model_navigation_blocked(cx)
+            || self.project_action_navigation_blocked(cx)
         {
             return false;
         }
@@ -1085,7 +1106,7 @@ impl WorkspaceView {
         self.attachments.clear();
         self.uploading = 0;
         self.stop_transcript();
-        self.clear_workspace();
+        self.clear_workspace(cx);
         self.reset_recovery(cx);
         self.reset_inputs(cx);
         self.reset_tool_results();
@@ -1109,6 +1130,15 @@ impl WorkspaceView {
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
         if self.thread_dialog.is_some() {
+            return;
+        }
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|chat| chat["archived"] == true)
+        {
+            self.error = Some("Unarchive this thread before sending another message.".into());
+            cx.notify();
             return;
         }
         if self.settings {

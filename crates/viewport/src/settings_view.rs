@@ -68,6 +68,7 @@ impl WorkspaceView {
         self.model_picker = false;
         if section == Section::General {
             self.refresh_worktree_settings();
+            self.refresh_title_settings();
         }
         if section == Section::Devices {
             self.refresh_pairings();
@@ -216,6 +217,7 @@ impl WorkspaceView {
                 .child(self.appearance_settings(cx))
                 .child(self.completion_sound_settings(cx))
                 .child(self.worktree_settings_card(cx))
+                .child(self.thread_naming_settings_card(cx))
                 .into_any_element(),
             Section::Defaults => self.default_model_settings(cx),
             Section::Providers => column()
@@ -261,7 +263,7 @@ impl WorkspaceView {
                                 this.completion_preset_menu = false;
                                 this.default_permission_menu = false;
                                 this.model_picker = false;
-                                this.model_picker_default = false;
+                                this.picker_target = model_picker::PickerTarget::Composer;
                                 window.focus(&this.input.focus_handle(cx), cx);
                                 cx.notify();
                             })),
@@ -452,7 +454,10 @@ impl WorkspaceView {
                     .justify_between()
                     .role(Role::ComboBox)
                     .aria_label(format!("Default model: {label}"))
-                    .aria_expanded(self.model_picker && self.model_picker_default)
+                    .aria_expanded(
+                        self.model_picker
+                            && self.picker_target == model_picker::PickerTarget::Defaults,
+                    )
                     .track_focus(&self.default_model_focus)
                     .tab_index(0)
                     .child(
@@ -474,11 +479,11 @@ impl WorkspaceView {
                     )
                     .child(icon("alt-arrow-down").size(px(14.)))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_model_picker(window, cx);
-                        this.model_picker_default = this.model_picker;
-                        if this.model_picker {
-                            this.load_picker_catalogs(false);
-                        }
+                        this.open_settings_model_picker(
+                            model_picker::PickerTarget::Defaults,
+                            window,
+                            cx,
+                        );
                         this.default_permission_menu = false;
                         if !this.model_picker {
                             window.focus(&this.default_model_focus, cx);
@@ -486,11 +491,14 @@ impl WorkspaceView {
                         cx.notify();
                     })),
             )
-            .when(self.model_picker && self.model_picker_default, |view| {
-                view.child(
-                    deferred(self.composer_picker(cx, Some(model_bounds.clone()))).priority(1),
-                )
-            });
+            .when(
+                self.model_picker && self.picker_target == model_picker::PickerTarget::Defaults,
+                |view| {
+                    view.child(
+                        deferred(self.composer_picker(cx, Some(model_bounds.clone()))).priority(1),
+                    )
+                },
+            );
         use zuse_protocol::presentation::PermissionMode;
         let selected = self.preferences.default_permission_mode;
         let permission = column()

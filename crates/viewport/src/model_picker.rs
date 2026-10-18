@@ -8,7 +8,34 @@ use zuse_protocol::{Model, presentation::ModelSelection};
 const ACCENT: u32 = 0x89ca21;
 pub(super) type TriggerBounds = std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum PickerTarget {
+    #[default]
+    Composer,
+    Defaults,
+    ThreadNaming,
+}
+
 impl WorkspaceView {
+    pub(super) fn picker_in_settings(&self) -> bool {
+        self.picker_target != PickerTarget::Composer
+    }
+    fn picker_current_provider(&self) -> String {
+        match self.picker_target {
+            PickerTarget::Composer => self
+                .composer_provider()
+                .and_then(|provider| provider["id"].as_str())
+                .unwrap_or_default()
+                .to_owned(),
+            PickerTarget::Defaults => self
+                .preferences
+                .default_provider
+                .clone()
+                .unwrap_or_default(),
+            PickerTarget::ThreadNaming => self.title_settings.provider().unwrap_or_default(),
+        }
+    }
+
     pub(super) fn save_preferences(&self) {
         let _ = self
             .requests
@@ -50,14 +77,30 @@ impl WorkspaceView {
             .unwrap_or_else(|| "Agent default".into())
     }
     pub(super) fn open_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings_model_picker(PickerTarget::Composer, window, cx);
+    }
+    pub(super) fn open_settings_model_picker(
+        &mut self,
+        target: PickerTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.context_menu = false;
-        self.model_picker = !self.model_picker;
-        self.model_picker_default = false;
+        self.model_picker = !(self.model_picker && self.picker_target == target);
+        self.picker_target = if self.model_picker {
+            target
+        } else {
+            PickerTarget::Composer
+        };
         self.agent_picker = false;
         self.access_picker = false;
         self.add_menu = false;
         if self.model_picker {
-            if self.selected.is_some() && !self.model_confirmed && self.model_watch.is_none() {
+            if target == PickerTarget::Composer
+                && self.selected.is_some()
+                && !self.model_confirmed
+                && self.model_watch.is_none()
+            {
                 self.refresh_model_config_watch();
             }
             self.picker_scope = None;
@@ -79,17 +122,17 @@ impl WorkspaceView {
         }
         cx.notify();
     }
-    fn return_model_picker_focus(
+    pub(super) fn return_model_picker_focus(
         &self,
-        defaults: bool,
+        target: PickerTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         window.focus(
-            &if defaults {
-                self.default_model_focus.clone()
-            } else {
-                self.input.focus_handle(cx)
+            &match target {
+                PickerTarget::Defaults => self.default_model_focus.clone(),
+                PickerTarget::ThreadNaming => self.title_settings.focus.clone(),
+                PickerTarget::Composer => self.input.focus_handle(cx),
             },
             cx,
         );
@@ -139,7 +182,11 @@ impl WorkspaceView {
         else {
             return;
         };
-        if self.model_picker_default {
+        if self.picker_target == PickerTarget::ThreadNaming {
+            self.save_title_model(Some(provider), model, cx);
+            return;
+        }
+        if self.picker_target == PickerTarget::Defaults {
             self.preferences.default_provider = Some(provider.clone());
             if let Some(model) = model {
                 self.preferences
@@ -149,7 +196,7 @@ impl WorkspaceView {
             }
             self.save_preferences();
             self.model_picker = false;
-            self.model_picker_default = false;
+            self.picker_target = model_picker::PickerTarget::Composer;
             cx.notify();
             return;
         }
@@ -196,10 +243,19 @@ impl WorkspaceView {
                 || (self.model.is_none() && model.id == "default"));
         let default = self.preferences.default_provider.as_deref() == Some(provider)
             && self.preferences.default_models.get(provider) == Some(&model.id);
-        let active = if self.model_picker_default {
-            default
-        } else {
-            active_chat
+        let active = match self.picker_target {
+            PickerTarget::Defaults => default,
+            PickerTarget::Composer => active_chat,
+            PickerTarget::ThreadNaming => {
+                self.title_settings.provider().as_deref() == Some(provider)
+                    && self
+                        .title_settings
+                        .settings
+                        .as_ref()
+                        .and_then(|settings| settings.model.as_deref())
+                        .unwrap_or("default")
+                        == model.id
+            }
         };
         let selection = ModelSelection {
             provider: provider.to_owned(),
@@ -293,10 +349,10 @@ impl WorkspaceView {
                 d.child(icon("check").size(px(14.)).text_color(rgb(ACCENT)))
             })
             .on_click(cx.listener(move |this, _, window, cx| {
-                let defaults = this.model_picker_default;
+                let target = this.picker_target;
                 this.choose_model(provider_id.clone(), Some(model_id.clone()), cx);
                 if !this.model_picker {
-                    this.return_model_picker_focus(defaults, window, cx);
+                    this.return_model_picker_focus(target, window, cx);
                 }
             }))
             .into_any_element()
@@ -307,17 +363,7 @@ impl WorkspaceView {
         trigger: Option<TriggerBounds>,
     ) -> AnyElement {
         let query = self.model_search.read(cx).value(cx).to_lowercase();
-        let current = if self.model_picker_default {
-            self.preferences
-                .default_provider
-                .as_deref()
-                .unwrap_or_default()
-        } else {
-            self.picker_providers()
-                .get(self.provider_index)
-                .and_then(|p| p["id"].as_str())
-                .unwrap_or_default()
-        };
+        let current = self.picker_current_provider();
         let total = self
             .active_picker_catalog()
             .providers
@@ -334,8 +380,8 @@ impl WorkspaceView {
         row()
             .id("composer-picker")
             .absolute()
-            .when(!self.model_picker_default, |view| view.bottom_full().mb_2())
-            .when(self.model_picker_default, |view| view.top_full().mt_2())
+            .when(!self.picker_in_settings(), |view| view.bottom_full().mb_2())
+            .when(self.picker_in_settings(), |view| view.top_full().mt_2())
             .right_0()
             .w(px(width))
             .h(px(height))
@@ -358,9 +404,10 @@ impl WorkspaceView {
                             .get()
                             .is_some_and(|bounds| bounds.contains(&event.position))
                         {
+                            let target = this.picker_target;
                             this.model_picker = false;
-                            this.model_picker_default = false;
-                            this.return_model_picker_focus(true, window, cx);
+                            this.picker_target = PickerTarget::Composer;
+                            this.return_model_picker_focus(target, window, cx);
                             cx.notify();
                         }
                     },
@@ -401,7 +448,7 @@ impl WorkspaceView {
                             })
                             .filter(|(_, p)| {
                                 (p["installed"] != false && p["enabled"] != false)
-                                    || (!self.model_picker_default
+                                    || (!self.picker_in_settings()
                                         && self.selected.is_some()
                                         && p["id"] == current)
                             })
@@ -486,7 +533,7 @@ impl WorkspaceView {
                             ),
                     )
                     .when(
-                        !self.model_picker_default
+                        !self.picker_in_settings()
                             && self.model_host.request.is_some()
                             && !self.model_host.confirmed,
                         |d| {
@@ -500,7 +547,7 @@ impl WorkspaceView {
                             )
                         },
                     )
-                    .when(!self.model_picker_default, |d| {
+                    .when(!self.picker_in_settings(), |d| {
                         d.when_some(self.model_host.error.clone(), |d, error| {
                             d.child(
                                 div()
@@ -587,7 +634,7 @@ impl WorkspaceView {
                                     })
                                     .filter(|p| {
                                         (p["installed"] != false && p["enabled"] != false)
-                                            || (!self.model_picker_default
+                                            || (!self.picker_in_settings()
                                                 && self.selected.is_some()
                                                 && p["id"] == current)
                                     })
@@ -742,7 +789,7 @@ impl WorkspaceView {
                             ),
                     )
                     .when(
-                        !self.model_picker_default
+                        !self.picker_in_settings()
                             && self.selected_model().is_some_and(|m| {
                                 !m.reasoning_levels.is_empty() || !m.options.is_empty()
                             }),
@@ -753,17 +800,7 @@ impl WorkspaceView {
     }
     fn picker_matches(&self, cx: &App) -> Vec<ModelSelection> {
         let query = self.model_search.read(cx).value(cx).to_lowercase();
-        let current = if self.model_picker_default {
-            self.preferences
-                .default_provider
-                .as_deref()
-                .unwrap_or_default()
-        } else {
-            self.picker_providers()
-                .get(self.provider_index)
-                .and_then(|p| p["id"].as_str())
-                .unwrap_or_default()
-        };
+        let current = self.picker_current_provider();
         let mut matches = Vec::new();
         for provider in self.picker_providers() {
             let id = provider["id"].as_str().unwrap_or_default();
@@ -771,7 +808,7 @@ impl WorkspaceView {
                 continue;
             }
             if (provider["installed"] == false || provider["enabled"] == false)
-                && (self.model_picker_default || self.selected.is_none() || id != current)
+                && (self.picker_in_settings() || self.selected.is_none() || id != current)
             {
                 continue;
             }
@@ -810,10 +847,10 @@ impl WorkspaceView {
         }
         let key = event.keystroke.key.as_str();
         if key == "escape" {
-            let defaults = self.model_picker_default;
+            let target = self.picker_target;
             self.model_picker = false;
-            self.model_picker_default = false;
-            self.return_model_picker_focus(defaults, window, cx);
+            self.picker_target = model_picker::PickerTarget::Composer;
+            self.return_model_picker_focus(target, window, cx);
             cx.stop_propagation();
             cx.notify();
             return;
@@ -848,10 +885,10 @@ impl WorkspaceView {
             return;
         };
         if key == "enter" || shortcut {
-            let defaults = self.model_picker_default;
+            let target = self.picker_target;
             self.choose_model(choice.provider, Some(choice.model), cx);
             if !self.model_picker {
-                self.return_model_picker_focus(defaults, window, cx);
+                self.return_model_picker_focus(target, window, cx);
             }
         } else {
             if let Some(anchor) = self
@@ -1134,5 +1171,57 @@ impl WorkspaceView {
                     }),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod settings_workflow_tests {
+    use super::*;
+    use std::prelude::v1::test;
+    #[gpui::test]
+    fn workflow_title_picker_uses_connected_host_without_changing_chat_or_defaults(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(initialize);
+        let (requests, mut received) = futures::channel::mpsc::unbounded();
+        let (_events, frames) = futures::channel::mpsc::unbounded();
+        let window = cx.add_window(|window, cx| {
+            WorkspaceView::new(
+                Transport {
+                    requests,
+                    events: frames,
+                },
+                window,
+                cx,
+            )
+        });
+        window.update(cx,|view,window,cx|{
+            view.connected=true;view.device_id=Some("local".into());
+            view.providers=vec![json!({"id":"codex","installed":true,"enabled":true})];
+            view.selected=Some(json!({"id":"chat","deviceId":"remote","config":{"harness":"claude-code","model":"conversation-model"}}));
+            view.model=Some("conversation-model".into());
+            view.preferences.default_provider=Some("claude-code".into());
+            view.model_host.target=Some("remote".into());
+            view.model_host.rows=vec![json!({"id":"claude-code"})];
+            view.refresh_title_settings();
+            let read=std::iter::from_fn(||received.try_recv().ok()).find(|request|request["method"]==methods::GET_TITLE_SETTINGS).unwrap()["id"].as_u64().unwrap();
+            view.receive(json!({"id":read,"ok":{"harness":null,"model":null}}),cx);
+            view.open_settings_model_picker(PickerTarget::ThreadNaming,window,cx);
+            assert_eq!(view.picker_providers()[0]["id"],"codex");
+            view.choose_model("codex".into(),Some("title-model".into()),cx);
+            let writes=std::iter::from_fn(||received.try_recv().ok()).filter(|request|request["method"]==methods::SET_TITLE_SETTINGS).collect::<Vec<_>>();
+            assert_eq!(writes.len(),1);
+            assert_eq!(writes[0]["params"],json!({"harness":"codex","model":"title-model"}));
+            let write=writes[0]["id"].as_u64().unwrap();
+            view.receive(json!({"id":write,"ok":{"harness":"codex","model":"title-model"}}),cx);
+            assert!(!view.model_picker);
+            assert_eq!(view.title_settings.provider().as_deref(),Some("codex"));
+            assert_eq!(view.model.as_deref(),Some("conversation-model"));
+            assert_eq!(view.preferences.default_provider.as_deref(),Some("claude-code"));
+            assert_eq!(view.selected.as_ref().unwrap()["config"]["model"],"conversation-model");
+            view.save_title_model(None,None,cx);
+            let reset=std::iter::from_fn(||received.try_recv().ok()).find(|request|request["method"]==methods::SET_TITLE_SETTINGS).unwrap();
+            assert_eq!(reset["params"],json!({"harness":null,"model":null}));
+        }).unwrap();
     }
 }

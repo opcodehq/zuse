@@ -32,6 +32,16 @@ pub enum HarnessId {
     Mock,
 }
 
+/// Per-device automatic session title preferences.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TitleSettings {
+    /// None follows the session harness, using a supported installed fallback.
+    pub harness: Option<HarnessId>,
+    /// None selects the cheapest model offered by the selected harness.
+    pub model: Option<String>,
+}
+
 /// Durable user preference for one agent's independently-installed CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

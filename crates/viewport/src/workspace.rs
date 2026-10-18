@@ -16,7 +16,9 @@ impl WorkspaceView {
         self.pending.remove(&id);
     }
 
-    pub(super) fn clear_workspace(&mut self) {
+    pub(super) fn clear_workspace(&mut self, cx: &mut Context<Self>) {
+        self.reset_project_actions(cx);
+        self.detach_browser_terminal(cx);
         for id in [
             self.queue_watch.take(),
             self.directory_request.take(),
@@ -28,9 +30,6 @@ impl WorkspaceView {
         .flatten()
         {
             self.cancel(id);
-        }
-        if let Some(terminal) = self.terminal_id.take() {
-            self.call(methods::CLOSE_TERMINAL, json!({"terminalId":terminal}));
         }
         self.queue.clear();
         self.entries.clear();
@@ -158,13 +157,16 @@ impl WorkspaceView {
         self.right_tab = tab.into();
         match tab {
             "recovery" => self.inspect_recovery(),
+            "actions" => self.refresh_project_actions(),
             "files" => {
                 let dir = self.directory.clone();
                 self.load_directory(&dir);
             }
             "changes" if !self.cwd().is_empty() => self.refresh_changes(cx),
             "terminal" if self.terminal_id.is_none() => {
-                self.call(methods::OPEN_TERMINAL, json!({"chatId":self.selected.as_ref().map(|c|c["id"].as_str().unwrap_or_default()).unwrap_or("browser-canvas"),"cwd":self.cwd(),"cols":80,"rows":28}));
+                if !self.restore_browser_terminal(cx) {
+                    self.open_browser_terminal(cx);
+                }
             }
             _ => {}
         }
@@ -199,7 +201,7 @@ impl WorkspaceView {
         let command = self.terminal_input.read(cx).value(cx);
         let request = self.call(
             methods::WRITE_TERMINAL,
-            json!({"terminalId":id,"data":STANDARD.encode(format!("{command}\r"))}),
+            json!({"terminalId":id,"data":STANDARD.encode(format!("{command}\r")),"targetDeviceId":self.terminal_host}),
         );
         self.terminal_write = Some((request, command));
     }

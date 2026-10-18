@@ -99,15 +99,7 @@ struct HarnessPrefsFile {
     enabled: Option<Vec<HarnessId>>,
 }
 
-/// Per-device automatic session title preferences.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct TitleSettings {
-    /// None follows the session harness, using a supported installed fallback.
-    pub harness: Option<HarnessId>,
-    /// None selects the cheapest model offered by the selected harness.
-    pub model: Option<String>,
-}
+pub use zuse_protocol::TitleSettings;
 
 type Factory = Box<dyn Fn() -> Result<Arc<dyn Harness>, HarnessError> + Send + Sync>;
 type InstalledProbe = Box<dyn Fn() -> bool + Send + Sync>;

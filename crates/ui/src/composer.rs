@@ -7,6 +7,7 @@
 //! pending-input detection) lives in free functions/structs with unit tests;
 //! the gpui element only feeds them measurements.
 
+mod archive;
 mod permissions;
 
 use std::collections::{HashMap, HashSet};
@@ -81,8 +82,6 @@ pub const COMPACT_TOTAL_HEIGHT: f32 = 49.0;
 /// `max-w-3xl`: outer width of the new-chat composer, also used when no shell
 /// width is supplied. Established threads follow the conversation column.
 pub const COMPOSER_MAX_WIDTH: f32 = 768.0;
-/// The queue reads as a narrower tray emerging from behind the composer.
-const QUEUE_SIDE_INSET: f32 = 16.0;
 /// The composer covers the tray's lower padding so the queue reads as emerging
 /// from behind it instead of as a separate rounded pill.
 pub(crate) const QUEUE_COMPOSER_OVERLAP: f32 = 18.0;
@@ -6052,6 +6051,8 @@ pub struct Composer {
     answered_requests: HashSet<String>,
     advance_task: Option<Task<()>>,
     send_task: Option<Task<()>>,
+    unarchive_task: Option<Task<()>>,
+    unarchiving: Option<String>,
     /// The queued message being edited in the composer (see
     /// [`Composer::begin_queue_edit`]).
     pub(crate) editing_queued: Option<String>,
@@ -6359,6 +6360,8 @@ impl Composer {
             action_task: None,
             advance_task: None,
             send_task: None,
+            unarchive_task: None,
+            unarchiving: None,
             interrupting: HashSet::new(),
             interrupt_tasks: HashMap::new(),
             editing_queued: None,
@@ -8829,6 +8832,17 @@ impl Composer {
     /// is on), `Mutate createChat` with the `ChatConfig` + cwd, and the model /
     /// reasoning / options on the Run request itself (§1.7).
     fn send(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
+        if self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .is_some_and(|chat| chat.archived)
+        {
+            self.failure = Some("Unarchive this thread before sending another message.".into());
+            self.failure_key = self.state.read(cx).selected_chat.clone();
+            cx.notify();
+            return;
+        }
         if self.permission_blocked(cx) {
             self.failure = Some("Confirm this chat’s saved choices before sending. Open the access menu to refresh them.".into());
             self.failure_key = self.state.read(cx).selected_chat.clone();
@@ -10694,6 +10708,15 @@ impl Focusable for Composer {
 
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let archived = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .filter(|chat| chat.archived)
+            .cloned();
+        if let Some(chat) = archived {
+            return self.render_archived_footer(&chat, cx);
+        }
         if self.dictation_blur.is_none() {
             // Stop, Send and keyboard navigation within the composer must not
             // discard capture. Only leaving the whole composer invalidates it.
@@ -11000,7 +11023,8 @@ impl Render for Composer {
                 el.child(motion::fade_quick(
                     "composer-queue",
                     div()
-                        .mx(px(QUEUE_SIDE_INSET))
+                        .w_full()
+                        .min_w_0()
                         // Cancel the column gap, then tuck the tray one pixel
                         // behind the composer painted after it.
                         .mb(px(-(Theme::SPACE_SM + QUEUE_COMPOSER_OVERLAP)))

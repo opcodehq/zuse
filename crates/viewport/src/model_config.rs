@@ -58,7 +58,7 @@ impl WorkspaceView {
         }
     }
     pub(super) fn model_provider_allowed(&self, provider: &str) -> bool {
-        self.model_picker_default
+        self.picker_in_settings()
             || self
                 .selected
                 .as_ref()

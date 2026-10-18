@@ -43,6 +43,7 @@ impl WorkspaceView {
         column()
             .id("composer-queue-items")
             .w_full()
+            .min_w_0()
             .max_h(px(188.))
             .overflow_y_scroll()
             .p(px(4.))

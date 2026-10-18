@@ -46,7 +46,7 @@ impl WorkspaceView {
         }
     }
     pub(super) fn picker_providers(&self) -> &[Value] {
-        if self.model_picker_default {
+        if self.picker_in_settings() {
             &self.providers
         } else {
             self.composer_providers()
@@ -60,7 +60,7 @@ impl WorkspaceView {
         }
     }
     pub(super) fn active_picker_catalog(&self) -> &PickerCatalog {
-        if self.model_picker_default {
+        if self.picker_in_settings() {
             &self.picker_catalog
         } else {
             self.composer_catalog()
@@ -162,7 +162,7 @@ impl WorkspaceView {
     pub(super) fn load_picker_catalogs(&mut self, force: bool) {
         self.sync_catalog_target();
         self.load_catalogs_for(
-            self.model_picker_default || self.model_host.target.is_none(),
+            self.picker_in_settings() || self.model_host.target.is_none(),
             force,
         );
         self.sync_picker_anchors();
@@ -397,14 +397,14 @@ mod tests {
                     cx,
                 );
                 assert_eq!(view.picker_label(), "Peer B model");
-                view.model_picker_default = true;
+                view.picker_target = model_picker::PickerTarget::Defaults;
                 assert_eq!(view.picker_providers()[0]["id"], "claude-code");
                 assert_eq!(
                     view.active_picker_catalog().providers["claude-code"].models[0].label,
                     "Local model"
                 );
                 assert_eq!(view.selected_model().unwrap().label, "Peer B model");
-                view.model_picker_default = false;
+                view.picker_target = model_picker::PickerTarget::Composer;
                 assert!(view.new_chat(cx));
                 assert!(view.model_host.target.is_none());
                 assert_eq!(view.picker_label(), "Local model");

@@ -38,6 +38,10 @@ impl WorkspaceView {
         }) {
             self.connection_notice=Some("An action may have completed before the connection closed. Check its current state before trying it again.".into());
         }
+        self.interrupt_project_actions(cx);
+        self.terminal_open = None;
+        self.terminal_closing.clear();
+        self.interrupt_title_settings();
         self.interrupt_worktree_settings();
         self.interrupt_thread_action();
         self.interrupt_queue_edit(cx);
@@ -167,6 +171,7 @@ impl WorkspaceView {
         self.refresh_provider_updates();
         self.refresh_pairings();
         self.refresh_worktree_settings();
+        self.refresh_title_settings();
         self.refresh_model_connections();
         if self.cloud_account["user"].is_object() {
             self.plugin_action(self.plugin_state.refresh());
@@ -190,6 +195,7 @@ impl WorkspaceView {
                 match self.right_tab.as_str() {
                     "changes" => self.refresh_changes(cx),
                     "recovery" => self.inspect_recovery(),
+                    "actions" => self.refresh_project_actions(),
                     _ => {}
                 }
             }
@@ -197,7 +203,7 @@ impl WorkspaceView {
         if let Some(terminal) = &self.terminal_id {
             self.terminal_watch = Some(self.call(
                 methods::SUBSCRIBE_TERMINAL,
-                json!({"terminalId":terminal,"afterSeq":self.terminal_last_seq}),
+                json!({"terminalId":terminal,"afterSeq":self.terminal_last_seq,"targetDeviceId":self.terminal_host}),
             ));
         }
         self.sync_previews(true, cx);

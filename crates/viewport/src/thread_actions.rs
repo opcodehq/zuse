@@ -127,7 +127,8 @@ impl WorkspaceView {
             && !matches!(change, ThreadChange::Rename(_))
             && (self.file_navigation_blocked(cx)
                 || self.queue_edit_navigation_blocked(cx)
-                || self.model_navigation_blocked(cx))
+                || self.model_navigation_blocked(cx)
+                || self.project_action_navigation_blocked(cx))
         {
             if let Some(error) = self.error.clone() {
                 self.thread_error(&error, cx);
@@ -281,6 +282,46 @@ impl WorkspaceView {
             }
         }
         cx.stop_propagation();
+    }
+    pub(super) fn archived_thread_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let pending = self.thread_action.is_some();
+        column()
+            .w_full()
+            .flex_none()
+            .border_t_1()
+            .border_color(rgb(BORDER).opacity(0.6))
+            .bg(rgb(BG).opacity(0.92))
+            .px_4()
+            .py_2()
+            .child(
+                row()
+                    .w_full()
+                    .max_w(px(896.))
+                    .mx_auto()
+                    .gap(px(10.))
+                    .child(icon("archive-minimalistic").size(px(16.)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(12.))
+                            .text_color(rgb(MUTED))
+                            .child("This chat is archived."),
+                    )
+                    .child(
+                        s::button(
+                            "unarchive-thread",
+                            if pending {
+                                "Unarchiving…"
+                            } else {
+                                "Unarchive"
+                            },
+                        )
+                        .opacity(if self.connected && !pending { 1. } else { 0.45 })
+                        .on_click(cx.listener(|this, _, _, cx| this.archive(cx))),
+                    ),
+            )
+            .into_any_element()
     }
     pub(super) fn thread_dialog_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let dialog = self.thread_dialog.as_ref().unwrap();

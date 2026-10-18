@@ -438,6 +438,7 @@ impl WorkspaceView {
                                 this.settings = !this.settings;
                                 if this.settings {
                                     this.refresh_worktree_settings();
+                                    this.refresh_title_settings();
                                 }
                                 this.call(
                                     methods::LIST_AGENT_ACCOUNTS,
