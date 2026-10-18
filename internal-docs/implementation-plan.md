@@ -13,7 +13,7 @@ Finish the standalone native macOS/Linux and browser replacement: shared Rust/GP
 - Maintain the GPU toolkit independently in `opcodehq/zkit`, with a clean initial source snapshot and retained legal attribution. Zuse pins published toolkit revisions as Git dependencies; no submodule is required. Opus 5.5 owns a focused reusable-component cleanup task and may import/adapt licensed component implementations as its base.
 - Rust owns sessions, tools, queues, permissions, persistence and orchestration. Pinned SDK-only bridges are allowed and load on demand.
 - Keep hosted Executor v2 and existing account services. Retiring Electron does not require retiring these services.
-- Include localhost/LAN serving and hosted access through paired devices and an authenticated encrypted outbound relay.
+- Include localhost/LAN serving and hosted access through paired devices and an authenticated encrypted outbound relay. Reuse the existing account service for environment linking/discovery and managed endpoint provisioning; keep identity, endpoint reachability and host authorization separate. See `remote.md` for the remaining managed-access contract.
 - Defer hosted compute provisioning, mobile applications and replicated multi-device stores.
 
 ## Delivery sequence
