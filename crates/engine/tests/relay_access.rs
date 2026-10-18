@@ -426,3 +426,104 @@ async fn malformed_or_foreign_saved_configuration_keeps_local_engine_available()
     );
     core.shutdown().await;
 }
+
+#[tokio::test]
+async fn concurrent_attachment_connections_preserve_chat_and_shared_session_limit() {
+    use base64::Engine as _;
+    let root = tempfile::tempdir().unwrap();
+    let credential = root.path().join("host-token");
+    let secret = BrowserServer::random_token();
+    std::fs::write(&credential, &secret).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let stop = tokio_util::sync::CancellationToken::new();
+    let broker = tokio::spawn(
+        RelayBroker::new(HostToken::parse(secret).unwrap()).serve_with_shutdown(
+            listener,
+            root.path().into(),
+            None,
+            stop.clone().cancelled_owned(),
+        ),
+    );
+    let core = local_core(&root.path().join("engine"));
+    let client = zuse_rpc::memory_client(core.rpc_service());
+    client
+        .call(
+            methods::START_RELAY_ACCESS,
+            json!({"origin":origin,"hostTokenFile":credential}),
+        )
+        .await
+        .unwrap();
+    let invitation = client
+        .call(
+            methods::CREATE_PAIRING,
+            json!({"label":"Concurrent attachments"}),
+        )
+        .await
+        .unwrap();
+    let target = zuse_remote::PairedTarget::new(
+        &origin,
+        zuse_remote::Invitation::parse_fragment(invitation["fragment"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    let chat = paired(&target).await;
+    let mut watch = chat
+        .subscribe_scoped(methods::WATCH_CHATS, json!({}))
+        .await
+        .unwrap();
+    assert!(watch.recv().await.is_some());
+    let barrier = Arc::new(tokio::sync::Barrier::new(16));
+    let uploads=futures::future::join_all((0..16).map(|index|{
+        let target=target.clone();let barrier=barrier.clone();
+        async move {
+            let connection=zuse_rpc::connect_paired(&target).await.unwrap();
+            barrier.wait().await;
+            let bytes=vec![index as u8;45_000];
+            let id=format!("{index:08}attachment");
+            connection.call(methods::UPLOAD_CHUNK,json!({"uploadId":id,"seq":0,"data":base64::engine::general_purpose::STANDARD.encode(&bytes)})).await.unwrap();
+            let receipt=connection.call(methods::UPLOAD_COMMIT,json!({"uploadId":id,"fileName":format!("file-{index}.bin")})).await.unwrap();
+            let path=receipt["path"].as_str().unwrap().to_owned();
+            assert_eq!(std::fs::read(&path).unwrap(),bytes);
+            (connection,path)
+        }
+    })).await;
+    assert_eq!(uploads.len(), 16);
+    assert_eq!(status(&client).await["sessions"], 17);
+    let slots = core.browser_access.control().pairing_slots();
+    assert_eq!(slots.available_permits(), 47);
+    let remaining = slots.clone().acquire_many_owned(47).await.unwrap();
+    assert!(
+        zuse_rpc::connect_paired(&target).await.is_err(),
+        "relay must share direct admission instead of growing the host limit"
+    );
+    assert_eq!(
+        chat.call(methods::LOCAL_DEVICE, json!({})).await.unwrap()["deviceId"],
+        core.device_id
+    );
+    drop(remaining);
+    drop(uploads);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while slots.available_permits() != 63 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(status(&client).await["sessions"], 1);
+    assert!(
+        status(&client).await["sockets"].as_u64().unwrap() <= 5,
+        "completed uploads should not retain extra standby workers"
+    );
+    client
+        .call(
+            methods::REVOKE_PAIRING,
+            json!({"pairId":invitation["peer"]["id"]}),
+        )
+        .await
+        .unwrap();
+    drop(watch);
+    drop(chat);
+    core.shutdown().await;
+    stop.cancel();
+    broker.await.unwrap().unwrap();
+}

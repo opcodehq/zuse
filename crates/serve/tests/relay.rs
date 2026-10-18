@@ -270,3 +270,41 @@ async fn host_connector_restart_uses_fresh_noise_and_explicit_shutdown_closes_cl
         .unwrap();
     drop(fixture.root);
 }
+
+#[tokio::test]
+async fn one_pair_handles_a_burst_beyond_four_connections_without_retrying_requests() {
+    let fixture = Fixture::new().await;
+    let root = fixture.client().await;
+    let mut stream = root.subscribe_scoped("Watch", json!({})).await.unwrap();
+    assert_eq!(stream.recv().await.unwrap()["ready"], true);
+    let results = futures::future::join_all((0..24).map(|index| {
+        let target = fixture.target();
+        async move {
+            // Exactly one dial: a retry would hide failed burst admission.
+            let client = zuse_rpc::connect_paired(&target).await.unwrap();
+            let payload = json!({"upload":index,"data":"x".repeat(70_000)});
+            assert_eq!(client.call("Echo", payload.clone()).await.unwrap(), payload);
+            client
+        }
+    }))
+    .await;
+    assert_eq!(results.len(), 24);
+    assert_eq!(fixture.subscriptions.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        root.call("Echo", json!({"root":"still active"}))
+            .await
+            .unwrap()["root"],
+        "still active"
+    );
+    fixture.authority.revoke(&fixture.invitation.id).unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), results[0].call("Echo", json!({})))
+            .await
+            .unwrap()
+            .is_err()
+    );
+    drop(stream);
+    drop(root);
+    drop(results);
+    fixture.close().await;
+}

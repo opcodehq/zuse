@@ -3,7 +3,10 @@ use crate::BrowserServer;
 use axum::extract::ws::Message;
 use futures::{SinkExt, StreamExt};
 use std::{collections::HashSet, sync::Arc, time::Duration};
-use tokio::task::JoinSet;
+use tokio::{
+    sync::{Notify, Semaphore},
+    task::JoinSet,
+};
 use tokio_tungstenite::{
     connect_async_with_config,
     tungstenite::{self, client::IntoClientRequest, protocol::WebSocketConfig},
@@ -45,6 +48,58 @@ impl Drop for CountGuard {
         counter.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
+const STANDBY_PER_PAIR: usize = 4;
+// 32 saved grants × four standby sockets plus the profile's 64 active sessions.
+const MAX_WORKERS: usize = 192;
+struct Standby {
+    count: Arc<std::sync::atomic::AtomicUsize>,
+    changed: Arc<Notify>,
+}
+impl Standby {
+    fn new(count: Arc<std::sync::atomic::AtomicUsize>, changed: Arc<Notify>) -> Self {
+        count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Self { count, changed }
+    }
+}
+impl Drop for Standby {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        self.changed.notify_one();
+    }
+}
+async fn pool(
+    server: BrowserServer,
+    authority: zuse_remote::authority::Authority,
+    device: String,
+    credentials: Arc<Credentials>,
+    origin: String,
+    token: HostToken,
+    metrics: HostStatus,
+    budget: Arc<Semaphore>,
+) {
+    let standby = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let changed = Arc::new(Notify::new());
+    let mut workers = JoinSet::new();
+    loop {
+        tokio::select! { biased;
+            _ = server.shutdown.cancelled() => break,
+            _ = credentials.revoked() => break,
+            _ = workers.join_next(), if !workers.is_empty() => {},
+            _ = changed.notified() => {},
+            permit = budget.clone().acquire_owned(), if standby.load(std::sync::atomic::Ordering::Acquire) < STANDBY_PER_PAIR => {
+                let Ok(permit) = permit else { break; };
+                let standby = Standby::new(standby.clone(),changed.clone());
+                let (server,authority,device,credentials,origin,token,metrics) = (server.clone(),authority.clone(),device.clone(),credentials.clone(),origin.clone(),token.clone(),metrics.clone());
+                workers.spawn(async move {
+                    let _permit = permit;
+                    worker(server,authority,device,credentials,origin,token,metrics,standby).await;
+                });
+            }
+        }
+    }
+    workers.abort_all();
+    while workers.join_next().await.is_some() {}
+}
 /// Maintain outbound rendezvous sockets for saved grants. RPC and Noise remain
 /// authorized by the execution host, including revocation and profile scope.
 /// This future owns all workers; cancellation or drop cannot detach them.
@@ -62,6 +117,10 @@ pub async fn serve_host_with_status(
     metrics: HostStatus,
 ) -> anyhow::Result<()> {
     let origin = zuse_remote::normalized_origin(origin)?;
+    let shutdown = server.shutdown.child_token();
+    let _drop_guard = shutdown.clone().drop_guard();
+    let server = server.with_shutdown_token(shutdown);
+    let budget = Arc::new(Semaphore::new(MAX_WORKERS));
     let (authority, device) = server
         .pairings
         .clone()
@@ -81,18 +140,27 @@ pub async fn serve_host_with_status(
                     // Refresh expiry even for existing workers, cancelling stale invitations.
                     let Ok(credentials)=authority.credentials(&id)else{continue;};
                     if !running.insert(peer.id.clone()){continue;}
-                    let server=server.clone();let token=token.clone();let origin=origin.clone();let authority=authority.clone();let device=device.clone();let metrics=metrics.clone();
+                    let server=server.clone();let token=token.clone();let origin=origin.clone();let authority=authority.clone();let device=device.clone();let metrics=metrics.clone();let budget=budget.clone();
                     tasks.spawn(async move{
                         let credentials=Arc::new(credentials);
-                        let workers=(0..4).map(|_|worker(server.clone(),authority.clone(),device.clone(),credentials.clone(),origin.clone(),token.clone(),metrics.clone()));
-                        futures::future::join_all(workers).await;peer.id
+                        pool(server,authority,device,credentials,origin,token,metrics,budget).await;
+                        peer.id
                     });
                 }
             }
         }
     }
-    tasks.abort_all();
-    while tasks.join_next().await.is_some() {}
+    server.shutdown.cancel();
+    // Normal shutdown lets each pool drain its own tracked workers. The drop
+    // guard and nested JoinSets also revoke ownership if this future is aborted.
+    let drained = tokio::time::timeout(Duration::from_secs(5), async {
+        while tasks.join_next().await.is_some() {}
+    })
+    .await;
+    if drained.is_err() {
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+    }
     Ok(())
 }
 async fn worker(
@@ -103,7 +171,9 @@ async fn worker(
     origin: String,
     token: HostToken,
     metrics: HostStatus,
+    standby: Standby,
 ) {
+    let mut standby = Some(standby);
     let scheme = if origin.starts_with("https:") {
         "wss"
     } else {
@@ -153,6 +223,9 @@ async fn worker(
                     }}
                 }
             }
+            // Replenish the standby pool as soon as the broker assigns a
+            // client. This worker owns one session and never re-registers.
+            drop(standby.take());
             let _permit = server
                 .paired_slots
                 .clone()
@@ -193,6 +266,9 @@ async fn worker(
             _=credentials.revoked()=>return,
             result=attempt=>result.is_ok(),
         };
+        if standby.is_none() {
+            return;
+        }
         delay = if success {
             Duration::from_millis(250)
         } else {
