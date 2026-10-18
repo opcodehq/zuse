@@ -19,6 +19,9 @@ Rust dependencies and versions are managed in the root Cargo workspace. JavaScri
 
 ## Development
 
+For native app bundles and user-level Linux installation, see
+[local packaging](internal-docs/packaging.md).
+
 Install the stable Rust toolchain with rustfmt and Clippy. Linux native builds require the platform development libraries listed in `internal-docs/development.md`.
 
 ```sh

@@ -10,6 +10,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  packaging:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: opcodehq/zkit
+          ref: 461f6fcb94df6b40b7b61a36fcd01b87e9bae525
+          path: vendor/zkit
+      - run: python3 -m unittest discover -s scripts -p test_package.py -v
+
   engine:
     runs-on: ubuntu-24.04
     env:

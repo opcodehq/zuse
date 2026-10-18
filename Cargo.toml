@@ -158,7 +158,7 @@ ignore = "0.4"
 fff-search = "=0.11.0"
 
 [profile.release]
-# Distribution profile (scripts/package-linux.sh): thin LTO buys most of fat
+# Distribution profile (scripts/package.py): thin LTO buys most of fat
 # LTO's size/speed win at a fraction of the link time; strip debug symbols.
 lto = "thin"
 strip = "symbols"
