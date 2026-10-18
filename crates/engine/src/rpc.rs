@@ -3307,6 +3307,10 @@ impl RpcService for EngineRpc {
                                 &p.mode,
                                 p.base_ref.as_deref(),
                                 p.commit_sha.as_deref(),
+                                (p.mode == "turn")
+                                    .then(|| self.diff_sync.turn_snapshot(&chat.id))
+                                    .flatten()
+                                    .as_ref(),
                             )
                             .await
                             .map_err(|err| RpcError::Failed(err.to_string()))?;
@@ -3464,7 +3468,15 @@ impl RpcService for EngineRpc {
                     {
                         let pair = self
                             .archives
-                            .review_file(&chat, &record, &p)
+                            .review_file(
+                                &chat,
+                                &record,
+                                &p,
+                                (p.mode == "turn")
+                                    .then(|| self.diff_sync.turn_snapshot(&chat.id))
+                                    .flatten()
+                                    .as_ref(),
+                            )
                             .await
                             .map_err(|err| RpcError::Failed(err.to_string()))?;
                         return RpcReply::value(&pair);

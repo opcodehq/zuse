@@ -71,7 +71,7 @@ impl EngineRpc {
                                 }) {
                                     let diff = this
                                         .archives
-                                        .review_diff(chat, &record, "workingTree", None, None)
+                                        .review_diff(chat, &record, "workingTree", None, None, None)
                                         .await?;
                                     cached = Some((
                                         record.checkpoint.clone(),

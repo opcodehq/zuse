@@ -15,7 +15,8 @@
 //! - **Zuse's objects stay in Zuse's directory.** Each snapshot writes into
 //!   its own object directory under the data dir (`GIT_OBJECT_DIRECTORY`) and
 //!   reads the checkout's objects as an alternate. The checkout's database is
-//!   never written to, and the directory is deleted with the snapshot.
+//!   never written to. Temporary stores retire with their readers; a single
+//!   durable latest base per chat survives restart in a self-contained pack.
 //! - **The work is bounded.** Untracked files past [`MAX_UNTRACKED_FILE_BYTES`]
 //!   and untracked directories past the untracked budget are left out, and the
 //!   whole snapshot runs under [`SNAPSHOT_TIMEOUT`]. A left-out path simply
@@ -30,6 +31,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+mod persistence;
+pub(super) use persistence::{forget as forget_saved, load as load_saved, sweep_saved};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
@@ -60,8 +64,8 @@ const ALTERNATES_SEPARATOR: char = ';';
 const ALTERNATES_SEPARATOR: char = ':';
 
 /// A working tree written as a git tree, together with the private object
-/// store that holds it. Cloning shares the store; the last clone to drop
-/// deletes it.
+/// store that holds it. Temporary stores retire with their last reader;
+/// the latest persisted store stays until replaced by another turn.
 #[derive(Debug, Clone)]
 pub struct TreeSnapshot {
     tree: String,
@@ -94,6 +98,7 @@ struct ObjectStore {
     /// A layered snapshot reads through its base's directory, so the base
     /// has to outlive it.
     _base: Option<Arc<ObjectStore>>,
+    persistent: AtomicBool,
 }
 
 impl ObjectStore {
@@ -156,6 +161,7 @@ impl ObjectStore {
             dir,
             alternates,
             _base: base.cloned(),
+            persistent: AtomicBool::new(false),
         })
     }
 
@@ -171,6 +177,9 @@ impl ObjectStore {
 
 impl Drop for ObjectStore {
     fn drop(&mut self) {
+        if self.persistent.load(Ordering::Acquire) {
+            return;
+        }
         let dir = std::mem::take(&mut self.dir);
         // A store can hold thousands of loose objects: delete it off the
         // runtime's worker threads.
@@ -227,9 +236,8 @@ fn run_id() -> &'static str {
     })
 }
 
-/// Delete the stores of earlier engine runs. Snapshots are in-memory state, so
-/// nothing on disk from a previous run is reachable; a run that was killed, or
-/// exited without unwinding, leaves its stores behind for this to collect.
+/// Delete temporary stores of earlier engine runs. Durable saved bases live
+/// under a separate directory and remain reachable through their metadata.
 /// Requires a tokio runtime.
 pub(super) fn sweep_stale_stores(data_dir: &Path) {
     let parent = data_dir.join(STORE_DIR);
@@ -241,7 +249,7 @@ fn remove_other_runs(parent: &Path, current: &OsStr) {
         return;
     };
     for entry in entries.flatten() {
-        if entry.file_name() == current {
+        if entry.file_name() == current || entry.file_name() == OsStr::new("saved") {
             continue;
         }
         let path = entry.path();
@@ -288,6 +296,21 @@ async fn write_snapshot(
 ) -> Result<TreeSnapshot, EngineError> {
     let store = Arc::new(ObjectStore::create(repos, root, base.map(|base| &base.store)).await?);
     let mut skipped = untracked_to_skip(root).await?;
+    // A custom profile inside a project must never snapshot its own databases
+    // or packs recursively, even if the user has not ignored that directory.
+    let profile = std::fs::canonicalize(repos.data_dir())?;
+    if let Ok(relative) = profile.strip_prefix(root) {
+        if relative.as_os_str().is_empty() {
+            return Err(EngineError::Other(
+                "The engine profile cannot also be the turn-review checkout root.".into(),
+            ));
+        }
+        let path = relative.as_os_str().as_encoded_bytes().to_vec();
+        if !skipped.contains(&path) {
+            skipped.push(path);
+        }
+    }
+
     let index = store.dir.join("index");
     if let Some(base) = base {
         // Start from the base tree and leave out what either side left out:
@@ -643,7 +666,7 @@ mod tests {
     };
     use crate::repos::Repos;
 
-    async fn git(cwd: &Path, args: &[&str]) {
+    pub(super) async fn git(cwd: &Path, args: &[&str]) {
         let output = tokio::process::Command::new("git")
             .args(args)
             .current_dir(cwd)
@@ -664,7 +687,7 @@ mod tests {
 
     /// A repo with one committed file `a.txt`, and a `Repos` whose data dir
     /// sits next to it.
-    async fn fixture(tmp: &Path) -> (PathBuf, Repos, PathBuf) {
+    pub(super) async fn fixture(tmp: &Path) -> (PathBuf, Repos, PathBuf) {
         let root = tmp.join("repo");
         std::fs::create_dir_all(&root).expect("repo dir");
         git(&root, &["init", "-b", "main"]).await;
@@ -678,7 +701,7 @@ mod tests {
     }
 
     /// Every file under the checkout's object database, relative to it.
-    fn checkout_objects(root: &Path) -> BTreeSet<PathBuf> {
+    pub(super) fn checkout_objects(root: &Path) -> BTreeSet<PathBuf> {
         fn collect(dir: &Path, base: &Path, out: &mut BTreeSet<PathBuf>) {
             for entry in std::fs::read_dir(dir).expect("read objects dir").flatten() {
                 let path = entry.path();
@@ -696,7 +719,7 @@ mod tests {
     }
 
     /// Paths in the snapshot's tree, read through the snapshot's own store.
-    async fn tree_paths(root: &Path, snapshot: &TreeSnapshot) -> BTreeSet<String> {
+    pub(super) async fn tree_paths(root: &Path, snapshot: &TreeSnapshot) -> BTreeSet<String> {
         let mut cmd = tokio::process::Command::new("git");
         cmd.arg("-C")
             .arg(root)
@@ -1065,5 +1088,133 @@ mod tests {
             alternates_value(&[colon, plain]),
             std::ffi::OsString::from("\"/data:dir/say \\\"hi\\\"/objects\":/repo/.git/objects")
         );
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::tests::{checkout_objects, fixture, git, tree_paths};
+    use super::*;
+    #[tokio::test]
+    async fn durable_base_survives_drop_sweep_and_checkout_pruning_without_writing_project_objects()
+    {
+        let temp = tempfile::tempdir().unwrap();
+        let (root, _, _) = fixture(temp.path()).await;
+        let data = root.join("private-profile");
+        let repos = Repos::new(&data, "device-test");
+        std::fs::write(root.join("unchanged.txt"), "committed before snapshot\n").unwrap();
+        git(&root, &["add", "."]).await;
+        git(&root, &["commit", "-m", "Unchanged content"]).await;
+        std::fs::write(root.join("a.txt"), "user edit before turn\n").unwrap();
+        std::fs::write(root.join("pre.txt"), "already untracked\n").unwrap();
+        let before = checkout_objects(&root);
+        let at = chrono::Utc::now();
+        let saved = snapshot_tree(&repos, &root)
+            .await
+            .unwrap()
+            .persist_latest(&data, "chat/a", &root, at)
+            .await
+            .unwrap();
+        assert_eq!(
+            checkout_objects(&root),
+            before,
+            "turn persistence must not pollute the project database"
+        );
+        let objects = saved.store.dir.clone();
+        drop(saved);
+        git(&root, &["gc", "--prune=now"]).await;
+        remove_other_runs(&data.join(STORE_DIR), OsStr::new(run_id()));
+        persistence::sweep_saved(&data);
+        let mut loaded = load_saved(&data, "chat/a").unwrap().unwrap();
+        Arc::get_mut(&mut loaded.tree.store).unwrap().alternates = OsString::new();
+        assert_eq!(loaded.at, at);
+        assert!(objects.exists());
+        assert!(tree_paths(&root, &loaded.tree).await.contains("pre.txt"));
+        assert!(
+            tree_paths(&root, &loaded.tree)
+                .await
+                .iter()
+                .all(|p| !p.starts_with("private-profile/"))
+        );
+        let source = crate::diff_sync::capture_git_in(
+            &root,
+            &["show", &format!("{}:a.txt", loaded.tree.tree())],
+            1024,
+            Some(&loaded.tree),
+        )
+        .await
+        .unwrap();
+        assert_eq!(source.stdout, b"user edit before turn\n");
+        let unchanged = crate::diff_sync::capture_git_in(
+            &root,
+            &["show", &format!("{}:unchanged.txt", loaded.tree.tree())],
+            1024,
+            Some(&loaded.tree),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unchanged.stdout, b"committed before snapshot\n");
+        assert!(load_saved(&data, "another-chat").unwrap().is_none());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = std::fs::read_dir(data.join(STORE_DIR).join("saved"))
+                .unwrap()
+                .flatten()
+                .find(|e| e.path().extension().is_some_and(|x| x == "json"))
+                .unwrap();
+            assert_eq!(
+                metadata.metadata().unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+    #[tokio::test]
+    async fn replaced_packs_outlive_readers_and_damaged_records_are_preserved() {
+        let temp = tempfile::tempdir().unwrap();
+        let (root, repos, data) = fixture(temp.path()).await;
+        let saved = snapshot_tree(&repos, &root)
+            .await
+            .unwrap()
+            .persist_latest(&data, "chat", &root, chrono::Utc::now())
+            .await
+            .unwrap();
+        let reader = saved.clone();
+        let old = saved.store.dir.clone();
+        forget_saved(&data, "chat").unwrap();
+        saved.retire();
+        std::fs::write(root.join("a.txt"), "next base\n").unwrap();
+        let next = snapshot_tree(&repos, &root)
+            .await
+            .unwrap()
+            .persist_latest(&data, "chat", &root, chrono::Utc::now())
+            .await
+            .unwrap();
+        drop(saved);
+        assert!(old.exists());
+        assert!(tree_paths(&root, &reader).await.contains("a.txt"));
+        drop(reader);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while old.exists() {
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let metadata = std::fs::read_dir(data.join(STORE_DIR).join("saved"))
+            .unwrap()
+            .flatten()
+            .find(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .unwrap()
+            .path();
+        std::fs::write(&metadata, b"damaged cache record").unwrap();
+        assert!(load_saved(&data, "chat").is_err());
+        assert!(forget_saved(&data, "chat").is_err());
+        assert!(
+            next.persist_latest(&data, "chat", &root, chrono::Utc::now())
+                .await
+                .is_err()
+        );
+        persistence::sweep_saved(&data);
+        assert!(next.store.dir.exists());
+        assert_eq!(std::fs::read(metadata).unwrap(), b"damaged cache record");
     }
 }

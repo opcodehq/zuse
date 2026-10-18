@@ -343,7 +343,10 @@ impl EngineCore {
         // Turn starts snapshot the checkout tree — the "Latest turn" diff base.
         let turn_diff = diff_sync.clone();
         sessions.set_turn_listener(Arc::new(move |chat_id, cwd| {
-            turn_diff.note_turn_start(chat_id, cwd);
+            let turn_diff = turn_diff.clone();
+            Box::pin(async move {
+                turn_diff.note_turn_start(&chat_id, &cwd).await;
+            })
         }));
         let spaces_sync = SpacesSync::start(repos.clone(), workspace.clone(), &device_id);
         let account =

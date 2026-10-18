@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub(super) enum ReviewScope {
     #[default]
     WorkingTree,
+    LatestTurn,
     Commit {
         sha: String,
         subject: String,
@@ -19,6 +20,7 @@ impl ReviewScope {
     fn params(&self) -> Value {
         match self {
             Self::WorkingTree => json!({"mode":"workingTree"}),
+            Self::LatestTurn => json!({"mode":"turn"}),
             Self::Commit { sha, .. } => json!({"mode":"commit","commitSha":sha}),
         }
     }
@@ -170,6 +172,8 @@ impl WorkspaceView {
                     .gap_2()
                     .child(label(if self.review.path.is_some() {
                         "File changes"
+                    } else if matches!(self.review_scope, ReviewScope::LatestTurn) {
+                        "Latest turn"
                     } else if !self.review_scope.working() {
                         "Commit changes"
                     } else if self
@@ -190,6 +194,31 @@ impl WorkspaceView {
             .when_some(self.changes_error.clone(), |d, error| {
                 d.child(label(error).p_3())
             });
+        if !matches!(self.review_scope, ReviewScope::Commit { .. }) {
+            view = view.child(
+                row()
+                    .px_3()
+                    .gap_2()
+                    .child(
+                        control("review-working-tree", "Working tree")
+                            .when(self.review_scope.working(), |d| d.bg(rgb(0x222222)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.review_scope = ReviewScope::WorkingTree;
+                                this.refresh_changes(cx);
+                            })),
+                    )
+                    .child(
+                        control("review-latest-turn", "Latest turn")
+                            .when(matches!(self.review_scope, ReviewScope::LatestTurn), |d| {
+                                d.bg(rgb(0x222222))
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.review_scope = ReviewScope::LatestTurn;
+                                this.refresh_changes(cx);
+                            })),
+                    ),
+            );
+        }
         if let ReviewScope::Commit { sha, subject } = &self.review_scope {
             view = view.child(
                 column()
@@ -290,7 +319,9 @@ impl WorkspaceView {
             view = view
                 .when(self.review.lines.is_empty(), |d| d.child(div().flex_1()))
                 .when(
-                    self.review.can_open && self.selected.is_some() && self.review_scope.working(),
+                    self.review.can_open
+                        && self.selected.is_some()
+                        && !matches!(self.review_scope, ReviewScope::Commit { .. }),
                     |d| {
                         d.child(
                             control("edit-reviewed-file", "Open in editor")
@@ -348,6 +379,8 @@ impl WorkspaceView {
                                 d.child(
                                     label(if self.review_scope.working() {
                                         "No working tree changes"
+                                    } else if matches!(self.review_scope, ReviewScope::LatestTurn) {
+                                        "No changes since the latest turn"
                                     } else {
                                         "This commit has no file changes"
                                     })

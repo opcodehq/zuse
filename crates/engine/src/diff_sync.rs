@@ -62,6 +62,8 @@ use crate::repos::{CheckoutIdentity, Repos};
 use crate::workspace_host::WorkspaceHost;
 
 mod git_status;
+mod saved_turn;
+pub(crate) use saved_turn::capture_saved_turn_diff;
 mod turn_snapshot;
 
 pub use turn_snapshot::{TreeSnapshot, snapshot_tree};
@@ -156,14 +158,15 @@ struct CheckoutEntry {
 }
 
 /// Working-tree snapshot recorded when a chat's turn dispatches — the diff
-/// base for the Changes pane's "Latest turn" scope. In-memory only: after an
-/// engine restart the scope is unavailable until the next turn.
+/// base for the Changes pane's "Latest turn" scope. Its latest private pack
+/// survives restart and checkout reclamation.
 #[derive(Debug, Clone)]
 pub struct TurnSnapshot {
     /// Canonical checkout root the tree was captured in.
     pub root: PathBuf,
     /// The tracked + untracked (unignored) tree, with the object store that
-    /// holds it. Replacing or dropping the snapshot deletes that store.
+    /// holds it. The latest durable base survives shutdown; a replaced base
+    /// retires after its last active reader.
     pub tree: TreeSnapshot,
     pub at: chrono::DateTime<chrono::Utc>,
 }
@@ -188,6 +191,7 @@ struct DiffSyncInner {
     statuses_tx: watch::Sender<Vec<zuse_protocol::CheckoutGitStatus>>,
     /// chat_id → turn-start tree (see [`TurnSnapshot`]).
     turn_trees: Mutex<HashMap<String, TurnSnapshot>>,
+    turn_gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// The tasks hold `Weak` refs, but an in-flight iteration holds an
     /// upgraded Arc — the token cuts it so no sidecar HTTP outlives shutdown.
     cancel: CancellationToken,
@@ -327,8 +331,7 @@ impl CheckoutDiffSync {
         interest_linger: Duration,
     ) -> Self {
         let (diffs_tx, _) = watch::channel(Vec::new());
-        // Turn snapshots are in-memory state: whatever an earlier run left on
-        // disk is unreachable now.
+        turn_snapshot::sweep_saved(repos.data_dir());
         turn_snapshot::sweep_stale_stores(repos.data_dir());
         let sync = Self {
             inner: Arc::new(DiffSyncInner {
@@ -344,6 +347,7 @@ impl CheckoutDiffSync {
                 diffs_tx,
                 statuses_tx: watch::channel(Vec::new()).0,
                 turn_trees: Mutex::new(HashMap::new()),
+                turn_gates: Mutex::new(HashMap::new()),
                 cancel: CancellationToken::new(),
                 supervisor: Mutex::new(None),
                 interest: Mutex::new(HashMap::new()),
@@ -449,48 +453,71 @@ impl CheckoutDiffSync {
         }
     }
 
-    /// A turn is starting for `chat_id` in `cwd`: snapshot the checkout's tree
-    /// in the background so "Latest turn" has a base. Best-effort — failures
-    /// only log; a chat outside a checkout simply records nothing.
-    pub fn note_turn_start(&self, chat_id: &str, cwd: &str) {
-        let inner = Arc::downgrade(&self.inner);
-        let chat_id = chat_id.to_string();
-        let cwd = PathBuf::from(cwd);
-        tokio::spawn(async move {
-            let Some(inner) = inner.upgrade() else { return };
-            let identity = match inner.repos.checkout_identity(&cwd).await {
-                Ok(identity) => identity,
-                Err(_) => {
-                    // Not a checkout: no turn to diff, not the previous one.
-                    lock(&inner.turn_trees).remove(&chat_id);
-                    return;
-                }
-            };
-            match snapshot_tree(&inner.repos, &identity.root).await {
-                Ok(tree) => {
-                    lock(&inner.turn_trees).insert(
-                        chat_id,
-                        TurnSnapshot {
-                            root: identity.root,
-                            tree,
-                            at: chrono::Utc::now(),
-                        },
-                    );
-                }
-                Err(err) => {
-                    // Keeping the previous base would silently diff two turns.
-                    lock(&inner.turn_trees).remove(&chat_id);
-                    tracing::debug!(chat = %chat_id, error = %err,
-                        "diff-sync: turn snapshot failed");
-                }
+    /// Capture before delivery can modify files. Failures invalidate the previous
+    /// base; showing two turns together would misrepresent the user's changes.
+    pub async fn note_turn_start(&self, chat_id: &str, cwd: &str) {
+        let inner = &self.inner;
+        let gate = lock(&inner.turn_gates)
+            .entry(chat_id.to_owned())
+            .or_default()
+            .clone();
+        let _capture = gate.lock().await;
+        let previous = {
+            let mut trees = lock(&inner.turn_trees);
+            trees.remove(chat_id).or_else(|| {
+                turn_snapshot::load_saved(inner.repos.data_dir(), chat_id)
+                    .ok()
+                    .flatten()
+            })
+        };
+        if let Err(error) = turn_snapshot::forget_saved(inner.repos.data_dir(), chat_id) {
+            tracing::debug!(chat = %chat_id, %error, "diff-sync: could not invalidate turn metadata");
+            return;
+        }
+        if let Some(previous) = previous {
+            previous.tree.retire();
+        }
+        let captured = async {
+            let identity = inner.repos.checkout_identity(Path::new(cwd)).await?;
+            let at = chrono::Utc::now();
+            let tree = snapshot_tree(&inner.repos, &identity.root).await?;
+            let tree = tree
+                .persist_latest(inner.repos.data_dir(), chat_id, &identity.root, at)
+                .await?;
+            Ok::<_, EngineError>(TurnSnapshot {
+                root: identity.root,
+                tree,
+                at,
+            })
+        }
+        .await;
+        match captured {
+            Ok(snapshot) => {
+                lock(&inner.turn_trees).insert(chat_id.to_owned(), snapshot);
             }
-        });
+            Err(error) => {
+                tracing::debug!(chat = %chat_id, %error, "diff-sync: turn snapshot unavailable")
+            }
+        }
     }
 
-    /// The recorded turn-start snapshot for a chat, if any turn dispatched
-    /// since boot.
+    /// Load lazily so profiles with many old chats do not eagerly retain metadata.
     pub fn turn_snapshot(&self, chat_id: &str) -> Option<TurnSnapshot> {
-        lock(&self.inner.turn_trees).get(chat_id).cloned()
+        let mut trees = lock(&self.inner.turn_trees);
+        if let Some(snapshot) = trees.get(chat_id) {
+            return Some(snapshot.clone());
+        }
+        match turn_snapshot::load_saved(self.inner.repos.data_dir(), chat_id) {
+            Ok(Some(snapshot)) => {
+                trees.insert(chat_id.to_owned(), snapshot.clone());
+                Some(snapshot)
+            }
+            Ok(None) => None,
+            Err(error) => {
+                tracing::debug!(chat = %chat_id, %error, "diff-sync: latest-turn metadata unavailable");
+                None
+            }
+        }
     }
 
     /// Discard the complete uncommitted state of a checkout after verifying

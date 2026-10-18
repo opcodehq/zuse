@@ -307,8 +307,10 @@ impl Drop for FilesystemAdmission {
     }
 }
 
-/// Turn-start hook: called with `(chat_id, cwd)`.
-pub type TurnListener = Arc<dyn Fn(&str, &str) + Send + Sync>;
+/// Awaited before provider/mailbox delivery. Idle prewarming and startup retries
+/// retain the existing base rather than inventing another user turn.
+pub type TurnListener =
+    Arc<dyn Fn(String, String) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -407,9 +409,9 @@ impl SessionsEngine {
         let _ = self.inner.turn_listener.set(listener);
     }
 
-    fn note_turn_start(&self, chat_id: &str, cwd: &str) {
+    async fn note_turn_start(&self, chat_id: &str, cwd: &str) {
         if let Some(listener) = self.inner.turn_listener.get() {
-            listener(chat_id, cwd);
+            listener(chat_id.to_owned(), cwd.to_owned()).await;
         }
     }
 
@@ -738,6 +740,7 @@ impl SessionsEngine {
             let accepted = if steerable && same_runtime {
                 bootstrap =
                     self.warm_fork_history(chat_id, harness_id, &request.prompt, &history_sent)?;
+                self.note_turn_start(chat_id, &request.cwd).await;
                 let delivered = bootstrap.as_deref().unwrap_or(&request.prompt);
                 // Warm dispatch uses the same mailbox as explicit steering.
                 // Register acceptance before a fast boundary can retire it.
@@ -802,7 +805,6 @@ impl SessionsEngine {
                 }
                 let handle = self.doc_handle(chat_id)?;
                 handle.write_user_message(&user_id, &request.prompt, now_ms())?;
-                self.note_turn_start(chat_id, &request.cwd);
                 if self.is_live(chat_id, &run_id) {
                     if bootstrap.is_some() {
                         history_sent.store(true, std::sync::atomic::Ordering::Release);
@@ -1092,6 +1094,9 @@ impl SessionsEngine {
                 .then(|| sent_with.clone())
                 .flatten(),
         };
+        if let Some(request) = self.last_request(chat_id) {
+            self.note_turn_start(chat_id, &request.cwd).await;
+        }
         // Saturation is backpressure, not a dead runtime. Waiting for room
         // preserves the live process and every accepted message in a burst.
         if let Err(outcome) = publish_steer(
@@ -1122,11 +1127,6 @@ impl SessionsEngine {
         }
         let handle = self.doc_handle(chat_id)?;
         handle.write_user_message(&user_id, prompt, issued_at.min(now_ms()))?;
-        // A routed steer is a turn too. Fired here (not only on the confirmed
-        // path) — a reclaim falls back to dispatch, which just re-snapshots.
-        if let Some(request) = self.last_request(chat_id) {
-            self.note_turn_start(chat_id, &request.cwd);
-        }
         if self.is_live(chat_id, &run_id) {
             if bootstrap.is_some() {
                 history_sent.store(true, std::sync::atomic::Ordering::Release);
@@ -2573,15 +2573,32 @@ async fn drive_run(
             if let Some(lease) = lease {
                 _execution_lease = Some(lease.clone());
                 controls.execution_lease = Some(lease);
-                if let Some(listener) = inner.turn_listener.get() {
-                    listener(&chat_id, &request.cwd);
+                if !resume_state.idle
+                    && !resume_state.startup_retry
+                    && let Some(listener) = inner.turn_listener.get()
+                {
+                    tokio::select! {
+                        biased;
+                        _ = controls.interrupt.cancelled() => {},
+                        _ = listener(chat_id.clone(), request.cwd.clone()) => {},
+                    }
                 }
                 let mut wire_request = request;
                 if !matches!(harness_id, HarnessId::Cursor | HarnessId::Opencode) {
                     wire_request.prompt =
                         zuse_protocol::invocation::harness_prompt(&wire_request.prompt, harness_id);
                 }
-                if resume_state.idle {
+                if controls.interrupt.is_cancelled() {
+                    Ok(futures::stream::once(async {
+                        Ok(AgentEvent::Done {
+                            status: DoneStatus::Interrupted,
+                            result: None,
+                            error: None,
+                            session_id: None,
+                        })
+                    })
+                    .boxed())
+                } else if resume_state.idle {
                     harness.start_idle(wire_request, controls).await
                 } else {
                     harness

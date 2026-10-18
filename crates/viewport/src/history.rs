@@ -539,6 +539,10 @@ mod tests {
                 assert_eq!(view.history.query, "Author");
                 view.clear_history_search(cx);
                 assert!(view.history.query.is_empty());
+                view.review_scope=workspace_review::ReviewScope::LatestTurn;
+                view.refresh_changes(cx);let diff=view.changes_request.unwrap();
+                view.receive(json!({"id":diff,"ok":{"checkoutId":"saved","cwd":"/repo","checksum":"turn","files":[{"path":"turn.rs"}]}}),cx);
+                view.open_review("turn.rs".into(),cx);
             })
             .unwrap();
         let mut calls = vec![];
@@ -576,6 +580,9 @@ mod tests {
             let request = calls.iter().find(|c| c["method"] == method).unwrap();
             assert_eq!(request["params"]["mode"], "commit");
             assert_eq!(request["params"]["commitSha"], "b");
+            assert!(calls.iter().any(|c| c["method"] == method
+                && c["params"]["mode"] == "turn"
+                && c["params"]["commitSha"].is_null()));
         }
     }
     #[gpui::test]

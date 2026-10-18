@@ -38,6 +38,7 @@ impl Archives {
         mode: &str,
         base_ref: Option<&str>,
         commit: Option<&str>,
+        turn: Option<&crate::diff_sync::TurnSnapshot>,
     ) -> Result<(DiffSnapshot, String, String), EngineError> {
         let found = text(&record.repo, &["rev-parse", "--verify", &record.reference]).await?;
         if found != record.checkpoint {
@@ -68,8 +69,20 @@ impl Archives {
                 (diff_sync::commit_diff_base(&record.repo, &sha).await, sha)
             }
             "turn" => {
-                return Err(error(
-                    "Latest-turn review is unavailable for a reclaimed checkout. Select Working tree or Branch changes.",
+                let turn = turn
+                    .filter(|turn| turn.root == record.checkout)
+                    .ok_or_else(|| error("No saved turn is available for this checkout."))?;
+                let snapshot = diff_sync::capture_saved_turn_diff(
+                    &record.repo,
+                    &turn.tree,
+                    &record.checkpoint,
+                    record.branch.as_deref().unwrap_or("HEAD"),
+                )
+                .await?;
+                return Ok((
+                    snapshot,
+                    turn.tree.tree().to_owned(),
+                    record.checkpoint.clone(),
                 ));
             }
             // Preserve the live RPC's default/legacy working-tree modes.
@@ -92,8 +105,11 @@ impl Archives {
         mode: &str,
         base_ref: Option<&str>,
         commit: Option<&str>,
+        turn: Option<&crate::diff_sync::TurnSnapshot>,
     ) -> Result<CheckoutDiff, EngineError> {
-        let (snapshot, _, _) = self.review_snapshot(record, mode, base_ref, commit).await?;
+        let (snapshot, _, _) = self
+            .review_snapshot(record, mode, base_ref, commit, turn)
+            .await?;
         Ok(CheckoutDiff {
             checkout_id: chat
                 .checkout_id
@@ -119,6 +135,7 @@ impl Archives {
         chat: &Chat,
         record: &CheckoutArchive,
         request: &GetCheckoutFileDiffTextRequest,
+        turn: Option<&crate::diff_sync::TurnSnapshot>,
     ) -> Result<CheckoutFileDiffText, EngineError> {
         let expected = chat
             .checkout_id
@@ -133,6 +150,7 @@ impl Archives {
                 &request.mode,
                 request.base_ref.as_deref(),
                 request.commit_sha.as_deref(),
+                turn,
             )
             .await?;
         if snapshot.checksum != request.diff_checksum {
@@ -152,9 +170,15 @@ impl Archives {
             .iter()
             .find(|file| file.path == request.path)
             .ok_or_else(|| error("Path is not part of the saved diff snapshot."))?;
-        let pair =
-            diff_sync::read_diff_file_text_at(&record.repo, &base, None, Some(&target), file)
-                .await?;
+        let pair = diff_sync::read_diff_file_text_at(
+            &record.repo,
+            &base,
+            turn.filter(|_| request.mode == "turn")
+                .map(|turn| &turn.tree),
+            Some(&target),
+            file,
+        )
+        .await?;
         Ok(CheckoutFileDiffText {
             diff_checksum: snapshot.checksum,
             old_text: pair.old_text,
