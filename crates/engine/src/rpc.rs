@@ -3654,6 +3654,7 @@ impl RpcService for EngineRpc {
                 #[serde(rename_all = "camelCase")]
                 struct P {
                     cwd: String,
+                    chat_id: Option<String>,
                     #[serde(default)]
                     cursor: usize,
                     #[serde(default = "default_git_history_limit")]
@@ -3663,9 +3664,15 @@ impl RpcService for EngineRpc {
                     crate::repos::GIT_HISTORY_DEFAULT_LIMIT
                 }
                 let p: P = parse_params(params)?;
+                let archive = self.archived_review(p.chat_id.as_deref(), &p.cwd)?;
+                let root = archive
+                    .as_ref()
+                    .map(|(_, record)| record.repo.as_path())
+                    .unwrap_or_else(|| std::path::Path::new(&p.cwd));
+                let head = archive.as_ref().map(|(_, record)| record.head.as_str());
                 let history = self
                     .repos
-                    .history(std::path::Path::new(&p.cwd), p.cursor, p.limit)
+                    .history_at(root, p.cursor, p.limit, head)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&history)
@@ -3675,6 +3682,7 @@ impl RpcService for EngineRpc {
                 #[serde(rename_all = "camelCase")]
                 struct P {
                     cwd: String,
+                    chat_id: Option<String>,
                     query: String,
                     #[serde(default)]
                     cursor: usize,
@@ -3685,9 +3693,15 @@ impl RpcService for EngineRpc {
                     crate::repos::GIT_HISTORY_DEFAULT_LIMIT
                 }
                 let p: P = parse_params(params)?;
+                let archive = self.archived_review(p.chat_id.as_deref(), &p.cwd)?;
+                let root = archive
+                    .as_ref()
+                    .map(|(_, record)| record.repo.as_path())
+                    .unwrap_or_else(|| std::path::Path::new(&p.cwd));
+                let head = archive.as_ref().map(|(_, record)| record.head.as_str());
                 let history = self
                     .repos
-                    .search_history(std::path::Path::new(&p.cwd), &p.query, p.cursor, p.limit)
+                    .search_history_at(root, &p.query, p.cursor, p.limit, head)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&history)
@@ -3697,6 +3711,7 @@ impl RpcService for EngineRpc {
                 #[serde(rename_all = "camelCase")]
                 struct P {
                     cwd: String,
+                    chat_id: Option<String>,
                     authors: Vec<GitAvatarAuthor>,
                     #[serde(default)]
                     cursor: usize,
@@ -3712,6 +3727,11 @@ impl RpcService for EngineRpc {
                     crate::repos::GIT_HISTORY_DEFAULT_LIMIT
                 }
                 let p: P = parse_params(params)?;
+                let archive = self.archived_review(p.chat_id.as_deref(), &p.cwd)?;
+                let root = archive
+                    .as_ref()
+                    .map(|(_, record)| record.repo.as_path())
+                    .unwrap_or_else(|| std::path::Path::new(&p.cwd));
                 let authors: Vec<_> = p
                     .authors
                     .into_iter()
@@ -3721,7 +3741,7 @@ impl RpcService for EngineRpc {
                     .collect();
                 let avatar_paths = self
                     .repos
-                    .history_avatar_urls(std::path::Path::new(&p.cwd), &authors, p.cursor, p.limit)
+                    .history_avatar_urls(root, &authors, p.cursor, p.limit)
                     .await;
                 let mut avatars = std::collections::HashMap::new();
                 for (email, path) in avatar_paths {
@@ -3735,7 +3755,11 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&avatars)
             }
             methods::FETCH_ALL => {
-                let p: RepoPathParams = parse_params(params)?;
+                let chat_id = params["chatId"].as_str().map(str::to_owned);
+                let mut p: RepoPathParams = parse_params(params)?;
+                if let Some((_, record)) = self.archived_review(chat_id.as_deref(), &p.repo_path)? {
+                    p.repo_path = record.repo.to_string_lossy().into_owned();
+                }
                 self.repos
                     .fetch_all(std::path::Path::new(&p.repo_path))
                     .await
@@ -3925,6 +3949,26 @@ impl RpcService for EngineRpc {
             }
             methods::WATCH_WORKSPACE_FILES => {
                 let request: zuse_protocol::WatchWorkspaceFilesRequest = parse_params(params)?;
+                let mut phases = self.archives.watch_changes();
+                if self
+                    .workspace_files
+                    .archived_target(&request.target)
+                    .map_err(RpcError::from)?
+                    .is_some()
+                {
+                    let initial = serde_json::to_value(zuse_protocol::WorkspaceFileChanges {
+                        sequence: 0,
+                        resync_required: true,
+                        changes: vec![],
+                    })
+                    .unwrap();
+                    let stream = futures::stream::once(async move { initial })
+                        .chain(futures::stream::pending())
+                        .take_until(async move {
+                            let _ = phases.changed().await;
+                        });
+                    return Ok(RpcReply::Stream(stream.boxed()));
+                }
                 let subscription = self
                     .workspace_files
                     .watch_files(request)
@@ -3934,6 +3978,9 @@ impl RpcService for EngineRpc {
                     let changes = subscription.recv().await?;
                     let value = serde_json::to_value(changes).ok()?;
                     Some((value, subscription))
+                })
+                .take_until(async move {
+                    let _ = phases.changed().await;
                 });
                 Ok(RpcReply::Stream(stream.boxed()))
             }
@@ -5623,9 +5670,17 @@ impl EngineRpc {
         // renderer or a lost RPC response. A caller never replays the mutation.
         let this = self.clone();
         let chat = chat_id.to_owned();
-        tokio::spawn(async move { this.archive_chat_inner(&chat, archived).await })
-            .await
-            .map_err(|error| RpcError::Failed(format!("Archive operation interrupted: {error}")))?
+        tokio::spawn(async move {
+            let result = this.archive_chat_inner(&chat, archived).await;
+            // Retained main/shared folders have no checkpoint phase write, but
+            // their viewers must still refresh read-only state after the flag changes.
+            if result.is_ok() {
+                this.archives.notify_change();
+            }
+            result
+        })
+        .await
+        .map_err(|error| RpcError::Failed(format!("Archive operation interrupted: {error}")))?
     }
     async fn archive_chat_inner(
         &self,

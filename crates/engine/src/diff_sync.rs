@@ -1043,9 +1043,9 @@ async fn diff_sync_task(
 // Diff capture (exposed for tests)
 // ---------------------------------------------------------------------------
 
-struct Capture {
-    stdout: Vec<u8>,
-    truncated: bool,
+pub(crate) struct Capture {
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) truncated: bool,
 }
 
 /// Run git capturing stdout under a hard byte ceiling — the child is killed once
@@ -1053,7 +1053,7 @@ struct Capture {
 ///
 /// Not an `async fn`: a wrapping future would add a poll frame, and a copy of
 /// the 64 KiB read buffer, to every capture on the RPC worker's stack.
-fn capture_git<'a, S: AsRef<OsStr>>(
+pub(crate) fn capture_git<'a, S: AsRef<OsStr>>(
     cwd: &'a Path,
     args: &'a [S],
     max_bytes: usize,

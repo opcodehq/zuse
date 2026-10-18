@@ -742,6 +742,8 @@ pub enum WorkspaceLineEnding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkspaceReadOnlyReason {
+    /// Saved checkpoint content; restore the thread before editing.
+    Archived,
     Binary,
     UnsupportedEncoding,
     MixedLineEndings,

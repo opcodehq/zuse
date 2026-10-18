@@ -29,6 +29,7 @@ use zuse_rpc::RpcError;
 use crate::workspace_search::{IndexState, NameKinds, normalize_name_query};
 use crate::{Repos, WorkspaceHost, WorkspaceSearch};
 
+mod archived;
 mod mutations;
 
 const MAX_RELATIVE_PATH_BYTES: usize = 4096;
@@ -394,6 +395,10 @@ impl WorkspaceFiles {
         &self,
         request: ListWorkspaceDirectoryRequest,
     ) -> Result<WorkspaceDirectoryPage, WorkspaceFilesError> {
+        if let Some(archive) = self.archived_target(&request.target)? {
+            return archive.list_directory(request).await;
+        }
+        let archived = self.target_is_archived(&request.target)?;
         let workspace = self.resolve_target(&request.target).await?;
         let directory = WorkspaceRelativePath::directory(&request.directory)?;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -414,9 +419,16 @@ impl WorkspaceFiles {
         result.map(|mut page| {
             page.checkout_id = Some(workspace.checkout_id);
             page.mutation_capabilities = Some(zuse_protocol::WorkspaceMutationCapabilities {
-                move_entry: cfg!(any(target_os = "linux", target_os = "macos", windows)),
-                delete_entry: true,
+                move_entry: !archived
+                    && cfg!(any(target_os = "linux", target_os = "macos", windows)),
+                delete_entry: !archived,
             });
+            if archived {
+                for entry in &mut page.entries {
+                    entry.read_only = true;
+                    entry.mutation_revision = None;
+                }
+            }
             page
         })
     }
@@ -426,6 +438,9 @@ impl WorkspaceFiles {
         request: SearchWorkspaceFilesRequest,
     ) -> Result<Vec<WorkspaceFileSearchMatch>, WorkspaceFilesError> {
         validate_name_search_query(&request.query, request.include_ignored)?;
+        if let Some(archive) = self.archived_target(&request.target)? {
+            return archive.search(request).await;
+        }
         let workspace = self.resolve_target(&request.target).await?;
         let limit =
             usize::from(request.limit.unwrap_or(MAX_SEARCH_RESULTS as u16)).min(MAX_SEARCH_RESULTS);
@@ -452,6 +467,9 @@ impl WorkspaceFiles {
         &self,
         request: SearchWorkspaceContentRequest,
     ) -> Result<WorkspaceContentSearchResult, WorkspaceFilesError> {
+        if let Some(archive) = self.archived_target(&request.target)? {
+            return archive.search_content(request).await;
+        }
         validate_workspace_search_query(&request.query)?;
         let workspace = self.resolve_target(&request.target).await?;
         let search = self.inner.repos.workspace_search().clone();
@@ -466,6 +484,11 @@ impl WorkspaceFiles {
         &self,
         request: WarmWorkspaceSearchRequest,
     ) -> Result<WarmWorkspaceSearchResult, WorkspaceFilesError> {
+        if self.archived_target(&request.target)?.is_some() {
+            return Ok(WarmWorkspaceSearchResult {
+                state: WorkspaceSearchIndexState::Ready,
+            });
+        }
         let workspace = self.resolve_target(&request.target).await?;
         let search = self.inner.repos.workspace_search().clone();
         let state = tokio::task::spawn_blocking(move || search.warm(&workspace.root))
@@ -484,6 +507,10 @@ impl WorkspaceFiles {
         &self,
         request: ReadWorkspaceFileRequest,
     ) -> Result<WorkspaceFileText, WorkspaceFilesError> {
+        if let Some(archive) = self.archived_target(&request.target)? {
+            return archive.read_file(request).await;
+        }
+        let archived = self.target_is_archived(&request.target)?;
         let workspace = self.resolve_target(&request.target).await?;
         // Only a chat target may read by absolute path; space targets keep
         // the workspace-relative grammar.
@@ -502,13 +529,23 @@ impl WorkspaceFiles {
         .await
         .map_err(|error| WorkspaceFilesError::Io(format!("file read worker failed: {error}")))?;
         cancel_on_drop.disarm();
-        result
+        result.map(|mut file| {
+            if archived {
+                file.read_only_reason = file
+                    .read_only_reason
+                    .or(Some(WorkspaceReadOnlyReason::Archived));
+            }
+            file
+        })
     }
 
     pub async fn read_image(
         &self,
         request: zuse_protocol::ReadWorkspaceImageRequest,
     ) -> Result<zuse_protocol::WorkspaceImageChunk, WorkspaceFilesError> {
+        if let Some(archive) = self.archived_target(&request.target)? {
+            return archive.read_image(request).await;
+        }
         let workspace = self.resolve_target(&request.target).await?;
         let absolute = request.target.chat_id.is_some() && request.path.starts_with('/');
         if !absolute
@@ -548,6 +585,7 @@ impl WorkspaceFiles {
         &self,
         request: WriteWorkspaceFileRequest,
     ) -> Result<WriteWorkspaceFileOutcome, WorkspaceFilesError> {
+        self.require_active_target(&request.target)?;
         let bytes = encode_write_text(&request)?;
         let workspace = self.resolve_target(&request.target).await?;
         if request.expected_checkout_id.is_empty()

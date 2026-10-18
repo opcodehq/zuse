@@ -1806,7 +1806,11 @@ impl FilesSurface {
                     return;
                 };
                 if file.content_hash == document.saved_hash {
-                    let recovered = if matches!(document.phase, DocumentPhase::DeletedOnDisk) {
+                    let context_changed = document.file.as_ref().map(|old| old.read_only_reason)
+                        != Some(file.read_only_reason);
+                    let recovered = if context_changed
+                        || matches!(document.phase, DocumentPhase::DeletedOnDisk)
+                    {
                         document.restore_on_disk(file);
                         true
                     } else if matches!(document.phase, DocumentPhase::ExternallyModified { .. }) {
@@ -2723,22 +2727,26 @@ impl FilesSurface {
         if let Some(editor) = &editor {
             self.sync_editor_comment_anchors(path, editor, cx);
         }
-        let outside = self
+        let context_read_only = self
             .preview
             .documents
             .get(path)
             .and_then(|document| document.file.as_ref())
-            .is_some_and(|file| {
-                file.read_only_reason == Some(WorkspaceReadOnlyReason::OutsideWorkspace)
+            .and_then(|file| file.read_only_reason)
+            .filter(|reason| {
+                matches!(
+                    reason,
+                    WorkspaceReadOnlyReason::OutsideWorkspace | WorkspaceReadOnlyReason::Archived
+                )
             });
         if let Some(view) = self.prepare_markdown_preview(path, editor.as_ref(), cx) {
-            return if outside {
+            return if let Some(reason) = context_read_only {
                 div()
                     .flex_1()
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .child(outside_read_only_row(theme))
+                    .child(context_read_only_row(theme, reason))
                     .child(
                         div()
                             .flex_1()
@@ -2836,8 +2844,8 @@ impl FilesSurface {
             .min_h_0()
             .flex()
             .flex_col()
-            .when(outside, |element| {
-                element.child(outside_read_only_row(theme))
+            .when_some(context_read_only, |element, reason| {
+                element.child(context_read_only_row(theme, reason))
             })
             .when(truncated, |element| {
                 element.child(
@@ -3340,9 +3348,8 @@ fn centered_state(message: impl Into<SharedString>, color: gpui::Hsla) -> AnyEle
         .into_any_element()
 }
 
-/// The read-only line an outside file shows above its content — text or
-/// rendered Markdown — matching the truncated-preview row's shape.
-fn outside_read_only_row(theme: &Theme) -> AnyElement {
+/// Contextual read-only explanation above text or rendered Markdown.
+fn context_read_only_row(theme: &Theme, reason: WorkspaceReadOnlyReason) -> AnyElement {
     div()
         .h(px(28.0))
         .flex_none()
@@ -3354,9 +3361,7 @@ fn outside_read_only_row(theme: &Theme) -> AnyElement {
         .items_center()
         .text_size(px(10.0))
         .text_color(theme.text_muted)
-        .child(read_only_message(Some(
-            WorkspaceReadOnlyReason::OutsideWorkspace,
-        )))
+        .child(read_only_message(Some(reason)))
         .into_any_element()
 }
 
@@ -3374,6 +3379,7 @@ fn read_error_message(error: &super::client::FilesClientError) -> SharedString {
 
 fn read_only_message(reason: Option<WorkspaceReadOnlyReason>) -> SharedString {
     match reason {
+        Some(WorkspaceReadOnlyReason::Archived) => "Archived thread: unarchive to edit files.",
         Some(WorkspaceReadOnlyReason::Binary) => "Binary files cannot be previewed.",
         Some(WorkspaceReadOnlyReason::UnsupportedEncoding) => {
             "This file encoding is not supported."

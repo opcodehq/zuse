@@ -2012,7 +2012,12 @@ impl GitHistory {
         let cwd = chat.cwd.clone()?;
         let target = (state.local_device_id.as_deref() != Some(chat.device_id.as_str()))
             .then(|| chat.device_id.clone());
-        let key = format!("{}|{cwd}", target.as_deref().unwrap_or("local"));
+        let key = format!(
+            "{}|{cwd}|{}|{}",
+            target.as_deref().unwrap_or("local"),
+            chat.id,
+            chat.archived
+        );
         Some((key, cwd, target))
     }
 
@@ -2120,9 +2125,17 @@ impl GitHistory {
         self.fetch_for = Some(key.clone());
         self.fetch_error = None;
         cx.notify();
+        let chat_id = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .map(|chat| chat.id.clone());
         self.fetch_task = Some(cx.spawn(async move |this, cx| {
             let mut params = serde_json::Map::new();
             params.insert("repoPath".into(), serde_json::Value::String(cwd.clone()));
+            if let Some(id) = chat_id {
+                params.insert("chatId".into(), serde_json::Value::String(id));
+            }
             if let Some(target) = target.clone() {
                 params.insert("targetDeviceId".into(), serde_json::Value::String(target));
             }
@@ -2479,12 +2492,20 @@ impl GitHistory {
         self.search_loading = true;
         self.search_error = None;
         cx.notify();
+        let chat_id = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .map(|chat| chat.id.clone());
         self.search_task = Some(cx.spawn(async move |this, cx| {
             if !delay.is_zero() {
                 cx.background_executor().timer(delay).await;
             }
             let mut params = serde_json::Map::new();
             params.insert("cwd".into(), serde_json::Value::String(cwd.clone()));
+            if let Some(id) = chat_id {
+                params.insert("chatId".into(), serde_json::Value::String(id));
+            }
             params.insert("query".into(), serde_json::Value::String(query.clone()));
             params.insert("cursor".into(), serde_json::json!(cursor));
             params.insert("limit".into(), serde_json::json!(HISTORY_PAGE_SIZE));
@@ -2597,6 +2618,9 @@ impl GitHistory {
             return;
         };
         let mut params = serde_json::Map::new();
+        if let Some(chat) = self.state.read(cx).selected_chat_row() {
+            params.insert("chatId".into(), serde_json::Value::String(chat.id.clone()));
+        }
         params.insert("cwd".into(), serde_json::Value::String(cwd));
         params.insert("authors".into(), serde_json::Value::Array(authors));
         params.insert("cursor".into(), serde_json::json!(cursor));
@@ -2663,9 +2687,17 @@ impl GitHistory {
         self.loading = true;
         self.error = None;
         cx.notify();
+        let chat_id = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .map(|chat| chat.id.clone());
         self.request_task = Some(cx.spawn(async move |this, cx| {
             let mut params = serde_json::Map::new();
             params.insert("cwd".into(), serde_json::Value::String(cwd.clone()));
+            if let Some(id) = chat_id {
+                params.insert("chatId".into(), serde_json::Value::String(id));
+            }
             params.insert("cursor".into(), serde_json::json!(cursor));
             params.insert("limit".into(), serde_json::json!(HISTORY_PAGE_SIZE));
             if let Some(target) = target.clone() {

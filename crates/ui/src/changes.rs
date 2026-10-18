@@ -3522,11 +3522,6 @@ impl Changes {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let collapsed = fold.collapsed;
-        let archived = self
-            .state
-            .read(cx)
-            .selected_chat_row()
-            .is_some_and(|chat| chat.archived);
         let path = file.path.clone();
         let adds = file.additions;
         let dels = file.deletions;
@@ -3653,7 +3648,6 @@ impl Changes {
             .child(
                 div()
                     .id(("diff-open-file", ix))
-                    .when(archived, |el| el.opacity(0.35))
                     .flex_none()
                     .size(px(crate::surface_chrome::CONTROL_SIZE))
                     .flex()
@@ -3665,28 +3659,11 @@ impl Changes {
                         window.prevent_default();
                         cx.stop_propagation();
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |_, _, _, cx| {
                         cx.stop_propagation();
-                        if this
-                            .state
-                            .read(cx)
-                            .selected_chat_row()
-                            .is_some_and(|chat| chat.archived)
-                        {
-                            return;
-                        }
                         cx.emit(ChangesEvent::OpenFile(path.clone()));
                     }))
-                    .tooltip(move |_, cx| {
-                        cx.new(|_| {
-                            DiffHeaderTooltip(if archived {
-                                "Unarchive to open working files"
-                            } else {
-                                "Open in file browser"
-                            })
-                        })
-                        .into()
-                    })
+                    .tooltip(|_, cx| cx.new(|_| DiffHeaderTooltip("Open in file browser")).into())
                     .tooltip_show_delay(Duration::from_millis(350))
                     .child(
                         crate::icons::icon(crate::icons::DOCUMENT)

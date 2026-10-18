@@ -317,7 +317,7 @@ impl Archives {
     fn record_path(&self, checkout: &Path) -> PathBuf {
         self.root.join(key(checkout)).join("record.json")
     }
-    fn retained_root(&self, record: &CheckoutArchive) -> PathBuf {
+    pub(crate) fn retained_root(&self, record: &CheckoutArchive) -> PathBuf {
         self.root
             .join(key(&record.checkout))
             .join(&record.generation)
@@ -362,9 +362,12 @@ impl Archives {
         tokio::task::spawn_blocking(move || durable_json(&path, &record))
             .await
             .map_err(|err| error(err.to_string()))??;
+        self.notify_change();
+        Ok(())
+    }
+    pub(crate) fn notify_change(&self) {
         self.changes
             .send_modify(|revision| *revision = revision.wrapping_add(1));
-        Ok(())
     }
     pub(crate) fn watch_changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.changes.subscribe()
@@ -1397,6 +1400,282 @@ mod tests {
             "changed\n"
         );
         assert_eq!(handle.doc().read_entries().unwrap().len(), 1);
+        core.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn archived_workspace_browses_read_only_files_images_and_pinned_history() {
+        use serde_json::{Value, json};
+        use zuse_rpc::{RpcReply, RpcService, methods};
+        async fn value(rpc: &dyn RpcService, method: &str, params: Value) -> Value {
+            let RpcReply::Value(value) = rpc.handle(method, params).await.unwrap() else {
+                panic!("Expected unary response")
+            };
+            value
+        }
+        let f = Fixture::new().await;
+        f.edit();
+        std::fs::create_dir(f.checkout.join("folder")).unwrap();
+        std::fs::write(f.checkout.join("folder/nested.txt"), "nested saved text").unwrap();
+        std::fs::write(
+            f.checkout.join("unicode.txt"),
+            "    café — needle ñ\nİSTANBUL needle\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/etc/passwd", f.checkout.join("outside-link")).unwrap();
+        let core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(&f.data).unwrap(),
+            std::sync::Arc::new(crate::HarnessRegistry::new()),
+            zuse_protocol::HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        core.workspace
+            .create_space(
+                "project",
+                &core.device_id,
+                &f.repo.to_string_lossy(),
+                None,
+                true,
+            )
+            .unwrap();
+        let rpc = core.rpc_service();
+        value(rpc.as_ref(), methods::MUTATE, json!({"op":"createChat","chatId":"files","spaceId":"project","cwd":f.checkout,"config":{"harness":"mock","sandbox":"workspace-write"}})).await;
+        value(
+            rpc.as_ref(),
+            methods::MUTATE,
+            json!({"op":"setChatArchived","chatId":"files","archived":true}),
+        )
+        .await;
+        let root = value(
+            rpc.as_ref(),
+            methods::LIST_WORKSPACE_DIRECTORY,
+            json!({"chatId":"files"}),
+        )
+        .await;
+        assert_eq!(root["mutationCapabilities"]["deleteEntry"], false);
+        assert!(
+            root["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["path"] == "tracked.txt" && entry["readOnly"] == true)
+        );
+        assert!(
+            !root["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["path"] == ".env")
+        );
+        let ignored = value(
+            rpc.as_ref(),
+            methods::LIST_WORKSPACE_DIRECTORY,
+            json!({"chatId":"files","includeIgnored":true}),
+        )
+        .await;
+        assert!(
+            ignored["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["path"] == ".env")
+        );
+        assert!(
+            !ignored["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["path"] == "node_modules")
+        );
+        let nested = value(
+            rpc.as_ref(),
+            methods::LIST_WORKSPACE_DIRECTORY,
+            json!({"chatId":"files","directory":"folder"}),
+        )
+        .await;
+        assert_eq!(nested["entries"][0]["path"], "folder/nested.txt");
+        for (path, expected) in [
+            ("tracked.txt", "changed\n"),
+            ("folder/nested.txt", "nested saved text"),
+            (".env", "LOCAL_VALUE=preserved\n"),
+        ] {
+            let file = value(
+                rpc.as_ref(),
+                methods::READ_WORKSPACE_FILE,
+                json!({"chatId":"files","path":path}),
+            )
+            .await;
+            assert_eq!(file["text"], expected);
+            assert_eq!(file["readOnlyReason"], "archived");
+            assert_eq!(file["checkoutId"], root["checkoutId"]);
+        }
+        let absolute = value(
+            rpc.as_ref(),
+            methods::READ_WORKSPACE_FILE,
+            json!({"chatId":"files","path":f.checkout.join("tracked.txt")}),
+        )
+        .await;
+        assert_eq!(absolute["path"], "tracked.txt");
+        for path in ["../outside", ".git/config", "/etc/passwd", "deleted.txt"] {
+            assert!(
+                rpc.handle(
+                    methods::READ_WORKSPACE_FILE,
+                    json!({"chatId":"files","path":path})
+                )
+                .await
+                .is_err()
+            );
+        }
+        #[cfg(unix)]
+        {
+            let link = value(
+                rpc.as_ref(),
+                methods::READ_WORKSPACE_FILE,
+                json!({"chatId":"files","path":"outside-link"}),
+            )
+            .await;
+            assert_eq!(link["readOnlyReason"], "symlink");
+            assert!(link["text"].is_null());
+        }
+        let image = value(rpc.as_ref(), methods::READ_WORKSPACE_IMAGE, json!({"chatId":"files","path":".context/image.png","expectedCheckoutId":root["checkoutId"],"offset":0})).await;
+        assert_eq!(image["mimeType"], "image/png");
+        assert_eq!(image["data"], "iVBORw==");
+        let found = value(
+            rpc.as_ref(),
+            methods::SEARCH_WORKSPACE_FILES,
+            json!({"chatId":"files","query":"nst"}),
+        )
+        .await;
+        assert!(
+            found
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["path"] == "folder/nested.txt")
+        );
+        let content = value(
+            rpc.as_ref(),
+            methods::SEARCH_WORKSPACE_CONTENT,
+            json!({"chatId":"files","query":"needle"}),
+        )
+        .await;
+        assert_eq!(content["matches"].as_array().unwrap().len(), 2);
+        assert_eq!(content["matches"][0]["preview"], "café — needle ñ");
+        assert_eq!(content["matches"][0]["column"], 14);
+        assert_eq!(content["matches"][0]["ranges"], json!([[10, 16]]));
+        assert_eq!(content["matches"][1]["column"], 10);
+        let warm = value(
+            rpc.as_ref(),
+            methods::WARM_WORKSPACE_SEARCH,
+            json!({"chatId":"files"}),
+        )
+        .await;
+        assert_eq!(warm["state"], "ready");
+        // Saved HEAD is independent of the main checkout and future branch tips.
+        let head = text(&f.repo, &["rev-parse", "HEAD"]).await.unwrap();
+        std::fs::write(f.repo.join("later.txt"), "future main work").unwrap();
+        text(&f.repo, &["add", "."]).await.unwrap();
+        text(
+            &f.repo,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@localhost",
+                "commit",
+                "-m",
+                "Future main work",
+            ],
+        )
+        .await
+        .unwrap();
+        let history = value(
+            rpc.as_ref(),
+            methods::LIST_GIT_HISTORY,
+            json!({"chatId":"files","cwd":f.checkout}),
+        )
+        .await;
+        assert_eq!(history["headSha"], head);
+        assert_eq!(history["commits"].as_array().unwrap().len(), 1);
+        assert_eq!(history["commits"][0]["subject"], "Initial files");
+        let search = value(
+            rpc.as_ref(),
+            methods::SEARCH_GIT_HISTORY,
+            json!({"chatId":"files","cwd":f.checkout,"query":"Future"}),
+        )
+        .await;
+        assert!(search["commits"].as_array().unwrap().is_empty());
+        assert!(!f.checkout.exists(), "browsing must not restore a checkout");
+        assert!(rpc.handle(methods::WRITE_WORKSPACE_FILE, json!({"chatId":"files","path":"tracked.txt","text":"overwrite","expectedCheckoutId":root["checkoutId"],"expectedContentHash":absolute["contentHash"],"encoding":"utf8","lineEnding":"lf"})).await.is_err());
+        let direct_write: zuse_protocol::WriteWorkspaceFileRequest = serde_json::from_value(json!({"chatId":"files","path":"tracked.txt","text":"overwrite","expectedCheckoutId":root["checkoutId"],"expectedContentHash":absolute["contentHash"],"encoding":"utf8","lineEnding":"lf"})).unwrap();
+        assert!(core.workspace_files.write_file(direct_write).await.is_err());
+        use futures::StreamExt;
+        let RpcReply::Stream(mut file_watch) = rpc
+            .handle(methods::WATCH_WORKSPACE_FILES, json!({"chatId":"files"}))
+            .await
+            .unwrap()
+        else {
+            panic!("expected file watch")
+        };
+        assert_eq!(file_watch.next().await.unwrap()["resyncRequired"], true);
+        value(
+            rpc.as_ref(),
+            methods::MUTATE,
+            json!({"op":"setChatArchived","chatId":"files","archived":false}),
+        )
+        .await;
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), file_watch.next())
+                .await
+                .unwrap()
+                .is_none(),
+            "restoration must retire the static watch so the client can attach live"
+        );
+        let active = value(
+            rpc.as_ref(),
+            methods::READ_WORKSPACE_FILE,
+            json!({"chatId":"files","path":"tracked.txt"}),
+        )
+        .await;
+        assert!(active["readOnlyReason"].is_null());
+        assert_eq!(active["text"], "changed\n");
+        // Main/shared folders remain live on disk, but an archived thread
+        // still cannot mutate them and receives an explicit read-only preview.
+        value(rpc.as_ref(), methods::MUTATE, json!({"op":"createChat","chatId":"mainfiles","spaceId":"project","cwd":f.repo,"config":{"harness":"mock","sandbox":"workspace-write"}})).await;
+        let RpcReply::Stream(mut retained_watch) = rpc
+            .handle(
+                methods::WATCH_WORKSPACE_FILES,
+                json!({"chatId":"mainfiles"}),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected main file watch")
+        };
+        retained_watch.next().await.unwrap();
+        value(
+            rpc.as_ref(),
+            methods::MUTATE,
+            json!({"op":"setChatArchived","chatId":"mainfiles","archived":true}),
+        )
+        .await;
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), retained_watch.next())
+                .await
+                .unwrap()
+                .is_none(),
+            "flag-only archive must refresh file editability too"
+        );
+        let retained = value(
+            rpc.as_ref(),
+            methods::READ_WORKSPACE_FILE,
+            json!({"chatId":"mainfiles","path":"tracked.txt"}),
+        )
+        .await;
+        assert_eq!(retained["readOnlyReason"], "archived");
+        assert!(f.repo.exists());
         core.shutdown().await;
     }
 

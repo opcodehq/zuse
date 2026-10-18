@@ -225,6 +225,35 @@ impl WorkspaceView {
                     self.selected.as_mut().unwrap()["archived"] = json!(archived);
                     // Keep the archived conversation open and its unsent draft intact.
                     self.show_archive = archived;
+                    // Archive mode changes editability even when the file's
+                    // content hash is unchanged. Keep any edits made while the
+                    // action was pending, then reconcile clean previews.
+                    let dirty = self.file_dirty(cx);
+                    let path = self
+                        .open_file
+                        .as_ref()
+                        .and_then(|file| file["path"].as_str())
+                        .map(str::to_owned);
+                    if let Some(file) = self.open_file.as_mut() {
+                        if archived && file["readOnlyReason"].is_null() {
+                            file["readOnlyReason"] = json!("archived");
+                        }
+                        if !archived && file["readOnlyReason"] == "archived" {
+                            if let Some(object) = file.as_object_mut() {
+                                object.remove("readOnlyReason");
+                            }
+                        }
+                        let readonly =
+                            file["readOnlyReason"].is_string() || file["truncated"] == true;
+                        self.file_editor
+                            .update(cx, |input, cx| input.set_readonly(readonly, cx));
+                    }
+                    if !dirty {
+                        if let Some(path) = path {
+                            self.read_file(&path, true, cx);
+                        }
+                    }
+                    self.load_directory(&self.directory.clone());
                 }
             }
             ThreadChange::Delete => {

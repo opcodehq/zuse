@@ -787,12 +787,32 @@ impl Repos {
         cursor: usize,
         limit: usize,
     ) -> Result<GitHistoryPage, EngineError> {
+        self.history_at(repo_path, cursor, limit, None).await
+    }
+
+    pub(crate) async fn history_at(
+        &self,
+        repo_path: &Path,
+        cursor: usize,
+        limit: usize,
+        pinned_head: Option<&str>,
+    ) -> Result<GitHistoryPage, EngineError> {
         let limit = limit.clamp(1, GIT_HISTORY_MAX_LIMIT);
+        let head = pinned_head.unwrap_or("HEAD");
+        let head_spec = format!("{head}^{{commit}}");
         let head_sha = self
-            .git(&["rev-parse", "--verify", "HEAD^{commit}"], Some(repo_path))
+            .git(
+                &["rev-parse", "--verify", "--end-of-options", &head_spec],
+                Some(repo_path),
+            )
             .await
             .ok()
             .filter(|sha| !sha.is_empty());
+        if pinned_head.is_some() && head_sha.is_none() {
+            return Err(EngineError::Other(
+                "Saved history commit is unavailable.".into(),
+            ));
+        }
 
         let refs_out = self
             .git(
@@ -834,9 +854,11 @@ impl Repos {
             "--format=%H%x00%P%x00%s%x00%an%x00%ae%x00%aI%x00",
         ];
         if head_sha.is_some() {
-            log_args.push("HEAD");
+            log_args.push(head);
         }
-        log_args.extend(["--branches", "--remotes", "--tags"]);
+        if pinned_head.is_none() {
+            log_args.extend(["--branches", "--remotes", "--tags"]);
+        }
         let log = self.git(&log_args, Some(repo_path)).await?;
         let mut commits = parse_history_log(&log, &refs_by_sha);
         let has_next = commits.len() > limit;
@@ -857,9 +879,11 @@ impl Repos {
                 "--format=%H%x00%P%x00%s%x00%an%x00%ae%x00%aI%x00",
             ];
             if head_sha.is_some() {
-                tip_args.push("HEAD");
+                tip_args.push(head);
             }
-            tip_args.extend(["--branches", "--remotes"]);
+            if pinned_head.is_none() {
+                tip_args.extend(["--branches", "--remotes"]);
+            }
             let tips = self.git(&tip_args, Some(repo_path)).await?;
             parse_history_log(&tips, &refs_by_sha)
         } else {
@@ -869,9 +893,11 @@ impl Repos {
         let total_count = if cursor == 0 {
             let mut count_args = vec!["rev-list", "--count"];
             if head_sha.is_some() {
-                count_args.push("HEAD");
+                count_args.push(head);
             }
-            count_args.extend(["--branches", "--remotes", "--tags"]);
+            if pinned_head.is_none() {
+                count_args.extend(["--branches", "--remotes", "--tags"]);
+            }
             self.git(&count_args, Some(repo_path))
                 .await
                 .ok()
@@ -880,14 +906,14 @@ impl Repos {
             None
         };
         let head_commit_count = if cursor == 0 && head_sha.is_some() {
-            self.git(&["rev-list", "--count", "HEAD"], Some(repo_path))
+            self.git(&["rev-list", "--count", head], Some(repo_path))
                 .await
                 .ok()
                 .and_then(|count| count.parse().ok())
         } else {
             None
         };
-        let comparison = if cursor == 0 && head_sha.is_some() {
+        let comparison = if cursor == 0 && head_sha.is_some() && pinned_head.is_none() {
             self.history_comparison(repo_path).await
         } else {
             None
@@ -1012,6 +1038,18 @@ impl Repos {
         cursor: usize,
         limit: usize,
     ) -> Result<GitHistoryPage, EngineError> {
+        self.search_history_at(repo_path, query, cursor, limit, None)
+            .await
+    }
+
+    pub(crate) async fn search_history_at(
+        &self,
+        repo_path: &Path,
+        query: &str,
+        cursor: usize,
+        limit: usize,
+        pinned_head: Option<&str>,
+    ) -> Result<GitHistoryPage, EngineError> {
         let query = query.trim();
         if query.is_empty() {
             return Ok(GitHistoryPage {
@@ -1025,11 +1063,21 @@ impl Repos {
             });
         }
         let limit = limit.clamp(1, GIT_HISTORY_MAX_LIMIT);
+        let head = pinned_head.unwrap_or("HEAD");
+        let head_spec = format!("{head}^{{commit}}");
         let head_sha = self
-            .git(&["rev-parse", "--verify", "HEAD^{commit}"], Some(repo_path))
+            .git(
+                &["rev-parse", "--verify", "--end-of-options", &head_spec],
+                Some(repo_path),
+            )
             .await
             .ok()
             .filter(|sha| !sha.is_empty());
+        if pinned_head.is_some() && head_sha.is_none() {
+            return Err(EngineError::Other(
+                "Saved history commit is unavailable.".into(),
+            ));
+        }
         let refs_out = self
             .git(
                 &[
@@ -1065,9 +1113,11 @@ impl Repos {
             "--format=%H%x00%P%x00%s%x00%an%x00%ae%x00%aI%x00",
         ];
         if head_sha.is_some() {
-            log_args.push("HEAD");
+            log_args.push(head);
         }
-        log_args.extend(["--branches", "--remotes", "--tags"]);
+        if pinned_head.is_none() {
+            log_args.extend(["--branches", "--remotes", "--tags"]);
+        }
         let log = self.git(&log_args, Some(repo_path)).await?;
         let all_commits = parse_history_log(&log, &refs_by_sha);
         let visible: HashSet<String> = all_commits

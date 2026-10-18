@@ -1426,6 +1426,7 @@ fn markdown_block(block: &Block) -> AnyElement {
 
 fn read_only_message(reason: &str) -> &'static str {
     match reason {
+        "archived" => "Archived thread · Unarchive to edit files",
         "binary" => "Read only · Binary file",
         "unsupportedEncoding" => "Read only · Unsupported text encoding",
         "mixedLineEndings" => "Read only · Mixed line endings",

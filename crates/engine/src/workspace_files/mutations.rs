@@ -11,6 +11,7 @@ impl WorkspaceFiles {
         &self,
         request: zuse_protocol::DeleteWorkspaceEntryRequest,
     ) -> Result<WorkspaceMutationOutcome, WorkspaceFilesError> {
+        self.require_active_target(&request.target)?;
         let workspace = self.resolve_target(&request.target).await?;
         let gate = self
             .mutation_gate(&workspace.checkout_id)
@@ -84,6 +85,7 @@ impl WorkspaceFiles {
         &self,
         request: MoveWorkspaceEntryRequest,
     ) -> Result<WorkspaceMutationOutcome, WorkspaceFilesError> {
+        self.require_active_target(&request.target)?;
         let workspace = self.resolve_target(&request.target).await?;
         let gate = self
             .mutation_gate(&workspace.checkout_id)
