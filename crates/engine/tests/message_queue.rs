@@ -102,6 +102,9 @@ impl Harness for HeldHarness {
         request: RunRequest,
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        // Publishing a received prompt is the fixture's runtime-admission barrier.
+        // Subscribe first so a test may safely finish that turn after observing it.
+        let finish = self.finish.subscribe();
         self.prompts.lock().unwrap().push(request.prompt.clone());
         self.requests.lock().unwrap().push(request.clone());
         let answer = self.asks.then(|| {
@@ -117,7 +120,6 @@ impl Harness for HeldHarness {
                 multi_select: false,
             }])
         });
-        let finish = self.finish.subscribe();
         let steering = controls.steering;
         let prompts = self.prompts.clone();
         let gate = self.mailbox_gate.lock().unwrap().take();
@@ -779,7 +781,10 @@ async fn queued_text_waits_for_a_steerable_turn_even_with_legacy_policy() {
 
     harness.finish.send(()).unwrap();
     wait_for(
-        || user_messages(&core).iter().any(|m| m == "first queued"),
+        || {
+            prompts.lock().unwrap().iter().any(|m| m == "first queued")
+                && user_messages(&core).iter().any(|m| m == "first queued")
+        },
         "first queued turn",
     )
     .await;
@@ -787,7 +792,10 @@ async fn queued_text_waits_for_a_steerable_turn_even_with_legacy_policy() {
     assert!(!user_messages(&core).iter().any(|m| m == "second queued"));
     harness.finish.send(()).unwrap();
     wait_for(
-        || user_messages(&core).iter().any(|m| m == "second queued"),
+        || {
+            prompts.lock().unwrap().iter().any(|m| m == "second queued")
+                && user_messages(&core).iter().any(|m| m == "second queued")
+        },
         "second queued turn",
     )
     .await;
