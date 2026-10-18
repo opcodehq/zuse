@@ -216,14 +216,23 @@ impl crate::WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.plugin_state.active_attempt() {
+            self.plugin_state.notice =
+                Some("Finish or cancel the current plugin sign-in first.".into());
+            cx.notify();
+            return;
+        }
         if !self.connected
             || self.plugin_request.is_some()
             || self.cloud_account["user"]["id"].as_str().is_none()
-            || self.plugins["canManage"] == false
+            || self.plugin_state.snapshot["canManage"] == false
         {
             return;
         }
-        let Some(tenant) = self.plugins["tenantId"].as_str().map(str::to_owned) else {
+        let Some(tenant) = self.plugin_state.snapshot["tenantId"]
+            .as_str()
+            .map(str::to_owned)
+        else {
             return;
         };
         let owner = self.cloud_account["user"]["id"].clone();
@@ -251,8 +260,8 @@ impl crate::WorkspaceView {
                     if !this.connected
                         || this.plugin_request.is_some()
                         || this.cloud_account["user"]["id"] != owner
-                        || this.plugins["tenantId"] != expected
-                        || this.plugins["canManage"] == false
+                        || this.plugin_state.snapshot["tenantId"] != expected
+                        || this.plugin_state.snapshot["canManage"] == false
                     {
                         return;
                     }
@@ -300,7 +309,7 @@ mod tests {
                 view.connected = true;
                 view.connection_epoch = 1;
                 view.cloud_account = serde_json::json!({"user":{"id":"owner"}});
-                view.plugins =
+                view.plugin_state.snapshot =
                     serde_json::json!({"kind":"snapshot","tenantId":"tenant","canManage":true});
                 view.open_plugin_setup(SetupTarget::Server, window, cx);
             })
@@ -410,8 +419,8 @@ mod tests {
                     let form = fill(view, window, cx);
                     match condition {
                         0 => view.cloud_account = serde_json::json!({"user":{"id":"another"}}),
-                        1 => view.plugins["tenantId"] = serde_json::json!("another"),
-                        2 => view.plugins["canManage"] = serde_json::json!(false),
+                        1 => view.plugin_state.snapshot["tenantId"] = serde_json::json!("another"),
+                        2 => view.plugin_state.snapshot["canManage"] = serde_json::json!(false),
                         _ => view.connected = false,
                     }
                     form.update(cx, |form, cx| form.submit(cx));

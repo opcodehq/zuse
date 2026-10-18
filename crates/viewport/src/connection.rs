@@ -105,6 +105,7 @@ impl WorkspaceView {
             self.model_error=Some("Connection interrupted during sign-in. Check linked accounts before starting again.".into());
         }
         self.plugin_request = None;
+        self.plugin_state.interrupted();
         self.plugin_setup = None;
         self.plugin_setup_events = None;
         self.pairing_fetch = None;
@@ -163,6 +164,9 @@ impl WorkspaceView {
         self.refresh_provider_updates();
         self.refresh_pairings();
         self.refresh_model_connections();
+        if self.cloud_account["user"].is_object() {
+            self.plugin_action(self.plugin_state.refresh());
+        }
         if self.settings {
             self.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":false}));
         }

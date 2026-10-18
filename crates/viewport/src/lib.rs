@@ -15,6 +15,7 @@ mod navigation;
 mod notifications;
 mod pairing;
 pub mod palette;
+mod plugin_management;
 pub mod plugin_setup;
 mod previews;
 mod provider_settings;
@@ -204,8 +205,7 @@ pub struct WorkspaceView {
     accounts: Value,
     cloud_account: Value,
     browser_local: bool,
-    plugins: Value,
-    plugin_attempt: Value,
+    plugin_state: zuse_protocol::plugin_state::PluginState,
     plugin_request: Option<u64>,
     plugin_setup: Option<Entity<plugin_setup::PluginSetup>>,
     plugin_setup_events: Option<Subscription>,
@@ -472,8 +472,7 @@ impl WorkspaceView {
             accounts: Value::Null,
             cloud_account: Value::Null,
             browser_local: false,
-            plugins: Value::Null,
-            plugin_attempt: Value::Null,
+            plugin_state: Default::default(),
             plugin_request: None,
             plugin_setup: None,
             plugin_setup_events: None,
@@ -511,9 +510,16 @@ impl WorkspaceView {
         if self.plugin_request.is_some() {
             return;
         }
-        if request["action"] != "list" && self.plugins["canManage"] == false {
+        if !self.connected {
             return;
         }
+        let request = match self.plugin_state.begin(request) {
+            Ok(request) => request,
+            Err(error) => {
+                self.plugin_state.notice = Some(error.into());
+                return;
+            }
+        };
         self.plugin_setup = None;
         self.plugin_setup_events = None;
         self.plugin_request = Some(self.call(methods::PLUGINS, request));
@@ -641,11 +647,12 @@ impl WorkspaceView {
             self.receive_transcript(id, &frame, cx);
             return;
         }
+        if method == methods::PLUGINS {
+            self.receive_plugins(id, &frame, cx);
+            return;
+        }
         if let Some(error) = frame.get("err").and_then(Value::as_str) {
             self.error = Some(error.into());
-            if self.plugin_request == Some(id) {
-                self.plugin_request = None;
-            }
             if let Some(draft) = self.send_draft.remove(&id) {
                 self.restore_failed_draft(draft, cx);
             }
@@ -720,26 +727,11 @@ impl WorkspaceView {
                         self.refresh_model_connections();
                         self.plugin_setup = None;
                         self.plugin_setup_events = None;
-                        self.plugins = Value::Null;
-                        self.plugin_attempt = Value::Null;
+                        self.plugin_state = Default::default();
                         self.plugin_request = None;
                         if value["user"].is_object() {
                             self.plugin_action(json!({"action":"list"}));
                         }
-                    }
-                }
-                methods::PLUGINS if self.plugin_request == Some(id) => {
-                    self.plugin_request = None;
-                    if value["kind"] == "snapshot" {
-                        self.plugins = value.clone();
-                    } else if value["kind"] == "attempt" {
-                        self.plugin_attempt = value.clone();
-                        if value["state"] == "connected" {
-                            self.plugin_action(json!({"action":"list"}));
-                        }
-                    } else {
-                        self.plugin_attempt = Value::Null;
-                        self.plugin_action(json!({"action":"list"}));
                     }
                 }
                 methods::LOCAL_DEVICE => self.verify_engine(value, cx),

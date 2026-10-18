@@ -10,8 +10,7 @@ pub struct PluginsCard {
     state: Entity<AppState>,
     account_only: bool,
     account: AccountStatus,
-    snapshot: Value,
-    attempt: Value,
+    plugins: zuse_protocol::plugin_state::PluginState,
     error: Option<String>,
     epoch: u64,
     busy: bool,
@@ -32,8 +31,7 @@ impl PluginsCard {
                 this.setup = None;
                 this.setup_events = None;
                 this.account = AccountStatus::default();
-                this.snapshot = Value::Null;
-                this.attempt = Value::Null;
+                this.plugins = Default::default();
             } else if this.watch.is_none() {
                 this.attach(cx);
             }
@@ -42,8 +40,7 @@ impl PluginsCard {
             state,
             account_only: false,
             account: AccountStatus::default(),
-            snapshot: Value::Null,
-            attempt: Value::Null,
+            plugins: Default::default(),
             error: None,
             epoch: 0,
             busy: false,
@@ -85,8 +82,7 @@ impl PluginsCard {
                                     card.setup = None;
                                     card.setup_events = None;
                                     card.epoch = card.epoch.wrapping_add(1);
-                                    card.snapshot = Value::Null;
-                                    card.attempt = Value::Null;
+                                    card.plugins = Default::default();
                                     card.action = None;
                                     card.busy = false;
                                     if card.account.user.is_some() {
@@ -115,10 +111,18 @@ impl PluginsCard {
         }));
     }
     fn open_setup(&mut self, target: SetupTarget, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy || self.account.user.is_none() || self.snapshot["canManage"] == false {
+        if self.plugins.active_attempt() {
+            self.error = Some("Finish or cancel the current plugin sign-in first.".into());
+            cx.notify();
             return;
         }
-        let Some(tenant) = self.snapshot["tenantId"].as_str().map(str::to_owned) else {
+        if self.busy || self.account.user.is_none() || self.plugins.snapshot["canManage"] == false {
+            return;
+        }
+        let Some(tenant) = self.plugins.snapshot["tenantId"]
+            .as_str()
+            .map(str::to_owned)
+        else {
             return;
         };
         let expected = tenant.clone();
@@ -151,8 +155,8 @@ impl PluginsCard {
                     if this.busy
                         || this.epoch != epoch
                         || this.account.user.is_none()
-                        || this.snapshot["tenantId"] != expected
-                        || this.snapshot["canManage"] == false
+                        || this.plugins.snapshot["tenantId"] != expected
+                        || this.plugins.snapshot["canManage"] == false
                     {
                         return;
                     }
@@ -168,18 +172,48 @@ impl PluginsCard {
         self.setup = Some(form);
         cx.notify();
     }
+    fn ask_removal(
+        &mut self,
+        kind: zuse_protocol::plugin_state::Removal,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.read(cx).engine().is_none() {
+            return;
+        }
+        if let Err(error) = self.plugins.ask_removal(kind, id) {
+            self.error = Some(error.into());
+        }
+        cx.notify();
+    }
+    fn confirm_removal(&mut self, cx: &mut Context<Self>) {
+        if self.state.read(cx).engine().is_none() {
+            return;
+        }
+        match self.plugins.confirm_removal() {
+            Ok(request) => self.request(methods::PLUGINS, request, cx),
+            Err(error) => self.error = Some(error.into()),
+        }
+        cx.notify();
+    }
     fn request(&mut self, method: &'static str, params: Value, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
-        if method == methods::PLUGINS
-            && params["action"] != "list"
-            && self.snapshot["canManage"] == false
-        {
-            return;
-        }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
+        };
+        let params = if method == methods::PLUGINS {
+            match self.plugins.begin(params) {
+                Ok(request) => request,
+                Err(error) => {
+                    self.error = Some(error.into());
+                    cx.notify();
+                    return;
+                }
+            }
+        } else {
+            params
         };
         self.setup = None;
         self.setup_events = None;
@@ -194,22 +228,27 @@ impl PluginsCard {
                 }
                 card.busy = false;
                 match result {
-                    Ok(value) if method == methods::PLUGINS => match value["kind"].as_str() {
-                        Some("snapshot") => card.snapshot = value,
-                        Some("attempt") => {
-                            let complete = value["state"] == "connected";
-                            card.attempt = value;
-                            if complete {
-                                card.request(methods::PLUGINS, json!({"action":"list"}), cx);
+                    Ok(value) if method == methods::PLUGINS => {
+                        let next = match card.plugins.apply(&value) {
+                            Ok(next) => next,
+                            Err(error) => {
+                                card.error = Some(error.into());
+                                card.plugins.failed()
+                            }
+                        };
+                        if let Some(next) = next {
+                            card.request(methods::PLUGINS, next, cx);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        card.error = Some(error.to_string());
+                        if method == methods::PLUGINS {
+                            if let Some(next) = card.plugins.failed() {
+                                card.request(methods::PLUGINS, next, cx);
                             }
                         }
-                        _ => {
-                            card.attempt = Value::Null;
-                            card.request(methods::PLUGINS, json!({"action":"list"}), cx);
-                        }
-                    },
-                    Ok(_) => {}
-                    Err(error) => card.error = Some(error.to_string()),
+                    }
                 }
                 cx.notify();
             });
@@ -271,7 +310,7 @@ impl Render for PluginsCard {
                 .when_some(self.error.clone().or_else(||self.account.error.clone()),|view,error|view.child(widgets::error_strip(&theme,error)))
                 .into_any_element();
         }
-        let tenant = self.snapshot["tenantId"]
+        let tenant = self.plugins.snapshot["tenantId"]
             .as_str()
             .unwrap_or_default()
             .to_owned();
@@ -291,32 +330,40 @@ impl Render for PluginsCard {
             .when_some(self.error.clone().or_else(||self.account.error.clone()),|d,error|d.child(div().text_size(px(12.)).text_color(theme.danger).child(error)))
             .when(signed_in,|d|d
                 .child(action("add-hosted-server","Add MCP server").on_click(cx.listener(|this,_,window,cx|this.open_setup(SetupTarget::Server,window,cx))))
-                .when(self.snapshot["canManage"]==false,|d|d.child(widgets::row_title(&theme,"Only workspace administrators can manage these connections.")))
+                .when(self.plugins.snapshot["canManage"]==false,|d|d.child(widgets::row_title(&theme,"Only workspace administrators can manage these connections.")))
                 .when_some(self.setup.clone(),|d,form|d.child(form))
+                .when_some(self.plugins.notice.clone(),|d,notice|d.child(div().id("plugin-notice").role(gpui::Role::Status).child(notice)))
+                .when_some(self.plugins.confirmation.as_ref(),|d,confirmation|d.child(div().flex().flex_col().gap(px(8.)).p(px(12.)).border_1().rounded(px(8.)).border_color(theme.border)
+                    .child(confirmation.title()).child(confirmation.label.clone())
+                    .child(div().flex().gap(px(8.)).child(action("dismiss-plugin-removal","Keep it").on_click(cx.listener(|this,_,_,cx|{this.plugins.confirmation=None;cx.notify();})))
+                        .child(action("confirm-plugin-removal",confirmation.button()).on_click(cx.listener(|this,_,_,cx|this.confirm_removal(cx)))))))
                 .child(action("refresh-hosted-plugins",if self.busy {"Loading…"} else {"Refresh plugins"}).on_click(cx.listener(|this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"list"}),cx))))
-                .children(self.snapshot["tenants"].as_array().into_iter().flatten().enumerate().map(|(i,t)|{
+                .children(self.plugins.snapshot["tenants"].as_array().into_iter().flatten().enumerate().map(|(i,t)|{
                     let id=t["id"].clone();
-                    widgets::ghost_action(&theme).id(("plugin-tenant",i)).child(SharedString::from(t["name"].as_str().unwrap_or("Workspace").to_owned())).on_click(cx.listener(move |this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"list","tenantId":id}),cx)))
+                    widgets::ghost_action(&theme).id(("plugin-tenant",i)).when(t["id"]==self.plugins.snapshot["tenantId"],|d|d.text_color(theme.accent)).child(SharedString::from(t["name"].as_str().unwrap_or("Workspace").to_owned())).on_click(cx.listener(move |this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"list","tenantId":id}),cx)))
                 }))
-                .children(self.snapshot["connections"].as_array().into_iter().flatten().enumerate().map(|(i,c)|{
-                    let id=c["id"].clone();let tenant=tenant.clone();let enabled=c["enabled"]!=false;
+                .children(self.plugins.snapshot["connections"].as_array().into_iter().flatten().enumerate().map(|(i,c)|{
+                    let id=c["id"].clone();let tenant=tenant.clone();let enabled=c["enabled"]!=false;let remove_id=id.as_str().unwrap_or_default().to_owned();
                     div().flex().items_center().gap(px(10.)).child(div().flex_1().child(SharedString::from(c["label"].as_str().unwrap_or("Plugin").to_owned())))
                         .child(SharedString::from(c["state"].as_str().unwrap_or_default().to_owned()))
                         .child(widgets::ghost_action(&theme).id(("toggle-plugin",i)).child(if enabled {"Disable"} else {"Enable"}).on_click(cx.listener(move |this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"setEnabled","tenantId":tenant,"connectionId":id,"enabled":!enabled}),cx))))
+                        .child(widgets::ghost_action(&theme).id(("disconnect-plugin",i)).tab_index(0).role(gpui::Role::Button).child("Disconnect").on_click(cx.listener(move|this,_,_,cx|this.ask_removal(zuse_protocol::plugin_state::Removal::Connection,&remove_id,cx))))
                 }))
-                .children(self.snapshot["catalog"].as_array().into_iter().flatten().enumerate().map(|(i,p)|{
-                    let id=p["id"].clone();let name=p["name"].as_str().unwrap_or("Plugin").to_owned();let tenant=tenant.clone();
+                .children(self.plugins.snapshot["catalog"].as_array().into_iter().flatten().enumerate().map(|(i,p)|{
+                    let id=p["id"].clone();let name=p["name"].as_str().unwrap_or("Plugin").to_owned();let tenant=tenant.clone();let remove_id=id.as_str().unwrap_or_default().to_owned();let custom=p["custom"]==true;
                     div().flex().items_center().gap(px(12.)).child(div().flex_1().child(name.clone()))
                         .child(widgets::ghost_action(&theme).id(("connect-plugin",i)).child("Connect").on_click(cx.listener(move |this,_,window,cx|{
-                            let definition=this.snapshot["catalog"].as_array().into_iter().flatten().find(|p|p["id"]==id).cloned().and_then(|p|serde_json::from_value::<zuse_protocol::plugins::PluginDefinition>(p).ok());
+                            let definition=this.plugins.snapshot["catalog"].as_array().into_iter().flatten().find(|p|p["id"]==id).cloned().and_then(|p|serde_json::from_value::<zuse_protocol::plugins::PluginDefinition>(p).ok());
                             if let Some(definition)=definition.filter(|p|p.api_key_header.is_some()) {this.open_setup(SetupTarget::Catalog(definition),window,cx);}
                             else {this.request(methods::PLUGINS,json!({"action":"connect","tenantId":tenant,"pluginId":id,"label":name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":{"kind":"desktop","port":0}}),cx);}
                         })))
+                        .when(custom,|d|d.child(widgets::ghost_action(&theme).id(("remove-plugin-server",i)).tab_index(0).role(gpui::Role::Button).child("Remove").on_click(cx.listener(move|this,_,_,cx|this.ask_removal(zuse_protocol::plugin_state::Removal::Server,&remove_id,cx)))))
                 })))
-            .when_some(self.attempt["authorizationUrl"].as_str().filter(|s|s.starts_with("https://")).map(str::to_owned),|d,url|d.child(action("authorize-hosted-plugin","Authorize connection").on_click(move |_,_,cx|cx.open_url(&url))))
-            .when(self.attempt["id"].is_string(),|d|{
-                let id=self.attempt["id"].clone();let tenant=tenant.clone();
+            .when_some(self.plugins.attempt["authorizationUrl"].as_str().filter(|s|s.starts_with("https://")).map(str::to_owned),|d,url|d.child(action("authorize-hosted-plugin","Authorize connection").on_click(move |_,_,cx|cx.open_url(&url))))
+            .when(self.plugins.active_attempt(),|d|{
+                let id=self.plugins.attempt["id"].clone();let tenant=tenant.clone();
                 d.child(action("poll-hosted-plugin","Check connection").on_click(cx.listener(move |this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"poll","tenantId":tenant,"attemptId":id}),cx))))
+                    .child(action("cancel-plugin-attempt","Cancel sign-in").on_click(cx.listener(|this,_,_,cx|this.request(methods::PLUGINS,json!({"action":"cancel","tenantId":this.plugins.snapshot["tenantId"],"attemptId":this.plugins.attempt["id"]}),cx))))
             }).into_any_element()
     }
 }

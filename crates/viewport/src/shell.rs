@@ -685,7 +685,7 @@ impl WorkspaceView {
     fn cloud_settings_contents(&self, cx: &mut Context<Self>) -> AnyElement {
         use crate::settings_style::button as control;
         let signed_in = self.cloud_account["user"].is_object();
-        let tenant = self.plugins["tenantId"]
+        let tenant = self.plugin_state.snapshot["tenantId"]
             .as_str()
             .unwrap_or_default()
             .to_owned();
@@ -705,31 +705,39 @@ impl WorkspaceView {
             })
             .when(signed_in,|d|d
                 .child(control("add-plugin-server","Add MCP server").on_click(cx.listener(|this,_,window,cx|this.open_plugin_setup(crate::plugin_setup::SetupTarget::Server,window,cx))))
-                .when(self.plugins["canManage"]==false,|d|d.child(label("Only workspace administrators can manage these connections.")))
+                .when(self.plugin_state.snapshot["canManage"]==false,|d|d.child(label("Only workspace administrators can manage these connections.")))
                 .when_some(self.plugin_setup.clone(),|d,form|d.child(form))
+                .when_some(self.plugin_state.notice.clone(),|d,notice|d.child(div().id("plugin-notice").role(Role::Status).child(label(notice))))
+                .when_some(self.plugin_state.confirmation.as_ref(),|d,confirmation|d.child(column().gap_2().p_3().border_1().rounded_lg().border_color(rgb(BORDER))
+                    .child(label(confirmation.title())).child(label(confirmation.label.clone()))
+                    .child(row().gap_2().child(control("dismiss-plugin-removal","Keep it").on_click(cx.listener(|this,_,_,cx|{this.plugin_state.confirmation=None;cx.notify();})))
+                        .child(control("confirm-plugin-removal",confirmation.button()).on_click(cx.listener(|this,_,_,cx|this.confirm_plugin_removal(cx)))))))
                 .child(row().child(label("Connected plugins")).child(div().flex_1()).child(control("refresh-plugins",if busy {"Loading…"} else {"Refresh"}).on_click(cx.listener(|this,_,_,cx|{this.plugin_action(json!({"action":"list"}));cx.notify();}))))
-                .children(self.plugins["tenants"].as_array().into_iter().flatten().enumerate().map(|(i,t)| {
+                .children(self.plugin_state.snapshot["tenants"].as_array().into_iter().flatten().enumerate().map(|(i,t)| {
                     let id=t["id"].clone();
-                    control(("plugin-tenant",i),t["name"].as_str().unwrap_or("Workspace").to_owned()).on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"list","tenantId":id}));cx.notify();}))
+                    control(("plugin-tenant",i),t["name"].as_str().unwrap_or("Workspace").to_owned()).when(t["id"]==self.plugin_state.snapshot["tenantId"],|d|d.bg(crate::settings_style::frame_bg())).on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"list","tenantId":id}));cx.notify();}))
                 }))
-                .children(self.plugins["connections"].as_array().into_iter().flatten().enumerate().map(|(i,c)| {
-                    let id=c["id"].as_str().unwrap_or_default().to_owned();let tenant=tenant.clone();let enabled=c["enabled"]!=false;
+                .children(self.plugin_state.snapshot["connections"].as_array().into_iter().flatten().enumerate().map(|(i,c)| {
+                    let id=c["id"].as_str().unwrap_or_default().to_owned();let tenant=tenant.clone();let enabled=c["enabled"]!=false;let remove_id=id.clone();
                     row().gap_2().p_2().child(label(c["label"].as_str().unwrap_or("Plugin").to_owned())).child(label(c["state"].as_str().unwrap_or_default().to_owned())).child(div().flex_1())
                         .child(control(("toggle-plugin",i),if enabled {"Disable"} else {"Enable"}).on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"setEnabled","tenantId":tenant,"connectionId":id,"enabled":!enabled}));cx.notify();})))
+                        .child(control(("disconnect-plugin",i),"Disconnect").on_click(cx.listener(move|this,_,_,cx|this.ask_plugin_removal(zuse_protocol::plugin_state::Removal::Connection,&remove_id,cx))))
                 }))
-                .children(self.plugins["catalog"].as_array().into_iter().flatten().enumerate().map(|(i,p)| {
-                    let plugin=p["id"].as_str().unwrap_or_default().to_owned();let name=p["name"].as_str().unwrap_or("Plugin").to_owned();let tenant=tenant.clone();let title=name.clone();
+                .children(self.plugin_state.snapshot["catalog"].as_array().into_iter().flatten().enumerate().map(|(i,p)| {
+                    let plugin=p["id"].as_str().unwrap_or_default().to_owned();let name=p["name"].as_str().unwrap_or("Plugin").to_owned();let tenant=tenant.clone();let title=name.clone();let remove_id=plugin.clone();let custom=p["custom"]==true;
                     row().gap_2().p_2().child(column().flex_1().gap_1().child(label(title)).child(label(p["description"].as_str().unwrap_or_default().to_owned())))
                         .child(control(("connect-plugin",i),"Connect").on_click(cx.listener(move |this,_,window,cx|{
-                            let definition=this.plugins["catalog"].as_array().into_iter().flatten().find(|p|p["id"]==plugin).cloned().and_then(|p|serde_json::from_value::<zuse_protocol::plugins::PluginDefinition>(p).ok());
+                            let definition=this.plugin_state.snapshot["catalog"].as_array().into_iter().flatten().find(|p|p["id"]==plugin).cloned().and_then(|p|serde_json::from_value::<zuse_protocol::plugins::PluginDefinition>(p).ok());
                             if let Some(definition)=definition.filter(|p|p.api_key_header.is_some()) { this.open_plugin_setup(crate::plugin_setup::SetupTarget::Catalog(definition),window,cx); }
                             else {this.plugin_action(json!({"action":"connect","tenantId":tenant,"pluginId":plugin,"label":name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":if this.browser_local {json!({"kind":"desktop","port":0})} else {json!({"kind":"web"})}}));}
                             cx.notify();})))
+                        .when(custom,|d|d.child(control(("remove-plugin-server",i),"Remove").on_click(cx.listener(move|this,_,_,cx|this.ask_plugin_removal(zuse_protocol::plugin_state::Removal::Server,&remove_id,cx)))))
                 })))
-            .when_some(self.plugin_attempt["authorizationUrl"].as_str().filter(|u|u.starts_with("https://")).map(str::to_owned),|d,url|d.child(control("authorize-plugin","Authorize connection").on_click(move |_,_,cx|cx.open_url(&url))))
-            .when(self.plugin_attempt["id"].is_string(),|d| {
-                let attempt=self.plugin_attempt["id"].clone();let tenant=tenant.clone();
-                d.child(row().gap_3().child(label(self.plugin_attempt["state"].as_str().unwrap_or("Connecting").to_owned())).child(control("poll-plugin","Check connection").on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"poll","tenantId":tenant,"attemptId":attempt}));cx.notify();}))))
+            .when_some(self.plugin_state.attempt["authorizationUrl"].as_str().filter(|u|u.starts_with("https://")).map(str::to_owned),|d,url|d.child(control("authorize-plugin","Authorize connection").on_click(move |_,_,cx|cx.open_url(&url))))
+            .when(self.plugin_state.active_attempt(),|d| {
+                let attempt=self.plugin_state.attempt["id"].clone();let tenant=tenant.clone();
+                d.child(row().gap_3().child(label(self.plugin_state.attempt["state"].as_str().unwrap_or("Connecting").to_owned())).child(control("poll-plugin","Check connection").on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"poll","tenantId":tenant,"attemptId":attempt}));cx.notify();})))
+                    .child(control("cancel-plugin-attempt","Cancel sign-in").on_click(cx.listener(|this,_,_,cx|{this.plugin_action(json!({"action":"cancel","tenantId":this.plugin_state.snapshot["tenantId"],"attemptId":this.plugin_state.attempt["id"]}));cx.notify();}))))
             })
             .into_any_element()
     }
