@@ -89,6 +89,7 @@ impl Drop for WatchPreparation {
 // ---------------------------------------------------------------------------
 
 mod account_connection;
+mod remote_connection;
 pub use account_connection::{AccountTarget, RemoteTarget};
 
 /// Everything needed to reach (or start) an engine.
@@ -128,7 +129,7 @@ pub enum EngineMode {
 trait EngineBackend: Send + Sync {
     fn client(&self) -> &RpcClient;
     fn mode(&self) -> EngineMode;
-    fn remote_status(&self) -> Option<tokio::sync::watch::Receiver<account_connection::Status>> {
+    fn remote_status(&self) -> Option<tokio::sync::watch::Receiver<remote_connection::Status>> {
         None
     }
     fn retry_connection(&self) -> bool {
@@ -284,28 +285,6 @@ impl EngineBackend for RemoteEngine {
     }
 }
 
-/// A remote host stays authoritative; no local engine is created on failure.
-struct PairedEngine {
-    client: Arc<RpcClient>,
-    target: zuse_remote::PairedTarget,
-}
-#[async_trait]
-impl EngineBackend for PairedEngine {
-    fn client(&self) -> &RpcClient {
-        &self.client
-    }
-    fn mode(&self) -> EngineMode {
-        EngineMode::Remote {
-            url: self.target.origin().into(),
-        }
-    }
-    async fn media_client(&self) -> Result<RpcClient, RpcError> {
-        zuse_rpc::connect_paired(&self.target).await
-    }
-    async fn shutdown(&self) { /* The paired host owns its agent lifecycle. */
-    }
-}
-
 /// Cheaply clonable handle to whichever backend won the probe.
 #[derive(Clone)]
 pub struct EngineHandle {
@@ -334,28 +313,10 @@ impl EngineHandle {
     /// tokio tasks.
     pub async fn bootstrap(config: EngineBootConfig) -> anyhow::Result<EngineHandle> {
         if let Some(target) = config.target {
-            let target = match target {
-                RemoteTarget::Account(target) => {
-                    return account_connection::bootstrap(target).await;
-                }
-                RemoteTarget::Paired(target) => target,
+            return match target {
+                RemoteTarget::Account(target) => account_connection::bootstrap(target).await,
+                RemoteTarget::Paired(target) => remote_connection::paired(target).await,
             };
-            let client = zuse_rpc::connect_paired(&target).await?;
-            let engine_info = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                query_engine_info(&client),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("Paired engine identity timed out"))??;
-            return Ok(EngineHandle {
-                inner: Arc::new(PairedEngine {
-                    client: Arc::new(client),
-                    target,
-                }),
-                engine_info,
-                deferred_state: None,
-                connection_revision: 0,
-            });
         }
         // Invariant: at most one bootstrap in this process runs probe+embed at
         // a time. The winner binds the deferred IPC listener before releasing
@@ -2655,7 +2616,7 @@ impl AppState {
     fn apply_remote_status(
         &mut self,
         active: &EngineHandle,
-        status: &account_connection::Status,
+        status: &remote_connection::Status,
     ) -> bool {
         if self
             .engine
@@ -2665,7 +2626,7 @@ impl AppState {
             return false;
         }
         let current = active.current_connection();
-        let ready = matches!(status, account_connection::Status::Ready);
+        let ready = matches!(status, remote_connection::Status::Ready);
         let replaced = self
             .engine
             .as_ref()
@@ -2677,9 +2638,9 @@ impl AppState {
             self.reset_configuration_transport();
         }
         self.connection=match status {
-            account_connection::Status::Ready=>ConnectionStatus::Ready,
-            account_connection::Status::Reconnecting=>ConnectionStatus::Failed("Reconnecting to the selected computer… Local edits are preserved; actions are not resent.".into()),
-            account_connection::Status::Blocked(message)=>ConnectionStatus::Failed(message.clone()),
+            remote_connection::Status::Ready=>ConnectionStatus::Ready,
+            remote_connection::Status::Reconnecting=>ConnectionStatus::Failed("Reconnecting to the selected computer… Local edits are preserved; actions are not resent.".into()),
+            remote_connection::Status::Blocked(message)=>ConnectionStatus::Failed(message.clone()),
         };
         if ready {
             self.engine = Some(current);
@@ -2720,7 +2681,7 @@ impl AppState {
                             if !state.apply_remote_status(&active, &snapshot) {
                                 return;
                             }
-                            if matches!(snapshot, account_connection::Status::Ready) {
+                            if matches!(snapshot, remote_connection::Status::Ready) {
                                 state.reconcile_configuration_watch(cx);
                             }
                             cx.notify();

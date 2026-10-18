@@ -24,7 +24,7 @@ pub use chat_config::ChatConfigTarget;
 pub mod managed;
 mod paired;
 pub mod reconnect;
-pub use paired::connect_paired;
+pub use paired::{connect_paired, connect_paired_channel};
 pub mod device_room;
 mod server;
 

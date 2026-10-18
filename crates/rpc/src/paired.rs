@@ -15,6 +15,20 @@ use zuse_remote::{
 /// A fresh authenticated connection. No automatic replay of prior requests.
 /// Dropping it closes its socket; a reconnect must start a new Noise handshake.
 pub async fn connect_paired(target: &PairedTarget) -> Result<RpcClient, RpcError> {
+    let channel =
+        connect_paired_channel(target, tokio_util::sync::CancellationToken::new()).await?;
+    Ok(RpcClient::new(channel.outgoing, channel.incoming))
+}
+pub async fn connect_paired_channel(
+    target: &PairedTarget,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<crate::reconnect::Channel, RpcError> {
+    tokio::select! {biased;_=cancel.cancelled()=>Err(RpcError::Closed),value=paired_channel(target,cancel.clone())=>value}
+}
+async fn paired_channel(
+    target: &PairedTarget,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<crate::reconnect::Channel, RpcError> {
     let authenticate = async {
         let config = WebSocketConfig {
             max_message_size: Some(MAX_RECORD_BYTES),
@@ -35,7 +49,9 @@ pub async fn connect_paired(target: &PairedTarget) -> Result<RpcClient, RpcError
             match socket.next().await {
                 Some(Ok(Message::Binary(reply))) => {
                     let channel = handshake.finish(&reply).map_err(|_| {
-                        RpcError::Transport("Paired engine authentication failed".into())
+                        RpcError::Failed(
+                            "Paired engine authentication failed. Open a new invitation.".into(),
+                        )
                     })?;
                     return Ok((socket, channel));
                 }
@@ -93,7 +109,10 @@ pub async fn connect_paired(target: &PairedTarget) -> Result<RpcClient, RpcError
     let (mut writer, mut reader) = socket.split();
     let (out_tx, mut out_rx) = mpsc::channel::<String>(16);
     let (in_tx, in_rx) = mpsc::channel::<String>(16);
+    let closed = tokio_util::sync::CancellationToken::new();
+    let completion = closed.clone();
     tokio::spawn(async move {
+        let _completed = completion.drop_guard();
         let exchange = async {
             loop {
                 let wait = match heartbeat
@@ -131,14 +150,19 @@ pub async fn connect_paired(target: &PairedTarget) -> Result<RpcClient, RpcError
                 }
             }
         };
-        tokio::select! {
+        tokio::select! {biased;
+            _ = cancel.cancelled() => {},
             _ = in_tx.closed() => {},
             _ = exchange => {},
         }
         channel.close();
         // Drop both halves instead of waiting on an unresponsive peer's close ACK.
     });
-    Ok(RpcClient::new(out_tx, in_rx))
+    Ok(crate::reconnect::Channel {
+        outgoing: out_tx,
+        incoming: in_rx,
+        closed,
+    })
 }
 
 async fn send<W: futures::Sink<Message> + Unpin>(
