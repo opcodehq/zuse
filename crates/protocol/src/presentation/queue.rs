@@ -27,6 +27,55 @@ impl QueueAction {
     }
 }
 
+/// The single trailing action a queue row advertises and executes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueuePrimaryAction {
+    Steer,
+    SendNext,
+    SendNow,
+}
+
+impl QueuePrimaryAction {
+    pub fn action(self) -> QueueAction {
+        match self {
+            Self::Steer | Self::SendNext => QueueAction::Steer,
+            Self::SendNow => QueueAction::SendNow,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Steer => "Steer",
+            Self::SendNext => "Send next",
+            Self::SendNow => "Send now",
+        }
+    }
+
+    pub fn tooltip(self) -> &'static str {
+        match self {
+            Self::Steer => "Steer (keep current work running)",
+            Self::SendNext => "Send at the next turn (this agent cannot steer mid-turn)",
+            Self::SendNow => "Send now (interrupt)",
+        }
+    }
+}
+
+/// Text uses the live mailbox, including providers that consume at turn boundaries.
+/// Attachments still require a new request and advertise the interruption.
+pub fn queue_primary_action(
+    delivery_blocked: bool,
+    host_supports_actions: bool,
+    has_attachments: bool,
+    steers_mid_turn: bool,
+) -> Option<QueuePrimaryAction> {
+    (!delivery_blocked && host_supports_actions).then_some(if has_attachments {
+        QueuePrimaryAction::SendNow
+    } else if steers_mid_turn {
+        QueuePrimaryAction::Steer
+    } else {
+        QueuePrimaryAction::SendNext
+    })
+}
+
 /// Bind all queue/transcript/command operations to the chat's execution host.
 /// A reconnect must use the same scope as the original subscription/action.
 pub fn chat_request(chat: &Value, params: Value) -> Value {
@@ -147,6 +196,26 @@ pub fn queue_edit_review_matches(row: &Value, lease: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn primary_delivery_modes_keep_text_non_interrupting_and_files_explicit() {
+        let steer = queue_primary_action(false, true, false, true).unwrap();
+        let next = queue_primary_action(false, true, false, false).unwrap();
+        let files = queue_primary_action(false, true, true, true).unwrap();
+        assert_eq!(
+            (steer.label(), steer.action()),
+            ("Steer", QueueAction::Steer)
+        );
+        assert_eq!(
+            (next.label(), next.action()),
+            ("Send next", QueueAction::Steer)
+        );
+        assert_eq!(
+            (files.label(), files.action()),
+            ("Send now", QueueAction::SendNow)
+        );
+        assert!(queue_primary_action(true, true, true, true).is_none());
+        assert!(queue_primary_action(false, false, false, true).is_none());
+    }
     #[test]
     fn chat_scope_keeps_remote_host_and_payload_even_with_conflicting_fields() {
         let chat = json!({"id":"thread","deviceId":"linux-host"});

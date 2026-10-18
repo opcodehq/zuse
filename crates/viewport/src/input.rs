@@ -4,7 +4,9 @@ use gpui::{prelude::*, *};
 use gpui_base::input::{EditorState, InputEditorStyle, InputEvent, InputState, TextareaState};
 pub(crate) mod edit_menu;
 
-pub struct Submitted;
+pub struct Submitted {
+    pub secondary: bool,
+}
 impl EventEmitter<Submitted> for TextInput {}
 
 pub const CLIPBOARD_PASTE_ERROR: &str =
@@ -122,10 +124,16 @@ impl TextInput {
             InputEvent::Change | InputEvent::ClipboardWriteSucceeded => self.clipboard_error = None,
             _ => {}
         }
-        if !matches!(self.editor, Editor::Code(_))
-            && matches!(event, InputEvent::PressEnter { shift: false, .. })
-        {
-            cx.emit(Submitted);
+        if !matches!(self.editor, Editor::Code(_)) {
+            if let InputEvent::PressEnter {
+                secondary,
+                shift: false,
+            } = event
+            {
+                cx.emit(Submitted {
+                    secondary: *secondary,
+                });
+            }
         }
         cx.notify();
     }
@@ -241,8 +249,29 @@ impl Render for TextInput {
     }
 }
 
+struct InputBindings;
+impl Global for InputBindings {}
+
 pub fn bind_keys(cx: &mut App) {
+    if cx.has_global::<InputBindings>() {
+        return;
+    }
+    cx.set_global(InputBindings);
     gpui_base::init(cx);
+    // The toolkit already binds the platform's secondary modifier. Register
+    // only its complement: duplicate bindings can emit submission twice.
+    #[cfg(target_os = "macos")]
+    let alternate = "ctrl-enter";
+    #[cfg(not(target_os = "macos"))]
+    let alternate = "cmd-enter";
+    cx.bind_keys([KeyBinding::new(
+        alternate,
+        gpui_base::input::Enter {
+            secondary: true,
+            shift: false,
+        },
+        Some("Input"),
+    )]);
 }
 
 impl edit_menu::Host for TextInput {

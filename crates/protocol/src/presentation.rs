@@ -5,8 +5,8 @@ pub use model_config::RememberedModelConfig;
 mod queue;
 pub use effort::{EffortSetting, EffortStop, ModelEffort, model_effort, model_effort_option};
 pub use queue::{
-    QueueAction, QueueEditLease, QueueRowDetails, chat_request, queue_edit_lease,
-    queue_edit_review_matches, queue_row_details,
+    QueueAction, QueueEditLease, QueuePrimaryAction, QueueRowDetails, chat_request,
+    queue_edit_lease, queue_edit_review_matches, queue_primary_action, queue_row_details,
 };
 
 use crate::Model;

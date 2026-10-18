@@ -1435,16 +1435,23 @@ impl Pickers {
             .is_some_and(|list| self.offered(list).is_empty())
     }
 
-    pub(crate) fn steers_mid_turn(&self, cx: &App) -> bool {
+    pub(crate) fn steering_capability(&self, cx: &App) -> Option<bool> {
+        if self.harnesses_stale {
+            return None;
+        }
         self.harnesses
             .ready()
             .and_then(|list| {
                 let selected = self.effective_harness(cx)?;
                 list.iter().find(|h| h.id == selected)
             })
-            .is_some_and(|h| {
+            .map(|h| {
                 h.supports_steering && h.steering_mode == zuse_protocol::SteeringMode::StepBoundary
             })
+    }
+
+    pub(crate) fn steers_mid_turn(&self, cx: &App) -> bool {
+        self.steering_capability(cx).unwrap_or(false)
     }
 
     /// The fully-resolved config the composer threads into the Run request and

@@ -99,40 +99,9 @@ const ROW_CONTROL_RADIUS: f32 = ROW_RADIUS - ROW_CONTROL_INSET;
 /// render them slightly larger to preserve the previous optical weight.
 const QUEUE_ICON_SIZE: f32 = 13.0;
 
-/// The single trailing action a queue row advertises and executes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QueuePrimaryAction {
-    Steer,
-    SendNext,
-    SendNow,
-}
-
-impl QueuePrimaryAction {
-    fn tooltip(self) -> &'static str {
-        match self {
-            Self::Steer => "Steer (keep current work running)",
-            Self::SendNext => "Send at the next turn (this agent cannot steer mid-turn)",
-            Self::SendNow => "Send now (interrupt)",
-        }
-    }
-}
-
-/// Text uses the live mailbox, including providers that consume at turn boundaries.
-/// Attachments still require a new request and advertise the interruption.
-fn available_queue_primary_action(
-    delivery_blocked: bool,
-    host_supports_actions: bool,
-    has_attachments: bool,
-    steers_mid_turn: bool,
-) -> Option<QueuePrimaryAction> {
-    (!delivery_blocked && host_supports_actions).then_some(if has_attachments {
-        QueuePrimaryAction::SendNow
-    } else if steers_mid_turn {
-        QueuePrimaryAction::Steer
-    } else {
-        QueuePrimaryAction::SendNext
-    })
-}
+use zuse_protocol::presentation::{
+    QueuePrimaryAction, queue_primary_action as available_queue_primary_action,
+};
 
 fn queue_latest_shortcut_visible(
     index: usize,
@@ -572,7 +541,7 @@ impl Composer {
         );
         let resolved_primary = available_queue_primary_action(
             interaction_blocked,
-            host_supports_actions,
+            host_supports_actions && self.pickers().read(cx).steering_capability(cx).is_some(),
             !item.attachments.is_empty(),
             self.pickers().read(cx).steers_mid_turn(cx),
         );
@@ -1429,7 +1398,7 @@ impl Composer {
         };
         let Some(action) = available_queue_primary_action(
             delivery_blocked,
-            host_supports_actions,
+            host_supports_actions && self.pickers().read(cx).steering_capability(cx).is_some(),
             has_attachments,
             self.pickers().read(cx).steers_mid_turn(cx),
         ) else {

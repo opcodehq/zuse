@@ -76,7 +76,6 @@ impl WorkspaceView {
             || self.latest_provider_alert().is_some()
             || self.connection_notice.is_some()
             || !self.uncertain_drafts.is_empty()
-            || !self.queue.is_empty()
             || self.is_working()
             || self.provider_update_notice()
     }
@@ -320,9 +319,6 @@ impl WorkspaceView {
         }
         if self.connection_notice.is_some() || !self.uncertain_drafts.is_empty() {
             view = view.child(self.connection_recovery_view(cx));
-        }
-        if !self.queue.is_empty() {
-            view = view.child(self.queue_view(cx));
         }
         if self.is_working() {
             view = view.child(

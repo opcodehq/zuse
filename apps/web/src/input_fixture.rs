@@ -158,6 +158,9 @@ pub fn run() {
         .with_assets(zuse_viewport::assets::Assets)
         .run_embedded(|cx: &mut App| {
             zuse_viewport::initialize(cx);
+            // Embedding another shared editor/window must not duplicate shortcuts.
+            zuse_viewport::initialize(cx);
+            zuse_viewport::input::bind_keys(cx);
             cx.open_window(WindowOptions::default(), |window, cx| {
                 cx.new(|cx| InputFixture::new(window, cx))
             })

@@ -26,6 +26,7 @@ mod provider_updates;
 mod questions;
 mod queue;
 mod queue_edit;
+mod queue_render;
 mod recovery;
 pub mod settings_style;
 mod settings_view;
@@ -264,7 +265,9 @@ impl WorkspaceView {
         cx.subscribe_in(
             &input,
             window,
-            |this, _, _: &input::Submitted, window, cx| this.submit(&Submit, window, cx),
+            |this, _, event: &input::Submitted, window, cx| {
+                this.submit_composer(event.secondary, window, cx)
+            },
         )
         .detach();
         cx.subscribe_in(
@@ -1218,7 +1221,14 @@ impl WorkspaceView {
     }
 }
 
+struct WorkspaceInitialized;
+impl Global for WorkspaceInitialized {}
+
 pub fn initialize(cx: &mut App) {
+    if cx.has_global::<WorkspaceInitialized>() {
+        return;
+    }
+    cx.set_global(WorkspaceInitialized);
     input::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-k", SearchSessions, Some("Workspace")),

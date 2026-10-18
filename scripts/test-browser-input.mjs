@@ -443,6 +443,13 @@ try {
     await expect({first:'keep',second:'',readonly:true});
     assert.equal(await evaluate('window.__clipboardReads'),0);
   });
+  await test('Ctrl and Meta Enter each submit exactly once', async () => {
+    await focus('first'); await call('Input.insertText',{text:'keep'},sessionId);
+    await expect({first:'keep',second:''});
+    await key('Enter','Enter',2); await expect({first:'keep',second:'',submitted:1});
+    await key('Enter','Enter',4); await expect({first:'keep',second:'',submitted:2});
+    await key('Enter','Enter'); await expect({first:'keep',second:'',submitted:3});
+  });
   await test('WASM Meta selection and undo commands reach the editor', async () => {
     await focus('first'); await call('Input.insertText',{text:'replace me'},sessionId);
     await expect({first:'replace me',second:''}); await key('a','KeyA',4);

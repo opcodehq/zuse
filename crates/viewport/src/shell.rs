@@ -216,6 +216,9 @@ impl WorkspaceView {
                         ),
                 )
             })
+            .when(!self.queue.is_empty(), |view| {
+                view.child(self.queue_view(cx))
+            })
             .when(self.queue_edit.is_some(), |view| {
                 view.child(self.queue_edit_bar(cx))
             })
@@ -474,65 +477,6 @@ impl WorkspaceView {
                             }),
                     ),
             )
-            .into_any_element()
-    }
-
-    pub(super) fn queue_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        use zuse_protocol::presentation::{QueueAction, queue_row_details};
-        let blocked = self.queue_action_blocked();
-        let working = self.is_working();
-        column()
-            .border_b_1()
-            .border_color(rgb(BORDER))
-            .child(row().min_h(px(28.)).px_3().gap_2()
-                .child(label(if !self.connected { "Waiting for connection" }
-                    else if self.queue_edit.is_some() { "Editing queued message" } else if blocked { "Checking queue…" } else { "Queued" })
-                    .text_size(px(11.)).font_weight(FontWeight::MEDIUM))
-                .child(label(format!("{}", self.queue.len())).text_size(px(10.)))
-                .child(div().flex_1())
-                .child(label(if working { "After this turn" } else { "Waiting to run" }).text_size(px(10.))))
-            .child(column().id("composer-queue-items").max_h(px(208.)).overflow_y_scroll()
-                .children(self.queue.iter().enumerate().map(|(i, item)| {
-                    let details = queue_row_details(item);
-                    let edit_enabled = !blocked && details.valid_id && matches!(details.blocked, None | Some("Review required"));
-                    let edit = item.clone();
-                    let move_enabled = !blocked && details.allows(QueueAction::Move);
-                    let steer_enabled = !blocked && details.allows(QueueAction::Steer);
-                    let send_enabled = !blocked && details.allows(QueueAction::SendNow);
-                    let remove_enabled = !blocked && details.allows(QueueAction::Remove);
-                    let steer = item.clone(); let send = item.clone(); let remove = item.clone();
-                    let earlier = item.clone(); let later = item.clone();
-                    row().id(("queued-message", i)).min_h(px(32.)).px_3().py_1().gap_2()
-                        .when(i + 1 < self.queue.len(), |view| view.border_b_1().border_color(rgb(BORDER).opacity(0.35)))
-                        .hover(|view| view.bg(rgb(0x202020).opacity(0.35)))
-                        .child(icon("chat-round-line").size(px(14.)).text_color(rgb(MUTED)))
-                        .child(div().flex_1().min_w_0().text_size(px(11.)).font_weight(FontWeight::MEDIUM).text_ellipsis().child(details.title.clone()))
-                        .when_some(details.blocked, |view, status| view.child(label(status).text_size(px(10.)).text_color(rgb(0xe2b876))))
-                        .when(details.attachment_count > 0, |view| view.child(row().gap_1()
-                            .child(icon("paperclip").size(px(12.)))
-                            .child(label(format!("{} file{}", details.attachment_count, if details.attachment_count == 1 { "" } else { "s" })).text_size(px(10.)))))
-                        .child(row().gap(px(2.))
-                            .child(icon_button(("edit-queued", i), "pen", "Edit queued message")
-                                .size(px(20.)).when(!edit_enabled, |view| view.opacity(0.35))
-                                .when(edit_enabled, |view| view.on_click(cx.listener(move |this, _, _, cx| this.begin_queue_edit(edit.clone(), cx)))))
-                            .when(i > 0, |view| view.child(icon_button(("queue-up", i), "arrow-up", "Move queued message earlier")
-                                .size(px(20.)).when(!move_enabled, |view| view.opacity(0.35))
-                                .when(move_enabled, |view| view.on_click(cx.listener(move |this, _, _, cx| this.queue_action(QueueAction::Move, &earlier, Some(i - 1), cx))))))
-                            .when(i + 1 < self.queue.len(), |view| view.child(icon_button(("queue-down", i), "arrow-down", "Move queued message later")
-                                .size(px(20.)).when(!move_enabled, |view| view.opacity(0.35))
-                                .when(move_enabled, |view| view.on_click(cx.listener(move |this, _, _, cx| this.queue_action(QueueAction::Move, &later, Some(i + 1), cx))))))
-                            .child(control(("steer", i), if working { "Steer" } else { "Run next" })
-                                .h(px(22.)).px_1().text_size(px(11.))
-                                .aria_description("Deliver without interrupting current work; attachment rows require an explicit send.")
-                                .when(!steer_enabled, |view| view.opacity(0.35))
-                                .when(steer_enabled, |view| view.on_click(cx.listener(move |this, _, _, cx| this.queue_action(QueueAction::Steer, &steer, None, cx)))))
-                            .child(icon_button(("send-now", i), "queue-send", if working { "Interrupt and send queued message now" } else { "Send queued message now" })
-                                .size(px(20.)).when(!send_enabled, |view| view.opacity(0.35))
-                                .when(send_enabled, |view| view.on_click(cx.listener(move |this, _, _, cx| this.queue_action(QueueAction::SendNow, &send, None, cx)))))
-                            .child(icon_button(("remove-queued", i), "close", "Remove queued message")
-                                .size(px(20.)).when(!remove_enabled, |view| view.opacity(0.35))
-                                .when(remove_enabled, |view| view.on_click(cx.listener(move |this, _, _, cx| this.queue_action(QueueAction::Remove, &remove, None, cx))))))
-                })))
             .into_any_element()
     }
 
