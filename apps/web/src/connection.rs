@@ -48,6 +48,9 @@ async fn auth_status() -> Result<bool, ()> {
     }
 }
 fn local_action(frame: &Value, events: &Sender) -> bool {
+    if crate::account_connection::action(frame, events) {
+        return true;
+    }
     if crate::browser_frame::handle(frame) {
         return true;
     }
@@ -173,6 +176,16 @@ fn paired_target() -> Result<Option<PairedTarget>, String> {
 pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Sender) {
     crate::drafts::initialize().await;
     crate::voice_media::install(events.clone());
+    let account_target = match crate::account_connection::selected() {
+        Ok(target) => target,
+        Err(message) => {
+            let _ = events.unbounded_send(
+                json!({"connection":"accountRequired","message":message,"accountRemote":true}),
+            );
+            while wait_offline(8000, &mut outbound, &events).await {}
+            return;
+        }
+    };
     let target = match paired_target() {
         Ok(target) => target,
         Err(message) => {
@@ -190,13 +203,14 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
         }
     }
     let location = web_sys::window().unwrap().location();
-    let local = !paired
+    let local = account_target.is_none()
+        && !paired
         && matches!(
             location.hostname().unwrap_or_default().as_str(),
             "localhost" | "127.0.0.1" | "[::1]" | "::1"
         );
     crate::browser_frame::install(events.clone(), local);
-    let _ = events.unbounded_send(json!({"browserLocal":local,"paired":paired,"pairingOrigin":target.as_ref().map(|target|target.origin().to_owned()).unwrap_or_else(||location.origin().unwrap_or_default())}));
+    let _ = events.unbounded_send(json!({"browserLocal":local,"paired":paired && account_target.is_none(),"accountRemote":account_target.is_some(),"pairingOrigin":target.as_ref().map(|target|target.origin().to_owned()).unwrap_or_else(||location.origin().unwrap_or_default())}));
     let scheme = if location.protocol().unwrap_or_default() == "https:" {
         "wss"
     } else {
@@ -229,15 +243,40 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
                 Ok(true) => {}
             }
         }
-        let socket =
-            super::socket::Socket::connect(&url, target.as_ref().map(PairedTarget::invitation))
-                .await;
+        let controller = if let Some(account) = account_target.clone() {
+            match crate::account_connection::Controller::open(account, &url, target.as_ref()).await
+            {
+                Ok(controller) => Some(controller),
+                Err(message) => {
+                    let _ = events.unbounded_send(
+                        json!({"connection":"retrying","accountRemote":true,"message":message}),
+                    );
+                    if !wait_offline(retry_delay_ms(attempt), &mut outbound, &events).await {
+                        return;
+                    }
+                    attempt = attempt.saturating_add(1);
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        let socket = match &controller {
+            Some(controller) => super::socket::Socket::connect_account(controller.clone()).await,
+            None => {
+                super::socket::Socket::connect(&url, target.as_ref().map(PairedTarget::invitation))
+                    .await
+            }
+        };
         let mut socket = match socket {
             Ok(socket) => socket,
             Err(message) => {
-                let _ = events.unbounded_send(
-                    json!({"connection":"retrying","paired":paired,"message":message}),
-                );
+                let blocked = controller.as_ref().is_some_and(|c| c.is_blocked());
+                let _=events.unbounded_send(json!({"connection":if blocked {"accountRequired"}else{"retrying"},"paired":paired && account_target.is_none(),"message":message}));
+                if blocked {
+                    while wait_offline(8000, &mut outbound, &events).await {}
+                    return;
+                }
                 if !wait_offline(retry_delay_ms(attempt), &mut outbound, &events).await {
                     return;
                 }
@@ -245,10 +284,45 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
                 continue;
             }
         };
+        if let Some(controller) = &controller {
+            // Verify the actual canonical engine before any workspace read or write.
+            let verify = async {
+                socket
+                    .send(&json!({"id":0,"method":methods::ENGINE_INFO,"params":{}}).to_string())?;
+                let text = socket.receive().await?;
+                let value: Value =
+                    serde_json::from_str(&text).map_err(|_| "Invalid computer identity")?;
+                if value["id"] != 0
+                    || value["ok"]["deviceId"].as_str()
+                        != Some(controller.target.environment.as_str())
+                {
+                    return Err("The selected computer returned another identity".to_owned());
+                }
+                Ok::<_, String>(())
+            };
+            let verified = futures::select_biased! {value=verify.fuse()=>value,_=delay(10000).fuse()=>Err("Computer identity verification timed out".into())};
+            if let Err(message) = verified {
+                let _ = events
+                    .unbounded_send(json!({"connection":"accountRequired","message":message}));
+                drop(socket);
+                while wait_offline(8000, &mut outbound, &events).await {}
+                return;
+            }
+            let origin = socket.account_origin().unwrap_or_default();
+            let _ = events.unbounded_send(
+                json!({"pairingOrigin":origin,"accountRemote":true,"paired":false}),
+            );
+            let remember=controller.call(methods::REMEMBER_ACCOUNT_ROUTE,json!({"expectedSubject":controller.target.subject,"environmentId":controller.target.environment,"label":controller.target.label,"origin":origin}));
+            futures::select_biased! {_=remember.fuse()=>{},_=delay(2000).fuse()=>{}}
+        }
+        let upload_target = controller
+            .clone()
+            .map(crate::attachments::UploadTarget::Account)
+            .or_else(|| target.clone().map(crate::attachments::UploadTarget::Paired));
         let epoch = link.open();
         attempt = 0;
         let _ =
-            events.unbounded_send(json!({"connection":"connected","epoch":epoch,"paired":paired}));
+            events.unbounded_send(json!({"connection":"connected","epoch":epoch,"paired":paired && account_target.is_none(),"accountRemote":account_target.is_some()}));
         let mut application_closed = false;
         loop {
             enum Next {
@@ -288,14 +362,14 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             if frame["ui"] == "pickAttachments" || frame["ui"] == "pasteAttachments" {
                 if frame["epoch"].as_u64() == Some(epoch) {
                     if frame["ui"] == "pasteAttachments" {
-                        crate::attachments::pasted(&frame, events.clone(), target.clone());
+                        crate::attachments::pasted(&frame, events.clone(), upload_target.clone());
                         continue;
                     }
                     crate::attachments::pick_attachments(
                         events.clone(),
                         frame["generation"].as_u64().unwrap_or_default(),
                         epoch,
-                        target.clone(),
+                        upload_target.clone(),
                     );
                 } else {
                     reject(&events, &frame);
@@ -328,9 +402,12 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
         }
         drop(socket);
         let interrupted = link.close();
-        let _ = events.unbounded_send(
-            json!({"connection":"retrying","interrupted":interrupted,"paired":paired}),
-        );
+        let blocked = controller.as_ref().is_some_and(|c| c.is_blocked());
+        let _=events.unbounded_send(json!({"connection":if blocked {"accountRequired"}else{"retrying"},"interrupted":interrupted,"paired":paired && account_target.is_none(),"accountRemote":account_target.is_some(),"message":if blocked {Some("The controller account changed or computer access was rejected. Return to the controller and select it again.")}else{None}}));
+        if blocked {
+            while wait_offline(8000, &mut outbound, &events).await {}
+            return;
+        }
         if application_closed {
             return;
         }

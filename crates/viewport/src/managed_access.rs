@@ -20,6 +20,9 @@ pub(super) struct ManagedAccess {
     error: Option<String>,
 }
 impl WorkspaceView {
+    pub(super) fn account_connection_error(&mut self, message: &str) {
+        self.managed_access.error = Some(message.to_owned());
+    }
     pub(super) fn refresh_managed_access(&mut self) {
         if !self.connected || self.managed_access.action.is_some() {
             return;
@@ -170,7 +173,7 @@ impl WorkspaceView {
                 .as_str()
                 .unwrap_or("Create a private invitation below to connect another device.")
         } else {
-            "Link your account, then create a private invitation below to connect another device."
+            "Link this computer to make it available on your other signed-in devices."
         };
         column().gap_5()
             .child(s::frame().child(s::header("Account remote access","Connect your computers across networks using your Zuse account."))
@@ -190,15 +193,23 @@ impl WorkspaceView {
                     .when(signed_in && !configured,|card|card.child(s::setting_row(false).child(s::details("Computer name","A name you recognize on your other devices.")).child(s::field().child(self.managed_name.clone()))))
                     .when_some(self.managed_access.error.as_deref().or(host["error"].as_str()).or(self.cloud_account["error"].as_str()),|card,error|card.child(s::setting_row(false).child(s::description_text(error.to_owned()))))
                     .child(s::setting_row(false).child(s::button("refresh-managed-access","Refresh remote access").on_click(cx.listener(|this,_,_,cx|{this.managed_access.error=None;this.refresh_managed_access();cx.notify();}))))))
+            .when(self.account_remote,|view|view.child(s::frame().child(s::header("Account connection","This tab runs on the selected computer."))
+                .child(s::card().child(s::setting_row(true).child(s::details("Return to controller","Save local edits before returning to the computer that authorized this tab."))
+                    .child(s::button("return-to-controller","Return").on_click(cx.listener(|this,_,_,_|{let _=this.requests.unbounded_send(json!({"ui":"returnToController"}));})))))))
             .when(signed_in,|view|view
-                .child(s::frame().child(s::header("Account computers","Create a private invitation on the computer you want to connect to."))
+                .child(s::frame().child(s::header("Account computers","Open a linked computer in its own tab."))
                     .child(s::card()
                         .when(self.managed_access.computers.is_empty() && self.managed_access.saved.is_empty(),|card|card.child(s::setting_row(true).child(s::details("No linked computers","Link this computer to get started."))))
                         .children(zuse_protocol::managed_connection::computer_rows(&self.managed_access.computers,&self.managed_access.saved).into_iter().enumerate().map(|(index,computer)|{
                             let id=computer["environmentId"].as_str().unwrap_or_default().to_owned();
                             let remembered=self.managed_access.saved.iter().any(|saved|saved["environmentId"]==computer["environmentId"]);
+                            let current=self.device_id.as_deref()==Some(id.as_str());
+                            let connect=!self.account_remote && !current && zuse_protocol::managed_connection::supports_record(computer);
+                            let environment=id.clone();let label=computer["label"].as_str().unwrap_or("Linked computer").to_owned();
                             let subject=self.cloud_account["user"]["id"].as_str().unwrap_or_default().to_owned();
+                            let connect_subject=subject.clone();
                             s::setting_row(index==0).child(s::details(computer["label"].as_str().unwrap_or("Linked computer").to_owned(),computer["serviceState"].as_str().unwrap_or("Status unavailable").to_owned()))
+                                .when(connect,|row|row.child(s::button(("connect-account-computer",index),"Connect").on_click(cx.listener(move|this,_,_,_|{let _=this.requests.unbounded_send(json!({"ui":"openAccountComputer","environmentId":environment,"expectedSubject":connect_subject,"label":label}));}))))
                                 .when(remembered,|row|row.child(s::button(("forget-account-computer",index),"Forget saved").on_click(cx.listener(move|this,_,_,cx|{this.managed_action(methods::FORGET_ACCOUNT_ROUTE,json!({"environmentId":id,"expectedSubject":subject}));cx.notify();}))))
                         }))))
                 .child(s::frame().child(s::header("Authorized account devices","Revoke a device that no longer needs account access."))

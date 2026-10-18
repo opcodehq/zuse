@@ -33,6 +33,7 @@ pub(super) struct Socket {
     closed: Rc<Cell<bool>>,
     channel: Option<SecureChannel>,
     heartbeat: Option<Heartbeat>,
+    account: Option<Account>,
     clock: web_time::Instant,
     _open: Closure<dyn FnMut()>,
     _close: Closure<dyn FnMut()>,
@@ -40,8 +41,27 @@ pub(super) struct Socket {
     _message: Closure<dyn FnMut(MessageEvent)>,
 }
 impl Socket {
+    pub fn account_origin(&self) -> Option<String> {
+        self.account.as_ref().map(|a| {
+            a.origin
+                .trim_end_matches("/api/account-rpc")
+                .replacen("wss://", "https://", 1)
+                .replacen("ws://", "http://", 1)
+        })
+    }
     pub async fn connect(url: &str, invitation: Option<&Invitation>) -> Result<Self, String> {
-        let socket = WebSocket::new(url).map_err(|_| "Could not open engine connection")?;
+        Self::connect_with_protocol(url, invitation, None).await
+    }
+    async fn connect_with_protocol(
+        url: &str,
+        invitation: Option<&Invitation>,
+        protocol: Option<&str>,
+    ) -> Result<Self, String> {
+        let socket = match protocol {
+            Some(protocol) => WebSocket::new_with_str(url, protocol),
+            None => WebSocket::new(url),
+        }
+        .map_err(|_| "Could not open engine connection")?;
         socket.set_binary_type(web_sys::BinaryType::Arraybuffer);
         let (ready_tx, ready_rx) = oneshot::channel();
         let ready = Rc::new(RefCell::new(Some(ready_tx)));
@@ -104,6 +124,7 @@ impl Socket {
             closed,
             channel: None,
             heartbeat: None,
+            account: None,
             clock: web_time::Instant::now(),
             _open: open,
             _close: close,
@@ -218,6 +239,13 @@ impl Socket {
         }
     }
     pub fn send(&mut self, text: &str) -> Result<(), String> {
+        if self
+            .account
+            .as_ref()
+            .is_some_and(|a| a.controller.is_closed() || a.until <= js_sys::Date::now() as i64)
+        {
+            return Err("Account connection authorization ended".into());
+        }
         if self.closed.get() || self.socket.ready_state() != WebSocket::OPEN {
             return Err("Engine connection closed".into());
         }
@@ -237,6 +265,9 @@ impl Socket {
         Ok(())
     }
     pub async fn receive(&mut self) -> Result<String, String> {
+        if self.account.is_some() {
+            return self.receive_account().await;
+        }
         loop {
             let wait = self.poll_heartbeat()?;
             let frame = if let Some(ms) = wait {
@@ -267,6 +298,213 @@ impl Socket {
                     }
                 }
                 _ => return Err("Engine sent an unexpected transport frame".into()),
+            }
+        }
+    }
+}
+struct Account {
+    controller: crate::account_connection::Controller,
+    origin: String,
+    until: i64,
+    renew_at: f64,
+    renewal: Option<
+        futures::future::LocalBoxFuture<
+            'static,
+            Result<zuse_protocol::managed_connection::Bootstrap, String>,
+        >,
+    >,
+    awaiting: Option<(zuse_protocol::managed_connection::Bootstrap, f64)>,
+    failures: u32,
+    ping_at: f64,
+    pong: Option<(String, f64)>,
+}
+fn account_url(grant: &zuse_protocol::managed_connection::Bootstrap) -> Result<String, String> {
+    let origin =
+        zuse_remote::normalized_origin(&grant.origin).map_err(|_| "Invalid computer endpoint")?;
+    if origin != grant.origin.trim_end_matches('/')
+        || grant.connect_token.is_empty()
+        || grant.connect_token.len() > 16384
+        || grant.expires_at <= js_sys::Date::now() as i64
+        || grant.expires_at > js_sys::Date::now() as i64 + 86400000
+    {
+        return Err("Invalid account connection authorization".into());
+    }
+    let base = if let Some(host) = origin.strip_prefix("https://") {
+        format!("wss://{host}")
+    } else {
+        format!(
+            "ws://{}",
+            origin
+                .strip_prefix("http://")
+                .ok_or("Invalid computer endpoint")?
+        )
+    };
+    Ok(format!("{base}/api/account-rpc"))
+}
+fn ack(
+    text: &str,
+    grant: &zuse_protocol::managed_connection::Bootstrap,
+    renewed: bool,
+) -> Result<i64, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(text).map_err(|_| "Invalid account acknowledgement")?;
+    let until = v["expiresAt"].as_i64().ok_or("Invalid account expiry")?;
+    if v["authenticated"] != true
+        || v["protocol"] != zuse_protocol::managed_connection::PROTOCOL
+        || v["deviceId"] != grant.environment_id
+        || v["renewed"].as_bool().unwrap_or(false) != renewed
+        || until <= js_sys::Date::now() as i64
+        || until > grant.expires_at.saturating_add(1000)
+    {
+        return Err("Account authorization was not confirmed".into());
+    }
+    Ok(until)
+}
+impl Socket {
+    pub async fn connect_account(
+        controller: crate::account_connection::Controller,
+    ) -> Result<Self, String> {
+        let grant = controller.grant().await?;
+        let url = account_url(&grant)?;
+        // Explicit subprotocol opts only this grant-authenticated endpoint into
+        // cross-origin browser transport. No cookie authorizes an account socket.
+        let mut owner = Self::connect_with_protocol(
+            &url,
+            None,
+            Some(zuse_protocol::managed_connection::PROTOCOL),
+        )
+        .await?;
+        owner.send(&serde_json::json!({"protocol":zuse_protocol::managed_connection::PROTOCOL,"connectToken":grant.connect_token}).to_string())?;
+        let first = futures::select_biased! {value=owner.raw().fuse()=>value?,_=super::connection::delay(10000).fuse()=>return Err("Account authentication timed out".into())};
+        let Incoming::Text(first) = first else {
+            return Err("Invalid account authentication response".into());
+        };
+        let until = ack(&first, &grant, false)?;
+        let now = js_sys::Date::now();
+        owner.account = Some(Account {
+            controller,
+            origin: url,
+            until,
+            renew_at: now
+                + zuse_protocol::managed_connection::renew_in_ms(until, now as i64).unwrap_or(1)
+                    as f64,
+            renewal: None,
+            awaiting: None,
+            failures: 0,
+            ping_at: now + 20000.,
+            pong: None,
+        });
+        Ok(owner)
+    }
+    async fn receive_account(&mut self) -> Result<String, String> {
+        loop {
+            let now = js_sys::Date::now();
+            let account = self.account.as_mut().unwrap();
+            if account.controller.is_closed() || account.until <= now as i64 {
+                return Err("Account connection authorization ended".into());
+            }
+            if account.awaiting.as_ref().is_some_and(|(_, at)| *at <= now)
+                || account.pong.as_ref().is_some_and(|(_, at)| *at <= now)
+            {
+                return Err("Account computer stopped responding".into());
+            }
+            if account.renewal.is_none() && account.awaiting.is_none() && now >= account.renew_at {
+                let controller = account.controller.clone();
+                account.renewal = Some(async move { controller.grant().await }.boxed_local());
+            }
+            if account.pong.is_none() && now >= account.ping_at {
+                let nonce = uuid::Uuid::new_v4().to_string();
+                account.pong = Some((nonce.clone(), now + 10000.));
+                self.send(&serde_json::json!({"protocol":zuse_protocol::managed_connection::PROTOCOL,"ping":nonce}).to_string())?;
+            }
+            enum Next {
+                Frame(Result<Incoming, String>),
+                Grant(Result<zuse_protocol::managed_connection::Bootstrap, String>),
+                Tick,
+            }
+            let account = self.account.as_mut().unwrap();
+            let incoming = &mut self.incoming;
+            let closed = self.closed.clone();
+            let event = futures::select! {
+                frame=incoming.next().fuse()=>Next::Frame(match frame {Some(Incoming::Closed)|None=>Err("Account computer connection closed".into()),Some(frame) if !closed.get()=>Ok(frame),_=>Err("Account computer connection closed".into())}),
+                grant=async {match &mut account.renewal {Some(future)=>future.await,None=>futures::future::pending().await}}.fuse()=>Next::Grant(grant),
+                _=super::connection::delay(1000).fuse()=>Next::Tick,
+            };
+            let account = self.account.as_mut().unwrap();
+            match event {
+                Next::Tick => continue,
+                Next::Grant(result) => {
+                    account.renewal = None;
+                    match result {
+                        Ok(grant) => {
+                            if account_url(&grant)? != account.origin {
+                                return Err(
+                                    "The computer endpoint changed. Reopen it from Remote access."
+                                        .into(),
+                                );
+                            }
+                            if grant.expires_at > account.until.saturating_add(1000) {
+                                let frame=serde_json::json!({"protocol":zuse_protocol::managed_connection::PROTOCOL,"connectToken":grant.connect_token}).to_string();
+                                account.awaiting = Some((grant, js_sys::Date::now() + 10000.));
+                                self.send(&frame)?;
+                                continue;
+                            }
+                        }
+                        Err(_) if account.controller.is_closed() => {
+                            return Err("The controller account connection ended".into());
+                        }
+                        Err(_) => {}
+                    }
+                    account.failures = account.failures.saturating_add(1);
+                    account.renew_at = js_sys::Date::now()
+                        + ((1u64 << account.failures.min(5)).min(30) * 1000) as f64;
+                }
+                Next::Frame(result) => {
+                    let Incoming::Text(text) = result? else {
+                        return Err("Unexpected account transport frame".into());
+                    };
+                    // Control headers are small. Canonical frames are forwarded untouched.
+                    if let Ok(value) =
+                        serde_json::from_str::<zuse_protocol::managed_connection::Control>(&text)
+                    {
+                        if let Some(protocol) = value.protocol {
+                            if protocol != zuse_protocol::managed_connection::PROTOCOL {
+                                return Err("Invalid account control protocol".into());
+                            }
+                            if let Some(nonce) = value.pong {
+                                if account
+                                    .pong
+                                    .as_ref()
+                                    .is_none_or(|(expected, _)| expected != nonce)
+                                {
+                                    return Err("Invalid computer heartbeat".into());
+                                }
+                                account.pong = None;
+                                account.ping_at = js_sys::Date::now() + 20000.;
+                                continue;
+                            }
+                            let (grant, _) = account
+                                .awaiting
+                                .take()
+                                .ok_or("Unexpected account acknowledgement")?;
+                            let until = ack(&text, &grant, true)?;
+                            if until <= account.until {
+                                return Err("Account authorization did not renew".into());
+                            }
+                            account.until = until;
+                            account.failures = 0;
+                            account.renew_at = js_sys::Date::now()
+                                + zuse_protocol::managed_connection::renew_in_ms(
+                                    until,
+                                    js_sys::Date::now() as i64,
+                                )
+                                .ok_or("Account authorization expired")?
+                                    as f64;
+                            continue;
+                        }
+                    }
+                    return Ok(text);
+                }
             }
         }
     }

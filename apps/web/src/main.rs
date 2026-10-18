@@ -1,4 +1,6 @@
 #[cfg(target_family = "wasm")]
+mod account_connection;
+#[cfg(target_family = "wasm")]
 mod attachments;
 #[cfg(target_family = "wasm")]
 mod audio;

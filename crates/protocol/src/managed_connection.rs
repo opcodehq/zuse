@@ -16,6 +16,16 @@ pub struct Authenticate {
     pub protocol: String,
     pub connect_token: String,
 }
+/// Inspect transport controls without allocating a second copy of RPC payloads.
+#[derive(Deserialize)]
+pub struct Control<'a> {
+    #[serde(borrow)]
+    pub protocol: Option<&'a str>,
+    #[serde(borrow)]
+    pub ping: Option<&'a str>,
+    #[serde(borrow)]
+    pub pong: Option<&'a str>,
+}
 /// Renew with slack, also accommodating short-lived grants in local integration.
 pub fn renew_in_ms(expires_at: i64, now: i64) -> Option<u64> {
     let remaining = expires_at.checked_sub(now)?;

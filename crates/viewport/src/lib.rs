@@ -157,6 +157,7 @@ pub struct WorkspaceView {
     provider_updates_confirmed: bool,
     provider_updates_error: Option<String>,
     paired: bool,
+    account_remote: bool,
     pairing_origin: String,
     pairings: Value,
     pairing_name: Entity<input::TextInput>,
@@ -491,6 +492,7 @@ impl WorkspaceView {
             provider_updates_confirmed: false,
             provider_updates_error: None,
             paired: false,
+            account_remote: false,
             managed_access: Default::default(),
             managed_name,
             pairing_origin: String::new(),
@@ -704,6 +706,14 @@ impl WorkspaceView {
                 cx.notify();
             }
             return;
+        }
+        if let Some(message) = frame["accountConnectionError"].as_str() {
+            self.account_connection_error(message);
+            cx.notify();
+            return;
+        }
+        if let Some(account) = frame["accountRemote"].as_bool() {
+            self.account_remote = account;
         }
         if let Some(paired) = frame["paired"].as_bool() {
             self.paired = paired;

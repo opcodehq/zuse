@@ -216,7 +216,9 @@ impl WorkspaceView {
         let state = &self.worktree_settings;
         let editable = self.connected && state.editable();
         let saving = state.save.is_some();
-        let title = if self.paired {
+        let title = if self.account_remote {
+            "Worktrees on account computer"
+        } else if self.paired {
             "Worktrees on paired computer"
         } else {
             "Worktrees"

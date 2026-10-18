@@ -10,7 +10,7 @@ use tokio_tungstenite::{
     tungstenite::{Message, protocol::WebSocketConfig},
 };
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
-use zuse_protocol::managed_connection::{Bootstrap, PROTOCOL, renew_in_ms};
+use zuse_protocol::managed_connection::{Bootstrap, Control, PROTOCOL, renew_in_ms};
 #[async_trait::async_trait]
 pub trait GrantSource: Send + Sync {
     fn environment(&self) -> &str;
@@ -190,8 +190,6 @@ pub async fn connect(source: Arc<dyn GrantSource>) -> Result<Connection, RpcErro
                     },
                     frame=reader.next()=>match frame {
                         Some(Ok(Message::Text(text)))=>{
-                            #[derive(Deserialize)]
-                            struct Control<'a> {#[serde(borrow)]protocol:Option<&'a str>,#[serde(borrow)]pong:Option<&'a str>}
                             if let Ok(control)=serde_json::from_str::<Control>(&text) {
                                 if let Some(protocol)=control.protocol {
                                     if protocol!=PROTOCOL {return Err(());}

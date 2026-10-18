@@ -9,6 +9,11 @@ use web_sys::{Request, RequestInit, Response};
 use zuse_viewport::WorkspaceView;
 
 type Sender = mpsc::UnboundedSender<Value>;
+#[derive(Clone)]
+pub(super) enum UploadTarget {
+    Paired(zuse_remote::PairedTarget),
+    Account(crate::account_connection::Controller),
+}
 #[derive(Default)]
 struct PendingFiles {
     next: u64,
@@ -34,7 +39,7 @@ pub(super) fn discard(frame: &Value) {
         }
     }
 }
-pub(super) fn pasted(frame: &Value, events: Sender, target: Option<zuse_remote::PairedTarget>) {
+pub(super) fn pasted(frame: &Value, events: Sender, target: Option<UploadTarget>) {
     if let Some(files) = frame["ticket"].as_u64().and_then(take) {
         upload(
             files,
@@ -83,7 +88,7 @@ pub(super) fn pick_attachments(
     events: Sender,
     generation: u64,
     epoch: u64,
-    target: Option<zuse_remote::PairedTarget>,
+    target: Option<UploadTarget>,
 ) {
     let document = web_sys::window().unwrap().document().unwrap();
     let input: web_sys::HtmlInputElement =
@@ -112,7 +117,7 @@ fn upload(
     events: Sender,
     generation: u64,
     epoch: u64,
-    target: Option<zuse_remote::PairedTarget>,
+    target: Option<UploadTarget>,
 ) {
     let _ = events
         .unbounded_send(json!({"uploading":files.len(),"generation":generation,"epoch":epoch}));
@@ -123,7 +128,7 @@ fn upload(
             let name = file.name();
             let mime = file.type_();
             let result = match target {
-                Some(target) => upload_paired(file, &target).await,
+                Some(target) => upload_remote(file, &target).await,
                 None => upload_file(file).await,
             };
             let attachment = match result {
@@ -172,16 +177,19 @@ async fn upload_file(file: web_sys::File) -> Result<String, String> {
         .ok_or_else(|| "Attachment did not finish uploading".into())
 }
 
-async fn upload_paired(
-    file: web_sys::File,
-    target: &zuse_remote::PairedTarget,
-) -> Result<String, String> {
+async fn upload_remote(file: web_sys::File, target: &UploadTarget) -> Result<String, String> {
     use base64::Engine as _;
     if file.size() > 32. * 1024. * 1024. {
         return Err("Attachments must be 32 MB or smaller.".into());
     }
-    let mut socket =
-        super::socket::Socket::connect(&target.socket_url(), Some(target.invitation())).await?;
+    let mut socket = match target {
+        UploadTarget::Paired(target) => {
+            super::socket::Socket::connect(&target.socket_url(), Some(target.invitation())).await?
+        }
+        UploadTarget::Account(controller) => {
+            super::socket::Socket::connect_account(controller.clone()).await?
+        }
+    };
     let upload_id = uuid::Uuid::new_v4().simple().to_string();
     let mut offset = 0usize;
     let mut seq = 0usize;

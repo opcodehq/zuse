@@ -276,9 +276,16 @@ impl WorkspaceView {
                             .text_size(px(11.))
                             .text_color(rgb(MUTED))
                             .child(
-                                icon(if self.paired { "globe" } else { "monitor" }).size(px(14.)),
+                                icon(if self.paired || self.account_remote {
+                                    "globe"
+                                } else {
+                                    "monitor"
+                                })
+                                .size(px(14.)),
                             )
-                            .child(if self.paired {
+                            .child(if self.account_remote {
+                                "Account computer"
+                            } else if self.paired {
                                 "Paired computer"
                             } else {
                                 "Local workspace"

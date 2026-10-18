@@ -403,7 +403,9 @@ impl WorkspaceView {
                                 div()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child(if self.paired {
+                                    .child(if self.account_remote {
+                                        "Account workspace"
+                                    } else if self.paired {
                                         "Paired workspace"
                                     } else {
                                         "Local workspace"
@@ -419,7 +421,9 @@ impl WorkspaceView {
                                     )
                                     .child(
                                         label(if self.connected {
-                                            if self.paired {
+                                            if self.account_remote {
+                                                "Account computer"
+                                            } else if self.paired {
                                                 "Paired engine"
                                             } else {
                                                 "This device"

@@ -9,7 +9,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::{SinkExt, StreamExt};
-use serde::Deserialize;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -18,7 +17,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use zuse_rpc::{RpcError, RpcReply, RpcService};
 
-use zuse_protocol::managed_connection::Authenticate;
+use zuse_protocol::managed_connection::{Authenticate, Control};
 pub use zuse_protocol::managed_connection::{PROTOCOL, WIRE_VERSION};
 /// Implemented by the engine's account-bound host owner; transport holds no key.
 pub trait Authority: Send + Sync {
@@ -62,8 +61,21 @@ pub(super) async fn upgrade(
     if server.managed.is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    // Native clients need no Origin. Browsers must use this listener's origin.
+    // Cross-origin account clients explicitly select this protocol and present
+    // their grant in the bounded first frame. Cookies and listener tokens never
+    // authorize this route. Cookie-authenticated /api/rpc keeps its Origin fence.
+    let account_browser = headers
+        .get(header::SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|p| p.trim() == PROTOCOL))
+        && headers
+            .get(header::ORIGIN)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|origin| {
+                zuse_remote::normalized_origin(origin).is_ok_and(|normalized| normalized == origin)
+            });
     if headers.contains_key(header::ORIGIN)
+        && !account_browser
         && !server.valid_origin(&headers)
         && !headers
             .get(header::ORIGIN)
@@ -172,10 +184,8 @@ async fn session(server: BrowserServer, mut socket: WebSocket) {
                 },
                 frame = reader.next() => match frame {
                     Some(Ok(Message::Text(frame))) => {
-                        #[derive(Deserialize)]
-                        struct Probe<'a> {#[serde(borrow)] protocol:Option<&'a str>,#[serde(borrow)] ping:Option<&'a str>}
                         // Borrow only control fields; large RPC params are not cloned.
-                        if let Ok(probe)=serde_json::from_str::<Probe>(&frame) {
+                        if let Ok(probe)=serde_json::from_str::<Control>(&frame) {
                             if let Some(protocol)=probe.protocol {
                                 if protocol!=PROTOCOL {return Err(());}
                                 if let Some(nonce)=probe.ping {

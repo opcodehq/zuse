@@ -64,16 +64,22 @@ impl WorkspaceView {
             "Pairing invitation required · Open a new invitation"
         } else if frame["connection"] == "authRequired" {
             "Authentication required · Open the engine access link"
+        } else if frame["connection"] == "accountRequired" {
+            self.error = frame["message"].as_str().map(str::to_owned);
+            "Account access required · Return to the controller"
+        } else if self.account_remote {
+            "Reconnecting to account computer…"
         } else if self.paired {
             "Reconnecting to paired engine…"
         } else {
             "Reconnecting to your engine…"
         }
         .into();
-        if self.paired
+        if (self.paired || self.account_remote)
+            && frame["connection"] != "accountRequired"
             && let Some(message) = frame["message"].as_str()
         {
-            self.status = format!("Paired engine unavailable · {message}");
+            self.status = format!("Computer unavailable · {message}");
         }
         let had_pending = !self.pending.is_empty();
         for (id, mut draft) in std::mem::take(&mut self.send_draft) {
@@ -169,7 +175,9 @@ impl WorkspaceView {
                 .unbounded_send(json!({"ui":"loadDrafts","deviceId":device}));
         }
         self.connected = true;
-        self.status = if self.paired {
+        self.status = if self.account_remote {
+            "Account computer connected"
+        } else if self.paired {
             "Paired engine connected"
         } else {
             "Local engine connected"

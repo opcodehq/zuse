@@ -234,6 +234,91 @@ struct Source {
     cancel: CancellationToken,
     swap_subject: bool,
 }
+#[tokio::test]
+async fn cross_origin_account_transport_requires_explicit_protocol_and_private_grant() {
+    let host = TestHost::new(false).await;
+    let url = format!(
+        "{}/api/account-rpc",
+        host.source.origin.replace("http://", "ws://")
+    );
+    let request = |url: &str, origin: &str| {
+        let mut request = url.into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("origin", origin.parse().unwrap());
+        request
+            .headers_mut()
+            .insert("sec-websocket-protocol", PROTOCOL.parse().unwrap());
+        request.headers_mut().insert(
+            "cookie",
+            format!("zuse_session={}", "x".repeat(64)).parse().unwrap(),
+        );
+        request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {}", "x".repeat(64)).parse().unwrap(),
+        );
+        request
+    };
+    for origin in [
+        "null",
+        "http://public.example",
+        "https://user:password@public.example",
+    ] {
+        assert!(
+            tokio_tungstenite::connect_async(request(&url, origin))
+                .await
+                .is_err()
+        );
+    }
+    let plain = url.replace("/api/account-rpc", "/api/rpc");
+    assert!(
+        tokio_tungstenite::connect_async(request(&plain, "https://controller.example"))
+            .await
+            .is_err()
+    );
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(request(&url, "https://controller.example"))
+            .await
+            .unwrap();
+    socket
+        .send(Message::Text(
+            json!({"id":1,"method":"Write","params":{}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert!(receive(&mut socket).await.is_none());
+    assert_eq!(host.calls.load(Ordering::SeqCst), 0);
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(request(&url, "https://controller.example"))
+            .await
+            .unwrap();
+    socket
+        .send(Message::Text(
+            json!({"protocol":PROTOCOL,"connectToken":"fixture-grant"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(receive(&mut socket).await.unwrap()["authenticated"], true);
+    socket
+        .send(Message::Text(
+            json!({"id":1,"method":"Write","params":{"value":"authorized"}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        receive(&mut socket).await.unwrap()["ok"]["value"],
+        "authorized"
+    );
+    assert_eq!(host.calls.load(Ordering::SeqCst), 1);
+    drop(socket);
+    host.close().await;
+}
 #[async_trait::async_trait]
 impl zuse_rpc::managed::GrantSource for Source {
     fn environment(&self) -> &str {
