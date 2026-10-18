@@ -3,6 +3,8 @@
 mod access;
 mod activity;
 pub mod assets;
+#[cfg(test)]
+mod attachment_tests;
 mod composer_alerts;
 mod connection;
 pub mod context_status;
@@ -576,12 +578,17 @@ impl WorkspaceView {
             return;
         }
         if frame.get("attachment").is_some() || frame.get("uploading").is_some() {
-            if frame["generation"].as_u64() != Some(self.composer_generation) {
+            if frame["generation"].as_u64() != Some(self.composer_generation)
+                || frame["epoch"].as_u64() != Some(self.connection_epoch)
+                || (!self.connected && frame["uploadRejected"] != true)
+            {
                 return;
             }
         }
         if frame.get("attachment").is_some() {
-            self.uploading = self.uploading.saturating_sub(1);
+            if frame["uploadRejected"] != true {
+                self.uploading = self.uploading.saturating_sub(1);
+            }
             if let Some(error) = frame["attachment"]["error"].as_str() {
                 self.error = Some(error.to_owned());
             } else {

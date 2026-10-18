@@ -245,10 +245,31 @@ impl WorkspaceView {
             .collect()
     }
 
+    /// Admit a browser paste only from this composer's focused editor.
+    pub fn paste_attachments(
+        &mut self,
+        ticket: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.settings || !self.input.read(cx).focus_handle(cx).is_focused(window) {
+            return false;
+        }
+        if !self.connected {
+            self.error = Some("Reconnect to the engine before uploading files.".into());
+            cx.notify();
+            return false;
+        }
+        self.requests
+            .unbounded_send(json!({"ui":"pasteAttachments","ticket":ticket,
+            "generation":self.composer_generation,"epoch":self.connection_epoch}))
+            .is_ok()
+    }
+
     pub(super) fn pick_attachments(&mut self) {
         let _ = self
             .requests
-            .unbounded_send(json!({"ui":"pickAttachments","generation":self.composer_generation,"epoch":if self.connected {self.connection_epoch}else{0}}));
+            .unbounded_send(json!({"ui":"pickAttachments","generation":self.composer_generation,"epoch":self.connection_epoch}));
     }
 }
 

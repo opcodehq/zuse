@@ -78,12 +78,13 @@ fn local_action(frame: &Value, events: &Sender) -> bool {
     true
 }
 fn reject(events: &Sender, frame: &Value) {
+    crate::attachments::discard(frame);
     if let Some(id) = frame["id"].as_u64() {
         if frame["cancel"] != true {
             let _=events.unbounded_send(json!({"id":id,"err":"The engine is not connected. This request was not sent.","outcomeUnknown":false}));
         }
-    } else if frame["ui"] == "pickAttachments" {
-        let _=events.unbounded_send(json!({"attachment":{"error":"Reconnect to the engine before uploading files."},"generation":frame["generation"]}));
+    } else if frame["ui"] == "pickAttachments" || frame["ui"] == "pasteAttachments" {
+        let _=events.unbounded_send(json!({"attachment":{"error":"Reconnect to the engine before uploading files."},"generation":frame["generation"],"epoch":frame["epoch"],"uploadRejected":true}));
     }
 }
 async fn wait_offline(
@@ -276,11 +277,16 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             if local_action(&frame, &events) {
                 continue;
             }
-            if frame["ui"] == "pickAttachments" {
+            if frame["ui"] == "pickAttachments" || frame["ui"] == "pasteAttachments" {
                 if frame["epoch"].as_u64() == Some(epoch) {
-                    super::browser::pick_attachments(
+                    if frame["ui"] == "pasteAttachments" {
+                        crate::attachments::pasted(&frame, events.clone(), target.clone());
+                        continue;
+                    }
+                    crate::attachments::pick_attachments(
                         events.clone(),
                         frame["generation"].as_u64().unwrap_or_default(),
+                        epoch,
                         target.clone(),
                     );
                 } else {
