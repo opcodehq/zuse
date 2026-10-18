@@ -88,11 +88,14 @@ impl Drop for WatchPreparation {
 // Engine handle
 // ---------------------------------------------------------------------------
 
+mod account_connection;
+pub use account_connection::{AccountTarget, RemoteTarget};
+
 /// Everything needed to reach (or start) an engine.
 #[derive(Debug, Clone)]
 pub struct EngineBootConfig {
     /// An explicit paired connection never falls back to a local engine.
-    pub paired_target: Option<zuse_remote::PairedTarget>,
+    pub target: Option<RemoteTarget>,
     /// Data directory for the embedded engine (`~/.zuse`).
     pub data_dir: PathBuf,
     /// Localhost IPC port to probe / serve.
@@ -125,6 +128,9 @@ pub enum EngineMode {
 trait EngineBackend: Send + Sync {
     fn client(&self) -> &RpcClient;
     fn mode(&self) -> EngineMode;
+    fn connection_end(&self) -> Option<tokio_util::sync::CancellationToken> {
+        None
+    }
     async fn media_client(&self) -> Result<RpcClient, RpcError> {
         Err(RpcError::Failed("voice media unavailable".into()))
     }
@@ -311,7 +317,13 @@ impl EngineHandle {
     /// Must run on the tokio runtime (`Tokio::spawn`): both transports spawn
     /// tokio tasks.
     pub async fn bootstrap(config: EngineBootConfig) -> anyhow::Result<EngineHandle> {
-        if let Some(target) = config.paired_target {
+        if let Some(target) = config.target {
+            let target = match target {
+                RemoteTarget::Account(target) => {
+                    return account_connection::bootstrap(target).await;
+                }
+                RemoteTarget::Paired(target) => target,
+            };
             let client = zuse_rpc::connect_paired(&target).await?;
             let engine_info = tokio::time::timeout(
                 std::time::Duration::from_secs(10),
@@ -2639,6 +2651,15 @@ impl AppState {
         if let Some(task) = spawn_deferred_engine_watch(cx, handle.clone()) {
             watch_tasks.push(task);
         }
+        if let Some(closed) = handle.inner.connection_end() {
+            watch_tasks.push(cx.spawn(async move|this,cx| {
+                closed.cancelled().await;
+                let _=this.update(cx,|state,cx| {
+                    state.connection=ConnectionStatus::Failed("The account connection closed. Reconnect to the selected computer; unsent edits are preserved.".into());
+                    cx.notify();
+                });
+            }));
+        }
         watch_tasks.extend([
             spawn_watch(
                 cx,
@@ -3661,7 +3682,7 @@ mod tests {
         ));
         let dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3692,7 +3713,7 @@ mod tests {
     async fn bootstrap_embeds_engine_when_port_is_free() {
         let dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: free_port().await,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3731,7 +3752,7 @@ mod tests {
         let port = free_port().await;
 
         let error = match EngineHandle::bootstrap(EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3789,7 +3810,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3828,7 +3849,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let port = free_port().await;
         let handle = EngineHandle::bootstrap(EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3871,7 +3892,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let port = free_port().await;
         let config = EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3932,7 +3953,7 @@ mod tests {
         let port = squatter.local_addr().unwrap().port();
         let dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -3960,7 +3981,7 @@ mod tests {
     async fn production_bootstrap_opens_local_data_without_sign_in() {
         let dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: free_port().await,
             edge_url: "http://127.0.0.1:1".into(),
@@ -4012,7 +4033,7 @@ mod tests {
         )
         .unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: free_port().await,
             edge_url: "http://127.0.0.1:1".into(),
@@ -4071,7 +4092,7 @@ mod tests {
 
         let ui_dir = tempfile::tempdir().unwrap();
         let handle = EngineHandle::bootstrap(EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: ui_dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),

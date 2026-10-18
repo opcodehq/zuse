@@ -2424,6 +2424,102 @@ impl RpcService for EngineRpc {
                     }
                 }
             }
+            methods::LIST_ACCOUNT_ROUTES
+            | methods::REMEMBER_ACCOUNT_ROUTE
+            | methods::FORGET_ACCOUNT_ROUTE => {
+                if params
+                    .get("targetDeviceId")
+                    .filter(|v| !v.is_null())
+                    .is_some_and(|v| v.as_str() != Some(self.doc_host.device_id()))
+                {
+                    return Err(RpcError::BadParams(
+                        "Saved connections belong to the connected profile".into(),
+                    ));
+                }
+                let access = self.managed_access.as_ref().ok_or_else(|| {
+                    RpcError::Failed("Account connections are unavailable".into())
+                })?;
+                let text = |key: &str| {
+                    params[key]
+                        .as_str()
+                        .ok_or_else(|| RpcError::BadParams("Choose a computer and account".into()))
+                };
+                let routes = match method {
+                    methods::LIST_ACCOUNT_ROUTES => access.saved_routes(),
+                    methods::REMEMBER_ACCOUNT_ROUTE => access.remember_route(
+                        text("expectedSubject")?,
+                        text("environmentId")?,
+                        text("label")?,
+                        text("origin")?,
+                    ),
+                    _ => access.forget_route(text("expectedSubject")?, text("environmentId")?),
+                }
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(
+                    &serde_json::json!({"computers":routes.iter().map(|computer|computer.record()).collect::<Vec<_>>()}),
+                )
+            }
+            methods::BOOTSTRAP_ACCOUNT_CONNECTION => {
+                if params
+                    .get("targetDeviceId")
+                    .filter(|v| !v.is_null())
+                    .is_some_and(|v| v.as_str() != Some(self.doc_host.device_id()))
+                {
+                    return Err(RpcError::BadParams(
+                        "Account connections belong to the connected profile".into(),
+                    ));
+                }
+                let expected = params["expectedSubject"]
+                    .as_str()
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| RpcError::BadParams("Choose a signed-in account".into()))?;
+                let environment = params["environmentId"]
+                    .as_str()
+                    .ok_or_else(|| RpcError::BadParams("Choose a computer".into()))?;
+                let account = self.account.as_ref().ok_or_else(|| {
+                    RpcError::Failed("Account connections are unavailable".into())
+                })?;
+                let same_account = || {
+                    account
+                        .status()
+                        .user
+                        .is_some_and(|user| user.id == expected)
+                };
+                if !same_account() {
+                    return Err(RpcError::Failed(
+                        "The account changed. Select the computer again.".into(),
+                    ));
+                }
+                let access = self.managed_access.as_ref().ok_or_else(|| {
+                    RpcError::Failed("Account connections are unavailable".into())
+                })?;
+                let grant = access
+                    .connect(
+                        environment,
+                        self.doc_host.device_id(),
+                        zuse_serve::managed::WIRE_VERSION,
+                    )
+                    .await
+                    .map_err(|e| match e {
+                        crate::managed_access::Error::Unavailable => {
+                            RpcError::Failed(e.to_string())
+                        }
+                        _ => RpcError::Failed(zuse_protocol::managed_connection::REJECTED.into()),
+                    })?;
+                if !same_account() {
+                    return Err(RpcError::Failed(
+                        "The account changed. Select the computer again.".into(),
+                    ));
+                }
+                // Dedicated private bootstrap reply. This capability is never catalog/settings data.
+                let origin = grant
+                    .endpoint
+                    .managed_origin()
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(
+                    &serde_json::json!({"environmentId":environment,"origin":origin,"connectToken":grant.connect_token,"expiresAt":grant.expires_at}),
+                )
+            }
             methods::MANAGED_HOST_STATUS
             | methods::WATCH_MANAGED_HOST
             | methods::LINK_MANAGED_HOST

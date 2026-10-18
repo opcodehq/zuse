@@ -387,7 +387,7 @@ mod tests {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -442,7 +442,7 @@ mod tests {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),

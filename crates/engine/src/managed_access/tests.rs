@@ -225,7 +225,7 @@ async fn account_discovery_link_proofs_shared_renewal_and_no_uncertain_write_rep
     let root = tempfile::tempdir().unwrap();
     let (state, server) = fixture().await;
     let account = Account::fixture_signed_in(root.path(), state.origin.clone(), "user_a");
-    let client = AccountClient::new(account).unwrap();
+    let client = AccountClient::new(account, root.path()).unwrap();
     assert_eq!(
         client.environments().await.unwrap().environments[0].environment_id,
         "env_remote"
@@ -301,7 +301,7 @@ async fn account_change_cancels_in_flight_reads_and_retires_cached_proof_credent
     let root = tempfile::tempdir().unwrap();
     let (state, server) = fixture().await;
     let account = Account::fixture_signed_in(root.path(), state.origin.clone(), "user_a");
-    let client = AccountClient::new(account.clone()).unwrap();
+    let client = AccountClient::new(account.clone(), root.path()).unwrap();
     client.connect("env_remote", "device_1", 1).await.unwrap();
     assert_eq!(state.mints.load(Ordering::SeqCst), 1);
     state.hold.store(true, Ordering::SeqCst);
@@ -395,7 +395,7 @@ async fn managed_host_persists_identity_checks_grants_and_disables_before_uncert
     let root = tempfile::tempdir().unwrap();
     let (state, server) = fixture().await;
     let account = Account::fixture_signed_in(root.path(), state.origin.clone(), "user_a");
-    let client = AccountClient::new(account.clone()).unwrap();
+    let client = AccountClient::new(account.clone(), root.path()).unwrap();
     let owner = host::Owner::open(root.path(), "device_1", client.clone());
     let host = owner.control();
     assert!(!host.status().configured);
@@ -517,7 +517,7 @@ async fn connector_follows_real_listener_account_and_revocation_without_recreati
     let root = tempfile::tempdir().unwrap();
     let (api, api_task) = fixture().await;
     let account = Account::fixture_signed_in(root.path(), api.origin.clone(), "user_a");
-    let client = AccountClient::new(account.clone()).unwrap();
+    let client = AccountClient::new(account.clone(), root.path()).unwrap();
     let owner = host::Owner::open(root.path(), "device_1", client.clone());
     let host = owner.control();
     let binary = root.path().join("connector-fixture");
@@ -609,7 +609,7 @@ async fn managed_invitation_origin_and_status_stream_follow_the_linked_account()
     )
     .unwrap();
     let account = Account::fixture_signed_in(root.path(), api.origin.clone(), "user_a");
-    let client = AccountClient::new(account.clone()).unwrap();
+    let client = AccountClient::new(account.clone(), root.path()).unwrap();
     let owner = host::Owner::open(root.path(), &core.device_id, client.clone());
     let host = owner.control();
     let mut status = Box::pin(host.watch());
@@ -648,6 +648,151 @@ async fn managed_invitation_origin_and_status_stream_follow_the_linked_account()
     drop(watch);
     drop(owner);
     assert!(status.next().await.is_none());
+    core.shutdown().await;
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn saved_routes_are_account_scoped_deduplicated_and_never_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let account = Account::fixture_signed_in(root.path(), "http://127.0.0.1:1".into(), "account_a");
+    let client = AccountClient::new(account.clone(), root.path()).unwrap();
+    assert!(client.saved_routes().unwrap().is_empty());
+    client
+        .remember_route(
+            "account_a",
+            "remote",
+            "Build computer",
+            "https://one.example",
+        )
+        .unwrap();
+    client
+        .remember_route(
+            "account_a",
+            "remote",
+            "Build computer",
+            "https://two.example",
+        )
+        .unwrap();
+    let routes = client
+        .remember_route(
+            "account_a",
+            "remote",
+            "Build computer",
+            "https://one.example",
+        )
+        .unwrap();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].routes.len(), 2);
+    assert_eq!(routes[0].routes[0].origin, "https://one.example");
+    assert!(
+        client
+            .remember_route(
+                "account_b",
+                "remote",
+                "Wrong account",
+                "https://other.example"
+            )
+            .is_err()
+    );
+    assert!(
+        client
+            .remember_route("account_a", "remote", "Unsafe", "http://public.example")
+            .is_err()
+    );
+    assert!(client.forget_route("account_b", "remote").is_err());
+    account.sign_out().unwrap();
+    assert!(matches!(client.saved_routes(), Err(Error::SignedOut)));
+    account.fixture_install("account_b");
+    assert!(client.saved_routes().unwrap().is_empty());
+    client
+        .remember_route(
+            "account_b",
+            "other",
+            "Other computer",
+            "https://other.example",
+        )
+        .unwrap();
+    account.sign_out().unwrap();
+    account.fixture_install("account_a");
+    let restarted = AccountClient::new(account, root.path()).unwrap();
+    assert_eq!(restarted.saved_routes().unwrap()[0].routes.len(), 2);
+    for entry in std::fs::read_dir(root.path().join("managed-access/routes")).unwrap() {
+        let entry = entry.unwrap();
+        let content = std::fs::read_to_string(entry.path()).unwrap();
+        assert!(
+            !content.contains("refresh_token")
+                && !content.contains("connectToken")
+                && !content.contains("fixture.")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                entry.metadata().unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+    assert!(
+        restarted
+            .forget_route("account_a", "remote")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_rpc_fences_expected_account_before_minting_any_private_grant() {
+    let root = tempfile::tempdir().unwrap();
+    let (api, server) = fixture().await;
+    let core = crate::EngineCore::assemble_with_profile(
+        crate::EngineProfile::local(root.path()).unwrap(),
+        Arc::new(crate::HarnessRegistry::new()),
+        zuse_protocol::HarnessId::Mock,
+        None,
+    )
+    .unwrap();
+    let account = Account::fixture_signed_in(root.path(), api.origin.clone(), "user_a");
+    let client = AccountClient::new(account.clone(), root.path()).unwrap();
+    let service = (*core.rpc_service())
+        .clone()
+        .with_managed_access(client)
+        .with_account(account.clone(), core.plugins.clone());
+    let rpc = zuse_rpc::memory_client(Arc::new(service));
+    let method = zuse_rpc::methods::BOOTSTRAP_ACCOUNT_CONNECTION;
+    assert!(
+        rpc.call(
+            method,
+            json!({"environmentId":"env_remote","expectedSubject":"other"})
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(api.mints.load(Ordering::SeqCst), 0);
+    let grant = rpc
+        .call(
+            method,
+            json!({"environmentId":"env_remote","expectedSubject":"user_a"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(grant["environmentId"], "env_remote");
+    assert_eq!(grant["origin"], "https://computer.example");
+    assert_eq!(grant["connectToken"], "private-bootstrap");
+    account.sign_out().unwrap();
+    account.fixture_install("user_b");
+    assert!(
+        rpc.call(
+            method,
+            json!({"environmentId":"env_remote","expectedSubject":"user_a"})
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(api.mints.load(Ordering::SeqCst), 1);
+    assert!(!zuse_rpc::methods::retryable_read(method, &json!({})));
     core.shutdown().await;
     server.abort();
     let _ = server.await;

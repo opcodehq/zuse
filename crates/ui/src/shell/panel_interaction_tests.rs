@@ -43,7 +43,7 @@ fn setup(cx: &mut TestAppContext) -> (tempfile::TempDir, Entity<Shell>, &mut Vis
         let mut shell = Shell::new(
             state,
             EngineBootConfig {
-                paired_target: None,
+                target: None,
                 data_dir: dir.path().into(),
                 ipc_port: 0,
                 edge_url: String::new(),

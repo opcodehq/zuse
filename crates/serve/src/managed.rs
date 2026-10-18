@@ -18,8 +18,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use zuse_rpc::{RpcError, RpcReply, RpcService};
 
-pub const PROTOCOL: &str = "zuse-rpc-json-v1";
-pub const WIRE_VERSION: u32 = 1;
+use zuse_protocol::managed_connection::Authenticate;
+pub use zuse_protocol::managed_connection::{PROTOCOL, WIRE_VERSION};
 /// Implemented by the engine's account-bound host owner; transport holds no key.
 pub trait Authority: Send + Sync {
     fn authorize(&self, token: &str) -> Option<Authorization>;
@@ -53,12 +53,6 @@ impl Authorization {
                 .duration_since(std::time::UNIX_EPOCH)
                 .is_ok_and(|now| now.as_secs() < self.expires_at as u64)
     }
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Authenticate {
-    protocol: String,
-    connect_token: String,
 }
 pub(super) async fn upgrade(
     State(server): State<BrowserServer>,
@@ -98,12 +92,13 @@ pub(super) async fn upgrade(
 }
 struct Authorized {
     inner: Arc<dyn RpcService>,
-    grant: Arc<Authorization>,
+    grant: tokio::sync::watch::Receiver<Arc<Authorization>>,
 }
 #[async_trait::async_trait]
 impl RpcService for Authorized {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
-        if !self.grant.is_live() {
+        let grant = self.grant.borrow().clone();
+        if !grant.is_live() {
             return Err(RpcError::Failed(
                 "Account connection authorization expired".into(),
             ));
@@ -111,7 +106,7 @@ impl RpcService for Authorized {
         if params
             .get("targetDeviceId")
             .filter(|v| !v.is_null())
-            .is_some_and(|v| v.as_str() != Some(self.grant.device_id.as_str()))
+            .is_some_and(|v| v.as_str() != Some(grant.device_id.as_str()))
         {
             return Err(RpcError::BadParams(
                 "Connect directly to the execution host".into(),
@@ -155,12 +150,15 @@ async fn session(server: BrowserServer, mut socket: WebSocket) {
             if !matches!(result, Ok(Ok(()))) {return;}
         }
     }
+    let authority = server.managed.clone().unwrap();
+    let (grants, current) = tokio::sync::watch::channel(grant);
+    let lifetime = current.clone();
     let (mut writer, mut reader) = socket.split();
     let (output, mut outgoing) = mpsc::channel::<String>(16);
     let (input, incoming) = mpsc::channel::<String>(16);
     let service = Arc::new(Authorized {
         inner: server.service,
-        grant: grant.clone(),
+        grant: current,
     });
     let dispatch = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
         zuse_rpc::serve_connection(service, output, incoming),
@@ -173,7 +171,32 @@ async fn session(server: BrowserServer, mut socket: WebSocket) {
                     None => return Ok::<_, ()>(()),
                 },
                 frame = reader.next() => match frame {
-                    Some(Ok(Message::Text(frame))) => input.send(frame.to_string()).await.map_err(|_| ())?,
+                    Some(Ok(Message::Text(frame))) => {
+                        #[derive(Deserialize)]
+                        struct Probe<'a> {#[serde(borrow)] protocol:Option<&'a str>,#[serde(borrow)] ping:Option<&'a str>}
+                        // Borrow only control fields; large RPC params are not cloned.
+                        if let Ok(probe)=serde_json::from_str::<Probe>(&frame) {
+                            if let Some(protocol)=probe.protocol {
+                                if protocol!=PROTOCOL {return Err(());}
+                                if let Some(nonce)=probe.ping {
+                                    if nonce.is_empty() || nonce.len()>128 {return Err(());}
+                                    let pong=serde_json::json!({"protocol":PROTOCOL,"pong":nonce}).to_string();
+                                    writer.send(Message::Text(pong.into())).await.map_err(|_|())?;
+                                    continue;
+                                }
+                                if frame.len()>20*1024 {return Err(());}
+                                let auth:Authenticate=serde_json::from_str(&frame).map_err(|_|())?;
+                                let next=authority.authorize(&auth.connect_token).ok_or(())?;
+                                let previous=grants.borrow().clone();
+                                if !previous.is_live() || !next.is_live() || next.device_id!=previous.device_id || next.subject!=previous.subject {return Err(());}
+                                let acknowledgement=serde_json::json!({"authenticated":true,"protocol":PROTOCOL,"deviceId":next.device_id,"expiresAt":next.expires_at*1000,"renewed":true}).to_string();
+                                grants.send_replace(Arc::new(next));
+                                writer.send(Message::Text(acknowledgement.into())).await.map_err(|_|())?;
+                                continue;
+                            }
+                        }
+                        input.send(frame.to_string()).await.map_err(|_| ())?;
+                    },
                     Some(Ok(Message::Ping(data))) => writer.send(Message::Pong(data)).await.map_err(|_| ())?,
                     Some(Ok(Message::Pong(_))) => {},
                     _ => return Ok(()),
@@ -183,12 +206,25 @@ async fn session(server: BrowserServer, mut socket: WebSocket) {
     };
     tokio::select! {biased;
         _ = server.shutdown.cancelled() => {},
-        _ = grant.account_closed.cancelled() => {},
-        _ = grant.host_closed.cancelled() => {},
-        _ = tokio::time::sleep_until(grant.deadline.into()) => {},
+        _ = authorization_lifetime(lifetime) => {},
         _ = exchange => {},
     }
     drop(input);
     dispatch.abort();
     let _ = dispatch.await;
+}
+async fn authorization_lifetime(mut grants: tokio::sync::watch::Receiver<Arc<Authorization>>) {
+    loop {
+        let grant = grants.borrow_and_update().clone();
+        if !grant.is_live() {
+            return;
+        }
+        tokio::select! {biased;
+            _=grant.account_closed.cancelled()=>return,
+            _=grant.host_closed.cancelled()=>return,
+            _=tokio::time::sleep_until(grant.deadline.into())=>return,
+            result=grants.changed()=>if result.is_err(){return;},
+            _=tokio::time::sleep(Duration::from_secs(1))=>{},
+        }
+    }
 }

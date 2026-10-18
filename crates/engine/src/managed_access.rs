@@ -2,11 +2,13 @@
 pub mod host;
 mod identity;
 mod proof;
+mod routes;
 use crate::account::Account;
 use futures::StreamExt;
 pub use identity::HostIdentity;
 use proof::ProofKey;
 use reqwest::Method;
+pub use routes::{Computer as SavedComputer, Route as SavedRoute};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
@@ -59,7 +61,7 @@ pub struct Endpoint {
     pub ws_base_url: String,
 }
 impl Endpoint {
-    fn managed_origin(&self) -> Result<String> {
+    pub(crate) fn managed_origin(&self) -> Result<String> {
         if !(self.http_base_url.starts_with("https://")
             || self.http_base_url.starts_with("http://"))
             || !(self.ws_base_url.starts_with("wss://") || self.ws_base_url.starts_with("ws://"))
@@ -143,6 +145,7 @@ pub struct AccountClient {
     account: Account,
     http: reqwest::Client,
     session: Arc<Mutex<Option<Session>>>,
+    routes: Arc<routes::Routes>,
 }
 struct Lease {
     subject: String,
@@ -160,7 +163,7 @@ impl Lease {
     }
 }
 impl AccountClient {
-    pub fn new(account: Account) -> Result<Self> {
+    pub fn new(account: Account, profile: &std::path::Path) -> Result<Self> {
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
@@ -171,7 +174,50 @@ impl AccountClient {
             account,
             http,
             session: Arc::new(Mutex::new(None)),
+            routes: Arc::new(routes::Routes::new(profile)),
         })
+    }
+    fn catalog_lease(&self) -> Result<Lease> {
+        let cancel = self.account.session_cancellation();
+        let user = self.account.status().user.ok_or(Error::SignedOut)?;
+        let lease = Lease {
+            subject: user.id,
+            cancel,
+        };
+        lease.check(&self.account)?;
+        Ok(lease)
+    }
+    pub fn saved_routes(&self) -> Result<Vec<routes::Computer>> {
+        let lease = self.catalog_lease()?;
+        let result = self.routes.list(&lease.subject)?;
+        lease.check(&self.account)?;
+        Ok(result)
+    }
+    pub fn remember_route(
+        &self,
+        expected: &str,
+        environment: &str,
+        label: &str,
+        origin: &str,
+    ) -> Result<Vec<routes::Computer>> {
+        let lease = self.catalog_lease()?;
+        if lease.subject != expected {
+            return Err(Error::Changed);
+        }
+        let result = self
+            .routes
+            .remember(&lease.subject, environment, label, origin)?;
+        lease.check(&self.account)?;
+        Ok(result)
+    }
+    pub fn forget_route(&self, expected: &str, environment: &str) -> Result<Vec<routes::Computer>> {
+        let lease = self.catalog_lease()?;
+        if lease.subject != expected {
+            return Err(Error::Changed);
+        }
+        let result = self.routes.forget(&lease.subject, environment)?;
+        lease.check(&self.account)?;
+        Ok(result)
     }
     async fn lease(&self) -> Result<Lease> {
         if self.account.status().user.is_none() {

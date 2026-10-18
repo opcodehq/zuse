@@ -14862,7 +14862,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let boot = EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: dir.path().to_path_buf(),
             ipc_port: port,
             edge_url: "http://127.0.0.1:1".into(),
@@ -15414,7 +15414,7 @@ mod tests {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -15719,7 +15719,7 @@ mod exit_regressions {
             crate::app_menus::init(cx);
         });
         let boot = EngineBootConfig {
-            paired_target: None,
+            target: None,
             data_dir: dir.path().into(),
             ipc_port: 0,
             edge_url: "http://127.0.0.1:1".into(),
@@ -15773,7 +15773,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -15846,7 +15846,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -15956,7 +15956,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -16134,7 +16134,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -16204,7 +16204,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -16279,7 +16279,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -16330,7 +16330,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -16413,7 +16413,7 @@ mod exit_regressions {
                 Shell::new(
                     state,
                     EngineBootConfig {
-                        paired_target: None,
+                        target: None,
                         data_dir: dir.path().into(),
                         ipc_port: 0,
                         edge_url: "http://127.0.0.1:1".into(),
@@ -16473,7 +16473,7 @@ mod exit_regressions {
                 Shell::new(
                     state,
                     EngineBootConfig {
-                        paired_target: None,
+                        target: None,
                         data_dir: dir.path().into(),
                         ipc_port: 0,
                         edge_url: "http://127.0.0.1:1".into(),
@@ -16540,7 +16540,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir,
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -16801,7 +16801,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -16987,7 +16987,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -17089,7 +17089,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -17175,7 +17175,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -17257,7 +17257,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -17330,7 +17330,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -17415,7 +17415,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -17472,7 +17472,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -17623,7 +17623,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -17743,7 +17743,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -17842,7 +17842,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -17925,7 +17925,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -18004,7 +18004,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -18103,7 +18103,7 @@ mod exit_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -18282,7 +18282,7 @@ mod right_tab_mouse_regressions {
                 let mut shell = Shell::new(
                     state,
                     EngineBootConfig {
-                        paired_target: None,
+                        target: None,
                         data_dir: dir.path().into(),
                         ipc_port: 0,
                         edge_url: "http://127.0.0.1:1".into(),
@@ -18796,7 +18796,7 @@ mod settings_modal_regressions {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: dir.path().into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -18863,7 +18863,7 @@ mod settings_modal_regressions {
         Shell::new(
             state,
             EngineBootConfig {
-                paired_target: None,
+                target: None,
                 data_dir: dir.into(),
                 ipc_port: 0,
                 edge_url: "http://127.0.0.1:1".into(),

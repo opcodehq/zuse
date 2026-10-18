@@ -10,6 +10,7 @@ zuse-remote.workspace = true
 zuse-protocol.workspace = true
 zuse-sync.workspace = true
 tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 tokio-tungstenite.workspace = true
 futures.workspace = true
 serde.workspace = true

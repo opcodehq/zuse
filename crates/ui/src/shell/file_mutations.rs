@@ -260,7 +260,7 @@ mod tests {
                 let mut shell = Shell::new(
                     state,
                     EngineBootConfig {
-                        paired_target: None,
+                        target: None,
                         data_dir: directory.path().into(),
                         ipc_port: 0,
                         edge_url: "http://127.0.0.1:1".into(),

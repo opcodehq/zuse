@@ -121,7 +121,7 @@ pub struct UiConfig {
 impl UiConfig {
     fn boot(&self) -> EngineBootConfig {
         EngineBootConfig {
-            paired_target: self.paired_target.clone(),
+            target: self.paired_target.clone().map(state::RemoteTarget::Paired),
             data_dir: self.data_dir.clone(),
             ipc_port: self.ipc_port,
             edge_url: self.edge_url.clone(),
@@ -291,7 +291,22 @@ pub(crate) fn open_paired_window(target: zuse_remote::PairedTarget, cx: &mut App
         return;
     };
     let mut boot = reopen.boot.clone();
-    boot.paired_target = Some(target);
+    boot.target = Some(state::RemoteTarget::Paired(target));
+    let state = cx.new(|cx| {
+        let mut state = state::AppState::new();
+        state.watch_clock_transitions(cx);
+        state
+    });
+    open_main_window(state, boot, cx);
+    cx.activate(true);
+}
+
+pub(crate) fn open_account_window(target: state::AccountTarget, cx: &mut App) {
+    let Some(reopen) = cx.try_global::<ReopenState>() else {
+        return;
+    };
+    let mut boot = reopen.boot.clone();
+    boot.target = Some(state::RemoteTarget::Account(target));
     let state = cx.new(|cx| {
         let mut state = state::AppState::new();
         state.watch_clock_transitions(cx);

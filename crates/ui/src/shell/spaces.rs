@@ -238,7 +238,7 @@ mod pinned_session_tests {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: path.into(),
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),
@@ -1117,7 +1117,7 @@ mod pinned_session_tests {
                 let mut shell = Shell::new(
                     state,
                     EngineBootConfig {
-                        paired_target: None,
+                        target: None,
                         data_dir: dir.path().into(),
                         ipc_port: 0,
                         edge_url: "http://127.0.0.1:1".into(),
@@ -1237,7 +1237,7 @@ mod pinned_session_tests {
                 let state = cx.new(|_| AppState::new());
                 let mut shell = Shell::new(
                     state,
-                    EngineBootConfig { paired_target: None,
+                    EngineBootConfig { target: None,
                         data_dir: dir.path().into(),
                         ipc_port: 0,
                         edge_url: "http://127.0.0.1:1".into(),
@@ -1775,7 +1775,7 @@ mod pinned_session_tests {
                 let mut shell = Shell::new(
                     state,
                     EngineBootConfig {
-                        paired_target: None,
+                        target: None,
                         data_dir: dir.path().into(),
                         ipc_port: 0,
                         edge_url: "http://127.0.0.1:1".into(),
@@ -7902,7 +7902,7 @@ mod project_flow_tests {
             Shell::new(
                 state,
                 EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir: data.path().into(),
                     ipc_port: 0,
                     edge_url: String::new(),
@@ -8050,7 +8050,7 @@ mod home_folder_search_tests {
             Shell::new(
                 state,
                 crate::EngineBootConfig {
-                    paired_target: None,
+                    target: None,
                     data_dir,
                     ipc_port: 0,
                     edge_url: "http://127.0.0.1:1".into(),

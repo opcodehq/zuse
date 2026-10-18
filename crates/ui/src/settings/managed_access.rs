@@ -21,6 +21,7 @@ pub struct ManagedAccessCard {
     account: Value,
     host: Value,
     environments: Vec<Value>,
+    saved: Vec<Value>,
     devices: Vec<Value>,
     name: Entity<ComposerInput>,
     error: Option<String>,
@@ -55,6 +56,7 @@ impl ManagedAccessCard {
             this.account = Value::Null;
             this.host = Value::Null;
             this.environments.clear();
+            this.saved.clear();
             this.devices.clear();
             this.error = None;
             this.attach(cx);
@@ -67,6 +69,7 @@ impl ManagedAccessCard {
             account: Value::Null,
             host: Value::Null,
             environments: vec![],
+            saved: vec![],
             devices: vec![],
             name,
             error: None,
@@ -152,6 +155,7 @@ impl ManagedAccessCard {
                                     card.action = None;
                                     card.busy = false;
                                     card.environments.clear();
+                                    card.saved.clear();
                                     card.devices.clear();
                                     card.error = None;
                                     card.refresh(cx);
@@ -181,6 +185,24 @@ impl ManagedAccessCard {
         let epoch = self.epoch;
         let signed_in = self.account["user"].is_object();
         self.load = Some(cx.spawn(async move |this, cx| {
+            if signed_in {
+                let saved = engine
+                    .client()
+                    .call(methods::LIST_ACCOUNT_ROUTES, json!({}))
+                    .await;
+                let _ = this.update(cx, |card, cx| {
+                    if card.epoch == epoch {
+                        match saved {
+                            Ok(value) => {
+                                card.saved =
+                                    value["computers"].as_array().cloned().unwrap_or_default()
+                            }
+                            Err(error) => card.error = Some(error.to_string()),
+                        }
+                        cx.notify();
+                    }
+                });
+            }
             let catalog = async {
                 if !signed_in {
                     return None;
@@ -239,13 +261,20 @@ impl ManagedAccessCard {
                     return;
                 }
                 card.busy = false;
-                if let Err(error) = result {
-                    card.error = Some(error.to_string());
+                let forgetting = method == methods::FORGET_ACCOUNT_ROUTE;
+                match result {
+                    Ok(value) if forgetting => {
+                        card.saved = value["computers"].as_array().cloned().unwrap_or_default()
+                    }
+                    Err(error) => card.error = Some(error.to_string()),
+                    _ => {}
                 }
-                if !matches!(
-                    method,
-                    methods::CLOUD_ACCOUNT_SIGN_IN | methods::CLOUD_ACCOUNT_SIGN_OUT
-                ) {
+                if !forgetting
+                    && !matches!(
+                        method,
+                        methods::CLOUD_ACCOUNT_SIGN_IN | methods::CLOUD_ACCOUNT_SIGN_OUT
+                    )
+                {
                     card.refresh(cx);
                     if matches!(
                         method,
@@ -304,10 +333,24 @@ impl Render for ManagedAccessCard {
                     .when_some(self.error.as_deref().or(self.host["error"].as_str()).or(self.account["error"].as_str()),|card,error|card.child(widgets::card_row(&theme,false).child(div().text_size(px(12.)).text_color(theme.danger).child(error.to_owned()))))
                     .child(widgets::card_row(&theme,false).child(widgets::text_action(&theme,widgets::ActionTone::Quiet,"Refresh remote access").id("refresh-managed-access").on_click(cx.listener(|this,_,_,cx|{if !this.busy {this.error=None;this.refresh(cx);cx.notify();}}))))))
             .when(signed_in,|view|view
-                .child(frame(&theme).child(header(&theme,"Account computers","Create a private invitation on the computer you want to connect to."))
+                .child(frame(&theme).child(header(&theme,"Account computers","Open a linked computer in its own Zuse window."))
                     .child(widgets::section_card(&theme).mt(px(0.))
-                        .when(self.environments.is_empty(),|card|card.child(widgets::card_row(&theme,true).child(details(&theme,"No linked computers","Link this computer to get started."))))
-                        .children(self.environments.iter().enumerate().map(|(index,computer)|widgets::card_row(&theme,index==0).child(details(&theme,computer["label"].as_str().unwrap_or("Linked computer"),computer["serviceState"].as_str().unwrap_or("Status unavailable")))))))
+                        .when(self.environments.is_empty() && self.saved.is_empty(),|card|card.child(widgets::card_row(&theme,true).child(details(&theme,"No linked computers","Link this computer to get started."))))
+                        .children(zuse_protocol::managed_connection::computer_rows(&self.environments,&self.saved).into_iter().enumerate().map(|(index,computer)|{
+                            let environment=computer["environmentId"].as_str().unwrap_or_default().to_owned();
+                            let subject=self.account["user"]["id"].as_str().unwrap_or_default().to_owned();
+                            let controller=self.engine.clone();
+                            let label=computer["label"].as_str().unwrap_or("Linked computer").to_owned();
+                            let current=controller.as_ref().is_some_and(|engine|engine.engine_info().device_id==environment);
+                            let compatible=zuse_protocol::managed_connection::supports_record(computer);
+                            let remembered=self.saved.iter().any(|row|row["environmentId"]==computer["environmentId"]);
+                            let forget_id=environment.clone();
+                            let forget_subject=subject.clone();
+                            widgets::card_row(&theme,index==0).child(details(&theme,computer["label"].as_str().unwrap_or("Linked computer"),if current {"This computer"}else if compatible {computer["serviceState"].as_str().unwrap_or("Availability checked on connect")}else{"Update Zuse on this computer to connect through your account."}))
+                                .when(!current && compatible,|row|row.child(widgets::text_action(&theme,widgets::ActionTone::Outlined,"Connect").id(("connect-account-computer",index))
+                                    .on_click(move|_,_,cx|{if let Some(controller)=controller.clone(){crate::open_account_window(crate::state::AccountTarget{controller,subject:subject.clone(),environment:environment.clone(),label:label.clone()},cx);}})))
+                                .when(remembered,|row|row.child(widgets::text_action(&theme,widgets::ActionTone::Quiet,"Forget saved").id(("forget-account-computer",index)).on_click(cx.listener(move|this,_,_,cx|this.request(methods::FORGET_ACCOUNT_ROUTE,json!({"environmentId":forget_id,"expectedSubject":forget_subject}),cx)))))
+                        }))))
                 .child(frame(&theme).child(header(&theme,"Authorized account devices","Revoke a device that no longer needs account access."))
                     .child(widgets::section_card(&theme).mt(px(0.))
                         .when(self.devices.is_empty(),|card|card.child(widgets::card_row(&theme,true).child(details(&theme,"No authorized devices","Devices appear here after they connect through your account."))))

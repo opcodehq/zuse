@@ -22,19 +22,35 @@ struct Auth {
 }
 impl Authority for Auth {
     fn authorize(&self, token: &str) -> Option<Authorization> {
-        (token == "fixture-grant" || token == "expiring-grant").then(|| Authorization {
+        if ![
+            "fixture-grant",
+            "expiring-grant",
+            "renewable-grant",
+            "renewed-grant",
+            "other-account-grant",
+        ]
+        .contains(&token)
+        {
+            return None;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        let expires_at = now.as_secs() as i64 + if token == "renewable-grant" { 2 } else { 60 };
+        Some(Authorization {
             device_id: "host-device".into(),
-            subject: "account-user".into(),
-            expires_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64
-                + 60,
+            subject: if token == "other-account-grant" {
+                "other-user"
+            } else {
+                "account-user"
+            }
+            .into(),
+            expires_at,
             deadline: Instant::now()
                 + if token == "expiring-grant" {
                     Duration::from_millis(100)
                 } else {
-                    Duration::from_secs(60)
+                    Duration::from_millis((expires_at * 1000 - now.as_millis() as i64) as u64)
                 },
             account_closed: self.account.clone(),
             host_closed: self.host.clone(),
@@ -150,6 +166,15 @@ async fn bounded_authentication_foreign_host_rejection_and_live_stream_retiremen
     assert_eq!(receive(&mut socket).await.unwrap()["authenticated"], true);
     socket
         .send(Message::Text(
+            json!({"protocol":PROTOCOL,"ping":"proof"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(receive(&mut socket).await.unwrap()["pong"], "proof");
+    socket
+        .send(Message::Text(
             json!({"id":1,"method":"Write","params":{"targetDeviceId":"other"}})
                 .to_string()
                 .into(),
@@ -201,4 +226,167 @@ async fn bounded_authentication_foreign_host_rejection_and_live_stream_retiremen
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+struct Source {
+    origin: String,
+    calls: AtomicUsize,
+    cancel: CancellationToken,
+    swap_subject: bool,
+}
+#[async_trait::async_trait]
+impl zuse_rpc::managed::GrantSource for Source {
+    fn environment(&self) -> &str {
+        "host-device"
+    }
+    fn cancellation(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+    async fn grant(&self) -> Result<zuse_protocol::managed_connection::Bootstrap, RpcError> {
+        let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        Ok(zuse_protocol::managed_connection::Bootstrap {
+            environment_id: "host-device".into(),
+            origin: self.origin.clone(),
+            connect_token: if first {
+                "renewable-grant"
+            } else if self.swap_subject {
+                "other-account-grant"
+            } else {
+                "renewed-grant"
+            }
+            .into(),
+            expires_at: now + if first { 2000 } else { 60000 },
+        })
+    }
+}
+struct TestHost {
+    _root: tempfile::TempDir,
+    source: Arc<Source>,
+    calls: Arc<AtomicUsize>,
+    streams: Arc<AtomicUsize>,
+    stop: CancellationToken,
+    task: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+impl TestHost {
+    async fn new(swap_subject: bool) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let source = Arc::new(Source {
+            origin: format!("http://{}", listener.local_addr().unwrap()),
+            calls: AtomicUsize::new(0),
+            cancel: CancellationToken::new(),
+            swap_subject,
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        let streams = Arc::new(AtomicUsize::new(0));
+        let stop = CancellationToken::new();
+        let server = zuse_serve::BrowserServer::new(
+            Arc::new(Service {
+                calls: calls.clone(),
+                streams: streams.clone(),
+            }),
+            "x".repeat(64),
+            None,
+        )
+        .unwrap()
+        .with_managed_authority(Arc::new(Auth {
+            account: CancellationToken::new(),
+            host: CancellationToken::new(),
+        }));
+        let task = tokio::spawn(server.serve_with_shutdown(
+            listener,
+            root.path().into(),
+            None,
+            stop.clone().cancelled_owned(),
+        ));
+        Self {
+            _root: root,
+            source,
+            calls,
+            streams,
+            stop,
+            task,
+        }
+    }
+    async fn close(self) {
+        self.stop.cancel();
+        tokio::time::timeout(Duration::from_secs(3), self.task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+}
+#[tokio::test]
+async fn native_grant_renewal_preserves_the_same_canonical_stream_and_cancellation_retires_it() {
+    let host = TestHost::new(false).await;
+    let connection = zuse_rpc::managed::connect(host.source.clone())
+        .await
+        .unwrap();
+    let mut watch = connection
+        .client
+        .subscribe_scoped("Watch", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(watch.recv().await.unwrap()["ready"], true);
+    assert_eq!(
+        connection
+            .client
+            .call("Write", json!({"value":1}))
+            .await
+            .unwrap()["value"],
+        1
+    );
+    // Remain beyond the initial grant's lifetime; no stream resubscription occurs.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(host.source.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(host.streams.load(Ordering::SeqCst), 1);
+    assert_eq!(host.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        connection
+            .client
+            .call("Read", json!({"value":2}))
+            .await
+            .unwrap()["value"],
+        2
+    );
+    host.source.cancel.cancel();
+    tokio::time::timeout(Duration::from_secs(3), connection.closed.cancelled())
+        .await
+        .unwrap();
+    assert!(
+        connection
+            .client
+            .call("Write", json!({"value":3}))
+            .await
+            .is_err()
+    );
+    assert_eq!(host.calls.load(Ordering::SeqCst), 3);
+    drop(watch);
+    host.close().await;
+}
+#[tokio::test]
+async fn renewing_as_another_subject_closes_the_existing_stream_instead_of_switching_accounts() {
+    let host = TestHost::new(true).await;
+    let connection = zuse_rpc::managed::connect(host.source.clone())
+        .await
+        .unwrap();
+    let mut watch = connection
+        .client
+        .subscribe_scoped("Watch", json!({}))
+        .await
+        .unwrap();
+    watch.recv().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(4), connection.closed.cancelled())
+        .await
+        .unwrap();
+    assert_eq!(host.source.calls.load(Ordering::SeqCst), 2);
+    assert!(connection.client.call("Write", json!({})).await.is_err());
+    assert_eq!(host.calls.load(Ordering::SeqCst), 1);
+    drop(watch);
+    host.close().await;
 }

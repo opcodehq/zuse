@@ -15,6 +15,7 @@ pub mod file_mentions;
 pub mod git_workspace;
 pub mod input_answers;
 pub mod invocation;
+pub mod managed_connection;
 pub mod methods;
 pub mod motion;
 pub mod plugins;

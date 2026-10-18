@@ -5,12 +5,14 @@ use crate::{settings_style as s, shell::column};
 enum Read {
     Host,
     Computers,
+    Routes,
     Devices,
 }
 #[derive(Default)]
 pub(super) struct ManagedAccess {
     host: Value,
     computers: Vec<Value>,
+    saved: Vec<Value>,
     devices: Vec<Value>,
     reads: HashMap<u64, Read>,
     action: Option<u64>,
@@ -26,6 +28,7 @@ impl WorkspaceView {
         if self.managed_access.account_ready && self.cloud_account["user"].is_object() {
             reads.extend([
                 (Read::Computers, methods::LIST_ACCOUNT_ENVIRONMENTS),
+                (Read::Routes, methods::LIST_ACCOUNT_ROUTES),
                 (Read::Devices, methods::LIST_ACCOUNT_DEVICES),
             ]);
         }
@@ -53,6 +56,7 @@ impl WorkspaceView {
                 self.managed_access.error=Some("The account changed during an access action. Check its current state before trying again.".into());
             }
             self.managed_access.computers.clear();
+            self.managed_access.saved.clear();
             self.managed_access.devices.clear();
             self.managed_access.host = Value::Null;
             self.managed_access.account_ready = true;
@@ -93,6 +97,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> bool {
         let action = self.managed_access.action == Some(id);
+        let method = self.pending.get(&id).cloned().unwrap_or_default();
         let kind = self.managed_access.reads.get(&id).copied();
         if !action && kind.is_none() {
             return false;
@@ -103,6 +108,10 @@ impl WorkspaceView {
         if let Some(value) = frame.get("ok").or_else(|| frame.get("item")) {
             match kind {
                 Some(Read::Host) => self.managed_access.host = value.clone(),
+                Some(Read::Routes) => {
+                    self.managed_access.saved =
+                        value["computers"].as_array().cloned().unwrap_or_default()
+                }
                 Some(Read::Computers) => {
                     self.managed_access.computers = value["environments"]
                         .as_array()
@@ -112,6 +121,10 @@ impl WorkspaceView {
                 Some(Read::Devices) => {
                     self.managed_access.devices =
                         value["clients"].as_array().cloned().unwrap_or_default()
+                }
+                None if action && method == methods::FORGET_ACCOUNT_ROUTE => {
+                    self.managed_access.saved =
+                        value["computers"].as_array().cloned().unwrap_or_default()
                 }
                 None => {}
             }
@@ -123,8 +136,15 @@ impl WorkspaceView {
         }
         if action {
             self.managed_access.action = None;
-            self.refresh_managed_access();
-            self.refresh_pairings();
+            if method != methods::FORGET_ACCOUNT_ROUTE {
+                self.refresh_managed_access();
+            }
+            if matches!(
+                method.as_str(),
+                methods::LINK_MANAGED_HOST | methods::UNLINK_MANAGED_HOST
+            ) {
+                self.refresh_pairings();
+            }
         }
         cx.notify();
         true
@@ -173,14 +193,20 @@ impl WorkspaceView {
             .when(signed_in,|view|view
                 .child(s::frame().child(s::header("Account computers","Create a private invitation on the computer you want to connect to."))
                     .child(s::card()
-                        .when(self.managed_access.computers.is_empty(),|card|card.child(s::setting_row(true).child(s::details("No linked computers","Link this computer to get started."))))
-                        .children(self.managed_access.computers.iter().enumerate().map(|(index,computer)|s::setting_row(index==0).child(s::details(computer["label"].as_str().unwrap_or("Linked computer").to_owned().to_owned(),computer["serviceState"].as_str().unwrap_or("Status unavailable").to_owned()))))))
+                        .when(self.managed_access.computers.is_empty() && self.managed_access.saved.is_empty(),|card|card.child(s::setting_row(true).child(s::details("No linked computers","Link this computer to get started."))))
+                        .children(zuse_protocol::managed_connection::computer_rows(&self.managed_access.computers,&self.managed_access.saved).into_iter().enumerate().map(|(index,computer)|{
+                            let id=computer["environmentId"].as_str().unwrap_or_default().to_owned();
+                            let remembered=self.managed_access.saved.iter().any(|saved|saved["environmentId"]==computer["environmentId"]);
+                            let subject=self.cloud_account["user"]["id"].as_str().unwrap_or_default().to_owned();
+                            s::setting_row(index==0).child(s::details(computer["label"].as_str().unwrap_or("Linked computer").to_owned(),computer["serviceState"].as_str().unwrap_or("Status unavailable").to_owned()))
+                                .when(remembered,|row|row.child(s::button(("forget-account-computer",index),"Forget saved").on_click(cx.listener(move|this,_,_,cx|{this.managed_action(methods::FORGET_ACCOUNT_ROUTE,json!({"environmentId":id,"expectedSubject":subject}));cx.notify();}))))
+                        }))))
                 .child(s::frame().child(s::header("Authorized account devices","Revoke a device that no longer needs account access."))
                     .child(s::card()
                         .when(self.managed_access.devices.is_empty(),|card|card.child(s::setting_row(true).child(s::details("No authorized devices","Devices appear here after they connect through your account."))))
                         .children(self.managed_access.devices.iter().enumerate().map(|(index,device)|{
                             let id=device["clientId"].as_str().unwrap_or_default().to_owned();
-                            s::setting_row(index==0).child(s::details(device["label"].as_str().unwrap_or("Account device").to_owned().to_owned(),device["platform"].as_str().unwrap_or("Device").to_owned()))
+                            s::setting_row(index==0).child(s::details(device["label"].as_str().unwrap_or("Account device").to_owned(),device["platform"].as_str().unwrap_or("Device").to_owned()))
                                 .child(s::button(("revoke-account-device",index),"Revoke").on_click(cx.listener(move|this,_,_,cx|{this.managed_action(methods::REVOKE_ACCOUNT_DEVICE,json!({"clientId":id}));cx.notify();})))
                         }))))
             ).into_any_element()
@@ -205,7 +231,7 @@ mod tests {
             view.connected=true;view.settings=true;view.settings_section=settings_view::Section::Devices;
             view.cloud_account=json!({"user":{"id":"account-a"}});view.managed_account_updated(true);
             view.refresh_managed_access();
-            assert_eq!(view.managed_access.reads.len(),3);
+            assert_eq!(view.managed_access.reads.len(),4);
             let host=*view.managed_access.reads.iter().find(|(_,kind)|**kind==Read::Host).unwrap().0;
             let stale=*view.managed_access.reads.iter().find(|(_,kind)|**kind==Read::Computers).unwrap().0;
             view.receive(json!({"id":host,"item":{"configured":true,"enabled":true,"accountMatches":true,"tunnelRunning":false}}),cx);

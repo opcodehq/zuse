@@ -359,8 +359,9 @@ impl EngineCore {
         let spaces_sync = SpacesSync::start(repos.clone(), workspace.clone(), &device_id);
         let account =
             account::Account::open(data_dir).map_err(|e| EngineError::Other(e.to_string()))?;
-        let managed_access = managed_access::AccountClient::new(account.clone())
-            .map_err(|e| EngineError::Other(e.to_string()))?;
+        let managed_access =
+            managed_access::AccountClient::new(account.clone(), profile.store_root())
+                .map_err(|e| EngineError::Other(e.to_string()))?;
         let managed_host = managed_access::host::Owner::open(
             profile.store_root(),
             &device_id,
