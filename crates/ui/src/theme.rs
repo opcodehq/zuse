@@ -2979,10 +2979,13 @@ mod tests {
     }
 
     #[test]
-    fn opaque_floating_surfaces_keep_their_existing_fill_and_text() {
+    fn floating_surfaces_have_an_opaque_menu_fill() {
         for mut theme in [Theme::dark(), Theme::light()] {
             theme.surface_treatment = SurfaceTreatment::Opaque;
-            assert_eq!(crate::popover::surface_bg(&theme), theme.input_glass_bg());
+            assert_eq!(
+                crate::popover::surface_bg(&theme),
+                theme.surface_overlay.opacity(1.0)
+            );
             assert_eq!(crate::popover::surface_bg(&theme).a, 1.0);
             assert_eq!(theme.for_popup().text_muted, theme.text_muted);
             assert_eq!(theme.for_popup().text_faint, theme.text_faint);

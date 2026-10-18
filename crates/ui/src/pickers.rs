@@ -1177,10 +1177,13 @@ impl Pickers {
         &self.config
     }
 
-    /// Harness is locked once the chat exists (feature-inventory §1.7).
+    /// Preserve provider continuity after a conversation has started.
     fn harness_locked(&self, cx: &App) -> bool {
         let state = self.state.read(cx);
-        self.title.is_none() && state.selected_chat.is_some() && !state.side_chat_harness_editable()
+        self.title.is_none()
+            && state.selected_chat.is_some()
+            && !state.side_chat_harness_editable()
+            && !state.conversation_provider_editable()
     }
 
     /// The harnesses this picker offers: runnable ones for the composer,
@@ -2108,10 +2111,11 @@ impl Pickers {
         if self.harness_locked(cx) {
             return;
         }
-        if self.state.read(cx).side_chat_unsaved() && self.effective_harness(cx) != Some(harness) {
-            // A side-chat draft already has a selected row. Replace its inherited
-            // provider settings so both the picker and first createChat use the
-            // new harness, even when its model catalog has not loaded yet.
+        if self.state.read(cx).selected_chat.is_some()
+            && self.effective_harness(cx) != Some(harness)
+        {
+            // Empty conversations own their provider and model settings.
+            // Clear the old provider's traits before applying its replacement.
             let model = self.defaults.model_for(harness).map(|m| m.id.clone());
             let reasoning = self.defaults.reasoning_for(harness, model.as_deref());
             let options = model

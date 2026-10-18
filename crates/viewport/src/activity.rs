@@ -88,8 +88,7 @@ impl WorkspaceView {
                             .child(text),
                     )
                 })
-                .child(div().flex_1())
-                .when(!reasoning, |d| {
+                .when(!reasoning && (!resolved || failed), |d| {
                     d.child(
                         label(if failed {
                             "Failed"

@@ -81,12 +81,11 @@ pub fn dither_action(
         .child(div().relative().child(name))
 }
 
-pub fn dither_icon_action(
+pub fn round_icon_action(
     id: impl Into<ElementId>,
     glyph: &str,
     label: &'static str,
     enabled: bool,
-    primary: bool,
 ) -> Stateful<Div> {
     div()
         .id(id)
@@ -94,21 +93,13 @@ pub fn dither_icon_action(
         .aria_label(label)
         .relative()
         .size(px(28.))
-        .rounded(px(10.))
-        .overflow_hidden()
+        .rounded_full()
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgb(0x13150f))
+        .bg(rgb(0x303230))
         .when(!enabled, |d| d.opacity(0.45))
-        .when(enabled, |d| d.cursor_pointer().hover(|d| d.opacity(0.95)))
-        .child(
-            div()
-                .absolute()
-                .inset_0()
-                .opacity(0.32)
-                .child(dither_background(primary, enabled)),
-        )
+        .when(enabled, |d| d.cursor_pointer().hover(|d| d.opacity(0.85)))
         .child(
             svg()
                 .path(SharedString::from(format!("icons/{glyph}.svg")))

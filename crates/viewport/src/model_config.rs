@@ -59,6 +59,18 @@ impl WorkspaceView {
     }
     pub(super) fn model_provider_allowed(&self, provider: &str) -> bool {
         self.picker_in_settings()
+            || self.selected.as_ref().is_some_and(|chat| {
+                chat["parentChatId"].is_null()
+                    && chat["archived"] != true
+                    && chat["lastMessageAt"].is_null()
+                    && chat["harnessSessionId"].is_null()
+                    && self.creating.is_none()
+                    && self.uploading == 0
+                    && !self
+                        .queue_actions
+                        .values()
+                        .any(|action| chat["id"] == action.chat)
+            })
             || self
                 .selected
                 .as_ref()
@@ -66,8 +78,12 @@ impl WorkspaceView {
                 .is_none_or(|saved| saved == provider)
     }
     fn current_model_config(&self) -> Option<RememberedModelConfig> {
+        let provider = self.composer_providers().get(self.provider_index)?["id"].as_str()?;
+        if !self.model_provider_allowed(provider) {
+            return None;
+        }
         Some(RememberedModelConfig {
-            provider: self.composer_provider()?["id"].as_str()?.into(),
+            provider: provider.into(),
             model: self.model.clone(),
             reasoning: self.reasoning,
             model_options: self.model_options.clone(),

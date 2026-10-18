@@ -65,7 +65,7 @@ impl WorkspaceView {
         }
     }
     pub(super) fn selected_model(&self) -> Option<&Model> {
-        let provider = self.composer_provider()?["id"].as_str()?;
+        let provider = self.composer_providers().get(self.provider_index)?["id"].as_str()?;
         let models = &self.composer_catalog().providers.get(provider)?.models;
         let id = self.model.as_deref().unwrap_or("default");
         models.iter().find(|m| m.id == id)
@@ -1178,6 +1178,51 @@ impl WorkspaceView {
 mod settings_workflow_tests {
     use super::*;
     use std::prelude::v1::test;
+    #[gpui::test]
+    fn fresh_conversation_saves_its_own_provider_and_model(cx: &mut TestAppContext) {
+        cx.update(initialize);
+        let (requests, mut received) = futures::channel::mpsc::unbounded();
+        let (_events, frames) = futures::channel::mpsc::unbounded();
+        let window = cx.add_window(|window, cx| {
+            WorkspaceView::new(
+                Transport {
+                    requests,
+                    events: frames,
+                },
+                window,
+                cx,
+            )
+        });
+        window.update(cx, |view, _, cx| {
+            view.connected = true;
+            view.workspace_synced = true;
+            view.model_confirmed = true;
+            view.device_id = Some("local".into());
+            view.providers = vec![json!({"id":"claude-code"}), json!({"id":"codex"})];
+            let root = json!({"id":"thread","deviceId":"local","config":{"harness":"claude-code","model":"root-model"}});
+            let fresh = json!({"id":"conversation","threadId":"thread","deviceId":"local","config":{"harness":"claude-code","model":"root-model","sandbox":"read-only"}});
+            view.chats = vec![root.clone(), fresh.clone()];
+            view.selected = Some(fresh);
+            view.model = Some("root-model".into());
+            assert!(view.model_provider_allowed("codex"));
+            view.choose_model("codex".into(), Some("own-model".into()), cx);
+            let writes = std::iter::from_fn(|| received.try_recv().ok())
+                .filter(|request| request["method"] == methods::MUTATE).collect::<Vec<_>>();
+            assert_eq!(writes.len(), 1);
+            let write = &writes[0];
+            assert_eq!(write["params"]["chatId"], "conversation");
+            assert_eq!(write["params"]["config"]["harness"], "codex");
+            assert_eq!(write["params"]["config"]["model"], "own-model");
+            assert_eq!(write["params"]["config"]["sandbox"], "read-only");
+            view.receive(json!({"id":write["id"],"ok":{"ok":true}}), cx);
+            assert_eq!(view.chats[0], root);
+            assert_eq!(view.selected.as_ref().unwrap()["config"]["harness"], "codex");
+            view.selected.as_mut().unwrap()["lastMessageAt"] = json!("2026-10-18T00:00:00Z");
+            assert!(!view.model_provider_allowed("claude-code"));
+            assert!(view.model_provider_allowed("codex"));
+        }).unwrap();
+    }
+
     #[gpui::test]
     fn workflow_title_picker_uses_connected_host_without_changing_chat_or_defaults(
         cx: &mut TestAppContext,

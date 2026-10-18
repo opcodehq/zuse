@@ -385,7 +385,7 @@ impl Shell {
     /// Replaces the tab strip; inherits its titlebar duties (drag region,
     /// animated left inset, the toggle-changes button on git projects).
     fn add_thread_conversation(&mut self, cx: &mut Context<Self>) {
-        if self.side_chat_creating {
+        if self.thread_conversation_creating {
             return;
         }
         let state = self.state.read(cx);
@@ -397,12 +397,12 @@ impl Shell {
         };
         let root = selected.thread_id().to_owned();
         let device = selected.device_id.clone();
-        self.side_chat_creating = true;
+        self.thread_conversation_creating = true;
         cx.spawn(async move |this, cx| {
             let result = engine.client().call_as::<zuse_protocol::Chat>(methods::CREATE_THREAD_SESSION,
                 serde_json::json!({"chatId": uuid::Uuid::new_v4().to_string(), "threadId": root, "targetDeviceId": device})).await;
             let _ = this.update(cx, |this, cx| {
-                this.side_chat_creating = false;
+                this.thread_conversation_creating = false;
                 match result {
                     Ok(chat) => {
                         let id = chat.id.clone();
@@ -443,6 +443,7 @@ impl Shell {
             .child(
                 div()
                     .id("thread-conversations")
+                    .flex_1()
                     .flex()
                     .items_center()
                     .min_w_0()
@@ -496,7 +497,7 @@ impl Shell {
                         .tooltip(crate::settings::widgets::text_tooltip(
                             "New chat in this thread",
                         ))
-                        .child(icon(icons::PLUS).size(px(14.)))
+                        .child(icon(icons::PLUS).size(px(14.)).text_color(theme.text))
                         .on_click(cx.listener(|this, _, _, cx| this.add_thread_conversation(cx))),
                 )
             })
@@ -730,6 +731,7 @@ impl Shell {
                 el.child(
                     div()
                         .min_w_0()
+                        .flex_1()
                         .overflow_hidden()
                         .flex()
                         .flex_row()
@@ -749,7 +751,7 @@ impl Shell {
                         .child(
                             div()
                                 .min_w_0()
-                                .truncate()
+                                .flex_1()
                                 .text_size(crate::typography::ui_rems(12.0))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(if on_canvas {
@@ -761,7 +763,7 @@ impl Shell {
                         ),
                 )
             })
-            .child(div().flex_1())
+            .when(takeover, |d| d.child(div().flex_1()))
             .children(session_info_toggle)
             .children(trailing);
 

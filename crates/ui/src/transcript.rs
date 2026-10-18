@@ -8424,19 +8424,12 @@ impl Transcript {
                     .flex_col()
                     .overflow_hidden()
                     .when(!collapses, |card| {
-                        card.rounded(px(9.0))
-                            .border_1()
-                            .border_color(crate::theme::hairline(0.07))
-                            .bg(crate::theme::ink(0.03))
+                        card.rounded(px(6.0)).bg(crate::theme::ink(0.02))
                     })
                     .child(
                         div()
                             .id(key.clone())
-                            .h(px(if collapses {
-                                CHIP_CARD_HEIGHT
-                            } else {
-                                CHIP_HEADER_HEIGHT
-                            }))
+                            .h(px(CHIP_CARD_HEIGHT))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -9964,10 +9957,7 @@ fn tool_chip(
                 .items_center()
                 .overflow_hidden()
                 .when(!rail, |card| {
-                    card.rounded(px(9.0))
-                        .border_1()
-                        .border_color(crate::theme::hairline(0.07))
-                        .bg(crate::theme::ink(0.03))
+                    card.rounded(px(6.0)).bg(crate::theme::ink(0.02))
                 })
                 .when(rail && content_reveal < 1.0, |card| {
                     card.relative()

@@ -85,9 +85,8 @@ pub const COMPOSER_MAX_WIDTH: f32 = 768.0;
 /// The composer covers the tray's lower padding so the queue reads as emerging
 /// from behind it instead of as a separate rounded pill.
 pub(crate) const QUEUE_COMPOSER_OVERLAP: f32 = 18.0;
-/// The original floating selector rows use the same 20px chip height as the
-/// established-thread footer. Their surrounding rows own no plate or border.
-const NEW_THREAD_SELECTOR_ROW_HEIGHT: f32 = 20.0;
+/// The inset new-chat toolbar has room around its compact selector chips.
+const NEW_THREAD_SELECTOR_ROW_HEIGHT: f32 = 40.0;
 // Accommodate the 24px usage indicator and PR badge without overflowing the
 // row's equal 8px top/bottom gutters.
 pub(crate) const SESSION_FOOTER_HEIGHT: f32 = 24.0;
@@ -6222,8 +6221,11 @@ impl Composer {
         })
         .detach();
         let input = cx.new(|cx| {
-            let mut input =
-                ComposerInput::with_context("Do anything…", MESSAGE_COMPOSER_CONTEXT, cx);
+            let mut input = ComposerInput::with_context(
+                "Ask to make changes at the @ mentioned files or run slash commands…",
+                MESSAGE_COMPOSER_CONTEXT,
+                cx,
+            );
             input.enable_mentions();
             input.copies_transcript_selection = true;
             input
@@ -9992,7 +9994,7 @@ impl Composer {
             .rounded(px(COMPOSER_RADIUS))
             .border_1()
             .border_color(theme.border)
-            .bg(theme.composer_surface_bg())
+            .bg(theme.surface_card.opacity(1.0))
             .when(!theme.is_frost(), |el| el.shadow_lg())
             .flex()
             .flex_col()
@@ -10655,7 +10657,7 @@ impl Composer {
     }
 }
 
-/// Shared dither send action, dimmed and inert while blocked.
+/// Neutral rounded send action, dimmed and inert while blocked.
 pub(crate) fn send_circle(
     id: &'static str,
     blocked: bool,
@@ -10667,16 +10669,8 @@ pub(crate) fn send_circle(
         .size(px(28.0))
         .flex_none()
         .relative()
-        .rounded(px(10.))
-        .overflow_hidden()
+        .rounded_full()
         .bg(theme.surface_raised)
-        .child(
-            div()
-                .absolute()
-                .inset_0()
-                .opacity(0.32)
-                .child(zuse_viewport::styling::dither_background(true, !blocked)),
-        )
         .flex()
         .items_center()
         .justify_center()
@@ -10687,7 +10681,7 @@ pub(crate) fn send_circle(
         .child(
             crate::icons::icon(crate::icons::ARROW_UP)
                 .size(px(14.0))
-                .text_color(gpui::rgb(0xffffff)),
+                .text_color(theme.text),
         )
 }
 
@@ -11361,7 +11355,7 @@ impl Render for Composer {
             .rounded(px(surface_radius))
             .border_1()
             .border_color(pill_border)
-            .bg(theme.composer_surface_bg())
+            .bg(theme.surface_card.opacity(1.0))
             .when(!theme.is_frost(), |el| el.shadow_lg());
         // The pill's bottom edge is stationary on screen (the composer sits at
         // the bottom of the shell column; growth moves the TOP edge), so the
@@ -11613,26 +11607,25 @@ impl Render for Composer {
             // the file-mention and slash tokens are mutually exclusive.
             .children(self.render_file_mention_popup(&theme, cx))
             .children(self.render_slash_popup(&theme, cx));
-        // Restore the original chip-only selector treatment: destination at
-        // the top-right, no surrounding surface. Cancel the column gap as the
-        // row collapses so the pill never jumps at the route boundary.
+        // An inset toolbar meets the composer plate above its input.
+        // Keep the destination and checkout controls on one shared surface.
         let container = if self.dock_frame.is_some() {
             // Floating selectors share the surface's origin and never change its height.
             container.relative().child(
                 div()
                     .id("dock-target-selectors")
                     .absolute()
-                    .top(px(-34.0))
+                    .top(px(-40.0))
                     .left(px(Theme::SPACE_LG + 10.0))
                     .right(px(Theme::SPACE_LG + 10.0))
-                    .h(px(28.0))
+                    .h(px(40.0))
                     .flex()
                     .items_center()
                     .justify_start()
                     .gap(px(10.0))
                     .px(px(8.0))
-                    .rounded_t(px(14.0))
-                    .bg(theme.surface_card)
+                    .rounded_t(px(20.0))
+                    .bg(theme.surface.opacity(1.0))
                     .opacity(new_thread_chrome_opacity)
                     .children(new_thread_target_selectors)
                     .children(new_thread_git_selectors),
@@ -11649,8 +11642,8 @@ impl Render for Composer {
                     .justify_start()
                     .gap(px(10.0))
                     .px(px(8.0))
-                    .rounded_t(px(14.0))
-                    .bg(theme.surface_card)
+                    .rounded_t(px(20.0))
+                    .bg(theme.surface.opacity(1.0))
                     .opacity(new_thread_chrome_opacity)
                     .children(new_thread_target_selectors)
                     .children(new_thread_git_selectors),
@@ -15879,8 +15872,8 @@ mod tests {
     }
 
     #[test]
-    fn new_thread_selectors_restore_the_compact_floating_row() {
-        assert_eq!(NEW_THREAD_SELECTOR_ROW_HEIGHT, 20.0);
+    fn new_thread_toolbar_keeps_its_own_height() {
+        assert_eq!(NEW_THREAD_SELECTOR_ROW_HEIGHT, 40.0);
         assert_eq!(SESSION_FOOTER_HEIGHT, 24.0);
     }
 

@@ -2038,6 +2038,7 @@ pub struct Shell {
     side_chats: std::collections::HashMap<u64, SideChatTab>,
     side_chat_seq: u64,
     side_chat_creating: bool,
+    thread_conversation_creating: bool,
     browsers: std::collections::HashMap<u64, Entity<crate::browser::BrowserSurface>>,
     browser_subs: std::collections::HashMap<u64, Subscription>,
     browser_seq: u64,
@@ -2564,6 +2565,7 @@ impl Shell {
             side_chats: std::collections::HashMap::new(),
             side_chat_seq: 0,
             side_chat_creating: false,
+            thread_conversation_creating: false,
             browsers: std::collections::HashMap::new(),
             browser_subs: std::collections::HashMap::new(),
             browser_seq: 0,
@@ -2812,6 +2814,7 @@ impl Shell {
         if state.read(cx).engine().is_none() {
             self.side_chats.clear();
             self.side_chat_creating = false;
+            self.thread_conversation_creating = false;
         }
         if let Some(notice) = state.update(cx, |state, _| state.take_deep_link_notice()) {
             self.show_notice(crate::toast::ToastKind::Info, notice, cx);

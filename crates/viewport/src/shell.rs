@@ -529,7 +529,7 @@ impl WorkspaceView {
                             })
                             .when((!working || has_draft) && self.queue_edit.is_none(), |d| {
                                 d.child(
-                                    crate::styling::dither_icon_action(
+                                    crate::styling::round_icon_action(
                                         "send",
                                         if working { "queue-send" } else { "arrow-up" },
                                         if working {
@@ -538,7 +538,6 @@ impl WorkspaceView {
                                             "Send message"
                                         },
                                         has_draft && self.connected && !self.transcript_blocked(),
-                                        true,
                                     )
                                     .on_click(cx.listener(
                                         |this, _, window, cx| this.submit(&Submit, window, cx),

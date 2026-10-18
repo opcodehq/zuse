@@ -315,15 +315,8 @@ pub const MENU_ITEM_RADIUS: f32 = CARD_RADIUS - 1.0 - CARD_INSET;
 pub const PALETTE_ITEM_RADIUS: f32 = 14.0 - CARD_INSET;
 
 pub fn surface_bg(theme: &Theme) -> gpui::Hsla {
-    if theme.is_frost() {
-        if matches!(theme.appearance, crate::theme::Appearance::Dark) {
-            theme.composer_sidebar_tint()
-        } else {
-            theme.glass_overlay()
-        }
-    } else {
-        theme.input_glass_bg()
-    }
+    // Floating menus must hide the transcript and controls underneath them.
+    theme.surface_overlay.opacity(1.0)
 }
 
 pub fn popover_card(theme: &Theme) -> gpui::Div {
