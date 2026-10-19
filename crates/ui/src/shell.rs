@@ -61,7 +61,7 @@ use crate::state::{
 };
 use crate::terminal::panel::{TerminalPanel, ToggleTerminal, clamp_terminal_height};
 use crate::theme::Theme;
-use crate::transcript::{self, Transcript, TranscriptEvent};
+use crate::transcript::{self, ForkTarget, Transcript, TranscriptEvent};
 
 mod actions_ui;
 mod chat_dropzone;
@@ -4422,9 +4422,8 @@ impl Shell {
                     cx,
                 );
             }
-            // A message's Fork: the same side-chat fork as the conversation's
-            // own; a side chat's copy lists as its sibling.
-            TranscriptEvent::ForkChat { chat_id } => {
+            // A reply's Fork menu: a new tab in this thread, or a new thread.
+            TranscriptEvent::ForkChat { chat_id, target } => {
                 let source = self
                     .state
                     .read(cx)
@@ -4433,11 +4432,7 @@ impl Shell {
                     .find(|chat| &chat.id == chat_id)
                     .cloned();
                 if let Some(source) = source {
-                    let parent = source
-                        .parent_chat_id
-                        .clone()
-                        .unwrap_or_else(|| source.id.clone());
-                    self.fork_chat(source, parent, cx);
+                    self.fork_chat(source, *target, cx);
                 }
             }
         }
@@ -18886,7 +18881,21 @@ impl Shell {
         }
         let composer = self.composer.clone();
         let pickers = composer.read(cx).pickers().clone();
-        if route.ends_with("access-menu") {
+        if route.ends_with("access-auto-menu") {
+            // "Approve for me" selected: the chip and the menu's check. Wait
+            // out the new-chat canvas resetting the draft picks.
+            cx.spawn(async move |_, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(200))
+                    .await;
+                composer
+                    .update(cx, |composer, cx| {
+                        composer.fixture_set_permission(zuse_protocol::SandboxLevel::Auto, cx);
+                        composer.fixture_open_permissions(cx);
+                    });
+            })
+            .detach();
+        } else if route.ends_with("access-menu") {
             composer.update(cx, |composer, cx| composer.fixture_open_permissions(cx));
         } else if route.ends_with("device-menu") {
             pickers.update(cx, |p, cx| {
@@ -19140,13 +19149,39 @@ impl Shell {
         }
         // `main:transcript` seeds a worked conversation (tool calls, thinking,
         // subagents, a hovered reply footer); `:transcript-card` also opens
-        // the session card over it; `:transcript-outline` adds a second
-        // prompt so the outline control shows.
+        // the session card over it, `:transcript-fork` the reply's Fork
+        // menu; `:transcript-outline` adds a second prompt so the outline
+        // control shows.
         if variant.starts_with("transcript") {
             self.fixture_seed_transcript(variant == "transcript-outline", cx);
-            if variant == "transcript-card" {
+            if variant.starts_with("transcript-card") {
                 self.settings.session_info_hidden = false;
                 self.session_info_overlay = true;
+            }
+            // `:transcript-card-git` runs the chat in a worktree of a Git
+            // project whose branch has a pull request, so the card lists
+            // the checkout, branch and pull request rows.
+            if variant == "transcript-card-git" {
+                self.state.update(cx, |state, cx| {
+                    if let Some(space) = state.spaces.iter_mut().find(|s| s.id == "project") {
+                        space.git_detected = true;
+                    }
+                    let source = state.chats.iter().find(|c| c.id == "chat-0").cloned();
+                    if let Some((source, chat)) =
+                        source.zip(state.chats.iter_mut().find(|c| c.id == "browser-fixture"))
+                    {
+                        chat.branch = source.branch;
+                        chat.source_context = source.source_context;
+                        chat.checkout_id = source.checkout_id;
+                        chat.cwd = Some("/tmp/worktrees/fieldnotes/quiet-owl".into());
+                    }
+                    cx.notify();
+                });
+            }
+            // `:transcript-fork` opens the Fork menu on the hovered reply.
+            if variant == "transcript-fork" {
+                self.transcript
+                    .update(cx, |transcript, cx| transcript.fixture_fork_menu("a1", cx));
             }
             cx.notify();
         }

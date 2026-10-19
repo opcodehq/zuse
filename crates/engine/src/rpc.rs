@@ -2927,13 +2927,31 @@ impl RpcService for EngineRpc {
                     /// side chat's parent so the copy lists as a sibling.
                     #[serde(default)]
                     parent_chat_id: Option<String>,
+                    /// Where the copy lands; a side chat when absent.
+                    #[serde(default)]
+                    placement: ForkPlacement,
+                }
+                /// A side chat under the parent, a new conversation tab in
+                /// the source's thread, or a thread of its own, optionally in
+                /// another checkout of the same repository (a worktree the
+                /// caller created first).
+                #[derive(Deserialize, Default)]
+                #[serde(tag = "kind", rename_all = "camelCase")]
+                enum ForkPlacement {
+                    #[default]
+                    SideChat,
+                    Conversation,
+                    #[serde(rename_all = "camelCase")]
+                    Thread {
+                        #[serde(default)]
+                        cwd: Option<String>,
+                        #[serde(default)]
+                        branch: Option<String>,
+                        #[serde(default)]
+                        checkout_id: Option<String>,
+                    },
                 }
                 let p: ForkParams = parse_params(params)?;
-                let parent_chat_id = p
-                    .parent_chat_id
-                    .clone()
-                    .filter(|id| !id.trim().is_empty())
-                    .unwrap_or_else(|| p.source_chat_id.clone());
                 let failed = |e: crate::EngineError| RpcError::Failed(e.to_string());
                 let source = self
                     .workspace
@@ -2945,12 +2963,46 @@ impl RpcService for EngineRpc {
                         "Fork must be created on the source device".into(),
                     ));
                 }
+                // The copy's place in the tree: `(parent, thread)`.
+                let (parent_chat_id, thread_id) =
+                    match &p.placement {
+                        ForkPlacement::SideChat => (
+                            Some(
+                                p.parent_chat_id
+                                    .clone()
+                                    .filter(|id| !id.trim().is_empty())
+                                    .unwrap_or_else(|| p.source_chat_id.clone()),
+                            ),
+                            source.thread_id.clone(),
+                        ),
+                        ForkPlacement::Conversation => {
+                            // A side chat's fork joins the thread its top-level
+                            // ancestor belongs to.
+                            let mut top = source.clone();
+                            for _ in 0..16 {
+                                let Some(parent) = top.parent_chat_id.clone() else {
+                                    break;
+                                };
+                                top = self.workspace.chat(&parent).map_err(failed)?.ok_or_else(
+                                    || RpcError::Failed("Thread no longer exists.".into()),
+                                )?;
+                            }
+                            if top.parent_chat_id.is_some() || top.archived {
+                                return Err(RpcError::Failed(
+                                    "Open an active thread before forking into it.".into(),
+                                ));
+                            }
+                            (None, Some(top.thread_id().to_owned()))
+                        }
+                        ForkPlacement::Thread { .. } => (None, None),
+                    };
                 if let Some(existing) = self
                     .workspace
                     .chat(&p.chat_id)
                     .map_err(|e| RpcError::Failed(e.to_string()))?
                 {
-                    if existing.parent_chat_id.as_deref() == Some(parent_chat_id.as_str()) {
+                    if existing.parent_chat_id == parent_chat_id && existing.thread_id == thread_id
+                    {
                         return RpcReply::value(&existing);
                     }
                     return Err(RpcError::Failed("Chat id already exists".into()));
@@ -2967,13 +3019,25 @@ impl RpcService for EngineRpc {
                             && entry.status == Some(zuse_doc::MessageStatus::Complete)
                     })
                     .ok_or_else(|| {
-                        RpcError::Failed(
-                            "Wait for a completed response before starting a side chat".into(),
-                        )
+                        RpcError::Failed("Wait for a completed response before forking".into())
                     })?;
                 let mut chat = source.clone();
                 chat.id = p.chat_id;
-                chat.parent_chat_id = Some(parent_chat_id);
+                chat.parent_chat_id = parent_chat_id;
+                chat.thread_id = thread_id;
+                if let ForkPlacement::Thread {
+                    cwd: Some(cwd),
+                    branch,
+                    checkout_id,
+                } = p.placement
+                {
+                    // Another checkout: the source's captured repository
+                    // identity no longer describes where this one runs.
+                    chat.cwd = Some(cwd);
+                    chat.branch = branch;
+                    chat.checkout_id = checkout_id;
+                    chat.source_context = None;
+                }
                 chat.title = None; // First side-chat turn receives its own generated title.
                 chat.archived = false;
                 chat.created_at = chrono::Utc::now();

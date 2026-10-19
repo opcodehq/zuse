@@ -31,44 +31,109 @@ impl Shell {
             .update(cx, |composer, cx| composer.show_error(message, cx));
     }
 
-    /// Fork the current conversation through its latest completed response,
-    /// as a child of it. The app forks from a reply's footer instead (see
-    /// [`Self::fork_chat`]); tests drive the whole-conversation fork.
+    /// Fork the current conversation into a new tab of its thread. The app
+    /// forks from a reply's footer instead (see [`Self::fork_chat`]); tests
+    /// drive the selected conversation's fork.
     #[cfg(test)]
-    pub(super) fn create_side_chat(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn fork_selected_chat(&mut self, target: ForkTarget, cx: &mut Context<Self>) {
         let Some(source) = self.state.read(cx).selected_chat_row().cloned() else {
-            self.show_side_chat_error("Start a conversation before creating a side chat.", cx);
+            self.show_side_chat_error("Start a conversation before forking it.", cx);
             return;
         };
-        let parent = source.id.clone();
-        self.fork_chat(source, parent, cx);
+        self.fork_chat(source, target, cx);
     }
 
-    /// Fork `source` through its latest completed response into a new chat
-    /// hanging under `parent_id`, and open it in the right pane. A side
-    /// chat's own fork button passes its parent so the copy lists as a
-    /// sibling; the picker passes the source itself.
+    /// Fork `source` through its latest completed response and open the
+    /// copy. [`ForkTarget::Conversation`] lands as a new tab of the source's
+    /// thread, in the same checkout. [`ForkTarget::Thread`] lands as a thread
+    /// of its own: in a Git project the copy first gets a fresh worktree off
+    /// the source's branch (created, and its setup action started, the way a
+    /// new chat's "New worktree" is), elsewhere it stays in the source's
+    /// folder.
     pub(super) fn fork_chat(
         &mut self,
         source: zuse_protocol::Chat,
-        parent_id: String,
+        target: ForkTarget,
         cx: &mut Context<Self>,
     ) {
         if self.side_chat_creating {
             return;
         }
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
-            return;
+        let (engine, worktree, remote) = {
+            let state = self.state.read(cx);
+            let Some(engine) = state.engine().cloned() else {
+                return;
+            };
+            let worktree = (target == ForkTarget::Thread)
+                .then(|| {
+                    source
+                        .space_id
+                        .as_deref()
+                        .and_then(|id| state.space_row(id))
+                })
+                .flatten()
+                .filter(|space| space.git_detected && space.device_id == source.device_id)
+                .map(|space| (space.path.clone(), space.id.clone()));
+            let remote = (state.local_device_id.as_deref() != Some(source.device_id.as_str()))
+                .then(|| source.device_id.clone());
+            (engine, worktree, remote)
         };
         let key = self.panel_key(cx);
+        let device = source.device_id.clone();
+        let base = source
+            .branch
+            .clone()
+            .filter(|branch| !branch.trim().is_empty())
+            .unwrap_or_else(|| "HEAD".to_owned());
         self.side_chat_creating = true;
-        let params = serde_json::json!({
-            "chatId": uuid::Uuid::new_v4().to_string(),
-            "sourceChatId": source.id,
-            "parentChatId": parent_id,
-            "targetDeviceId": source.device_id,
-        });
         cx.spawn(async move |this, cx| {
+            let mut setup = None;
+            let placement = match (target, worktree) {
+                (ForkTarget::Conversation, _) => serde_json::json!({ "kind": "conversation" }),
+                (ForkTarget::Thread, None) => serde_json::json!({ "kind": "thread" }),
+                (ForkTarget::Thread, Some((repo_path, space_id))) => {
+                    let created = engine
+                        .client()
+                        .call_as::<zuse_protocol::CreateWorktreeOutcome>(
+                            methods::CREATE_WORKTREE,
+                            serde_json::json!({
+                                "repoPath": repo_path,
+                                "branch": base,
+                                "spaceId": space_id,
+                                "targetDeviceId": device,
+                            }),
+                        )
+                        .await;
+                    match created {
+                        Ok(outcome) => {
+                            setup = Some((outcome.setup_action, outcome.setup_error));
+                            serde_json::json!({
+                                "kind": "thread",
+                                "cwd": outcome.worktree.path,
+                                "branch": outcome.worktree.branch,
+                                "checkoutId": outcome.worktree.checkout_id,
+                            })
+                        }
+                        Err(error) => {
+                            let _ = this.update(cx, |this, cx| {
+                                this.side_chat_creating = false;
+                                this.show_side_chat_error(
+                                    format!("Couldn't create a worktree for the fork: {error}"),
+                                    cx,
+                                );
+                                cx.notify();
+                            });
+                            return;
+                        }
+                    }
+                }
+            };
+            let params = serde_json::json!({
+                "chatId": uuid::Uuid::new_v4().to_string(),
+                "sourceChatId": source.id,
+                "placement": placement,
+                "targetDeviceId": device,
+            });
             let result = engine
                 .client()
                 .call_as::<zuse_protocol::Chat>(methods::FORK_SIDE_CHAT, params)
@@ -76,15 +141,19 @@ impl Shell {
             let _ = this.update(cx, |this, cx| {
                 this.side_chat_creating = false;
                 match result {
+                    // A host too old to place forks makes a side chat: show
+                    // it where side chats open.
+                    Ok(chat) if chat.parent_chat_id.is_some() => this.open_side_chat(chat, key, cx),
                     Ok(chat) => {
-                        if this
-                            .state
-                            .read(cx)
-                            .chats
-                            .iter()
-                            .any(|c| Some(&c.id) == chat.parent_chat_id.as_ref())
-                        {
-                            this.open_side_chat(chat, key, cx);
+                        let id = chat.id.clone();
+                        this.state.update(cx, |state, _| {
+                            if !state.chats.iter().any(|row| row.id == id) {
+                                state.chats.push(chat);
+                            }
+                        });
+                        this.open_chat(id.clone(), cx);
+                        if let Some((setup_action, setup_error)) = setup {
+                            this.attach_worktree_setup(id, setup_action, setup_error, remote, cx);
                         }
                     }
                     Err(error) => this.show_side_chat_error(error.to_string(), cx),
@@ -567,7 +636,7 @@ mod tests {
         // Nothing to fork yet: the reason shows in the composer.
         window
             .update(cx, |shell, _, cx| {
-                shell.create_side_chat(cx);
+                shell.fork_selected_chat(ForkTarget::Conversation, cx);
                 assert!(
                     shell
                         .composer

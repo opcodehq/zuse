@@ -65,7 +65,10 @@ use zuse_protocol::{
 use crate::jsonrpc::{Incoming, RpcClient};
 use crate::process::{Child, Command, Stdio};
 use crate::{Harness, HarnessError, RunControls};
-use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, static_models, to_effort};
+use catalog::{
+    REASONING_LEVELS, approvals_reviewer, sandbox_mode, sandbox_policy_value, static_models,
+    to_effort,
+};
 use normalize::{
     ChildRoute, Phase, ReasoningStream, delta_text, item_id, item_type, notification_thread_id,
     route_child_notification, turn_error_message, turn_id, usage_event,
@@ -1101,6 +1104,9 @@ async fn run_session(session: Session) {
             overrides.extend(codex_mcp_overrides(mcp));
         }
         p.insert("approvalPolicy".into(), approval_policy.into());
+        if let Some(reviewer) = approvals_reviewer(request.sandbox) {
+            p.insert("approvalsReviewer".into(), reviewer.into());
+        }
         p.insert("sandbox".into(), sandbox_mode(request.sandbox).into());
         if let Some(model) = &request.model {
             p.insert("model".into(), Value::String(model.clone()));
@@ -1227,6 +1233,9 @@ async fn run_session(session: Session) {
         p.insert("threadId".into(), Value::String(thread_id.clone()));
         p.insert("input".into(), prompt_input(text));
         p.insert("approvalPolicy".into(), policy_for(live).into());
+        if let Some(reviewer) = approvals_reviewer(live.sandbox) {
+            p.insert("approvalsReviewer".into(), reviewer.into());
+        }
         p.insert("sandboxPolicy".into(), sandbox_policy_value(live.sandbox));
         // Reasoning summaries stream (`item/reasoning/summaryTextDelta`) only
         // when asked for — without this codex "thinks" in silence for minutes:
@@ -2255,6 +2264,30 @@ mod tests {
         assert!(!legacy_model_page(&page));
         assert!(legacy_model_page(&json!({"data":[{"model":"old"}]})));
         assert!(!legacy_model_page(&json!({"data":[]})));
+    }
+
+    #[test]
+    fn access_levels_map_to_codex_policy_sandbox_and_reviewer() {
+        use zuse_protocol::SandboxLevel;
+        for (sandbox, auto, policy, mode, reviewer) in [
+            (SandboxLevel::ReadOnly, true, "never", "read-only", None),
+            (SandboxLevel::WorkspaceWrite, true, "on-request", "workspace-write", None),
+            (SandboxLevel::Auto, true, "on-request", "workspace-write", Some("auto_review")),
+            (SandboxLevel::DangerFullAccess, true, "never", "danger-full-access", None),
+            (SandboxLevel::DangerFullAccess, false, "on-request", "danger-full-access", None),
+        ] {
+            let request: RunRequest = serde_json::from_value(
+                json!({"prompt":"","cwd":"/tmp","sandbox":sandbox,"autoApprove":auto}),
+            )
+            .unwrap();
+            assert_eq!(policy_for(&request), policy, "{sandbox:?}");
+            assert_eq!(sandbox_mode(sandbox), mode);
+            assert_eq!(approvals_reviewer(sandbox), reviewer);
+        }
+        assert_eq!(
+            sandbox_policy_value(SandboxLevel::Auto),
+            json!({"type":"workspaceWrite","networkAccess":false})
+        );
     }
 
     #[test]

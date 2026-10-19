@@ -387,6 +387,115 @@ async fn forking_a_side_chat_can_land_as_a_sibling_under_the_main_chat() {
     assert_eq!(nested.parent_chat_id.as_deref(), Some("side"));
 }
 
+#[tokio::test]
+async fn forks_can_land_as_a_thread_conversation_or_a_thread_of_their_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = EngineCore::assemble(
+        dir.path(),
+        Arc::new(HarnessRegistry::new()),
+        HarnessId::Mock,
+        None,
+    )
+    .unwrap();
+    core.workspace
+        .create_chat(
+            "main",
+            None,
+            Some(&core.device_id),
+            None,
+            Some("/tmp/repo".into()),
+        )
+        .unwrap();
+    let main = core.doc_host.open("main").unwrap();
+    for (id, role) in [("u1", MessageRole::User), ("a1", MessageRole::Assistant)] {
+        main.doc()
+            .push_message(&message(id, role, "hi", MessageStatus::Complete))
+            .unwrap();
+    }
+    let client = zuse_rpc::memory_client(core.rpc_service());
+    let fork = |params: serde_json::Value| {
+        let client = &client;
+        async move {
+            client
+                .call_as::<zuse_protocol::Chat>(methods::FORK_SIDE_CHAT, params)
+                .await
+                .unwrap()
+        }
+    };
+    // A new tab in the source's thread: same checkout, no parent.
+    let tab = fork(serde_json::json!({
+        "chatId": "tab", "sourceChatId": "main", "placement": { "kind": "conversation" },
+    }))
+    .await;
+    assert_eq!(tab.parent_chat_id, None);
+    assert_eq!(tab.thread_id.as_deref(), Some("main"));
+    assert_eq!(tab.cwd.as_deref(), Some("/tmp/repo"));
+    let copied = core
+        .doc_host
+        .open("tab")
+        .unwrap()
+        .doc()
+        .read_entries()
+        .unwrap();
+    assert_eq!(copied.len(), 3, "history then the seam");
+    // Idempotent for the same placement, refused for another.
+    let again = fork(serde_json::json!({
+        "chatId": "tab", "sourceChatId": "main", "placement": { "kind": "conversation" },
+    }))
+    .await;
+    assert_eq!(again.thread_id.as_deref(), Some("main"));
+    assert!(
+        client
+            .call(
+                methods::FORK_SIDE_CHAT,
+                serde_json::json!({ "chatId": "tab", "sourceChatId": "main" }),
+            )
+            .await
+            .is_err()
+    );
+    // A tab's own fork stays in the root thread; so does a side chat's.
+    let sibling = fork(serde_json::json!({
+        "chatId": "tab-2", "sourceChatId": "tab", "placement": { "kind": "conversation" },
+    }))
+    .await;
+    assert_eq!(sibling.thread_id.as_deref(), Some("main"));
+    fork(serde_json::json!({ "chatId": "side", "sourceChatId": "main" })).await;
+    let from_side = fork(serde_json::json!({
+        "chatId": "tab-3", "sourceChatId": "side", "placement": { "kind": "conversation" },
+    }))
+    .await;
+    assert_eq!(from_side.parent_chat_id, None);
+    assert_eq!(from_side.thread_id.as_deref(), Some("main"));
+    // A thread of its own in another checkout.
+    let thread = fork(serde_json::json!({
+        "chatId": "thread",
+        "sourceChatId": "tab",
+        "placement": {
+            "kind": "thread",
+            "cwd": "/tmp/worktrees/repo/quiet-owl",
+            "branch": "zuse/quiet-owl",
+            "checkoutId": "checkout-2",
+        },
+    }))
+    .await;
+    assert_eq!(thread.parent_chat_id, None);
+    assert_eq!(thread.thread_id, None);
+    assert!(thread.is_top_level());
+    assert_eq!(thread.cwd.as_deref(), Some("/tmp/worktrees/repo/quiet-owl"));
+    assert_eq!(thread.branch.as_deref(), Some("zuse/quiet-owl"));
+    assert_eq!(thread.checkout_id.as_deref(), Some("checkout-2"));
+    let row = core.workspace.chat("thread").unwrap().unwrap();
+    assert_eq!(row.cwd, thread.cwd);
+    assert_eq!(row.thread_id, None);
+    // Without a checkout it stays in the source's.
+    let here = fork(serde_json::json!({
+        "chatId": "thread-2", "sourceChatId": "main", "placement": { "kind": "thread" },
+    }))
+    .await;
+    assert_eq!(here.thread_id, None);
+    assert_eq!(here.cwd.as_deref(), Some("/tmp/repo"));
+}
+
 /// One turn through the engine; returns the request the provider received.
 async fn side_turn(
     core: &EngineCore,

@@ -34,8 +34,6 @@ use zuse_rpc::methods;
 /// pagination plumbing).
 const MAX_REF_ROWS: usize = 300;
 
-const FOOTER_CHIP_RADIUS: f32 = 6.0;
-
 /// Both sides of the composer handoff share one leading-aligned workspace
 /// cluster. Available width belongs after the pair, never between its labels.
 fn workspace_footer_row() -> gpui::Div {
@@ -660,7 +658,7 @@ fn mark_ambiguous(rows: &mut [ModelRowData]) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PickerKind {
     Branch,
-    /// The checkout-kind dropdown in the composer footer (Current
+    /// The checkout-kind dropdown in the new-session context tray (Current
     /// checkout/worktree | New worktree).
     Checkout,
     /// The combined agent/model/traits popover: harness tabs across the top,
@@ -3489,7 +3487,7 @@ impl Pickers {
         let resizing = kind == PickerKind::HarnessModel && self.chip_resizing;
         // The composer's model trigger is a filled pill (`h-7 rounded-full
         // bg-muted/65 px-2.5 text-[11px]`, 12px brand icon, trailing caret);
-        // the footer and destination triggers stay quiet ghost chips.
+        // the destination triggers stay quiet ghost chips.
         let model = kind == PickerKind::HarnessModel;
         let pill_rest = theme.muted_fill().opacity(0.65);
         let pill_hover = theme.muted_fill();
@@ -3614,21 +3612,6 @@ impl Pickers {
             })
     }
 
-    /// A footer-row trigger (t3code ghost `Button size="xs"`): leading icon,
-    /// truncating label, trailing chevron — smaller and quieter than the
-    /// in-pill chips.
-    fn footer_chip(
-        &self,
-        kind: PickerKind,
-        id: &'static str,
-        icon_path: &'static str,
-        label: SharedString,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        self.selector_chip(kind, id, icon_path, label, false, theme, cx)
-    }
-
     /// A context-tray trigger (the new-session destination and checkout
     /// chips on the tab behind the composer): `h-7 px-2.5 text-[12px]`, a
     /// 14px icon and a faint chevron, foreground text so the tray reads as
@@ -3642,20 +3625,6 @@ impl Pickers {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        self.selector_chip(kind, id, icon_path, label, true, theme, cx)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn selector_chip(
-        &self,
-        kind: PickerKind,
-        id: &'static str,
-        icon_path: &'static str,
-        label: SharedString,
-        tray: bool,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
         let open = self.open_kind() == Some(kind);
         // Per-picker hover key, like the trigger chips.
         let id: SharedString = format!("{id}-{}", cx.entity_id()).into();
@@ -3663,22 +3632,22 @@ impl Pickers {
             .relative()
             .child(self.measure_trigger(kind, cx))
             .id(id.clone())
-            .h(px(if tray { 28.0 } else { 20.0 }))
+            .h(px(28.0))
             .max_w(px(280.0))
             .min_w_0()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(6.0))
-            .px(px(if tray { 10.0 } else { 8.0 }))
-            .rounded(px(if tray { 8.0 } else { FOOTER_CHIP_RADIUS }))
+            .px(px(10.0))
+            .rounded(px(8.0))
             .text_size(crate::typography::ui_rems(12.0))
             .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(if tray {
-                motion::hover_blend(&id, theme.text.opacity(0.85), theme.text)
-            } else {
-                motion::hover_blend(&id, theme.text_muted.opacity(0.7), theme.text.opacity(0.8))
-            })
+            .text_color(motion::hover_blend(
+                &id,
+                theme.text.opacity(0.85),
+                theme.text,
+            ))
             .bg(if open {
                 theme.element_hover
             } else {
@@ -3695,62 +3664,13 @@ impl Pickers {
             .on_click(cx.listener(move |this, _, window, cx| this.toggle(kind, window, cx)))
             .child(
                 crate::icons::icon(icon_path)
-                    .size(px(if tray { 14.0 } else { 12.0 }))
+                    .size(px(14.0))
                     .flex_none()
-                    .text_color(if tray {
-                        theme.text.opacity(0.8)
-                    } else {
-                        theme.text_muted.opacity(0.7)
-                    }),
+                    .text_color(theme.text.opacity(0.8)),
             )
             .child(roll_text(format!("{id}-label"), label, cx.reduce_motion()))
             .child(
                 crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
-                    .size(px(12.0))
-                    .flex_none()
-                    .text_color(theme.text_muted.opacity(if tray { 0.6 } else { 0.5 })),
-            )
-    }
-
-    /// A read-only footer label (locked sessions — t3code's
-    /// `resolveLockedWorkspaceLabel` span).
-    fn footer_label(icon_path: &'static str, label: SharedString, theme: &Theme) -> gpui::Div {
-        Self::footer_label_shell(icon_path, theme)
-            .max_w(px(160.0))
-            .child(div().min_w_0().truncate().child(label))
-    }
-
-    /// A [`Self::footer_label`] that takes whatever width the row leaves it
-    /// and fades its tail only when that isn't enough.
-    fn footer_faded_label(
-        id: &'static str,
-        icon_path: &'static str,
-        label: SharedString,
-        theme: &Theme,
-    ) -> gpui::Div {
-        Self::footer_label_shell(icon_path, theme).child(crate::shell::sidebar_faded_label(
-            id.into(),
-            false,
-            label,
-        ))
-    }
-
-    fn footer_label_shell(icon_path: &'static str, theme: &Theme) -> gpui::Div {
-        div()
-            .h(px(20.0))
-            // Labels SHRINK (`min_w_0`) — without it the clusters overflowed
-            // into each other and the labels painted overlapped (user report).
-            .min_w_0()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(6.0))
-            .px(px(8.0))
-            .text_size(crate::typography::ui_rems(12.0))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.text_muted.opacity(0.6))
-            .child(
-                crate::icons::icon(icon_path)
                     .size(px(12.0))
                     .flex_none()
                     .text_color(theme.text_muted.opacity(0.6)),
@@ -3900,173 +3820,6 @@ impl Pickers {
                 ))
                 .into_any_element(),
         )
-    }
-
-    /// The composer footer row: checkout-kind + ref, LEFT-aligned, only when
-    /// the picked (or session's) project has git. New sessions use the floating
-    /// chip clusters; sessions name their target in the titlebar.
-    pub fn render_footer(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let theme = Theme::of(cx).clone();
-        // A selected chat whose workspace row hasn't synced yet (the moment
-        // right after send mints it) still renders the DRAFT footer — the
-        // values are identical, so the toolbar never blinks through a
-        // half-empty locked state.
-        let (space, session, change_request) = {
-            let state = self.state.read(cx);
-            let space = state.selected_space_row().cloned();
-            let session = state
-                .selected_chat
-                .as_ref()
-                .and_then(|_| state.selected_chat_row().cloned());
-            let change_request = session
-                .as_ref()
-                .and_then(|chat| state.change_request_for_chat(chat).cloned());
-            (space, session, change_request)
-        };
-        let row = || {
-            // The composer owns the row's animated reveal and negative bottom
-            // margin. Keeping that geometry outside this reusable content
-            // lets the new-thread route handoff collapse the footer without
-            // clipping its controls or changing its steady-state spacing.
-            // `w_full` is load-bearing: without it the canvas layout sizes
-            // the row to CONTENT, and the left cluster's flex_1 (basis 0)
-            // collapsed to zero width — both clusters painted from the same
-            // origin, chips overlapping (user report).
-            workspace_footer_row().px(px(10.0))
-        };
-
-        if let Some(chat) = &session {
-            // Sessions never move: read-only checkout-kind + ref labels,
-            // LEFT-aligned, only when the session's project has git. The
-            // target (project @ device) lives in the titlebar now.
-            let Some(space) = space.as_ref().filter(|s| s.git_detected) else {
-                return None;
-            };
-            let is_worktree = chat.cwd.as_deref().is_some_and(|cwd| cwd != space.path);
-            let (icon_path, label) = if is_worktree {
-                (crate::icons::WORKTREE, "Worktree")
-            } else {
-                (crate::icons::FOLDER, "Local checkout")
-            };
-            // Keep the same reading order and leading edge as the draft.
-            let left = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .min_w_0()
-                .child(Self::footer_label(
-                    icon_path,
-                    SharedString::from(label),
-                    &theme,
-                ));
-            let right = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(4.0))
-                .min_w_0()
-                .child(Self::footer_faded_label(
-                    "composer-session-branch",
-                    crate::icons::GIT_BRANCH,
-                    chat.branch
-                        .clone()
-                        .map(SharedString::from)
-                        .unwrap_or_else(|| SharedString::from("No ref")),
-                    &theme,
-                ));
-            // Checkout + branch stay together. PR and usage form the trailing
-            // status group, independently of the branch label's length.
-            return Some(
-                row()
-                    .pr_0()
-                    .child(left)
-                    .child(right)
-                    .child(div().flex_1().min_w_0())
-                    .when_some(change_request, |el, summary| {
-                        el.child(div().flex_none().child(
-                            crate::change_requests::pull_request_badge(
-                                "composer-pull-request".into(),
-                                summary,
-                                crate::change_requests::ChangeRequestBadgeSurface::Composer,
-                                Some(chat.device_id.clone()),
-                                &theme,
-                            ),
-                        ))
-                    })
-                    .into_any_element(),
-            );
-        }
-
-        // New-session draft: checkout + ref only, LEFT-aligned (device +
-        // project live in the row above the pill now).
-        let git = space.as_ref().is_some_and(|s| s.git_detected);
-        if !git {
-            return None;
-        }
-        // Refs feed the draft labels — eager + idempotent.
-        self.ensure_refs(false, cx);
-        let closing = (self.open.closing_since(), self.menu_geometry().below);
-        let mut overlay: Option<(PickerKind, AnyElement)> = match self.mounted_kind() {
-            Some(PickerKind::Branch) => {
-                let content = self.render_branch_popover(cx);
-                Some((PickerKind::Branch, self.popover_frame(320.0, content, cx)))
-            }
-            Some(PickerKind::Checkout) => {
-                let content = self.render_checkout_popover(cx);
-                Some((PickerKind::Checkout, self.popover_frame(224.0, content, cx)))
-            }
-            // Space/Device popovers mount in the floating row above the pill.
-            _ => None,
-        };
-
-        let ref_label = self.ref_label();
-        let ref_chip = self.footer_chip(
-            PickerKind::Branch,
-            "picker-branch",
-            crate::icons::GIT_BRANCH,
-            ref_label,
-            &theme,
-            cx,
-        );
-        let kind_icon = match (self.config.checkout, self.display_ref_is_worktree()) {
-            (CheckoutKind::Local, false) => crate::icons::FOLDER,
-            _ => crate::icons::WORKTREE,
-        };
-        let kind_chip = self.footer_chip(
-            PickerKind::Checkout,
-            "picker-checkout",
-            kind_icon,
-            SharedString::from(self.checkout_label()),
-            &theme,
-            cx,
-        );
-        // Match the floating draft's adjacent checkout/ref pair, including
-        // while the newly created session is waiting for its workspace row.
-        let left = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .min_w_0()
-            .child(attach_overlay(
-                kind_chip,
-                &mut overlay,
-                PickerKind::Checkout,
-                "checkout-popover",
-                closing,
-            ));
-        let right = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .min_w_0()
-            .child(attach_overlay(
-                ref_chip,
-                &mut overlay,
-                PickerKind::Branch,
-                "branch-popover",
-                closing,
-            ));
-        Some(row().child(left).child(right).into_any_element())
     }
 
     fn popover_frame(&self, width: f32, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
@@ -6425,26 +6178,6 @@ fn fast_mode_values(option: &zuse_protocol::ModelOption) -> Option<(&str, &str)>
     Some((on, off))
 }
 
-/// Attach the (single) open popover above a selector trigger.
-fn attach_overlay(
-    chip: gpui::Stateful<gpui::Div>,
-    overlay: &mut Option<(PickerKind, AnyElement)>,
-    kind: PickerKind,
-    id: &'static str,
-    closing: (Option<std::time::Instant>, bool),
-) -> gpui::Stateful<gpui::Div> {
-    if overlay.as_ref().is_some_and(|(k, _)| *k == kind)
-        && let Some((_, element)) = overlay.take()
-    {
-        return chip.child(if closing.1 {
-            popover::anchored_menu_below(id, element, closing.0)
-        } else {
-            popover::anchored_menu_above(id, element, closing.0)
-        });
-    }
-    chip
-}
-
 /// Attach the (single) open popover below a selector trigger.
 fn attach_overlay_below(
     chip: gpui::Stateful<gpui::Div>,
@@ -6618,11 +6351,11 @@ impl Render for Pickers {
         // reads in the muted second tone, default or not (user request).
         let effort = self.effective_reasoning(cx);
         // Render the open popover's body first (mutable borrow), then the
-        // chips. Branch/Checkout render in the composer FOOTER row (see
-        // `render_footer`), not here.
+        // chips. Branch/Checkout render in the new-session context tray (see
+        // `render_new_thread_git_selectors`), not here.
         let closing = (self.open.closing_since(), self.menu_geometry().below);
         let mut overlay: Option<(PickerKind, AnyElement)> = match self.mounted_kind() {
-            // Footer-row pickers — their popovers mount down there.
+            // Context-tray pickers — their popovers mount up there.
             Some(PickerKind::Branch)
             | Some(PickerKind::Checkout)
             | Some(PickerKind::Space)

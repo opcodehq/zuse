@@ -191,7 +191,31 @@ pub enum SandboxLevel {
     ReadOnly,
     #[default]
     WorkspaceWrite,
+    /// "Approve for me": workspace writes, with the agent's own automatic
+    /// approver deciding escalations (Claude Code's `auto` permission mode,
+    /// Codex's `auto_review` approvals reviewer). Agents without one fall
+    /// back to [`SandboxLevel::WorkspaceWrite`]'s ask-first behaviour; see
+    /// [`SandboxLevel::automatic_review_support`]. Serialized as `auto`;
+    /// older hosts that predate it cannot parse a chat stored with it.
+    #[serde(alias = "auto-review")]
+    Auto,
     DangerFullAccess,
+}
+
+impl SandboxLevel {
+    /// Whether this level lets the agent's automatic approver decide.
+    pub fn automatic_review(self) -> bool {
+        self == Self::Auto
+    }
+
+    /// Whether `harness` maps [`SandboxLevel::Auto`] to a native automatic
+    /// approver. `Err` carries the reason shown beside the disabled option.
+    pub fn automatic_review_support(harness: &HarnessId) -> Result<(), &'static str> {
+        match harness {
+            HarnessId::ClaudeCode | HarnessId::Codex | HarnessId::Mock => Ok(()),
+            _ => Err("Not available for this agent"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,6 +319,7 @@ mod access_posture_tests {
         for sandbox in [
             SandboxLevel::ReadOnly,
             SandboxLevel::WorkspaceWrite,
+            SandboxLevel::Auto,
             SandboxLevel::DangerFullAccess,
         ] {
             for enabled in [false, true] {
@@ -305,6 +330,36 @@ mod access_posture_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn sandbox_levels_round_trip_and_keep_legacy_words() {
+        for (level, word) in [
+            (SandboxLevel::ReadOnly, "read-only"),
+            (SandboxLevel::WorkspaceWrite, "workspace-write"),
+            (SandboxLevel::Auto, "auto"),
+            (SandboxLevel::DangerFullAccess, "danger-full-access"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(level).unwrap(),
+                serde_json::json!(word)
+            );
+            assert_eq!(
+                serde_json::from_value::<SandboxLevel>(serde_json::json!(word)).unwrap(),
+                level
+            );
+        }
+        assert_eq!(
+            serde_json::from_value::<SandboxLevel>(serde_json::json!("auto-review")).unwrap(),
+            SandboxLevel::Auto
+        );
+        let config: crate::ChatConfig =
+            serde_json::from_value(serde_json::json!({"harness":"codex","sandbox":"auto"}))
+                .unwrap();
+        assert!(config.sandbox.automatic_review());
+        assert!(SandboxLevel::automatic_review_support(&HarnessId::Codex).is_ok());
+        assert!(SandboxLevel::automatic_review_support(&HarnessId::ClaudeCode).is_ok());
+        assert!(SandboxLevel::automatic_review_support(&HarnessId::Cursor).is_err());
     }
 }
 

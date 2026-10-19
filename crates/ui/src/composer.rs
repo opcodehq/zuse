@@ -118,9 +118,6 @@ pub(crate) fn context_tray_fill(theme: &Theme) -> gpui::Hsla {
         ),
     }
 }
-// Accommodate the 24px checkout chips and PR badge without overflowing the
-// row's equal 8px top/bottom gutters.
-pub(crate) const SESSION_FOOTER_HEIGHT: f32 = 24.0;
 
 /// Route chrome dissolves around the middle of the shared-element move. The
 /// two ramps never overlap, which avoids duplicate picker ids/popovers while
@@ -11271,9 +11268,11 @@ impl Render for Composer {
                     },
                 )
             });
-        let (new_thread_chrome_opacity, session_chrome_opacity) = self.dock_frame.map_or_else(
-            || route_chrome_opacities(new_thread_chrome),
-            |frame| (frame.selectors(), frame.footer()),
+        // Sessions keep nothing under the card: where a session runs (its
+        // checkout, branch and pull request) lives in the session card.
+        let new_thread_chrome_opacity = self.dock_frame.map_or_else(
+            || route_chrome_opacities(new_thread_chrome).0,
+            |frame| frame.selectors(),
         );
         self.height_morph = if dock_owns_layout {
             None
@@ -11778,40 +11777,6 @@ impl Render for Composer {
                 .children(dictation_status),
         );
 
-        // The lower slot keeps a stable footprint for Git projects while its
-        // old floating checkout/ref controls dissolve into the session footer.
-        // Non-Git sessions grow the slot continuously from zero.
-        let session_chrome = 1.0 - new_thread_chrome;
-        let bottom_slot = session_chrome;
-        let container = if bottom_slot > 0.0 {
-            let footer = (session_chrome_opacity > 0.0 && !self.side_chat).then(|| {
-                self.pickers
-                    .update(cx, |pickers, cx| pickers.render_footer(cx))
-            });
-            container.child(
-                div()
-                    .w_full()
-                    .h(px(SESSION_FOOTER_HEIGHT * bottom_slot))
-                    .mt(px(-Theme::SPACE_SM * (1.0 - bottom_slot)))
-                    .mb(px(-Theme::SPACE_SM * bottom_slot))
-                    .relative()
-                    .when(session_chrome_opacity > 0.0, |slot| {
-                        slot.child(
-                            div()
-                                .absolute()
-                                .inset_0()
-                                .w_full()
-                                .h(px(SESSION_FOOTER_HEIGHT))
-                                .flex()
-                                .items_center()
-                                .opacity(session_chrome_opacity)
-                                .child(div().flex_1().min_w_0().children(footer.flatten())),
-                        )
-                    }),
-            )
-        } else {
-            container
-        };
         // Full-size preview of a staged thumbnail (AttachmentPreviewDialog).
         if let Some(preview) = self.preview.clone() {
             if std::mem::take(&mut self.preview_focus_pending) {
@@ -15902,7 +15867,6 @@ mod tests {
     #[test]
     fn new_thread_toolbar_keeps_its_own_height() {
         assert_eq!(NEW_THREAD_SELECTOR_ROW_HEIGHT, 40.0);
-        assert_eq!(SESSION_FOOTER_HEIGHT, 24.0);
     }
 
     #[test]
