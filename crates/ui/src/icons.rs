@@ -59,6 +59,10 @@ icon_assets![
     (QUEUE_CLOSE, "queue-close"),
     (QUEUE_PAPERCLIP, "queue-paperclip"),
     (CLOCK_CIRCLE, "clock-circle"),
+    // A thread's earlier conversations (the tab strip's history menu) and
+    // the counter-clockwise arrow that reopens one.
+    (HISTORY, "history"),
+    (RESTORE, "restore"),
     (CALENDAR, "calendar"),
     (LIST, "list"),
     (FOLDER_WITH_FILES, "folder-with-files"),
@@ -322,6 +326,8 @@ mod tests {
             CHECKLIST,
             DANGER_TRIANGLE,
             CLOCK_CIRCLE,
+            HISTORY,
+            RESTORE,
             GLOBAL,
             COPY,
             REFRESH,

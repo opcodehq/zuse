@@ -91,10 +91,16 @@ pub(crate) const NEW_THREAD_SELECTOR_ROW_HEIGHT: f32 = 40.0;
 /// corner radius so no seam shows beside the rounded corners.
 const CONTEXT_TRAY_TUCK: f32 = COMPOSER_RADIUS + 2.0;
 
+/// How far every tray behind the card (context tray, queue) is inset from
+/// each side: one step narrower than the card (`w-14/15`).
+pub(crate) fn tray_inset(surface_width: f32) -> f32 {
+    (surface_width / 30.0).clamp(12.0, 32.0)
+}
+
 /// The context tray's tonal fill: a step darker than the composer card on
 /// dark (`hsl(120 2% 8.5% / 0.96)` on Zuse Dark), a soft grey-green wash on
-/// light.
-fn context_tray_fill(theme: &Theme) -> gpui::Hsla {
+/// light. The queue tray wears the same fill.
+pub(crate) fn context_tray_fill(theme: &Theme) -> gpui::Hsla {
     match theme.appearance {
         crate::theme::Appearance::Dark if theme.variant_id.as_ref() == "zuse-dark" => {
             gpui::hsla(120.0 / 360.0, 0.02, 0.085, 0.96)
@@ -110,7 +116,7 @@ fn context_tray_fill(theme: &Theme) -> gpui::Hsla {
         ),
     }
 }
-// Accommodate the 24px usage indicator and PR badge without overflowing the
+// Accommodate the 24px checkout chips and PR badge without overflowing the
 // row's equal 8px top/bottom gutters.
 pub(crate) const SESSION_FOOTER_HEIGHT: f32 = 24.0;
 
@@ -6114,6 +6120,34 @@ impl Composer {
         cx.notify();
     }
 
+    /// Review fixtures: a queued follow-up, context and plan usage, and
+    /// (`open`) the usage card pinned open.
+    #[cfg(feature = "browser-fixture")]
+    pub fn fixture_seed_usage(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            state.queue = vec![
+                zuse_doc::QueuedMessage::new(
+                    "fixture-q1",
+                    "Also cover the expired-token path",
+                    "local",
+                ),
+                zuse_doc::QueuedMessage::new("fixture-q2", "Then open a pull request", "local"),
+            ];
+            state.context_usage = Some(zuse_protocol::ContextUsage {
+                tokens: Some(241_400),
+                window: Some(1_000_000),
+            });
+            cx.notify();
+        });
+        self.account_usage.update(cx, |usage, cx| {
+            usage.fixture_seed(cx);
+            if open {
+                usage.fixture_open(cx);
+            }
+        });
+        cx.notify();
+    }
+
     pub(crate) fn surface_bounds(&self) -> crate::new_thread_background_mask::SurfaceBounds {
         self.surface_bounds.clone()
     }
@@ -10962,11 +10996,21 @@ impl Render for Composer {
         let container = container.when_some(
             self.render_queue_panel(show_queue_latest_shortcut, window, cx),
             |el, panel| {
+                // Inset like the context tray: a tab tucked behind the
+                // card's top edge rather than a full-width shelf.
+                let inset = tray_inset(self.last_available_width.map_or_else(
+                    || {
+                        self.surface_bounds
+                            .get()
+                            .map_or(COMPOSER_MAX_WIDTH, |bounds| f32::from(bounds.size.width))
+                    },
+                    |width| (width - 2.0 * Theme::SPACE_LG).max(0.0),
+                ));
                 el.child(motion::fade_quick(
                     "composer-queue",
                     div()
-                        .w_full()
                         .min_w_0()
+                        .mx(px(inset))
                         // Cancel the column gap, then tuck the tray one pixel
                         // behind the composer painted after it.
                         .mb(px(-(Theme::SPACE_SM + QUEUE_COMPOSER_OVERLAP)))
@@ -11115,6 +11159,23 @@ impl Render for Composer {
         });
 
         let send_button = self.render_send_button(mode, cx);
+        // The usage ring follows the session's harness and device; side
+        // chats borrow their parent's usage, so they show none.
+        let harness = (!self.side_chat)
+            .then(|| self.pickers.read(cx).resolved(cx).harness)
+            .flatten();
+        let target = {
+            let state = self.state.read(cx);
+            state
+                .selected_chat_row()
+                .map(|chat| chat.device_id.clone())
+                .filter(|device| state.local_device_id.as_ref() != Some(device))
+        };
+        let side_chat = self.side_chat;
+        self.account_usage.update(cx, |usage, cx| {
+            usage.set_visible(!side_chat, cx);
+            usage.track(harness, target, cx);
+        });
         let (voice_t, voice_frame) = self.update_voice(window, cx);
         let dictating = self.input.read(cx).dictation.phase.active();
         let microphone = self.render_dictation_button(voice_t, voice_frame.as_ref(), cx);
@@ -11409,10 +11470,15 @@ impl Render for Composer {
                             .children(microphone)
                             .child(model_picker),
                     )
+                    // `[model][usage ring][send]`: the ring renders nothing
+                    // until the harness reports context or plan usage.
                     .child(
                         div()
                             .flex_none()
+                            .flex()
+                            .items_center()
                             .pl(px(ACTION_PRIMARY_GAP))
+                            .child(self.account_usage.clone())
                             .child(send_button),
                     ),
             );
@@ -11458,7 +11524,7 @@ impl Render for Composer {
         // one step narrower than the card (`w-14/15`), carrying the
         // destination and checkout chips. It reaches down under the card so
         // the card painted after it reads as sitting on top of the tray.
-        let tray_inset = (surface_width / 30.0).clamp(12.0, 32.0);
+        let tray_inset = tray_inset(surface_width);
         let tray = |tuck: f32| {
             div()
                 .id("composer-context-tray")
@@ -11537,20 +11603,6 @@ impl Render for Composer {
                 self.pickers
                     .update(cx, |pickers, cx| pickers.render_footer(cx))
             });
-            if session_chrome_opacity > 0.0 {
-                let harness = (!self.side_chat)
-                    .then(|| self.pickers.read(cx).resolved(cx).harness)
-                    .flatten();
-                let target = {
-                    let state = self.state.read(cx);
-                    state
-                        .selected_chat_row()
-                        .map(|chat| chat.device_id.clone())
-                        .filter(|device| state.local_device_id.as_ref() != Some(device))
-                };
-                self.account_usage
-                    .update(cx, |usage, cx| usage.track(harness, target, cx));
-            }
             container.child(
                 div()
                     .w_full()
@@ -11568,17 +11620,7 @@ impl Render for Composer {
                                 .flex()
                                 .items_center()
                                 .opacity(session_chrome_opacity)
-                                .child(div().flex_1().min_w_0().children(footer.flatten()))
-                                .child(
-                                    // The footer row's own 4px gap: the PR badge
-                                    // ends flush with the row, so the rings keep
-                                    // their distance here.
-                                    div()
-                                        .flex_none()
-                                        .pl(px(4.0))
-                                        .pr(px(10.0))
-                                        .child(self.account_usage.clone()),
-                                ),
+                                .child(div().flex_1().min_w_0().children(footer.flatten())),
                         )
                     }),
             )

@@ -28,6 +28,47 @@ pub(super) fn cycle_target(
     Some(order[next].clone())
 }
 
+/// A thread's top-level conversations split into the strip's open tabs (in
+/// strip order: the thread's first conversation, then by creation) and the
+/// closed ones its history menu lists (most recently active first). Pure.
+///
+/// The selected conversation always shows as a tab, even when it was closed
+/// earlier and reopened from elsewhere (the sidebar, a deep link), and the
+/// strip never empties: with everything closed the first conversation stays.
+pub(super) fn split_thread_conversations(
+    mut rows: Vec<zuse_protocol::Chat>,
+    root: &str,
+    closed: &[String],
+    selected: &str,
+) -> (Vec<zuse_protocol::Chat>, Vec<zuse_protocol::Chat>) {
+    rows.sort_by(|a, b| (a.id != root, a.created_at).cmp(&(b.id != root, b.created_at)));
+    let (mut open, mut hidden): (Vec<_>, Vec<_>) = rows
+        .into_iter()
+        .partition(|chat| chat.id == selected || !closed.contains(&chat.id));
+    if open.is_empty() && !hidden.is_empty() {
+        open.push(hidden.remove(0));
+    }
+    hidden.sort_by_key(|chat| std::cmp::Reverse(chat.last_message_at.unwrap_or(chat.created_at)));
+    (open, hidden)
+}
+
+/// The tab to show after closing `closing`: the one to its right, else the
+/// one to its left. Pure.
+pub(super) fn close_neighbour(open: &[String], closing: &str) -> Option<String> {
+    let at = open.iter().position(|id| id == closing)?;
+    open.get(at + 1)
+        .or_else(|| at.checked_sub(1).and_then(|left| open.get(left)))
+        .cloned()
+}
+
+/// "1d ago" for the history menu; a just-active conversation reads "now".
+fn history_time(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    match crate::state::format_time_ago(at, now) {
+        recent if recent == "now" => recent,
+        ago => format!("{ago} ago"),
+    }
+}
+
 pub(super) fn right_pane_expand_icon(expanded: bool) -> &'static str {
     if expanded {
         icons::COLLAPSE_ARROWS
@@ -123,6 +164,7 @@ impl Shell {
             || self.user_menu.get().is_some()
             || self.spaces_menu.get().is_some()
             || self.right_plus.get().is_some()
+            || self.conversation_history.get().is_some()
             || !self.pending_file_closes.is_empty()
             || self.pending_exit.is_some()
     }
@@ -378,10 +420,8 @@ impl Shell {
         }
     }
 
-    /// The unified titlebar in chat mode:
-    /// `[new-session +] [harness icon + session title] … [toggle-changes]`.
-    /// Replaces the tab strip; inherits its titlebar duties (drag region,
-    /// animated left inset, the toggle-changes button on git projects).
+    /// The strip's `+`: a new conversation in the selected thread, sharing
+    /// its checkout, opened as the active tab.
     fn add_thread_conversation(&mut self, cx: &mut Context<Self>) {
         if self.thread_conversation_creating {
             return;
@@ -417,14 +457,15 @@ impl Shell {
         cx.notify();
     }
 
-    fn render_thread_conversations(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::of(cx).clone();
+    /// The selected thread's conversations as `(thread id, open tabs, closed)`.
+    fn thread_conversation_tabs(
+        &self,
+        cx: &App,
+    ) -> Option<(String, Vec<zuse_protocol::Chat>, Vec<zuse_protocol::Chat>)> {
         let state = self.state.read(cx);
-        let Some(selected) = state.selected_chat_row() else {
-            return Empty.into_any_element();
-        };
-        let root = selected.thread_id();
-        let mut rows: Vec<_> = state
+        let selected = state.selected_chat_row()?;
+        let root = selected.thread_id().to_owned();
+        let rows: Vec<_> = state
             .chats
             .iter()
             .filter(|chat| {
@@ -432,7 +473,76 @@ impl Shell {
             })
             .cloned()
             .collect();
-        rows.sort_by_key(|chat| (chat.id != root, chat.created_at));
+        let closed = self
+            .settings
+            .closed_thread_conversations
+            .get(&root)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let (open, hidden) = split_thread_conversations(rows, &root, closed, &selected.id);
+        Some((root, open, hidden))
+    }
+
+    /// Close a conversation tab: it leaves the strip but stays in the thread,
+    /// listed in the history menu. The last open tab never closes; closing
+    /// the one on screen shows its neighbour.
+    fn close_thread_conversation(&mut self, chat_id: &str, cx: &mut Context<Self>) {
+        let Some((root, open, _)) = self.thread_conversation_tabs(cx) else {
+            return;
+        };
+        let open: Vec<String> = open.into_iter().map(|chat| chat.id).collect();
+        if open.len() <= 1 {
+            return;
+        }
+        let Some(neighbour) = close_neighbour(&open, chat_id) else {
+            return;
+        };
+        let closed = self
+            .settings
+            .closed_thread_conversations
+            .entry(root)
+            .or_default();
+        if !closed.iter().any(|id| id == chat_id) {
+            closed.push(chat_id.to_owned());
+        }
+        self.schedule_save(cx);
+        if self.state.read(cx).selected_chat.as_deref() == Some(chat_id) {
+            self.open_chat(neighbour, cx);
+        }
+        cx.notify();
+    }
+
+    /// Reopen a closed conversation from the history menu as the active tab.
+    fn restore_thread_conversation(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        if let Some((root, ..)) = self.thread_conversation_tabs(cx)
+            && let Some(closed) = self.settings.closed_thread_conversations.get_mut(&root)
+        {
+            closed.retain(|id| *id != chat_id);
+            if closed.is_empty() {
+                self.settings.closed_thread_conversations.remove(&root);
+            }
+            self.schedule_save(cx);
+        }
+        self.close_conversation_history(cx);
+        self.open_chat(chat_id, cx);
+        self.activate_main_tab(None, cx);
+    }
+
+    pub(super) fn close_conversation_history(&mut self, cx: &mut Context<Self>) {
+        if self.conversation_history.begin_close() {
+            popover::reap_popup(cx, |shell: &mut Self| &mut shell.conversation_history);
+        }
+    }
+
+    fn render_thread_conversations(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).clone();
+        let Some((_, rows, closed_rows)) = self.thread_conversation_tabs(cx) else {
+            return Empty.into_any_element();
+        };
+        let state = self.state.read(cx);
+        let Some(selected) = state.selected_chat_row() else {
+            return Empty.into_any_element();
+        };
         // Side chats of the open conversation list after its siblings; they
         // open in the right pane, beside the conversation they branch from.
         let mut side_chats: Vec<_> = state
@@ -448,6 +558,7 @@ impl Shell {
         let archived = selected.archived;
         let main_diff = self.active_main_diff(cx);
         let main_tabs = self.main_tab_rows(cx);
+        let closable = rows.len() > 1;
         let tab = |id: SharedString, title: SharedString, active: bool| {
             div()
                 .id(id)
@@ -474,136 +585,253 @@ impl Shell {
                         .hover(|d| d.bg(theme.muted_fill().opacity(0.6)).text_color(theme.text))
                 })
         };
-        let main_chips = main_tabs.into_iter().map(|(id, title, review)| {
-            let active = main_diff == Some(id);
-            let group = SharedString::from(format!("main-tab-{id}"));
-            tab(group.clone(), title.clone(), active)
-                .group(group.clone())
-                .pr(px(4.))
-                .debug_selector(move || format!("main-tab-{id}"))
-                .child(
-                    icon(if review {
-                        icons::GIT_COMPARE
-                    } else {
-                        icons::GIT_BRANCH
-                    })
-                    .size(px(13.))
+        // The × every closable tab shares: shown on the active tab, revealed
+        // on hover for the rest.
+        let close_button =
+            |id: SharedString, label: &'static str, active: bool, group: SharedString| {
+                div()
+                    .id(id)
+                    .role(gpui::Role::Button)
+                    .aria_label(label)
+                    .size(px(16.))
                     .flex_none()
-                    .text_color(theme.text_muted),
-                )
-                .child(div().min_w_0().truncate().child(title))
-                .child(
-                    div()
-                        .id(SharedString::from(format!("main-tab-close-{id}")))
-                        .role(gpui::Role::Button)
-                        .aria_label(if review { "Close review" } else { "Close diff" })
-                        .size(px(16.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .when(!active, |d| d.invisible())
+                    .group_hover(group, |d| d.visible())
+                    .hover(|d| d.bg(theme.muted_fill()))
+                    .child(
+                        icon(icons::CLOSE)
+                            .size(px(10.))
+                            .text_color(theme.text_muted),
+                    )
+            };
+        let main_chips = main_tabs
+            .into_iter()
+            .map(|(id, title, review)| {
+                let active = main_diff == Some(id);
+                let group = SharedString::from(format!("main-tab-{id}"));
+                tab(group.clone(), title.clone(), active)
+                    .group(group.clone())
+                    .pr(px(4.))
+                    .debug_selector(move || format!("main-tab-{id}"))
+                    .child(
+                        icon(if review {
+                            icons::GIT_COMPARE
+                        } else {
+                            icons::GIT_BRANCH
+                        })
+                        .size(px(13.))
                         .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.))
-                        .when(!active, |d| d.invisible())
-                        .group_hover(group, |d| d.visible())
-                        .hover(|d| d.bg(theme.muted_fill()))
-                        .child(
-                            icon(icons::CLOSE)
-                                .size(px(10.))
-                                .text_color(theme.text_muted),
+                        .text_color(theme.text_muted),
+                    )
+                    .child(div().min_w_0().truncate().child(title))
+                    .child(
+                        close_button(
+                            SharedString::from(format!("main-tab-close-{id}")),
+                            if review { "Close review" } else { "Close diff" },
+                            active,
+                            group,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.close_main_tab(id, cx);
                         })),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.close_main_tab(id, cx);
+                        }),
+                    )
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.activate_main_tab(Some(id), cx)),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        let conversation_chips = rows
+            .into_iter()
+            .enumerate()
+            .map(|(index, chat)| {
+                let active = chat.id == selected_id && main_diff.is_none();
+                let title = chat
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| format!("Chat {}", index + 1));
+                let brand = chat
+                    .config
+                    .as_ref()
+                    .map(|c| crate::pickers::harness_brand_icon(c.harness));
+                let id = chat.id;
+                let group = SharedString::from(format!("thread-conversation-{id}"));
+                let (close_id, middle_id) = (id.clone(), id.clone());
+                tab(group.clone(), title.clone().into(), active)
+                    .group(group.clone())
+                    .when(closable, |d| d.pr(px(4.)))
+                    .debug_selector({
+                        let id = id.clone();
+                        move || format!("thread-conversation-{id}")
+                    })
+                    .child(match brand {
+                        Some((path, tint)) => icon(path)
+                            .size(px(14.))
+                            .flex_none()
+                            .text_color(tint.unwrap_or(theme.text_muted)),
+                        None => icon(icons::CHAT_ROUND_LINE)
+                            .size(px(14.))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    })
+                    .child(div().min_w_0().truncate().child(title))
+                    .when(closable, |d| {
+                        d.child(
+                            close_button(
+                                SharedString::from(format!("thread-conversation-close-{id}")),
+                                "Close chat",
+                                active,
+                                group,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.close_thread_conversation(&close_id, cx);
+                                },
+                            )),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Middle,
+                            cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.close_thread_conversation(&middle_id, cx);
+                            }),
+                        )
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.active_chat == id {
+                            this.activate_main_tab(None, cx);
+                        } else {
+                            this.open_chat(id.clone(), cx);
+                        }
+                    }))
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        let side_chips = side_chats
+            .into_iter()
+            .map(|chat| {
+                let title: SharedString = chat
+                    .title
+                    .clone()
+                    .or_else(|| chat.last_message_preview.clone())
+                    .unwrap_or_else(|| "Side chat".into())
+                    .into();
+                let brand = chat
+                    .config
+                    .as_ref()
+                    .map(|c| crate::pickers::harness_brand_icon(c.harness));
+                let id = chat.id;
+                let rename = self.rename_input_for(&id, ChatRenameSurface::Tab);
+                let (open_id, menu_id, rename_id) = (id.clone(), id.clone(), id.clone());
+                tab(
+                    SharedString::from(format!("side-chat-tab-{id}")),
+                    title.clone(),
+                    false,
                 )
-                .on_click(cx.listener(move |this, _, _, cx| this.activate_main_tab(Some(id), cx)))
+                .child(
+                    icon(brand.map_or(icons::CHAT_ROUND_LINE, |(path, _)| path))
+                        .size(px(14.))
+                        .text_color(brand.and_then(|(_, tint)| tint).unwrap_or(theme.text_muted)),
+                )
+                .child(match rename {
+                    Some(input) => div().w(px(120.)).child(input).into_any_element(),
+                    None => div().min_w_0().truncate().child(title).into_any_element(),
+                })
+                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                    if event.click_count() >= 2 {
+                        this.open_rename_chat(rename_id.clone(), cx);
+                    } else {
+                        this.open_child_chat_tab(&open_id, cx);
+                    }
+                }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.chat_menu.open(ChatMenuState {
+                            chat_id: menu_id.clone(),
+                            tab: None,
+                            position: event.position,
+                            page: ChatMenuPage::Root,
+                        });
+                        cx.notify();
+                    }),
+                )
                 .into_any_element()
-        });
-        let conversation_chips = rows.into_iter().enumerate().map(|(index, chat)| {
-            let active = chat.id == selected_id && main_diff.is_none();
-            let title = chat
-                .title
-                .clone()
-                .unwrap_or_else(|| format!("Chat {}", index + 1));
-            let brand = chat
-                .config
-                .as_ref()
-                .map(|c| crate::pickers::harness_brand_icon(c.harness));
-            let id = chat.id;
-            tab(
-                SharedString::from(format!("thread-conversation-{id}")),
-                title.clone().into(),
-                active,
-            )
-            .child(match brand {
-                Some((path, tint)) => icon(path)
-                    .size(px(14.))
-                    .text_color(tint.unwrap_or(theme.text_muted)),
-                None => icon(icons::CHAT_ROUND_LINE)
-                    .size(px(14.))
-                    .text_color(theme.text_muted),
             })
-            .child(div().min_w_0().truncate().child(title))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if this.active_chat == id {
-                    this.activate_main_tab(None, cx);
-                } else {
-                    this.open_chat(id.clone(), cx);
-                }
-            }))
-            .into_any_element()
-        });
-        let side_chips = side_chats.into_iter().map(|chat| {
-            let title: SharedString = chat
-                .title
-                .clone()
-                .or_else(|| chat.last_message_preview.clone())
-                .unwrap_or_else(|| "Side chat".into())
-                .into();
-            let brand = chat
-                .config
-                .as_ref()
-                .map(|c| crate::pickers::harness_brand_icon(c.harness));
-            let id = chat.id;
-            let rename = self.rename_input_for(&id, ChatRenameSurface::Tab);
-            let (open_id, menu_id, rename_id) = (id.clone(), id.clone(), id.clone());
-            tab(
-                SharedString::from(format!("side-chat-tab-{id}")),
-                title.clone(),
-                false,
-            )
-            .child(
-                icon(brand.map_or(icons::CHAT_ROUND_LINE, |(path, _)| path))
-                    .size(px(14.))
-                    .text_color(brand.and_then(|(_, tint)| tint).unwrap_or(theme.text_muted)),
-            )
-            .child(match rename {
-                Some(input) => div().w(px(120.)).child(input).into_any_element(),
-                None => div().min_w_0().truncate().child(title).into_any_element(),
-            })
-            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                if event.click_count() >= 2 {
-                    this.open_rename_chat(rename_id.clone(), cx);
-                } else {
-                    this.open_child_chat_tab(&open_id, cx);
-                }
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    this.chat_menu.open(ChatMenuState {
-                        chat_id: menu_id.clone(),
-                        tab: None,
-                        position: event.position,
-                        page: ChatMenuPage::Root,
-                    });
-                    cx.notify();
-                }),
-            )
-            .into_any_element()
-        });
+            .collect::<Vec<_>>();
+        // Quiet 24px strip buttons: the `+` after the last tab and the
+        // history clock at the strip's right end.
+        let strip_button = |id: &'static str, glyph: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .role(gpui::Role::Button)
+                .aria_label(label)
+                .size(px(24.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(7.))
+                .cursor_pointer()
+                .hover(|d| d.bg(theme.muted_fill().opacity(0.6)))
+                .tooltip(crate::settings::widgets::text_tooltip(label))
+                .child(icon(glyph).size(px(14.)).text_color(theme.text_muted))
+        };
+        let history_open = self.conversation_history.get().is_some();
+        let history = strip_button(
+            "thread-conversation-history",
+            icons::HISTORY,
+            "Earlier chats",
+        )
+        .aria_expanded(history_open)
+        .when(history_open, |d| d.bg(theme.muted_fill().opacity(0.6)))
+        .block_mouse_except_scroll()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, _| {
+                window.prevent_default();
+                this.conversation_history.note_trigger_press();
+            }),
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            cx.stop_propagation();
+            if this.conversation_history.take_press_was_open() {
+                this.close_conversation_history(cx);
+            } else {
+                this.conversation_history.open(());
+                cx.notify();
+            }
+        }));
+        let history = if history_open {
+            let closing = self.conversation_history.closing_since();
+            let menu = self.render_conversation_history(&closed_rows, &theme, cx);
+            history
+                .relative()
+                .child(popover::anchored_menu_below_end(
+                    "thread-conversation-history-menu",
+                    menu,
+                    closing,
+                ))
+                .into_any_element()
+        } else {
+            history.into_any_element()
+        };
         div()
+            .w_full()
             .flex()
             .items_center()
             .min_w_0()
@@ -611,7 +839,6 @@ impl Shell {
             .child(
                 div()
                     .id("thread-conversations")
-                    .flex_1()
                     .flex()
                     .items_center()
                     .min_w_0()
@@ -623,25 +850,89 @@ impl Shell {
             )
             .when(!archived, |d| {
                 d.child(
-                    div()
-                        .id("add-thread-conversation")
-                        .role(gpui::Role::Button)
-                        .aria_label("New chat in this thread")
-                        .size(px(24.))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(7.))
-                        .cursor_pointer()
-                        .hover(|d| d.bg(theme.muted_fill().opacity(0.6)))
-                        .tooltip(crate::settings::widgets::text_tooltip(
-                            "New chat in this thread",
-                        ))
-                        .child(icon(icons::PLUS).size(px(14.)).text_color(theme.text_muted))
-                        .on_click(cx.listener(|this, _, _, cx| this.add_thread_conversation(cx))),
+                    strip_button(
+                        "add-thread-conversation",
+                        icons::PLUS,
+                        "New chat in this thread",
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.add_thread_conversation(cx))),
                 )
             })
+            .child(div().flex_1())
+            .child(history)
+            .into_any_element()
+    }
+
+    /// The history menu: this thread's closed conversations, most recent
+    /// first; a row reopens its conversation as the active tab.
+    fn render_conversation_history(
+        &self,
+        closed: &[zuse_protocol::Chat],
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = &theme.for_popup();
+        let now = Utc::now();
+        let rows = closed.iter().map(|chat| {
+            let brand = chat
+                .config
+                .as_ref()
+                .map(|c| crate::pickers::harness_brand_icon(c.harness));
+            let title: SharedString = chat
+                .title
+                .clone()
+                .or_else(|| chat.last_message_preview.clone())
+                .unwrap_or_else(|| "Untitled chat".into())
+                .into();
+            let id = chat.id.clone();
+            let fade = format!("thread-history-row-{id}");
+            popover::menu_row(theme, false, fade.clone())
+                .id(SharedString::from(fade))
+                .role(gpui::Role::MenuItem)
+                .aria_label(title.clone())
+                .child(
+                    icon(brand.map_or(icons::CHAT_ROUND_LINE, |(path, _)| path))
+                        .size(px(14.))
+                        .flex_none()
+                        .text_color(brand.and_then(|(_, tint)| tint).unwrap_or(theme.text_muted)),
+                )
+                .child(div().flex_1().min_w_0().truncate().child(title))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(crate::typography::ui_rems(12.))
+                        .text_color(theme.text_muted)
+                        .child(history_time(
+                            chat.last_message_at.unwrap_or(chat.created_at),
+                            now,
+                        )),
+                )
+                .child(
+                    icon(icons::RESTORE)
+                        .size(px(13.))
+                        .flex_none()
+                        .text_color(theme.text_muted),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.restore_thread_conversation(id.clone(), cx)
+                }))
+                .into_any_element()
+        });
+        popover::popover_card(theme)
+            .w(px(300.))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_conversation_history(cx)))
+            .flex()
+            .flex_col()
+            .when(closed.is_empty(), |d| {
+                d.child(
+                    div()
+                        .px(px(8.))
+                        .py(px(6.))
+                        .text_color(theme.text_muted)
+                        .child("No earlier chats"),
+                )
+            })
+            .children(rows)
             .into_any_element()
     }
 
@@ -946,6 +1237,70 @@ mod panel_titlebar_tests {
 }
 
 #[cfg(test)]
+mod thread_conversation_tests {
+    use super::*;
+
+    fn chat(id: &str, minutes: i64, active_minutes: Option<i64>) -> zuse_protocol::Chat {
+        let base = chrono::DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        serde_json::from_value(serde_json::json!({
+            "id": id, "deviceId": "local", "title": null, "archived": false,
+            "createdAt": base + chrono::Duration::minutes(minutes),
+            "lastMessageAt": active_minutes.map(|m| base + chrono::Duration::minutes(m)),
+            "threadId": "root",
+        }))
+        .unwrap()
+    }
+
+    fn ids(chats: &[zuse_protocol::Chat]) -> Vec<&str> {
+        chats.iter().map(|chat| chat.id.as_str()).collect()
+    }
+
+    #[test]
+    fn closed_conversations_move_to_history_most_recent_first() {
+        let rows = vec![
+            chat("b", 2, Some(5)),
+            chat("root", 0, None),
+            chat("c", 3, Some(90)),
+            chat("d", 4, None),
+        ];
+        let closed = vec!["b".to_owned(), "c".to_owned()];
+        let (open, hidden) = split_thread_conversations(rows, "root", &closed, "root");
+        assert_eq!(ids(&open), ["root", "d"]);
+        assert_eq!(ids(&hidden), ["c", "b"]);
+    }
+
+    #[test]
+    fn the_selected_conversation_always_shows_and_the_strip_never_empties() {
+        let rows = vec![chat("root", 0, None), chat("b", 1, None)];
+        let closed = vec!["root".to_owned(), "b".to_owned()];
+        let (open, hidden) = split_thread_conversations(rows.clone(), "root", &closed, "b");
+        assert_eq!((ids(&open), ids(&hidden)), (vec!["b"], vec!["root"]));
+        // Selection outside the thread (stale): the first conversation stays.
+        let (open, hidden) = split_thread_conversations(rows, "root", &closed, "elsewhere");
+        assert_eq!((ids(&open), ids(&hidden)), (vec!["root"], vec!["b"]));
+    }
+
+    #[test]
+    fn closing_shows_the_right_neighbour_then_the_left() {
+        let open = ["a", "b", "c"].map(String::from);
+        assert_eq!(close_neighbour(&open, "b").as_deref(), Some("c"));
+        assert_eq!(close_neighbour(&open, "c").as_deref(), Some("b"));
+        assert_eq!(close_neighbour(&open, "a").as_deref(), Some("b"));
+        assert_eq!(close_neighbour(&open[..1], "a"), None);
+        assert_eq!(close_neighbour(&open, "gone"), None);
+    }
+
+    #[test]
+    fn history_times_read_as_ago() {
+        let now = Utc::now();
+        assert_eq!(history_time(now, now), "now");
+        assert_eq!(history_time(now - chrono::Duration::days(1), now), "1d ago");
+    }
+}
+
+#[cfg(test)]
 mod cycle_tests {
     use super::*;
 
@@ -1010,4 +1365,83 @@ mod cycle_tests {
     // `AppState::sidebar_chats` the sidebar and the jump shortcuts read, and
     // `jump_slots_count_the_rows_the_sidebar_draws` (state.rs) covers the
     // space-filter behaviour for all of them.
+}
+
+#[cfg(feature = "browser-fixture")]
+impl Shell {
+    /// Three conversations in the selected thread, the oldest sibling closed
+    /// into the history menu. `hover` moves the pointer over the second tab
+    /// so captures show its ×.
+    pub(super) fn fixture_seed_thread_conversations(
+        &mut self,
+        hover: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self.state.read(cx).selected_chat.clone() else {
+            return;
+        };
+        self.state.update(cx, |state, cx| {
+            let Some(base) = state.chats.iter().find(|chat| chat.id == root).cloned() else {
+                return;
+            };
+            for (id, title, harness, hours) in [
+                (
+                    "thread-review",
+                    "Review the sync protocol",
+                    HarnessId::Codex,
+                    30,
+                ),
+                (
+                    "thread-copy",
+                    "Tidy onboarding copy",
+                    HarnessId::ClaudeCode,
+                    2,
+                ),
+                ("thread-tests", "Add snapshot tests", HarnessId::Codex, 1),
+            ] {
+                let mut chat = base.clone();
+                chat.id = id.into();
+                chat.title = Some(title.into());
+                chat.thread_id = Some(root.clone());
+                chat.created_at = Utc::now() - chrono::Duration::hours(hours);
+                chat.last_message_at = Some(chat.created_at);
+                if let Some(config) = chat.config.as_mut() {
+                    config.harness = harness;
+                }
+                state.chats.retain(|row| row.id != id);
+                state.chats.push(chat);
+            }
+            cx.notify();
+        });
+        self.settings
+            .closed_thread_conversations
+            .insert(root, vec!["thread-review".into()]);
+        if hover {
+            // The real pointer, so the strip's own hover styling shows.
+            cx.spawn(async move |_, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(300))
+                    .await;
+                let pid = std::process::id().to_string();
+                if let Ok(out) = std::process::Command::new("xdotool")
+                    .args(["search", "--onlyvisible", "--pid", &pid])
+                    .output()
+                    && let Some(window) = String::from_utf8_lossy(&out.stdout).lines().next()
+                {
+                    let (x, y) = std::env::var("ZUSE_FIXTURE_HOVER")
+                        .ok()
+                        .and_then(|at| {
+                            let (x, y) = at.split_once(',')?;
+                            Some((x.to_owned(), y.to_owned()))
+                        })
+                        .unwrap_or_else(|| ("520".into(), "24".into()));
+                    let _ = std::process::Command::new("xdotool")
+                        .args(["mousemove", "--window", window, &x, &y])
+                        .status();
+                }
+            })
+            .detach();
+        }
+        cx.notify();
+    }
 }

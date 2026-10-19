@@ -1005,6 +1005,11 @@ pub struct UiSettings {
     /// The user hid the session card (project, device, side chats, actions)
     /// that otherwise shows beside a transcript with room for it.
     pub session_info_hidden: bool,
+    /// Conversations closed out of each thread's tab strip, keyed by thread
+    /// id. Device-local and non-destructive: a closed conversation stays in
+    /// the thread and lists under the strip's history menu until reopened.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub closed_thread_conversations: HashMap<String, Vec<String>>,
     /// Interactive identity overlay; imported themes default to their own accent.
     pub accent: zuse_theme::AccentSelection,
     /// Glass policy, independent from the selected appearance, theme, and accent.
@@ -1118,6 +1123,7 @@ impl Default for UiSettings {
             files_word_wrap: false,
             files_show_all: false,
             session_info_hidden: false,
+            closed_thread_conversations: HashMap::new(),
             accent: zuse_theme::AccentSelection::default(),
             surface: zuse_theme::SurfacePreference::default(),
             new_thread_composer_background: None,
@@ -1766,6 +1772,7 @@ impl UiSettings {
             files_word_wrap,
             files_show_all,
             session_info_hidden,
+            closed_thread_conversations,
             accent,
             surface,
             new_thread_composer_background,
@@ -2855,6 +2862,10 @@ mod tests {
             code_font_size: 11.0,
             files_show_all: true,
             session_info_hidden: true,
+            closed_thread_conversations: HashMap::from([(
+                "thread".into(),
+                vec!["closed-conversation".into()],
+            )]),
             accent: zuse_theme::AccentSelection::Preset(zuse_theme::AccentPreset::Cyan),
             surface: zuse_theme::SurfacePreference::Frosted,
             new_thread_composer_background: Some(NewThreadComposerBackground {

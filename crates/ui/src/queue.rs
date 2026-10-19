@@ -257,16 +257,11 @@ pub(crate) fn queue_panel_surface(theme: &Theme, dragging: bool) -> gpui::Div {
     div()
         .when(!dragging, |el| el.occlude())
         .rounded_t(px(PANEL_RADIUS))
-        .bg(
-            if theme.is_frost() && matches!(theme.appearance, crate::theme::Appearance::Dark) {
-                theme.composer_sidebar_tint()
-            } else {
-                theme.input_glass_bg()
-            },
-        )
+        // The composer's context tray: its tonal fill and a faint hairline,
+        // no drop shadow — a tab behind the card, not a floating panel.
+        .bg(crate::composer::context_tray_fill(theme))
         .border_1()
-        .border_color(theme.border)
-        .when(!theme.is_frost(), |el| el.shadow_lg())
+        .border_color(theme.hairline(0.06))
         // GPUI clips children to rectangles, so inset the rows to keep their
         // hover and editing backgrounds inside the tray's rounded corners.
         // The composer covers the bottom overlap; the same inset shows above it.

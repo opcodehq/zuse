@@ -2103,6 +2103,8 @@ pub struct Shell {
     side_chat_seq: u64,
     side_chat_creating: bool,
     thread_conversation_creating: bool,
+    /// The tab strip's history menu: this thread's closed conversations.
+    conversation_history: popover::Popup<()>,
     browsers: std::collections::HashMap<u64, Entity<crate::browser::BrowserSurface>>,
     browser_subs: std::collections::HashMap<u64, Subscription>,
     browser_seq: u64,
@@ -2630,6 +2632,7 @@ impl Shell {
             side_chat_seq: 0,
             side_chat_creating: false,
             thread_conversation_creating: false,
+            conversation_history: popover::Popup::default(),
             browsers: std::collections::HashMap::new(),
             browser_subs: std::collections::HashMap::new(),
             browser_seq: 0,
@@ -11284,6 +11287,10 @@ impl Shell {
         if self.right_plus.get().is_some() {
             return true;
         }
+        if self.conversation_history.is_open() {
+            self.close_conversation_history(cx);
+            return true;
+        }
         self.active_changes(cx)
             .is_some_and(|changes| changes.update(cx, |changes, cx| changes.handle_escape(cx)))
     }
@@ -19037,6 +19044,9 @@ impl Shell {
             self.toggle_command_palette(window, cx);
         } else if route.ends_with("sidebar-view-menu") {
             self.open_sidebar_view_menu(window, cx);
+        } else if route.ends_with("tabs-history-menu") {
+            self.conversation_history.open(());
+            cx.notify();
         }
     }
     /// Right-pane and main-area tab states for review captures:
@@ -19163,6 +19173,14 @@ impl Shell {
             "new-thread" => self.open_new_session(None, cx),
             _ => {}
         }
+        // `main:usage` adds queued follow-ups and context/plan usage to the
+        // worked conversation; `:usage-open` also pins the usage card open.
+        if variant.starts_with("usage") {
+            self.fixture_seed_transcript(false, cx);
+            self.composer.update(cx, |composer, cx| {
+                composer.fixture_seed_usage(variant == "usage-open", cx)
+            });
+        }
         // `<route>:draft` types a prompt so the send key is live.
         if variant == "draft" {
             self.composer.update(cx, |composer, cx| {
@@ -19180,6 +19198,11 @@ impl Shell {
                 self.session_info_overlay = true;
             }
             cx.notify();
+        }
+        // `main:tabs…` seeds a thread with three conversations, one closed
+        // into the strip's history (`-hover` points at an inactive tab).
+        if variant.starts_with("tabs") {
+            self.fixture_seed_thread_conversations(variant == "tabs-hover", cx);
         }
     }
 

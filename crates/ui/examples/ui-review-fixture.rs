@@ -4,6 +4,8 @@
 //! ZUSE_SIDEBAR_BY_PROJECT groups by project, with a remote clone of the local repository;
 //! ZUSE_SIDEBAR_COLLAPSED=<space ids> collapses those project groups and
 //! ZUSE_SIDEBAR_FILTER=<space id> sets the project filter.
+//! Route variants: `main:usage` seeds queued follow-ups and context/plan usage on the
+//! worked conversation; `main:usage-open` also pins the composer's usage card open.
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 use zuse_ui::*;
 
