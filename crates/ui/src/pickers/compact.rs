@@ -885,7 +885,7 @@ impl Pickers {
     }
 
     /// Tab on the panel: the next provider on offer, wrapping, at its
-    /// last-used model. A chat's fixed provider stays put.
+    /// last-used model. Pending first sends keep their snapshot stable.
     fn cycle_compact_provider(&mut self, delta: isize, cx: &mut Context<Self>) {
         if self.harness_locked(cx) {
             return;

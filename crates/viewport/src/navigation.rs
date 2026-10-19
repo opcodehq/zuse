@@ -2,7 +2,7 @@
 use super::*;
 use crate::assets::icon;
 use crate::shell::{
-    BG, BORDER, FAINT, MUTED, RAISED, SURFACE, TEXT, column, control, icon_button, label,
+    BG, BORDER, FAINT, MUTED, RAISED, SURFACE, TEXT, column, icon_button, label,
     provider_icon, row,
 };
 use zuse_protocol::presentation::{SidebarView, project_identity};
@@ -83,7 +83,11 @@ impl WorkspaceView {
                     let active = chat["id"] == selected["id"];
                     let chat = chat.clone();
                     let title = chat["title"].as_str().map(str::to_owned).unwrap_or_else(|| format!("Chat {}", index+1));
-                    control(SharedString::from(format!("thread-conversation-{}", chat["id"].as_str().unwrap_or_default())), SharedString::from(title))
+                    let provider = chat["config"]["harness"].as_str().unwrap_or_default();
+                    row().id(SharedString::from(format!("thread-conversation-{}", chat["id"].as_str().unwrap_or_default())))
+                        .h(px(28.)).px_2().gap_2().rounded(px(7.)).cursor_pointer()
+                        .child(icon(provider_icon(provider)).size(px(14.)).text_color(rgb(MUTED)))
+                        .child(div().min_w_0().truncate().text_size(px(12.)).child(title))
                         .role(Role::Tab).aria_selected(active).max_w(px(180.)).flex_shrink_0()
                         .when(active, |d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
                         .on_click(cx.listener(move |this, _, _, cx| { this.select(chat.clone(), cx); }))

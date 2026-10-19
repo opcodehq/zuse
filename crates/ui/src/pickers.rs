@@ -1177,7 +1177,7 @@ impl Pickers {
         &self.config
     }
 
-    /// Preserve provider continuity after a conversation has started.
+    /// Keep a first-send snapshot stable while it is being submitted.
     fn harness_locked(&self, cx: &App) -> bool {
         let state = self.state.read(cx);
         self.title.is_none()
@@ -2119,7 +2119,7 @@ impl Pickers {
         if self.state.read(cx).selected_chat.is_some()
             && self.effective_harness(cx) != Some(harness)
         {
-            // Empty conversations own their provider and model settings.
+            // Each conversation owns its provider and model settings.
             // Clear the old provider's traits before applying its replacement.
             let model = self.defaults.model_for(harness).map(|m| m.id.clone());
             let reasoning = self.defaults.reasoning_for(harness, model.as_deref());
@@ -6904,7 +6904,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn side_chat_favorites_switch_harness_locally_and_lock_after_creation(
+    fn side_chat_choices_remain_editable_after_creation(
         cx: &mut gpui::TestAppContext,
     ) {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -6952,14 +6952,11 @@ mod tests {
         );
 
         cx.update(|cx| {
-            // Forks are already persisted when opened, even before their first
-            // own message. Saved empty side chats must have the same lock.
+            // Persisted conversations can change provider, including forks.
             let (_, fork) = side_chat_picker(false, cx);
             fork.update(cx, |pickers, cx| {
-                assert!(pickers.harness_locked(cx));
-                assert_eq!(pickers.rail_descriptors(cx).len(), 1);
-                pickers.pick_harness(HarnessId::Codex, cx);
-                assert_eq!(pickers.resolved(cx).harness, Some(HarnessId::ClaudeCode));
+                assert!(!pickers.harness_locked(cx));
+                assert_eq!(pickers.rail_descriptors(cx).len(), 2);
             });
             let (state, pickers) = side_chat_picker(true, cx);
             state.update(cx, |state, _| {
@@ -6980,9 +6977,8 @@ mod tests {
             );
             state.update(cx, |state, cx| state.side_chat_saved("side", cx));
             pickers.update(cx, |pickers, cx| {
-                assert!(pickers.harness_locked(cx));
-                pickers.pick_harness(HarnessId::Codex, cx);
-                assert_eq!(pickers.resolved(cx).harness, Some(HarnessId::ClaudeCode));
+                assert!(!pickers.harness_locked(cx));
+                assert_eq!(pickers.rail_descriptors(cx).len(), 2);
             });
         });
     }
@@ -9421,7 +9417,7 @@ mod tests {
                     .update(cx, |input, cx| input.set_text("Claude", cx));
                 assert_eq!(picker.model_rows_len(cx), 0);
                 picker.search.update(cx, |input, cx| input.set_text("", cx));
-                // A chat's provider is fixed: one tab, its own.
+                // Until the selected chat row arrives, keep its last known provider.
                 assert_eq!(picker.compact_groups(cx), vec![(Some(HarnessId::Codex), 0)]);
                 picker.compact_model_list = false;
                 picker.focus_on_mount = true;

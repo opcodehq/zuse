@@ -2581,15 +2581,10 @@ impl AppState {
                 .is_some_and(|id| !self.pending_sends.contains_key(id))
     }
 
-    /// A conversation chooses its own provider before its first run.
+    /// Provider changes use the engine’s existing context handoff between runs.
     pub(crate) fn conversation_provider_editable(&self) -> bool {
-        self.selected_chat_row().is_some_and(|chat| {
-            chat.parent_chat_id.is_none()
-                && !chat.archived
-                && chat.last_message_at.is_none()
-                && chat.harness_session_id.is_none()
-                && !self.pending_sends.contains_key(&chat.id)
-        })
+        self.selected_chat_row()
+            .is_some_and(|chat| !chat.archived && !self.pending_sends.contains_key(&chat.id))
     }
 
     fn is_unsaved_side_chat(&self, chat_id: &str) -> bool {

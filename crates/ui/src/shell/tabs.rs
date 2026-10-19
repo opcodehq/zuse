@@ -525,13 +525,25 @@ impl Shell {
                 .title
                 .clone()
                 .unwrap_or_else(|| format!("Chat {}", index + 1));
+            let brand = chat
+                .config
+                .as_ref()
+                .map(|c| crate::pickers::harness_brand_icon(c.harness));
             let id = chat.id;
             tab(
                 SharedString::from(format!("thread-conversation-{id}")),
                 title.clone().into(),
                 active,
             )
-            .child(div().truncate().child(title))
+            .child(match brand {
+                Some((path, tint)) => icon(path)
+                    .size(px(14.))
+                    .text_color(tint.unwrap_or(theme.text_muted)),
+                None => icon(icons::CHAT_ROUND_LINE)
+                    .size(px(14.))
+                    .text_color(theme.text_muted),
+            })
+            .child(div().min_w_0().truncate().child(title))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if this.active_chat == id {
                     this.activate_main_tab(None, cx);
@@ -548,6 +560,10 @@ impl Shell {
                 .or_else(|| chat.last_message_preview.clone())
                 .unwrap_or_else(|| "Side chat".into())
                 .into();
+            let brand = chat
+                .config
+                .as_ref()
+                .map(|c| crate::pickers::harness_brand_icon(c.harness));
             let id = chat.id;
             let rename = self.rename_input_for(&id, ChatRenameSurface::Tab);
             let (open_id, menu_id, rename_id) = (id.clone(), id.clone(), id.clone());
@@ -557,10 +573,9 @@ impl Shell {
                 false,
             )
             .child(
-                icon(icons::CHAT_ROUND_LINE)
-                    .size(px(13.))
-                    .flex_none()
-                    .text_color(theme.text_muted),
+                icon(brand.map_or(icons::CHAT_ROUND_LINE, |(path, _)| path))
+                    .size(px(14.))
+                    .text_color(brand.and_then(|(_, tint)| tint).unwrap_or(theme.text_muted)),
             )
             .child(match rename {
                 Some(input) => div().w(px(120.)).child(input).into_any_element(),
@@ -636,13 +651,7 @@ impl Shell {
         // header over the empty canvas was noise); the bar keeps its height,
         // drag region, and buttons. Where a session runs, and its side-chat
         // and project actions, live in the session card.
-        let (harness, on_canvas) = {
-            let state = self.state.read(cx);
-            match state.selected_chat_row() {
-                Some(chat) => (chat.config.as_ref().map(|c| c.harness), false),
-                None => (None, true),
-            }
-        };
+        let on_canvas = self.state.read(cx).selected_chat_row().is_none();
 
         // The new-session `+` renders in the WINDOW-CONTROL CLUSTER whenever a
         // session is selected (`render_titlebar_cluster`) — this row budgets
@@ -843,17 +852,6 @@ impl Shell {
                         .flex_row()
                         .items_center()
                         .gap(px(6.0))
-                        .when_some(
-                            harness.map(crate::pickers::harness_brand_icon),
-                            |el, (path, tint)| {
-                                el.child(
-                                    icon(path)
-                                        .size(px(14.0))
-                                        .flex_none()
-                                        .text_color(tint.unwrap_or(theme.text_muted)),
-                                )
-                            },
-                        )
                         .child(
                             div()
                                 .min_w_0()

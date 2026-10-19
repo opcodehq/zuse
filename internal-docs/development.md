@@ -2,6 +2,30 @@
 
 Use stable Rust, rustfmt and Clippy. Keep versions in the workspace and lockfile. Browser builds additionally require the `wasm32-unknown-unknown` target and Trunk.
 
+Existing conversations can select another provider directly in the model picker.
+The next send uses the saved provider/model choice and the engine's context
+handoff, retaining the same chat history. Each conversation tab shows its own
+provider icon. Pending first sends keep their original configuration snapshot.
+
+## Native development reload
+
+Run `python3 scripts/dev-native.py` on macOS or Linux. It builds the app, starts
+one headless development engine, then watches Rust sources and bundled assets.
+Successful builds relaunch only the native UI; active agents and chat history
+stay in the engine. Failed builds leave the current window running until the
+next edit. No watcher package is required.
+
+This is automatic rebuild/relaunch, not Rust code replacement inside a running
+process. Unsaved editor buffers and UI-only drafts do not survive a relaunch.
+Engine or protocol changes require restarting the command so both processes use
+the new engine code. Ctrl+C stops the UI and its development engine.
+
+The default profile is `.context/native-profile`, with IPC on `127.0.0.1:27664`.
+Use `--data-dir /path/to/profile` and `--ipc-port 27665` to override them;
+`ZUSE_DATA_DIR` and `ZUSE_IPC_PORT` also work. An occupied port fails startup
+rather than connecting to a different engine. Existing provider CLI logins work;
+cloud sync is opt-in through `ZUSE_WORKOS_CLIENT_ID` or `ZUSE_EDGE_TOKEN`.
+
 ## Linux native dependencies
 
 The native platform needs a C/C++ compiler, pkg-config, CMake, OpenSSL, Fontconfig, FreeType, XCB, XKBCommon/X11, Wayland, Vulkan loader, ALSA and Clang development files. Embedded browser previews additionally require WebKitGTK 4.1 and JSON-GLib development files. Package names vary by distribution.

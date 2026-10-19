@@ -200,11 +200,6 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
-        if !self.model_provider_allowed(&provider) {
-            self.error = Some("Start a new chat to use another provider.".into());
-            cx.notify();
-            return;
-        }
         if !self.can_change_model(cx) {
             return;
         }
@@ -368,7 +363,6 @@ impl WorkspaceView {
             .active_picker_catalog()
             .providers
             .iter()
-            .filter(|(provider, _)| self.model_provider_allowed(provider))
             .map(|(_, catalog)| catalog.models.len())
             .sum::<usize>();
         let width = (self.content_width - 48.).clamp(272., 380.);
@@ -443,9 +437,6 @@ impl WorkspaceView {
                         self.picker_providers()
                             .iter()
                             .enumerate()
-                            .filter(|(_, p)| {
-                                self.model_provider_allowed(p["id"].as_str().unwrap_or_default())
-                            })
                             .filter(|(_, p)| {
                                 (p["installed"] != false && p["enabled"] != false)
                                     || (!self.picker_in_settings()
@@ -587,9 +578,6 @@ impl WorkspaceView {
                                         .preferences
                                         .recent_models
                                         .iter()
-                                        .filter(|choice| {
-                                            self.model_provider_allowed(&choice.provider)
-                                        })
                                         .filter_map(|choice| {
                                             self.active_picker_catalog()
                                                 .providers
@@ -627,11 +615,6 @@ impl WorkspaceView {
                             .children(
                                 self.picker_providers()
                                     .iter()
-                                    .filter(|p| {
-                                        self.model_provider_allowed(
-                                            p["id"].as_str().unwrap_or_default(),
-                                        )
-                                    })
                                     .filter(|p| {
                                         (p["installed"] != false && p["enabled"] != false)
                                             || (!self.picker_in_settings()
@@ -804,9 +787,6 @@ impl WorkspaceView {
         let mut matches = Vec::new();
         for provider in self.picker_providers() {
             let id = provider["id"].as_str().unwrap_or_default();
-            if !self.model_provider_allowed(id) {
-                continue;
-            }
             if (provider["installed"] == false || provider["enabled"] == false)
                 && (self.picker_in_settings() || self.selected.is_none() || id != current)
             {
@@ -1179,7 +1159,7 @@ mod settings_workflow_tests {
     use super::*;
     use std::prelude::v1::test;
     #[gpui::test]
-    fn fresh_conversation_saves_its_own_provider_and_model(cx: &mut TestAppContext) {
+    fn conversation_switches_providers_in_both_directions(cx: &mut TestAppContext) {
         cx.update(initialize);
         let (requests, mut received) = futures::channel::mpsc::unbounded();
         let (_events, frames) = futures::channel::mpsc::unbounded();
@@ -1200,11 +1180,10 @@ mod settings_workflow_tests {
             view.device_id = Some("local".into());
             view.providers = vec![json!({"id":"claude-code"}), json!({"id":"codex"})];
             let root = json!({"id":"thread","deviceId":"local","config":{"harness":"claude-code","model":"root-model"}});
-            let fresh = json!({"id":"conversation","threadId":"thread","deviceId":"local","config":{"harness":"claude-code","model":"root-model","sandbox":"read-only"}});
+            let fresh = json!({"id":"conversation","threadId":"thread","deviceId":"local","lastMessageAt":"2026-10-18T00:00:00Z","harnessSessionId":"previous-provider-session","config":{"harness":"claude-code","model":"root-model","sandbox":"read-only"}});
             view.chats = vec![root.clone(), fresh.clone()];
             view.selected = Some(fresh);
             view.model = Some("root-model".into());
-            assert!(view.model_provider_allowed("codex"));
             view.choose_model("codex".into(), Some("own-model".into()), cx);
             let writes = std::iter::from_fn(|| received.try_recv().ok())
                 .filter(|request| request["method"] == methods::MUTATE).collect::<Vec<_>>();
@@ -1217,9 +1196,13 @@ mod settings_workflow_tests {
             view.receive(json!({"id":write["id"],"ok":{"ok":true}}), cx);
             assert_eq!(view.chats[0], root);
             assert_eq!(view.selected.as_ref().unwrap()["config"]["harness"], "codex");
-            view.selected.as_mut().unwrap()["lastMessageAt"] = json!("2026-10-18T00:00:00Z");
-            assert!(!view.model_provider_allowed("claude-code"));
-            assert!(view.model_provider_allowed("codex"));
+            view.choose_model("claude-code".into(), Some("opus-model".into()), cx);
+            let back = std::iter::from_fn(|| received.try_recv().ok())
+                .find(|request| request["method"] == methods::MUTATE).unwrap();
+            assert_eq!(back["params"]["chatId"], "conversation");
+            assert_eq!(back["params"]["config"]["harness"], "claude-code");
+            assert_eq!(back["params"]["config"]["model"], "opus-model");
+            assert_eq!(view.chats[0], root);
         }).unwrap();
     }
 
