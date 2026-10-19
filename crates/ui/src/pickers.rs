@@ -1643,8 +1643,7 @@ impl Pickers {
             // scroll_to_item below may land anywhere; the first note of the
             // settled position is the fresh baseline, not scroll motion.
             popover::reset_menu_scroll(&self.model_scroll_base(), &mut self.menu_bar);
-            self.model_scroll
-                .scroll_to_item(self.active, gpui::ScrollStrategy::Nearest);
+            self.scroll_to_model_row(self.active, gpui::ScrollStrategy::Nearest, cx);
         }
         // Searchable pickers focus the filter input (it sits inside the frame,
         // so the frame's key handler still sees arrows/Enter); the rest focus
@@ -1674,8 +1673,13 @@ impl Pickers {
             }
             PickerKind::HarnessModel => {
                 let handle = self.search.read(cx).focus_handle(cx);
+                let placeholder = if self.compact_model_picker(cx) {
+                    self.compact_search_placeholder(cx)
+                } else {
+                    "Search models…".into()
+                };
                 self.search.update(cx, |input, cx| {
-                    input.set_placeholder("Search models…", cx);
+                    input.set_placeholder(placeholder, cx);
                 });
                 window.focus(&handle, cx);
             }
@@ -1933,6 +1937,7 @@ impl Pickers {
         {
             self.active = self.selected_model_index(cx);
         }
+        self.refresh_compact_placeholder(cx);
         cx.notify();
     }
 
@@ -2527,8 +2532,7 @@ impl Pickers {
                     candidate.harness == row.harness && candidate.model.id == row.model.id
                 })
                 .unwrap_or(self.active);
-            self.model_scroll
-                .scroll_to_item(self.active, gpui::ScrollStrategy::Nearest);
+            self.scroll_to_model_row(self.active, gpui::ScrollStrategy::Nearest, cx);
         }
         cx.notify();
     }
@@ -2939,6 +2943,12 @@ impl Pickers {
                                     this.pick_device_row(row.clone(), cx);
                                 }))
                                 .child(
+                                    crate::icons::icon(crate::icons::MONITOR)
+                                        .size(px(14.0))
+                                        .flex_none()
+                                        .text_color(theme.text_muted),
+                                )
+                                .child(
                                     div()
                                         .flex_1()
                                         .min_w_0()
@@ -2978,6 +2988,7 @@ impl Pickers {
                                             .text_color(theme.warning.opacity(0.8)),
                                     )
                                 })
+                                .child(popover::radio_dot(&theme, is_selected))
                             },
                         )),
                 ))
@@ -3292,8 +3303,7 @@ impl Pickers {
                 if self.open_kind() == Some(PickerKind::HarnessModel)
                     && self.active < self.model_rows_len(cx)
                 {
-                    self.model_scroll
-                        .scroll_to_item(self.active, gpui::ScrollStrategy::Nearest);
+                    self.scroll_to_model_row(self.active, gpui::ScrollStrategy::Nearest, cx);
                 }
                 cx.notify();
                 cx.stop_propagation();
@@ -3615,6 +3625,36 @@ impl Pickers {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        self.selector_chip(kind, id, icon_path, label, false, theme, cx)
+    }
+
+    /// A context-tray trigger (the new-session destination and checkout
+    /// chips on the tab behind the composer): `h-7 px-2.5 text-[12px]`, a
+    /// 14px icon and a faint chevron, foreground text so the tray reads as
+    /// the chat's context rather than as footnotes.
+    fn tray_chip(
+        &self,
+        kind: PickerKind,
+        id: &'static str,
+        icon_path: &'static str,
+        label: SharedString,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        self.selector_chip(kind, id, icon_path, label, true, theme, cx)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn selector_chip(
+        &self,
+        kind: PickerKind,
+        id: &'static str,
+        icon_path: &'static str,
+        label: SharedString,
+        tray: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let open = self.open_kind() == Some(kind);
         // Per-picker hover key, like the trigger chips.
         let id: SharedString = format!("{id}-{}", cx.entity_id()).into();
@@ -3622,21 +3662,22 @@ impl Pickers {
             .relative()
             .child(self.measure_trigger(kind, cx))
             .id(id.clone())
-            .h(px(20.0))
+            .h(px(if tray { 28.0 } else { 20.0 }))
             .max_w(px(280.0))
+            .min_w_0()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(6.0))
-            .px(px(8.0))
-            .rounded(px(FOOTER_CHIP_RADIUS))
+            .px(px(if tray { 10.0 } else { 8.0 }))
+            .rounded(px(if tray { 8.0 } else { FOOTER_CHIP_RADIUS }))
             .text_size(crate::typography::ui_rems(12.0))
             .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(motion::hover_blend(
-                &id,
-                theme.text_muted.opacity(0.7),
-                theme.text.opacity(0.8),
-            ))
+            .text_color(if tray {
+                motion::hover_blend(&id, theme.text.opacity(0.85), theme.text)
+            } else {
+                motion::hover_blend(&id, theme.text_muted.opacity(0.7), theme.text.opacity(0.8))
+            })
             .bg(if open {
                 theme.element_hover
             } else {
@@ -3653,16 +3694,20 @@ impl Pickers {
             .on_click(cx.listener(move |this, _, window, cx| this.toggle(kind, window, cx)))
             .child(
                 crate::icons::icon(icon_path)
-                    .size(px(12.0))
+                    .size(px(if tray { 14.0 } else { 12.0 }))
                     .flex_none()
-                    .text_color(theme.text_muted.opacity(0.7)),
+                    .text_color(if tray {
+                        theme.text.opacity(0.8)
+                    } else {
+                        theme.text_muted.opacity(0.7)
+                    }),
             )
             .child(roll_text(format!("{id}-label"), label, cx.reduce_motion()))
             .child(
                 crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
                     .size(px(12.0))
                     .flex_none()
-                    .text_color(theme.text_muted.opacity(0.5)),
+                    .text_color(theme.text_muted.opacity(if tray { 0.6 } else { 0.5 })),
             )
     }
 
@@ -3748,7 +3793,7 @@ impl Pickers {
             (device_label, project_label, offline)
         };
         let device_chip = self
-            .footer_chip(
+            .tray_chip(
                 PickerKind::Device,
                 "picker-device",
                 crate::icons::MONITOR,
@@ -3757,7 +3802,7 @@ impl Pickers {
                 cx,
             )
             .when(offline, |el| el.text_color(theme.warning.opacity(0.8)));
-        let project_chip = self.footer_chip(
+        let project_chip = self.tray_chip(
             PickerKind::Space,
             "picker-project",
             crate::icons::FOLDER,
@@ -3820,7 +3865,7 @@ impl Pickers {
             (CheckoutKind::Local, false) => crate::icons::FOLDER,
             _ => crate::icons::WORKTREE,
         };
-        let checkout_chip = self.footer_chip(
+        let checkout_chip = self.tray_chip(
             PickerKind::Checkout,
             "picker-checkout",
             kind_icon,
@@ -3828,7 +3873,7 @@ impl Pickers {
             &theme,
             cx,
         );
-        let branch_chip = self.footer_chip(
+        let branch_chip = self.tray_chip(
             PickerKind::Branch,
             "picker-branch",
             crate::icons::GIT_BRANCH,
@@ -4512,8 +4557,7 @@ impl Pickers {
                     // the top — never a stray second highlight.
                     this.active = this.selected_model_index(cx);
                     this.model_scroll_base().set_offset(gpui::Point::default());
-                    this.model_scroll
-                        .scroll_to_item(this.active, gpui::ScrollStrategy::Nearest);
+                    this.scroll_to_model_row(this.active, gpui::ScrollStrategy::Nearest, cx);
                     cx.notify();
                 }))
                 .child(
@@ -4531,6 +4575,7 @@ impl Pickers {
         for (ix, descriptor) in descriptors.iter().enumerate() {
             let harness = descriptor.id;
             let is_viewed = !all_view && effective == Some(harness);
+            let live = descriptor.installed && descriptor.enabled != Some(false);
             let (icon_path, tint) = harness_brand_icon(harness);
             tabs =
                 tabs.child(
@@ -4561,7 +4606,19 @@ impl Pickers {
                             } else {
                                 theme.text_muted
                             }),
-                        )),
+                        ))
+                        // Live: the provider's CLI is installed and enabled.
+                        .when(live, |el| {
+                            el.child(
+                                div()
+                                    .absolute()
+                                    .right(px(4.0))
+                                    .bottom(px(4.0))
+                                    .size(px(6.0))
+                                    .rounded_full()
+                                    .bg(theme.accent),
+                            )
+                        }),
                 );
         }
 
@@ -4605,25 +4662,34 @@ impl Pickers {
         //    (field report: the un-virtualized stack was the picker's lag).
         //    Keyboard nav scrolls via the UniformListScrollHandle.
         let effective_models = effective.and_then(|h| self.models.get(&h));
+        // The compact list interleaves its section label and provider
+        // headings with the rows (`compact::CompactItem`).
+        let items = self
+            .compact_model_picker(cx)
+            .then(|| std::sync::Arc::new(self.compact_items(cx)));
         let model_list: Option<AnyElement> = if !rows.is_empty() {
             let entity = cx.entity();
             let row_data = rows.clone();
+            let count = items.as_ref().map_or(rows.len(), |items| items.len());
             Some(
-                gpui::uniform_list(
-                    "model-menu-scroll",
-                    rows.len(),
-                    move |range, _window, app| {
-                        entity.update(app, |this, cx| {
-                            range
-                                .filter_map(|ix| {
-                                    row_data
-                                        .get(ix)
-                                        .map(|row| this.render_model_row(ix, row, cx))
-                                })
-                                .collect::<Vec<AnyElement>>()
-                        })
-                    },
-                )
+                gpui::uniform_list("model-menu-scroll", count, move |range, _window, app| {
+                    entity.update(app, |this, cx| {
+                        range
+                            .filter_map(|ix| {
+                                let row = match items.as_ref().map(|items| &items[ix]) {
+                                    None => ix,
+                                    Some(compact::CompactItem::Row(row)) => *row,
+                                    Some(item) => {
+                                        return Some(this.render_compact_item(ix, item, cx));
+                                    }
+                                };
+                                row_data
+                                    .get(row)
+                                    .map(|data| this.render_model_row(row, data, cx))
+                            })
+                            .collect::<Vec<AnyElement>>()
+                    })
+                })
                 .size_full()
                 .px(px(popover::CARD_INSET))
                 .track_scroll(&model_scroll)
@@ -6260,13 +6326,14 @@ const MODEL_ROW_RADIUS: f32 = 7.0;
 
 /// The selected model row / provider treatment: a lime-tinted wash and ring.
 fn model_selected<E: Styled>(el: E, theme: &Theme) -> E {
-    el.bg(theme.accent.opacity(0.12)).shadow(vec![gpui::BoxShadow {
-        color: theme.accent.opacity(0.2),
-        offset: gpui::point(px(0.0), px(0.0)),
-        blur_radius: px(0.0),
-        spread_radius: px(1.0),
-        inset: true,
-    }])
+    el.bg(theme.accent.opacity(0.12))
+        .shadow(vec![gpui::BoxShadow {
+            color: theme.accent.opacity(0.2),
+            offset: gpui::point(px(0.0), px(0.0)),
+            blur_radius: px(0.0),
+            spread_radius: px(1.0),
+            inset: true,
+        }])
 }
 
 /// The lime check marking the selected model row.
@@ -7541,6 +7608,7 @@ mod tests {
             state.apply_spaces(vec![Space {
                 id: "repo".into(),
                 device_id: "local".into(),
+                remote_repository: None,
                 path: "/repo".into(),
                 name: None,
                 git_detected: true,
@@ -7584,6 +7652,7 @@ mod tests {
         Space {
             id: id.into(),
             device_id: device.into(),
+            remote_repository: None,
             path: format!("/{device}/{id}"),
             name: None,
             git_detected: true,
@@ -7764,6 +7833,7 @@ mod tests {
         let space = |id: &str, device: &str, name: &str, repository: Option<&str>, minutes| Space {
             id: id.into(),
             device_id: device.into(),
+            remote_repository: None,
             path: format!("/{device}/{id}"),
             name: Some(name.into()),
             git_detected: repository.is_some(),
@@ -10139,6 +10209,13 @@ impl Pickers {
 
 #[cfg(feature = "browser-fixture")]
 impl Pickers {
+    /// Review fixture: open one picker as its trigger would.
+    pub fn fixture_open(&mut self, kind: PickerKind, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_kind() != Some(kind) {
+            self.toggle(kind, window, cx);
+        }
+    }
+
     /// Review fixture: a ready provider catalog, so the model picker renders
     /// real rows without an engine behind it.
     pub fn fixture_seed_catalog(&mut self, cx: &mut Context<Self>) {
@@ -10167,11 +10244,21 @@ impl Pickers {
             ],
             options: Vec::new(),
         };
+        // The selected model runs fast by default (the Advanced footer
+        // toggle, on).
+        let fast = |mut model: Model| {
+            model.options = serde_json::from_value(serde_json::json!([
+                {"id":"serviceTier","label":"Service tier","defaultChoice":"fast","choices":[
+                    {"id":"standard","label":"Standard"},{"id":"fast","label":"Fast"}]}
+            ]))
+            .unwrap();
+            model
+        };
         self.apply_model_catalog(
             HarnessId::ClaudeCode,
             Loadable::Ready(vec![
                 model("claude-opus-4-1", "Claude Opus 4.1"),
-                model("claude-sonnet-4-6", "claude-sonnet-4-6"),
+                fast(model("claude-sonnet-4-6", "claude-sonnet-4-6")),
                 model("claude-sonnet-4-5", "Claude Sonnet 4.5"),
                 model("claude-haiku-4-5", "Claude Haiku 4.5"),
             ]),

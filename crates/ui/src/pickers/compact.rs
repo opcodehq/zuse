@@ -72,6 +72,23 @@ impl ScalarTransition {
     }
 }
 
+/// One entry of the compact model list. Labels and provider headers share
+/// the rows' height, so the list stays a virtualized uniform list; model
+/// rows keep their row index (keyboard cursor, ⌘N slots, activation).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum CompactItem {
+    /// The list's uppercase section label.
+    Label(SharedString),
+    /// A group heading: the provider (or the starred models) and its count.
+    Header {
+        harness: Option<HarnessId>,
+        name: SharedString,
+        count: usize,
+        current: bool,
+    },
+    Row(usize),
+}
+
 impl Pickers {
     pub(super) fn render_compact_model_row(
         &mut self,
@@ -185,7 +202,6 @@ impl Pickers {
                         )
                     }),
             )
-            .when(selected, |el| el.child(model_check(&theme)))
             .child(
                 div()
                     .id(("model-star", ix))
@@ -223,11 +239,170 @@ impl Pickers {
                             theme.text_muted
                         }),
                     ),
-            );
+            )
+            .when(selected, |el| el.child(model_check(&theme)))
+            // ⌘1…⌘9 pick the first nine rows (see `jump_model_slot`).
+            .when(ix < 9, |el| el.child(shortcut_chip(&theme, ix + 1)))
+            .when(selected, |el| el.relative().child(selected_bar(&theme)));
         div()
             .pb(px(popover::MENU_GAP))
             .child(item)
             .into_any_element()
+    }
+
+    /// The compact list's entries: a section label, then — browsing every
+    /// provider unsearched — each group under its heading; a search or a
+    /// single provider lists its rows flat under a count.
+    pub(super) fn compact_items(&self, cx: &App) -> Vec<CompactItem> {
+        let rows = self.model_rows(cx);
+        let searching = !self.search.read(cx).text().trim().is_empty();
+        let mut items = Vec::with_capacity(rows.len() + 4);
+        if self.model_rail != ModelRail::All || searching {
+            let count = rows.len();
+            let noun = match (searching, count == 1) {
+                (true, true) => "match",
+                (true, false) => "matches",
+                (false, true) => "model",
+                (false, false) => "models",
+            };
+            items.push(CompactItem::Label(format!("{count} {noun}").into()));
+            items.extend((0..count).map(CompactItem::Row));
+            return items;
+        }
+        items.push(CompactItem::Label("Models".into()));
+        let effective = self.effective_harness(cx);
+        let groups = self.compact_groups(cx);
+        for (gx, (harness, start)) in groups.iter().enumerate() {
+            let end = groups.get(gx + 1).map_or(rows.len(), |(_, next)| *next);
+            let name: SharedString = match harness {
+                Some(_) => rows[*start].harness_name.clone(),
+                None => "Starred".into(),
+            };
+            items.push(CompactItem::Header {
+                harness: *harness,
+                name,
+                count: end - start,
+                current: harness.is_some() && *harness == effective,
+            });
+            items.extend((*start..end).map(CompactItem::Row));
+        }
+        items
+    }
+
+    /// Where model row `row` sits in the rendered list: the compact list
+    /// interleaves labels and headers; the standard list is rows only.
+    pub(super) fn model_item_index(&self, row: usize, cx: &App) -> usize {
+        if !self.compact_model_picker(cx) {
+            return row;
+        }
+        self.compact_items(cx)
+            .iter()
+            .position(|item| *item == CompactItem::Row(row))
+            .unwrap_or(row)
+    }
+
+    /// Scroll model row `row` into view by its rendered position.
+    pub(super) fn scroll_to_model_row(&self, row: usize, strategy: gpui::ScrollStrategy, cx: &App) {
+        self.model_scroll
+            .scroll_to_item(self.model_item_index(row, cx), strategy);
+    }
+
+    /// A compact list entry that is not a model row.
+    pub(super) fn render_compact_item(
+        &self,
+        ix: usize,
+        item: &CompactItem,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = Theme::of(cx).for_popup();
+        let el = div()
+            .id(("model-list-item", ix))
+            .w_full()
+            .h(px(COMPACT_ROW_HEIGHT + popover::MENU_GAP))
+            .px(px(8.0))
+            .flex()
+            .gap(px(8.0));
+        match item {
+            CompactItem::Label(label) => el
+                .items_end()
+                .pb(px(6.0))
+                .text_size(crate::typography::ui_rems(10.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.text_muted)
+                .child(SharedString::from(popover::tracked_upper(label)))
+                .into_any_element(),
+            CompactItem::Header {
+                harness,
+                name,
+                count,
+                current,
+            } => {
+                let icon = match harness {
+                    Some(harness) => {
+                        let (icon, tint) = harness_brand_icon(*harness);
+                        crate::icons::icon(icon)
+                            .size(px(14.0))
+                            .flex_none()
+                            .text_color(tint.unwrap_or(theme.text))
+                    }
+                    None => crate::icons::icon(crate::icons::STAR_BOLD)
+                        .size(px(13.0))
+                        .flex_none()
+                        .text_color(theme.accent),
+                };
+                el.items_center()
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .child(icon)
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme.text)
+                            .child(name.clone()),
+                    )
+                    .when(*current, |el| el.child(lime_badge(&theme, "Current")))
+                    .child(
+                        div()
+                            .ml_auto()
+                            .pr(px(4.0))
+                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_color(theme.text_muted)
+                            .child(SharedString::from(count.to_string())),
+                    )
+                    .into_any_element()
+            }
+            CompactItem::Row(_) => el.into_any_element(),
+        }
+    }
+
+    /// "Search N models": the count of everything the list can show.
+    pub(super) fn compact_search_placeholder(&self, cx: &App) -> SharedString {
+        let descriptors = self.rail_descriptors(cx);
+        let harnesses: Vec<HarnessId> = match self.model_rail {
+            ModelRail::Harness => self.effective_harness(cx).into_iter().collect(),
+            _ => descriptors.iter().map(|d| d.id).collect(),
+        };
+        let count: usize = harnesses
+            .iter()
+            .filter_map(|h| self.models.get(h).and_then(Loadable::ready))
+            .map(Vec::len)
+            .sum();
+        match count {
+            0 => "Search models…".into(),
+            1 => "Search 1 model".into(),
+            n => format!("Search {n} models").into(),
+        }
+    }
+
+    /// Keep the search's model count current as catalogs land while open.
+    pub(super) fn refresh_compact_placeholder(&mut self, cx: &mut Context<Self>) {
+        if !self.compact_model_picker(cx) || self.open_kind() != Some(PickerKind::HarnessModel) {
+            return;
+        }
+        let placeholder = self.compact_search_placeholder(cx);
+        self.search
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
     }
 
     pub(super) fn compact_model_picker(&self, cx: &App) -> bool {
@@ -243,18 +418,14 @@ impl Pickers {
         } else {
             ModelRail::All
         };
-        self.show_compact_list(rail, "Search models…", cx);
+        self.show_compact_list(rail, cx);
     }
 
-    fn show_compact_list(
-        &mut self,
-        rail: ModelRail,
-        placeholder: &'static str,
-        cx: &mut Context<Self>,
-    ) {
+    fn show_compact_list(&mut self, rail: ModelRail, cx: &mut Context<Self>) {
         self.setting_menu = None;
         self.compact_model_list = true;
         self.model_rail = rail;
+        let placeholder = self.compact_search_placeholder(cx);
         self.reset_compact_search(placeholder, cx);
         // Open on the current model: its provider's group at the top when
         // the model sits near the start of it, else centred on the model.
@@ -267,17 +438,26 @@ impl Pickers {
             .find(|(_, start)| *start <= selected)
             .map_or(0, |(_, start)| start);
         if selected - start < COMPACT_LIST_ROWS - 2 {
-            // One row of the previous group stays above, under the edge
-            // fade, so the group's first row is never washed out and the
-            // list shows there is more above.
-            self.model_scroll.scroll_to_item_strict_with_offset(
-                start,
-                gpui::ScrollStrategy::Top,
-                usize::from(start > 0),
-            );
+            // The group's heading (the section label too, for the first
+            // group) tops the list; a later group keeps one row of the
+            // previous group above, under the edge fade, so the list shows
+            // there is more above.
+            let heading = self.model_item_index(start, cx).saturating_sub(1);
+            if heading <= 1 {
+                self.model_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+            } else {
+                self.model_scroll.scroll_to_item_strict_with_offset(
+                    heading,
+                    gpui::ScrollStrategy::Top,
+                    1,
+                );
+            }
         } else {
-            self.model_scroll
-                .scroll_to_item_strict(selected, gpui::ScrollStrategy::Center);
+            self.model_scroll.scroll_to_item_strict(
+                self.model_item_index(selected, cx),
+                gpui::ScrollStrategy::Center,
+            );
         }
         self.focus_on_mount = true;
         cx.notify();
@@ -292,7 +472,7 @@ impl Pickers {
 
     /// Clear the shared filter for a new page without letting the clear's
     /// Edited event reset the highlight anchored right after.
-    fn reset_compact_search(&mut self, placeholder: &'static str, cx: &mut Context<Self>) {
+    fn reset_compact_search(&mut self, placeholder: SharedString, cx: &mut Context<Self>) {
         self.search_reset_muted = !self.search.read(cx).text().is_empty();
         self.search.update(cx, |input, cx| {
             input.set_placeholder(placeholder, cx);
@@ -396,7 +576,9 @@ impl Pickers {
             Some(EffortStops::Option { id, .. }) => Some(id),
             _ => None,
         };
-        effort.into_iter().collect()
+        // Fast mode is the Advanced footer's lightning toggle.
+        let fast = self.compact_fast_choice(cx).map(|(option, _, _, _)| option);
+        effort.into_iter().chain(fast).collect()
     }
 
     pub(super) fn pick_effort_at(&mut self, x: gpui::Pixels, cx: &mut Context<Self>) {
@@ -471,45 +653,66 @@ impl Pickers {
         self.popover_frame_flush(COMPACT_WIDTH, content, cx)
     }
 
+    /// The "Advanced" footer: the fast-mode toggle (when the selected model
+    /// offers fast mode) beside the label, the effort slider below it.
     pub(super) fn render_effort_slider(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let effort = self.compact_effort(cx)?;
+        let effort = self.compact_effort(cx);
+        let fast = self.compact_fast_choice(cx);
+        if effort.is_none() && fast.is_none() {
+            return None;
+        }
         let theme = Theme::of(cx).for_popup();
+        let footer = div()
+            .flex_none()
+            .px(px(10.))
+            .pt(px(6.))
+            .pb(px(if effort.is_some() { 4. } else { 6. }))
+            .border_t_1()
+            .border_color(theme.border.opacity(0.5))
+            .bg(theme.muted_fill().opacity(0.15))
+            .child(
+                div()
+                    .h(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .text_size(crate::typography::ui_rems(12.))
+                    .text_color(theme.text_muted)
+                    .child("Advanced")
+                    .children(fast.map(|(option, choice, default, on)| {
+                        fast_toggle(&theme, on).on_click(cx.listener(move |this, _, _, cx| {
+                            this.pick_option(option.clone(), choice.clone(), default, cx);
+                            cx.notify();
+                        }))
+                    })),
+            );
+        let Some(effort) = effort else {
+            return Some(footer.into_any_element());
+        };
         let selected = effort.selected;
         let count = effort.labels.len();
         let fraction = selected as f32 / count.saturating_sub(1).max(1) as f32;
         let entity = cx.entity().downgrade();
+        let effort_label = effort
+            .labels
+            .get(selected)
+            .cloned()
+            .unwrap_or_else(|| "Default".into());
         Some(
-            div()
-                .px(px(10.))
-                .py(px(8.))
-                .flex_none()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .text_size(px(11.))
-                        .text_color(theme.text_muted)
-                        .child(
-                            effort
-                                .labels
-                                .get(selected)
-                                .cloned()
-                                .unwrap_or_else(|| "Default".into()),
-                        )
-                        .child("Reasoning"),
-                )
+            footer
                 .child(
                     div()
                         .id("model-effort-slider")
                         .role(gpui::Role::Slider)
                         .tab_index(0)
-                        .aria_label("Reasoning effort")
+                        .aria_label(SharedString::from(format!(
+                            "Reasoning effort: {effort_label}"
+                        )))
+                        .tooltip(crate::settings::widgets::text_tooltip(effort_label.clone()))
                         .aria_numeric_value(selected as f64)
                         .aria_min_numeric_value(0.)
                         .aria_max_numeric_value(count.saturating_sub(1) as f64)
                         .h(px(30.))
-                        .mt(px(4.))
                         .relative()
                         .cursor_pointer()
                         .on_mouse_down(
@@ -651,8 +854,7 @@ impl Pickers {
                     popover::menu_step(Some(self.active), self.model_rows_len(cx), delta)
                 {
                     self.active = next;
-                    self.model_scroll
-                        .scroll_to_item(next, gpui::ScrollStrategy::Nearest);
+                    self.scroll_to_model_row(next, gpui::ScrollStrategy::Nearest, cx);
                 }
             }
             "enter" | "space" => self.show_compact_models(cx),
@@ -696,6 +898,91 @@ impl Pickers {
             self.pick_compact_provider(providers[next].id, cx);
         }
     }
+}
+
+/// The ⌘N slot chip at a model row's trailing edge.
+fn shortcut_chip(theme: &Theme, slot: usize) -> gpui::Div {
+    div()
+        .flex_none()
+        .ml(px(2.0))
+        .h(px(18.0))
+        .min_w(px(18.0))
+        .px(px(4.0))
+        .rounded(px(4.0))
+        .bg(theme.muted_fill().opacity(0.7))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(crate::typography::ui_rems(10.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.text_muted)
+        .child(SharedString::from(slot.to_string()))
+}
+
+/// The 2px lime bar on the selected row's leading edge.
+fn selected_bar(theme: &Theme) -> gpui::Div {
+    div()
+        .absolute()
+        .left_0()
+        .top(px((COMPACT_ROW_HEIGHT - 16.0) / 2.0))
+        .w(px(2.0))
+        .h(px(16.0))
+        .rounded_full()
+        .bg(theme.accent)
+}
+
+/// Small uppercase lime tag ("CURRENT").
+fn lime_badge(theme: &Theme, label: &str) -> gpui::Div {
+    let dark = theme.appearance.is_dark();
+    div()
+        .flex_none()
+        .px(px(6.0))
+        .py(px(1.0))
+        .rounded(px(4.0))
+        .bg(theme.accent.opacity(if dark { 0.15 } else { 0.35 }))
+        .text_size(crate::typography::ui_rems(9.0))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(if dark { theme.accent } else { theme.on_accent })
+        .child(SharedString::from(popover::tracked_upper(label)))
+}
+
+/// The Advanced footer's fast-mode button: an amber-tinted square while on.
+fn fast_toggle(theme: &Theme, on: bool) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id("model-fast-mode")
+        .role(gpui::Role::Button)
+        .aria_label(if on {
+            "Turn off fast mode"
+        } else {
+            "Turn on fast mode"
+        })
+        .aria_toggled(if on {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .aria_keyshortcuts("F")
+        .tooltip(crate::settings::widgets::text_tooltip_above(
+            "1.5× speed\nMore usage",
+        ))
+        .size(px(24.0))
+        .rounded(px(6.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .when(on, |el| {
+            el.bg(theme.warning.opacity(0.2))
+                .hover(|s| s.bg(theme.warning.opacity(0.3)))
+        })
+        .when(!on, |el| {
+            el.hover(|s| s.bg(theme.muted_fill().opacity(0.6)))
+        })
+        .child(
+            crate::icons::icon(crate::icons::FAST_TIER_BOLD)
+                .size(px(14.0))
+                .text_color(if on { theme.warning } else { theme.text_muted }),
+        )
 }
 
 fn effort_fraction(x: f32, width: f32) -> f32 {

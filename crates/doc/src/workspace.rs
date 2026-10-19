@@ -7,7 +7,8 @@
 //! to the *same* row settle field-by-field LWW (exactly right for renames/archives):
 //! - `devices`: LoroMap keyed by deviceId → row map {id, name, platform, lastSeenAt}
 //! - `spaces`: LoroMap keyed by spaceId → row map {id, deviceId, path, name?,
-//!   gitDetected, gitCheckedAt?, checkoutId?, repositoryId?, createdAt}
+//!   gitDetected, gitCheckedAt?, checkoutId?, repositoryId?, remoteRepository?,
+//!   createdAt}
 //! - `chats`: LoroMap keyed by chatId → row map {id, deviceId, title?, archived, cwd?,
 //!   branch?, checkoutId?, config?(json), lastMessagePreview?, lastMessageAt?, createdAt,
 //!   harnessSessionId?, harnessSessionCwd?, spaceId?, lastSeenAt?}
@@ -171,6 +172,7 @@ impl WorkspaceDoc {
         set_opt_ms(&row, "gitCheckedAt", space.git_checked_at)?;
         set_opt_str(&row, "checkoutId", space.checkout_id.as_deref())?;
         set_opt_str(&row, "repositoryId", space.repository_id.as_deref())?;
+        set_opt_str(&row, "remoteRepository", space.remote_repository.as_deref())?;
         row.insert("createdAt", space.created_at.timestamp_millis())?;
         self.doc.commit();
         Ok(())
@@ -210,6 +212,7 @@ impl WorkspaceDoc {
         detected: bool,
         checkout_id: Option<&str>,
         repository_id: Option<&str>,
+        remote_repository: Option<&str>,
         checked_at: DateTime<Utc>,
     ) -> Result<bool, DocError> {
         let Some(row) = self.existing_row("spaces", space_id) else {
@@ -218,6 +221,7 @@ impl WorkspaceDoc {
         row.insert("gitDetected", detected)?;
         set_opt_str(&row, "checkoutId", checkout_id)?;
         set_opt_str(&row, "repositoryId", repository_id)?;
+        set_opt_str(&row, "remoteRepository", remote_repository)?;
         row.insert("gitCheckedAt", checked_at.timestamp_millis())?;
         self.doc.commit();
         Ok(true)
@@ -661,6 +665,8 @@ pub(crate) struct RawSpace {
     #[serde(default)]
     repository_id: Option<String>,
     #[serde(default)]
+    remote_repository: Option<String>,
+    #[serde(default)]
     created_at: i64,
 }
 
@@ -675,6 +681,7 @@ impl From<RawSpace> for Space {
             git_checked_at: raw.git_checked_at.map(dt),
             checkout_id: raw.checkout_id,
             repository_id: raw.repository_id,
+            remote_repository: raw.remote_repository,
             created_at: dt(raw.created_at),
         }
     }
@@ -893,6 +900,7 @@ mod tests {
             git_checked_at: None,
             checkout_id: None,
             repository_id: None,
+            remote_repository: None,
             created_at: ts(1_500),
         }
     }
@@ -1124,6 +1132,7 @@ mod tests {
                 "sp-1",
                 true,
                 Some("checkout-abc"),
+                Some("commit:root"),
                 Some("github.com/owner/project"),
                 ts(4_000),
             )
@@ -1132,15 +1141,19 @@ mod tests {
         let row = ws.space("sp-1").unwrap().unwrap();
         assert!(row.git_detected);
         assert_eq!(row.checkout_id.as_deref(), Some("checkout-abc"));
+        assert_eq!(row.repository_id.as_deref(), Some("commit:root"));
         assert_eq!(
-            row.repository_id.as_deref(),
+            row.remote_repository.as_deref(),
             Some("github.com/owner/project")
         );
         assert_eq!(row.git_checked_at, Some(ts(4_000)));
 
         // Unknown rows report false, never invent rows.
         assert!(!ws.rename_space("nope", Some("x")).unwrap());
-        assert!(!ws.set_space_git("nope", true, None, None, ts(1)).unwrap());
+        assert!(
+            !ws.set_space_git("nope", true, None, None, None, ts(1))
+                .unwrap()
+        );
     }
 
     #[test]

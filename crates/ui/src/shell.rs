@@ -1068,6 +1068,9 @@ fn sidebar_diff_stat(additions: u32, deletions: u32, alpha: f32, theme: &Theme) 
 
 /// Flex gap between sidebar list items.
 const SIDEBAR_LIST_GAP: f32 = 2.0;
+/// Space between the Pinned (or a custom) section and the Threads view's
+/// unpinned rows, which carry no heading of their own.
+const SIDEBAR_THREADS_GAP: f32 = 10.0;
 /// Fixed vertical slot occupied by one active sidebar card.
 #[cfg(test)]
 const SIDEBAR_SESSION_SLOT: f32 = 61.0 + SIDEBAR_LIST_GAP;
@@ -1309,7 +1312,6 @@ type SidebarKeyedRow = (String, f32, AnyElement);
 
 struct SidebarSessionRows {
     custom_count: usize,
-    regular_count: usize,
     rows: Vec<SidebarKeyedRow>,
     pinned_count: usize,
     moving_row: Option<(AnyElement, f32)>,
@@ -2027,17 +2029,11 @@ pub struct Shell {
     /// Shared route clock and measured prepaint geometry for the persistent composer.
     composer_dock: crate::composer_dock::SharedDock,
     new_thread_artwork_ready: crate::new_thread_background_effects::Readiness,
-    /// Session-transient disclosure state, matching the Archived shelf.
+    /// The Pinned disclosure: open by default, session-transient.
     pub(super) pinned_open: bool,
-    pub(super) sessions_open: bool,
-    /// The sidebar's archived accordion (t3code Sidebar): OPEN by default
-    /// (user request), session-transient. `archived_shown` pages the
-    /// expanded list ("Show more" reveals another page).
-    pub(super) archived_open: bool,
-    pub(super) archived_shown: usize,
     /// Ephemeral collapsed project/device sections, keyed by organization + id.
     pub(super) sidebar_collapsed_groups: std::collections::HashSet<String>,
-    /// In-flight disclosure tweens, shared by device groups, Pinned and Archived.
+    /// In-flight disclosure tweens, shared by project/device groups and Pinned.
     pub(super) sidebar_disclosure_motion:
         std::collections::HashMap<String, SidebarDisclosureMotion>,
     /// Disclosures a reveal (an inline rename of a hidden row) just opened;
@@ -2589,10 +2585,7 @@ impl Shell {
             bottom_stack_has_composer: std::rc::Rc::new(std::cell::Cell::new(false)),
             composer_dock: Default::default(),
             new_thread_artwork_ready: Default::default(),
-            archived_open: true,
             pinned_open: true,
-            sessions_open: true,
-            archived_shown: 0,
             sidebar_collapsed_groups: std::collections::HashSet::new(),
             sidebar_reveal_motions: std::collections::HashSet::new(),
             sidebar_disclosure_motion: std::collections::HashMap::new(),
@@ -6394,6 +6387,12 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.close_chat_menu(cx);
+        // An archived row leaves the sidebar under the pointer, so it never
+        // hears the hover end; drop its wash now, or it would come back lit
+        // if the session is unarchived.
+        if archived {
+            motion::set_hover(&format!("chat-{chat_id}-hover"), false, true);
+        }
         self.mutate(
             serde_json::json!({ "op": "setChatArchived", "chatId": chat_id, "archived": archived }),
             cx,
@@ -8841,8 +8840,13 @@ impl Shell {
             // Activity (working, input, done, failed) takes the lead glyph's
             // place; idle rows under a project wear their branch, tinted by
             // the pull request's state.
+            // A working card wears its spinner as a badge on the avatar (the
+            // title stays clean); other activity leads the title.
+            let avatar_badge = !nested && working && project_icon.is_some();
             let (status_glyph, title_glyph) = if nested {
                 (status_label.and(compact_status), None)
+            } else if avatar_badge {
+                (None, None)
             } else {
                 (None, status_label.and(compact_status))
             };
@@ -8856,6 +8860,15 @@ impl Shell {
                         .items_center()
                         .justify_center()
                         .child(match status_glyph {
+                            // Running reads as the ring the Threads view
+                            // badges its avatar with.
+                            Some(_) if working => loaders::ring_spinner(
+                                SharedString::from(format!("{row_id}-working-ring")),
+                                13.0,
+                                1.5,
+                                theme.text.opacity(0.15),
+                                theme.text.opacity(0.85),
+                            ),
                             Some(glyph) => glyph,
                             None => icon(icons::GIT_BRANCH)
                                 .size(px(14.0))
@@ -8873,6 +8886,41 @@ impl Shell {
             } else {
                 None
             };
+            let project_icon = project_icon.map(|icon| {
+                if !avatar_badge {
+                    return icon;
+                }
+                div()
+                    .relative()
+                    .flex_none()
+                    .child(icon)
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("{row_id}-working-badge")))
+                            .debug_selector({
+                                let id = id.clone();
+                                move || format!("chat-status-{id}")
+                            })
+                            .aria_label("Working")
+                            .absolute()
+                            .right(px(-4.0))
+                            .bottom(px(-4.0))
+                            .size(px(13.0))
+                            .rounded_full()
+                            .bg(theme.bg)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(loaders::ring_spinner(
+                                SharedString::from(format!("{row_id}-working")),
+                                10.0,
+                                1.5,
+                                theme.text.opacity(0.15),
+                                theme.text.opacity(0.85),
+                            )),
+                    )
+                    .into_any_element()
+            });
             let avatar = (!nested)
                 .then(|| {
                     project_icon.or_else(|| {
@@ -9446,6 +9494,25 @@ impl Shell {
             self.cancel_pinned_session_drag(cx);
         }
 
+        // A row archived (or deleted) under the pointer unmounts without its
+        // hover ending: forget it, so the next row the pointer rests on can
+        // take the hover.
+        if let Some(chat_id) = self
+            .chat_status_hover
+            .as_deref()
+            .and_then(|row| row.strip_prefix("chat-"))
+        {
+            let listed = self
+                .state
+                .read(cx)
+                .chats
+                .iter()
+                .any(|chat| chat.id == chat_id && !chat.archived);
+            if !listed {
+                self.chat_status_hover = None;
+            }
+        }
+
         // Keyed rows: (stable key, estimated height, element) — the key + height
         // list drives the §1.6 resort FLIP diff below (attention-bucket
         // promotions glide; cleared rows just go).
@@ -9457,23 +9524,7 @@ impl Shell {
         let custom_count = session_rows.custom_count;
         let regular_start = pinned_count + custom_count;
         let keyed = session_rows.rows;
-        let regular_count = session_rows.regular_count;
         let ungrouped = self.settings.sidebar_organization == SidebarOrganization::InOneList;
-        let regular_body_height = spaces::SIDEBAR_DISCLOSURE_BODY_INSET
-            + keyed
-                .iter()
-                .skip(regular_start)
-                .map(|(_, height, _)| height)
-                .sum::<f32>()
-            + SIDEBAR_LIST_GAP * keyed.len().saturating_sub(regular_start + 1) as f32;
-        let regular_body_height =
-            if keyed.len() == regular_start && self.sidebar_session_transfer.is_some() {
-                spaces::SIDEBAR_DISCLOSURE_BODY_INSET
-                    + 48.0
-                    + self.sidebar_transfer_extra_gap("regular")
-            } else {
-                regular_body_height
-            };
         let pinned_body_height = spaces::SIDEBAR_DISCLOSURE_BODY_INSET
             + self.sidebar_transfer_extra_gap("pinned")
             + keyed
@@ -9503,25 +9554,15 @@ impl Shell {
                     },
             ));
         }
+        // Threads read as one list: no heading over the unpinned rows, just
+        // a section's breath below Pinned or a custom section.
+        let regular_gap = ungrouped && (show_pinned_section || custom_count > 0);
         for (ix, (key, height, _)) in keyed.iter().enumerate() {
-            if ungrouped && ix == regular_start {
+            if regular_gap && ix == regular_start {
                 order.push((
-                    "sidebar-sessions-header".into(),
-                    spaces::SIDEBAR_DISCLOSURE_HEADER_HEIGHT
-                        + if show_pinned_section || custom_count > 0 {
-                            12.0
-                        } else {
-                            0.0
-                        }
-                        + if self.sessions_open {
-                            spaces::SIDEBAR_DISCLOSURE_BODY_INSET - SIDEBAR_LIST_GAP
-                        } else {
-                            0.0
-                        },
+                    "sidebar-regular-gap".into(),
+                    SIDEBAR_THREADS_GAP - SIDEBAR_LIST_GAP,
                 ));
-            }
-            if ungrouped && ix >= regular_start && !self.sessions_open {
-                continue;
             }
             if ix < pinned_count && !self.pinned_open {
                 continue;
@@ -9537,7 +9578,7 @@ impl Shell {
                 // A disclosure already animates its own body height. Applying
                 // FLIP offsets when only keyed heights change double-counts
                 // that movement, leaving gaps and momentary overlaps between
-                // the first group, following groups, and Archived.
+                // the first group and the groups that follow.
                 let offsets = if key_order_changed {
                     resort_offsets(&self.sidebar_prev_order, &order, SIDEBAR_LIST_GAP)
                 } else {
@@ -9635,9 +9676,6 @@ impl Shell {
             })
             .collect();
 
-        // t3code's archived accordion, below the active list.
-        let archived_section = self.render_archived_section(theme, cx);
-
         // The space filter lives ABOVE the scroll region (fixed) so its
         // dropdown can float without being clipped by the list's overflow.
         let filter_row = self.render_spaces_filter(theme, cx);
@@ -9659,76 +9697,72 @@ impl Shell {
                 .when(
                     !regular_items.is_empty() || self.sidebar_session_transfer.is_some(),
                     |el| {
-                        el.child(
-                            self.render_sessions_section(
+                        el.when(regular_gap, |el| {
+                            el.child(
                                 div()
-                                    .id("sidebar-regular-sessions")
-                                    .debug_selector(|| "sidebar-regular-sessions".into())
-                                    .on_drag_move::<SidebarSessionDrag>(cx.listener(
-                                        move |this,
-                                              event: &gpui::DragMoveEvent<SidebarSessionDrag>,
-                                              _,
-                                              _| {
-                                            if regular_empty
-                                                && event.bounds.contains(&event.event.position)
-                                            {
-                                                let top = f32::from(
-                                                    event.bounds.top()
-                                                        - this.sidebar_scroll.bounds().top()
-                                                        - this.sidebar_scroll.offset().y,
-                                                );
-                                                if let Some(drag) =
-                                                    this.sidebar_session_transfer.as_mut()
-                                                {
-                                                    drag.preview = Some(SidebarSessionGap {
-                                                        group: "regular".into(),
-                                                        index: 0,
-                                                        pinned: false,
-                                                        top,
-                                                    });
-                                                }
-                                                return;
-                                            }
-                                            if event.bounds.contains(&event.event.position)
-                                                && let Some(drag) =
-                                                    this.sidebar_session_transfer.as_mut()
-                                                && drag
-                                                    .preview
-                                                    .as_ref()
-                                                    .is_some_and(|gap| gap.pinned)
-                                            {
-                                                drag.preview = None;
-                                            }
-                                        },
-                                    ))
-                                    .on_drop::<SidebarSessionDrag>(cx.listener(
-                                        |this, payload, _, cx| {
-                                            this.finish_sidebar_session_transfer(
-                                                payload,
-                                                SidebarSessionDrop::Regular,
-                                                cx,
+                                    .flex_none()
+                                    .h(px(SIDEBAR_THREADS_GAP - 2.0 * SIDEBAR_LIST_GAP)),
+                            )
+                        })
+                        .child(
+                            div()
+                                .id("sidebar-regular-sessions")
+                                .debug_selector(|| "sidebar-regular-sessions".into())
+                                .on_drag_move::<SidebarSessionDrag>(cx.listener(
+                                    move |this,
+                                          event: &gpui::DragMoveEvent<SidebarSessionDrag>,
+                                          _,
+                                          _| {
+                                        if regular_empty
+                                            && event.bounds.contains(&event.event.position)
+                                        {
+                                            let top = f32::from(
+                                                event.bounds.top()
+                                                    - this.sidebar_scroll.bounds().top()
+                                                    - this.sidebar_scroll.offset().y,
                                             );
-                                        },
-                                    ))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(SIDEBAR_LIST_GAP))
-                                    .when(regular_items.is_empty(), |el| {
-                                        el.h(px(48.0 + self.sidebar_transfer_extra_gap("regular")))
-                                            .justify_center()
-                                            .px(px(10.0))
-                                            .text_color(theme.text_muted)
-                                            .text_size(crate::typography::ui_rems(12.0))
-                                            .child("Drop here to unpin")
-                                    })
-                                    .children(regular_items)
-                                    .into_any_element(),
-                                regular_body_height,
-                                regular_count,
-                                show_pinned_section || custom_count > 0,
-                                theme,
-                                cx,
-                            ),
+                                            if let Some(drag) =
+                                                this.sidebar_session_transfer.as_mut()
+                                            {
+                                                drag.preview = Some(SidebarSessionGap {
+                                                    group: "regular".into(),
+                                                    index: 0,
+                                                    pinned: false,
+                                                    top,
+                                                });
+                                            }
+                                            return;
+                                        }
+                                        if event.bounds.contains(&event.event.position)
+                                            && let Some(drag) =
+                                                this.sidebar_session_transfer.as_mut()
+                                            && drag.preview.as_ref().is_some_and(|gap| gap.pinned)
+                                        {
+                                            drag.preview = None;
+                                        }
+                                    },
+                                ))
+                                .on_drop::<SidebarSessionDrag>(cx.listener(
+                                    |this, payload, _, cx| {
+                                        this.finish_sidebar_session_transfer(
+                                            payload,
+                                            SidebarSessionDrop::Regular,
+                                            cx,
+                                        );
+                                    },
+                                ))
+                                .flex()
+                                .flex_col()
+                                .gap(px(SIDEBAR_LIST_GAP))
+                                .when(regular_items.is_empty(), |el| {
+                                    el.h(px(48.0 + self.sidebar_transfer_extra_gap("regular")))
+                                        .justify_center()
+                                        .px(px(10.0))
+                                        .text_color(theme.text_muted)
+                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .child("Drop here to unpin")
+                                })
+                                .children(regular_items),
                         )
                     },
                 )
@@ -9790,7 +9824,7 @@ impl Shell {
                                 );
                             },
                         ))
-                        // Empty space and Archived are not transfer targets.
+                        // Empty space is not a transfer target.
                         .on_drop::<SidebarSessionDrag>(cx.listener(
                             |this, _: &SidebarSessionDrag, _, cx| {
                                 this.cancel_sidebar_session_transfer(cx);
@@ -9803,7 +9837,6 @@ impl Shell {
                         // is the whole column; a little air stands in.
                         .pt(px(SIDEBAR_LIST_PAD_TOP))
                         .child(active_list)
-                        .children(archived_section)
                         .children(moving_row),
                 )),
         )
@@ -11945,6 +11978,13 @@ impl Shell {
         } else {
             None
         };
+        // The notice rides above the composer's context tray (last frame's
+        // measured card top), never under the card where it used to peek out.
+        let composer_top = self.composer.read(cx).surface_bounds().get();
+        let harness_update_bottom = composer_top.map_or(24.0, |bounds| {
+            let lift = crate::composer::NEW_THREAD_SELECTOR_ROW_HEIGHT + 10.0;
+            (self.viewport_height - f32::from(bounds.top()) + lift).max(24.0)
+        }) - 8.0 * (1.0 - chip_opacity);
         let status = div()
             .relative()
             .left(px(-session_reserve / 2.0))
@@ -12035,7 +12075,7 @@ impl Shell {
                                         .absolute()
                                         .left_0()
                                         .right_0()
-                                        .bottom(px(24.0 - 8.0 * (1.0 - chip_opacity)))
+                                        .bottom(px(harness_update_bottom))
                                         .opacity(chip_opacity)
                                         .flex()
                                         .justify_center()
@@ -13956,6 +13996,7 @@ impl Render for Shell {
                 WorkspaceCommand::New => self.open_new_session(None, cx),
                 WorkspaceCommand::Resume => self.toggle_command_palette(window, cx),
                 WorkspaceCommand::Settings => self.open_last_settings(cx),
+                WorkspaceCommand::Plugins => self.open_plugins_page(cx),
                 WorkspaceCommand::Diff if !self.active_chat.is_empty() => {
                     self.add_diff_surface(window, cx)
                 }
@@ -17616,6 +17657,7 @@ mod exit_regressions {
                     git_checked_at: None,
                     checkout_id: None,
                     repository_id: None,
+                    remote_repository: None,
                     created_at: Utc::now(),
                 };
                 shell.state.update(cx, |state, cx| {
@@ -17887,6 +17929,7 @@ mod exit_regressions {
                         git_checked_at: None,
                         checkout_id: None,
                         repository_id: None,
+                        remote_repository: None,
                         created_at: Utc::now(),
                     }]);
                     // Boot opened an existing project session after loading defaults.
@@ -17957,6 +18000,7 @@ mod exit_regressions {
             git_checked_at: None,
             checkout_id: None,
             repository_id: None,
+            remote_repository: None,
             created_at: Utc::now(),
         };
         window
@@ -18043,6 +18087,7 @@ mod exit_regressions {
             git_checked_at: None,
             checkout_id: None,
             repository_id: None,
+            remote_repository: None,
             created_at: Utc::now(),
         };
         window
@@ -18315,6 +18360,7 @@ mod exit_regressions {
                         git_checked_at: None,
                         checkout_id: None,
                         repository_id: None,
+                        remote_repository: None,
                         created_at: Utc::now(),
                     }]);
                 });
@@ -18858,6 +18904,46 @@ impl Shell {
             pickers.open_model_menu(window, cx);
         });
     }
+    /// Opens a composer menu (review routes `<page>/access-menu`,
+    /// `<page>/device-menu`, `<page>/project-menu`) or Cmd+K
+    /// (`<page>/palette-menu`); `new/…` starts on the new-chat canvas.
+    pub fn fixture_open_menu(&mut self, route: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if route.starts_with("new/") {
+            self.open_new_session(None, cx);
+        }
+        let composer = self.composer.clone();
+        let pickers = composer.read(cx).pickers().clone();
+        if route.ends_with("access-menu") {
+            composer.update(cx, |composer, cx| composer.fixture_open_permissions(cx));
+        } else if route.ends_with("device-menu") {
+            pickers.update(cx, |p, cx| {
+                p.fixture_open(crate::pickers::PickerKind::Device, window, cx)
+            });
+        } else if route.ends_with("project-menu") {
+            pickers.update(cx, |p, cx| {
+                p.fixture_open(crate::pickers::PickerKind::Space, window, cx)
+            });
+        } else if route.ends_with("palette-menu") {
+            self.toggle_command_palette(window, cx);
+        }
+    }
+    /// Collapse the Projects view groups of these space ids, so a review
+    /// capture reaches the projects below them.
+    pub fn fixture_collapse_sidebar_groups(&mut self, space_ids: &[&str], cx: &mut Context<Self>) {
+        let keys: Vec<String> = {
+            let state = self.state.read(cx);
+            space_ids
+                .iter()
+                .filter_map(|id| state.space_row(id))
+                .map(zuse_protocol::view::project_key)
+                .collect()
+        };
+        for key in keys {
+            let key = self.sidebar_group_collapse_key(&key);
+            self.sidebar_collapsed_groups.insert(key);
+        }
+        cx.notify();
+    }
     pub fn fixture_review_route(&mut self, route: &str, cx: &mut Context<Self>) {
         // `<route>:<variant>` seeds fixture data (plugins, providers, the ACP
         // dialog) for pages that otherwise wait on an engine.
@@ -18883,7 +18969,15 @@ impl Shell {
                 page.update(cx, |page, cx| page.fixture_seed(variant, cx));
                 self.harnesses_page = Some(page);
             }
+            // The new-session view with its context tray above the composer.
+            "new-thread" => self.open_new_session(None, cx),
             _ => {}
+        }
+        // `<route>:draft` types a prompt so the send key is live.
+        if variant == "draft" {
+            self.composer.update(cx, |composer, cx| {
+                composer.fixture_set_draft("Tidy the onboarding copy and add a test", cx)
+            });
         }
     }
 }

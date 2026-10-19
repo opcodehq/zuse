@@ -498,8 +498,10 @@ impl Repos {
         })
     }
 
-    /// The normalized remote, else the device-scoped common-git-dir hash.
-    async fn remote_or_local_identity(&self, path: &Path) -> Result<String, EngineError> {
+    /// The `origin` remote (else the first remote) as `host/owner/repo`, in
+    /// the remote's own spelling. `None` when the checkout has no parseable
+    /// remote or git fails.
+    pub async fn remote_repository(&self, path: &Path) -> Option<String> {
         let remote = match self.git(&["remote", "get-url", "origin"], Some(path)).await {
             Ok(url) => Some(url),
             Err(_) => match self.git(&["remote"], Some(path)).await {
@@ -513,14 +515,17 @@ impl Repos {
                 Err(_) => None,
             },
         };
-        if let Some(remote) = remote
-            .as_deref()
-            .and_then(crate::source_control::parse_git_remote)
-        {
-            return Ok(
-                format!("{}/{}/{}", remote.host, remote.owner, remote.repository)
-                    .to_ascii_lowercase(),
-            );
+        let remote = crate::source_control::parse_git_remote(remote.as_deref()?)?;
+        Some(format!(
+            "{}/{}/{}",
+            remote.host, remote.owner, remote.repository
+        ))
+    }
+
+    /// The normalized remote, else the device-scoped common-git-dir hash.
+    async fn remote_or_local_identity(&self, path: &Path) -> Result<String, EngineError> {
+        if let Some(remote) = self.remote_repository(path).await {
+            return Ok(remote.to_ascii_lowercase());
         }
         let common_dir = self
             .git(

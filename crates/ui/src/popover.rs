@@ -319,24 +319,33 @@ pub fn surface_bg(theme: &Theme) -> gpui::Hsla {
     theme.surface_overlay.opacity(1.0)
 }
 
-/// The glass popover card: on dark themes a translucent elevated tone with a
-/// faint white sheen over the backdrop blur its mount helper paints, a
-/// hairline ring and a 1px top highlight; light themes keep the opaque
-/// popover tone with a border and drop shadow.
+/// The glass popover card, light and dark: a translucent tint with a faint
+/// sheen over the backdrop blur its mount helper paints, a hairline ring, a
+/// 1px top highlight and a soft drop. Every menu, popover and dialog wears
+/// this one surface ([`glass_surface`]).
 pub fn popover_card(theme: &Theme) -> gpui::Div {
-    let card = div().border_1().rounded(px(CARD_RADIUS));
-    let card = if theme.floating_glass() {
-        card.border_color(gpui::hsla(0.0, 0.0, 1.0, 0.065))
-            .shadow(theme.popover_glass_shadows())
-    } else {
-        card.border_color(theme.border).shadow_lg()
-    };
-    card.bg(theme.popover_glass_fill())
+    glass_surface(theme, div().rounded(px(CARD_RADIUS)))
         .p(px(CARD_INSET))
         .gap(px(MENU_GAP))
         .overflow_hidden()
         .text_size(crate::typography::ui_rems(13.0))
         .text_color(theme.text)
+}
+
+/// The shared glass material on `el`: fill, hairline ring and shadows. The
+/// mount helper ([`anchored_menu`] and friends, [`modal_glass`]) paints the
+/// matching backdrop blur; the caller supplies the rounding.
+pub fn glass_surface<E: Styled>(theme: &Theme, el: E) -> E {
+    let el = el.border_1();
+    if theme.floating_glass() {
+        el.border_color(theme.popover_glass_border())
+            .shadow(theme.popover_glass_shadows())
+            .bg(theme.popover_glass_fill())
+    } else {
+        el.border_color(theme.border)
+            .shadow_lg()
+            .bg(theme.popover_glass_fill())
+    }
 }
 
 /// [`popover_card`] without the shared inset — for popovers that manage their
@@ -642,9 +651,8 @@ pub fn nested_menu(id: impl Into<SharedString>, content: AnyElement, left: bool)
     // A nested menu shares the parent's interaction surface. Its outside
     // clicks must reach sibling controls and its trigger; the top-level menu
     // still consumes dismissal clicks before they reach the app underneath.
-    let content =
-        crate::frost::floating_glass(CARD_RADIUS, crate::frost::MENU_BLUR, content)
-            .into_any_element();
+    let content = crate::frost::floating_glass(CARD_RADIUS, crate::frost::MENU_BLUR, content)
+        .into_any_element();
     div()
         .absolute()
         .top_0()
@@ -879,8 +887,8 @@ fn modal_with(
     corner_radius: f32,
     scrim: f32,
 ) -> AnyElement {
-    let card =
-        crate::frost::frosted(corner_radius, crate::frost::MENU_BLUR, card).into_any_element();
+    let card = crate::frost::floating_glass(corner_radius, crate::frost::MENU_BLUR, card)
+        .into_any_element();
     gpui::deferred(
         gpui::anchored()
             .position(gpui::point(px(0.0), px(0.0)))
@@ -1020,13 +1028,7 @@ pub fn band() -> gpui::Hsla {
 /// radius, clipping, and shadow that make Cmd+K and its sibling flows read as
 /// one component family.
 pub fn palette_card(theme: &Theme, width: Pixels, corner_radius: f32) -> gpui::Div {
-    div()
-        .w(width)
-        .rounded(px(corner_radius))
-        .border_1()
-        .border_color(hairline(0.10))
-        .bg(surface_bg(theme))
-        .shadow_lg()
+    glass_surface(theme, div().w(width).rounded(px(corner_radius)))
         .overflow_hidden()
         .flex()
         .flex_col()
@@ -1231,6 +1233,26 @@ pub fn picker_row(
     if highlighted { row.bg(ink(0.05)) } else { row }
 }
 
+/// A single-choice row's trailing radio: a hollow ring, or a lime ring
+/// around a lime dot on the selected row.
+pub fn radio_dot(theme: &Theme, selected: bool) -> gpui::Div {
+    let ring = div()
+        .flex_none()
+        .size(px(16.0))
+        .rounded_full()
+        .border_1()
+        .flex()
+        .items_center()
+        .justify_center();
+    if selected {
+        ring.border_color(theme.accent)
+            .bg(theme.accent.opacity(0.12))
+            .child(div().size(px(8.0)).rounded_full().bg(theme.accent))
+    } else {
+        ring.border_color(theme.text_muted.opacity(0.45))
+    }
+}
+
 /// A picker row's leading slot: a project's artwork, or a glyph centred in
 /// the same square, so every label starts at one edge.
 pub fn picker_icon_slot(art: AnyElement) -> gpui::Div {
@@ -1272,17 +1294,10 @@ pub fn menu_section() -> gpui::Div {
 // Dialog primitives (zuse dialog.tsx / sidebar dialogs.tsx)
 // ---------------------------------------------------------------------------
 
-/// Centered dialog with the shared popover surface. A filled drop shadow
-/// would show through the translucent card, so only opaque cards use it.
+/// Centered dialog on the shared glass surface; its inset drop keeps the
+/// shadow from darkening the translucent card.
 pub fn dialog_card(theme: &Theme) -> gpui::Div {
-    div()
-        .w(px(360.0))
-        .p(px(20.0))
-        .rounded(px(16.0))
-        .bg(surface_bg(theme))
-        .border_1()
-        .border_color(hairline(0.10))
-        .when(!theme.is_frost(), |el| el.shadow_lg())
+    glass_surface(theme, div().w(px(360.0)).p(px(20.0)).rounded(px(16.0)))
         .flex()
         .flex_col()
         .text_color(theme.text)

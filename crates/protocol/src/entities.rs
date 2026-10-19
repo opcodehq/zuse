@@ -136,6 +136,12 @@ pub struct Space {
     /// readers: projects with equal ids group together.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository_id: Option<String>,
+    /// Owner-stamped when git: the `origin` remote (else the first remote)
+    /// as `host/owner/repo`, for display only — the sidebar shows the
+    /// owner's avatar for GitHub-hosted projects. Unlike `repository_id`
+    /// it never groups projects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_repository: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

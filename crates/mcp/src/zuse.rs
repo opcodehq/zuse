@@ -779,6 +779,7 @@ mod tests {
             git_checked_at: None,
             checkout_id: None,
             repository_id: None,
+            remote_repository: None,
             created_at: Utc::now(),
         }
     }

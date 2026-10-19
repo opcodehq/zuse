@@ -1,7 +1,9 @@
 //! Linux visual review fixture: the sidebar fixture's synthetic state, captured across
 //! the main view and every settings page. ZUSE_REVIEW_ROUTES overrides the route list.
 //! Sidebar options: ZUSE_SIDEBAR_COMPACT / ZUSE_SIDEBAR_HIDE_LABEL select layout;
-//! ZUSE_SIDEBAR_BY_PROJECT groups by project, with a remote clone of the local repository.
+//! ZUSE_SIDEBAR_BY_PROJECT groups by project, with a remote clone of the local repository;
+//! ZUSE_SIDEBAR_COLLAPSED=<space ids> collapses those project groups and
+//! ZUSE_SIDEBAR_FILTER=<space id> sets the project filter.
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 use zuse_ui::*;
 
@@ -17,7 +19,7 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| "/tmp/zuse-review".into()),
     );
     std::fs::create_dir_all(&output)?;
-    gpui_platform::application().with_assets(icons::Assets).run(move |cx| {
+    gpui_platform::application().with_assets(icons::Assets).with_http_client(fixture_http_client(runtime.handle().clone())).run(move |cx| {
         gpui_tokio::init(cx); gpui_base::init(cx);
         let mut settings = settings::UiSettings::default();
         settings.sidebar_show_branch = true;
@@ -27,6 +29,7 @@ fn main() -> anyhow::Result<()> {
         settings.sidebar_organization = if by_project { settings::SidebarOrganization::ByProject } else { settings::SidebarOrganization::InOneList };
         settings.sidebar_width = 310.0;
         settings.sidebar_pins_mut("local".into()).extend(["chat-0".into(), "chat-1".into()]);
+        settings.space_filter = std::env::var("ZUSE_SIDEBAR_FILTER").ok();
         let project_path = data.join("fieldnotes");
         std::fs::create_dir_all(project_path.join("public")).unwrap();
         std::fs::write(project_path.join("public/favicon.svg"), r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="6" fill="#668cf5"/><path d="M7 6h11v3h-8v3h6v3h-6v4H7Z" fill="white"/></svg>"##).unwrap();
@@ -102,6 +105,28 @@ fn main() -> anyhow::Result<()> {
             }
             s.chats[4].last_message_at = Some(chrono::Utc::now());
             s.chats[8].archived = true;
+            // More projects: GitHub-hosted ones show their owner's avatar,
+            // the rest a two-letter monogram; one chat is running.
+            s.spaces[0].remote_repository = Some("github.com/rust-lang/fieldnotes".into());
+            s.spaces[1].remote_repository = Some("github.com/tokio-rs/api-server".into());
+            for (id, remote) in [("zuse", Some("github.com/opcodehq/zuse")), ("twitter-articles", None), ("storytelling-images", None), ("infraloop", Some("github.com/rust-lang/infraloop"))] {
+                s.spaces.push(serde_json::from_value(serde_json::json!({"id":id,"deviceId":"local","path":data.join(id),"gitDetected":true,"remoteRepository":remote,"createdAt":"2026-09-01T00:00:00Z"})).unwrap());
+            }
+            for (id, space, title, minutes, diff) in [("zuse-publish", "zuse", "Let users publish their own plugins", 8, Some((5_500, 1_900))), ("zuse-new", "zuse", "New chat", 14 * 60, Some((38_100, 1))), ("articles-draft", "twitter-articles", "Draft the launch thread", 2 * 24 * 60, None)] {
+                let mut chat = s.chats[0].clone();
+                chat.id = id.into();
+                chat.space_id = Some(space.into());
+                chat.title = Some(title.into());
+                chat.branch = None;
+                chat.source_context = None;
+                chat.created_at = chrono::Utc::now() - chrono::Duration::minutes(minutes);
+                if let Some((additions, deletions)) = diff {
+                    chat.checkout_id = Some(format!("fixture-checkout-{id}"));
+                    s.checkout_diff_stats.push(state::CheckoutDiffStat { checkout_id: format!("fixture-checkout-{id}"), device_id: "local".into(), cwd: "/tmp/fieldnotes".into(), additions, deletions });
+                }
+                s.chats.push(chat);
+            }
+            s.apply_sessions(vec![zuse_protocol::Session { last_completed_turn: None, running_subagents: 0, chat_id: "zuse-publish".into(), device_id: "local".into(), status: zuse_protocol::SessionStatus::Working, started_at: Some(chrono::Utc::now()), updated_at: chrono::Utc::now() }]);
             s
         });
         let boot = EngineBootConfig { target: None,  data_dir: data, ipc_port: 0, edge_url: String::new(), edge_token: None, org_id: None, workos_client_id: None, default_harness: HarnessId::ClaudeCode };
@@ -113,6 +138,9 @@ fn main() -> anyhow::Result<()> {
             window_background: theme::Theme::of(cx).window_background_appearance(),
             ..Default::default()
         }, |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx))).unwrap();
+        if let Ok(ids) = std::env::var("ZUSE_SIDEBAR_COLLAPSED") {
+            let _ = window.update(cx, |shell, _, cx| shell.fixture_collapse_sidebar_groups(&ids.split(',').collect::<Vec<_>>(), cx));
+        }
         appearance::reapply_window_background(cx);
         state.update(cx, |_, cx| cx.notify());
         cx.activate(true);
@@ -124,7 +152,7 @@ fn main() -> anyhow::Result<()> {
             for route in routes {
                 let _ = window.update(cx, |shell, window, cx| {
                     shell.fixture_review_route(&route, cx);
-                    if route.ends_with("model-picker") { shell.fixture_open_model_picker(window, cx); }
+                    if route.ends_with("model-picker") { shell.fixture_open_model_picker(window, cx); } else if route.ends_with("-menu") { shell.fixture_open_menu(&route, window, cx); }
                 });
                 pause(cx, 700).await;
                 let name = route.replace('/', "-");

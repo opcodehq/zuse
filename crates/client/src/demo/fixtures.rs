@@ -257,6 +257,7 @@ pub(crate) fn spaces(now: i64) -> Vec<Space> {
             git_checked_at: git.then(|| ms(now)),
             checkout_id: git.then(|| format!("co-{id}")),
             repository_id: None,
+            remote_repository: None,
             created_at: ms(now - ago),
         };
     let zuse = |mut space: Space| {

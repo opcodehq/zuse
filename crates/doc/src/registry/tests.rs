@@ -290,6 +290,7 @@ fn space(id: &str, device_id: &str, path: &str) -> Space {
         git_checked_at: None,
         checkout_id: None,
         repository_id: None,
+        remote_repository: None,
         created_at: ts(1_500),
     }
 }
@@ -573,6 +574,7 @@ fn spaces_round_trip_and_mutate() {
             "sp-1",
             true,
             Some("checkout-abc"),
+            Some("commit:root"),
             Some("github.com/owner/project"),
             ts(4_000),
         )
@@ -581,14 +583,18 @@ fn spaces_round_trip_and_mutate() {
     let row = ws.space("sp-1").unwrap().unwrap();
     assert!(row.git_detected);
     assert_eq!(row.checkout_id.as_deref(), Some("checkout-abc"));
+    assert_eq!(row.repository_id.as_deref(), Some("commit:root"));
     assert_eq!(
-        row.repository_id.as_deref(),
+        row.remote_repository.as_deref(),
         Some("github.com/owner/project")
     );
     assert_eq!(row.git_checked_at, Some(ts(4_000)));
 
     assert!(!ws.rename_space("nope", Some("x")).unwrap());
-    assert!(!ws.set_space_git("nope", true, None, None, ts(1)).unwrap());
+    assert!(
+        !ws.set_space_git("nope", true, None, None, None, ts(1))
+            .unwrap()
+    );
 }
 
 #[test]

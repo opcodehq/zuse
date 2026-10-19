@@ -83,62 +83,52 @@ pub(super) fn monogram_tone(seed: &str, theme: &Theme) -> gpui::Hsla {
     .into()
 }
 
-fn monogram(name: &str, seed: &str, selected: bool, theme: &Theme) -> AnyElement {
-    // FNV-1a selects a stable entry from the curated palette.
-    let hash = seed.bytes().fold(2166136261u32, |hash, byte| {
-        (hash ^ u32::from(byte)).wrapping_mul(16777619)
-    });
-    let letter = name
-        .trim()
-        .chars()
-        .next()
-        .unwrap_or('?')
-        .to_uppercase()
-        .to_string();
-    let (dark, light) = MONOGRAM_PALETTE[hash as usize % MONOGRAM_PALETTE.len()];
-    let tone = gpui::Hsla::from(gpui::rgb(if theme.appearance.is_dark() {
-        dark
-    } else {
-        light
-    }));
-    let mut hover_text = tone;
-    hover_text.l = if theme.appearance.is_dark() {
-        (tone.l + 0.12).min(0.95)
-    } else {
-        (tone.l - 0.10).max(0.15)
+/// Two-letter initials for a monogram tile: the first letters of the first
+/// two words (`twitter-articles` → `TA`), else the name's first two letters.
+fn initials(name: &str) -> String {
+    let mut words = name
+        .split(|c: char| matches!(c, '-' | '_' | '.') || c.is_whitespace())
+        .filter(|word| !word.is_empty());
+    let letters: String = match (words.next(), words.next()) {
+        (Some(first), Some(second)) => first
+            .chars()
+            .take(1)
+            .chain(second.chars().take(1))
+            .collect(),
+        (Some(only), None) => only.chars().take(2).collect(),
+        _ => "?".into(),
     };
+    letters.to_uppercase()
+}
+
+/// A neutral tile with the project's initials — the artwork while nothing
+/// better is known (no owner avatar, no repository icon).
+fn monogram(name: &str, selected: bool, theme: &Theme) -> AnyElement {
+    let rest = theme.text.opacity(if selected { 0.14 } else { 0.08 });
+    let hover = theme.text.opacity(0.14);
     let tile = div()
         .size_full()
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(3.0))
-        // The active row wears the hover tint permanently.
-        .bg(tone.opacity(if selected { 0.24 } else { 0.08 }))
-        .text_color(if selected {
-            hover_text
-        } else {
-            tone.opacity(0.85)
-        })
-        .group_hover("sidebar-session-row", move |style| {
-            style.bg(tone.opacity(0.24)).text_color(hover_text)
-        })
-        .font_family(theme.font_mono.clone())
+        .rounded(px(4.0))
+        .bg(rest)
+        .text_color(theme.text.opacity(if selected { 0.9 } else { 0.7 }))
+        .group_hover("sidebar-session-row", move |style| style.bg(hover))
         .font_weight(gpui::FontWeight::MEDIUM)
         .child(
             div()
                 .w_full()
                 .text_center()
                 .text_size(px(9.0))
-                .line_height(px(13.0))
-                .child(letter),
+                .line_height(px(12.0))
+                .child(initials(name)),
         );
-    crate::frost::frosted(3.0, crate::frost::MENU_BLUR, tile).into_any_element()
+    crate::frost::frosted(4.0, crate::frost::MENU_BLUR, tile).into_any_element()
 }
 
 pub(super) struct ProjectIcon {
     name: String,
-    seed: String,
     media: Option<MediaImage>,
     refreshed: std::time::Instant,
     _task: Task<()>,
@@ -147,7 +137,6 @@ pub(super) struct ProjectIcon {
 impl ProjectIcon {
     fn new(
         name: String,
-        seed: String,
         context: FilesRequestContext,
         engine: Option<crate::state::EngineHandle>,
         cx: &mut Context<Self>,
@@ -203,7 +192,6 @@ impl ProjectIcon {
         });
         Self {
             name,
-            seed,
             media: None,
             refreshed: std::time::Instant::now(),
             _task: task,
@@ -218,7 +206,7 @@ impl Render for ProjectIcon {
                 .size_full()
                 .object_fit(gpui::ObjectFit::Contain)
                 .into_any_element(),
-            None => monogram(&self.name, &self.seed, false, Theme::of(cx)),
+            None => monogram(&self.name, false, Theme::of(cx)),
         }
     }
 }
@@ -388,15 +376,16 @@ fn github_owner(path: &str) -> Option<&str> {
 }
 
 /// The GitHub owner avatar for a project hosted on github.com. The owner
-/// comes from a remote-shaped repository identity (`github.com/owner/repo`),
-/// else from a pull request one of the project's sessions reported.
+/// comes from the remote the owning device stamped (`github.com/owner/repo`),
+/// else a remote-shaped repository identity, else a pull request one of the
+/// project's sessions reported.
 pub(super) fn github_avatar_url(state: &AppState, space: &zuse_protocol::Space) -> Option<String> {
     let members = state.project_members(space);
     let owner = members
         .iter()
-        .find_map(|member| {
-            member
-                .repository_id
+        .flat_map(|member| [&member.remote_repository, &member.repository_id])
+        .find_map(|remote| {
+            remote
                 .as_deref()
                 .and_then(|id| id.strip_prefix("github.com/"))
                 .and_then(github_owner)
@@ -442,9 +431,6 @@ impl ProjectIcons {
         let name = representative
             .map(|space| space.display_name().to_string())
             .unwrap_or_else(|| "Home".into());
-        let seed = representative
-            .map(|space| space.path.clone())
-            .unwrap_or_else(|| "home".into());
         let artwork = space.map(|space| {
             state
                 .project_members(space)
@@ -464,7 +450,7 @@ impl ProjectIcons {
             checkout_id: space.checkout_id.clone(),
         });
         let Some(context) = context else {
-            return monogram(&name, &seed, selected, Theme::of(cx));
+            return monogram(&name, selected, Theme::of(cx));
         };
         let key = format!(
             "{:?}:{:?}:{}:{:?}:{}",
@@ -473,15 +459,14 @@ impl ProjectIcons {
         let engine = state.engine().cloned();
         // Don't cache a remote miss before a connection exists.
         if context.target_device_id.is_some() && engine.is_none() {
-            return monogram(&name, &seed, selected, Theme::of(cx));
+            return monogram(&name, selected, Theme::of(cx));
         }
         let mut cache = self.entries.borrow_mut();
         cache.retain(|_, entity| entity.read(cx).refreshed.elapsed() < Duration::from_secs(300));
         let entity = cache
             .entry(key)
             .or_insert_with(|| {
-                let entity =
-                    cx.new(|cx| ProjectIcon::new(name.clone(), seed.clone(), context, engine, cx));
+                let entity = cx.new(|cx| ProjectIcon::new(name.clone(), context, engine, cx));
                 // The owner draws the selected monogram and redraws when artwork lands.
                 cx.observe(&entity, |_, _, cx| cx.notify()).detach();
                 entity
@@ -489,7 +474,7 @@ impl ProjectIcons {
             .clone();
         drop(cache);
         if entity.read(cx).media.is_none() {
-            return monogram(&name, &seed, selected, Theme::of(cx));
+            return monogram(&name, selected, Theme::of(cx));
         }
         entity.into_any_element()
     }
@@ -529,6 +514,52 @@ mod tests {
         assert_eq!(github_owner("example"), None);
         assert_eq!(github_owner("../etc/passwd"), None);
         assert_eq!(github_owner("a b/repo"), None);
+    }
+    #[test]
+    fn monogram_initials_take_two_words_or_two_letters() {
+        assert_eq!(initials("twitter-articles"), "TA");
+        assert_eq!(initials("storytelling_images"), "SI");
+        assert_eq!(initials("API server"), "AS");
+        assert_eq!(initials("zuse"), "ZU");
+        assert_eq!(initials("x"), "X");
+        assert_eq!(initials("--"), "?");
+    }
+    #[test]
+    fn github_avatar_comes_from_the_stamped_remote() {
+        let space = |id: &str, remote: Option<&str>, repository: Option<&str>| {
+            serde_json::from_value::<zuse_protocol::Space>(serde_json::json!({
+                "id": id, "deviceId": "local", "path": format!("/src/{id}"),
+                "remoteRepository": remote, "repositoryId": repository,
+                "createdAt": "2026-09-08T00:00:00Z",
+            }))
+            .unwrap()
+        };
+        let mut state = AppState::new();
+        state.spaces = vec![
+            space(
+                "hosted",
+                Some("github.com/opcodehq/zuse"),
+                Some("commit:abc"),
+            ),
+            space(
+                "ssh-alias",
+                Some("github-work/opcodehq/zuse"),
+                Some("commit:def"),
+            ),
+            space("legacy", None, Some("github.com/example/fieldnotes")),
+            space("plain", None, Some("commit:123")),
+        ];
+        let url = |id: &str| github_avatar_url(&state, state.space_row(id).unwrap());
+        assert_eq!(
+            url("hosted").as_deref(),
+            Some("https://github.com/opcodehq.png?size=80")
+        );
+        assert_eq!(url("ssh-alias"), None);
+        assert_eq!(
+            url("legacy").as_deref(),
+            Some("https://github.com/example.png?size=80")
+        );
+        assert_eq!(url("plain"), None);
     }
     #[test]
     fn sidebar_project_icons_support_svg_and_ico() {

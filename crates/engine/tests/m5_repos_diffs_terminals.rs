@@ -298,6 +298,20 @@ async fn repository_identity_spans_worktrees_and_clones() {
     .await;
     assert_eq!(repos.repository_identity(&repo).await.unwrap(), identity);
     assert_eq!(repos.repository_identity(&clone).await.unwrap(), identity);
+    // The display remote follows each checkout's own origin, unlike the
+    // identity, and keeps the owner's spelling.
+    assert_eq!(
+        repos.remote_repository(&repo).await.as_deref(),
+        Some("github-alias/zusesh/old-name")
+    );
+    assert_eq!(
+        repos.remote_repository(&clone).await.as_deref(),
+        Some("github.com/opcodehq/new-name")
+    );
+    assert_eq!(
+        repos.remote_repository(&linked).await.as_deref(),
+        Some("github-alias/zusesh/old-name")
+    );
 
     // Folders below the top level stay their own projects: monorepo
     // siblings differ, the same subfolder matches across clones.
@@ -333,6 +347,7 @@ async fn repository_identity_spans_worktrees_and_clones() {
     git(&other, &["add", "."]).await;
     git(&other, &["commit", "-q", "-m", "other initial"]).await;
     assert_ne!(repos.repository_identity(&other).await.unwrap(), identity);
+    assert_eq!(repos.remote_repository(&other).await, None);
 
     // Merging an unrelated history in adds a root on a second parent; the
     // trunk's root still names the repository.

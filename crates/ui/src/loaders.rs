@@ -407,12 +407,47 @@ fn progress_arc(
     arc: gpui::Hsla,
 ) -> gpui::Canvas<()> {
     let frac = f32::from(percent.min(100)) / 100.0;
+    arc_canvas(0.0, frac, diameter, RING_STROKE, track, arc)
+}
+
+/// An indeterminate ring: a quarter arc circling its faint track once per
+/// 900ms — the running badge on a sidebar avatar.
+pub fn ring_spinner(
+    id: impl Into<gpui::ElementId>,
+    diameter: f32,
+    stroke: f32,
+    track: gpui::Hsla,
+    arc: gpui::Hsla,
+) -> AnyElement {
+    use gpui::AnimationExt as _;
+    div()
+        .relative()
+        .size(px(diameter))
+        .flex_none()
+        .with_animation(
+            id,
+            gpui::Animation::new(std::time::Duration::from_millis(900)).repeat(),
+            move |el, t| el.child(arc_canvas(t, 0.28, diameter, stroke, track, arc)),
+        )
+        .into_any_element()
+}
+
+/// A full track plus an arc of `sweep` turns starting `start` turns
+/// clockwise from 12 o'clock, filling its parent.
+fn arc_canvas(
+    start: f32,
+    sweep: f32,
+    diameter: f32,
+    stroke: f32,
+    track: gpui::Hsla,
+    arc: gpui::Hsla,
+) -> gpui::Canvas<()> {
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
             let center = bounds.center();
-            let radius = diameter / 2.0 - RING_STROKE;
-            let mut paint_arc = |sweep: f32, color: gpui::Hsla| {
+            let radius = diameter / 2.0 - stroke;
+            let mut paint_arc = |from: f32, sweep: f32, color: gpui::Hsla| {
                 if sweep <= 0.0 {
                     return;
                 }
@@ -420,13 +455,13 @@ fn progress_arc(
                 let at = |i: usize| {
                     // Clockwise from 12 o'clock.
                     let theta = -std::f32::consts::FRAC_PI_2
-                        + std::f32::consts::TAU * sweep * (i as f32 / steps as f32);
+                        + std::f32::consts::TAU * (from + sweep * (i as f32 / steps as f32));
                     point(
                         center.x + px(radius * theta.cos()),
                         center.y + px(radius * theta.sin()),
                     )
                 };
-                let mut builder = PathBuilder::stroke(px(RING_STROKE));
+                let mut builder = PathBuilder::stroke(px(stroke));
                 builder.move_to(at(0));
                 for i in 1..=steps {
                     builder.line_to(at(i));
@@ -435,8 +470,8 @@ fn progress_arc(
                     window.paint_path(path, color);
                 }
             };
-            paint_arc(1.0, track);
-            paint_arc(frac, arc);
+            paint_arc(0.0, 1.0, track);
+            paint_arc(start, sweep, arc);
         },
     )
     .absolute()

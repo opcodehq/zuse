@@ -243,17 +243,15 @@ fn rename_opens_a_collapsed_pinned_section_with_its_motion(cx: &mut TestAppConte
 }
 
 #[gpui::test]
-fn rename_opens_collapsed_sessions_groups_and_the_sidebar(cx: &mut TestAppContext) {
+fn rename_opens_collapsed_groups_and_the_sidebar(cx: &mut TestAppContext) {
     let (shell, cx) = setup(cx);
     shell.update(cx, |shell, cx| {
-        shell.sessions_open = false;
         shell.settings.sidebar_collapsed = true;
         cx.notify();
     });
     redraw(cx);
     rename(&shell, cx, "newer");
     shell.read_with(cx, |shell, _| {
-        assert!(shell.sessions_open);
         assert!(!shell.settings.sidebar_collapsed);
     });
     assert_eq!(editing(&shell, cx).as_deref(), Some("newer"));
@@ -277,28 +275,13 @@ fn rename_opens_collapsed_sessions_groups_and_the_sidebar(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn rename_pages_the_archived_shelf_to_its_row(cx: &mut TestAppContext) {
+fn rename_refuses_an_archived_session_the_sidebar_does_not_list(cx: &mut TestAppContext) {
     let (shell, cx) = setup(cx);
-    let ids: Vec<String> = (0..14).map(|ix| format!("archived-{ix:02}")).collect();
-    add_chats(
-        &shell,
-        cx,
-        &ids.iter().map(String::as_str).collect::<Vec<_>>(),
-        true,
-    );
-    shell.update(cx, |shell, cx| {
-        shell.archived_open = false;
-        cx.notify();
-    });
+    add_chats(&shell, cx, &["archived-00"], true);
     redraw(cx);
-
-    // Oldest last: the 13th row is past the first page of ten.
-    rename(&shell, cx, "archived-12");
-    shell.read_with(cx, |shell, _| {
-        assert!(shell.archived_open);
-        assert_eq!(shell.archived_shown, 35);
-    });
-    assert!(cx.debug_bounds("chat-title-editor-archived-12").is_some());
+    rename(&shell, cx, "archived-00");
+    assert_eq!(editing(&shell, cx), None);
+    assert!(cx.debug_bounds("chat-archived-00").is_none());
 }
 
 #[gpui::test]

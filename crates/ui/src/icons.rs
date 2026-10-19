@@ -83,6 +83,7 @@ icon_assets![
     (KEY_MINIMALISTIC, "key-minimalistic"),
     (KEYBOARD, "keyboard"),
     (ARROW_UP, "arrow-up"),
+    (SEND, "send"),
     (ARROW_DOWN, "arrow-down"),
     (ARROW_UP_RIGHT, "arrow-up-right"),
     (RETURN, "return"),

@@ -207,7 +207,7 @@ async fn entry_task(
 /// Probe git presence and stamp the row — write only on change.
 async fn check_space(inner: &Arc<SpacesSyncInner>, space_id: &str, path: &Path) {
     let detected = inner.repos.is_repo(path).await;
-    let (checkout_id, repository_id) = if detected {
+    let (checkout_id, repository_id, remote_repository) = if detected {
         let checkout_id = match inner.repos.checkout_identity(path).await {
             Ok(identity) => Some(identity.id),
             Err(err) => {
@@ -224,9 +224,10 @@ async fn check_space(inner: &Arc<SpacesSyncInner>, space_id: &str, path: &Path) 
                 None
             }
         };
-        (checkout_id, repository_id)
+        let remote_repository = inner.repos.remote_repository(path).await;
+        (checkout_id, repository_id, remote_repository)
     } else {
-        (None, Some(None))
+        (None, Some(None), None)
     };
     let current = match inner.workspace.read_spaces() {
         Ok(spaces) => spaces.into_iter().find(|s| s.id == space_id),
@@ -242,6 +243,7 @@ async fn check_space(inner: &Arc<SpacesSyncInner>, space_id: &str, path: &Path) 
     if current.git_detected == detected
         && current.checkout_id == checkout_id
         && current.repository_id == repository_id
+        && current.remote_repository == remote_repository
     {
         return; // unchanged — no oplog growth
     }
@@ -250,6 +252,7 @@ async fn check_space(inner: &Arc<SpacesSyncInner>, space_id: &str, path: &Path) 
         detected,
         checkout_id.as_deref(),
         repository_id.as_deref(),
+        remote_repository.as_deref(),
     ) {
         Ok(_) => {
             tracing::info!(space = %space_id, git = detected, "space git presence updated");

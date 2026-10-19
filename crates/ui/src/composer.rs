@@ -1,9 +1,9 @@
 //! The composer: a hand-rolled multiline text input (adapted from gpui's
-//! `examples/input.rs`), the compact↔expanded flip, the Send/Queue/Stop morph,
+//! `examples/input.rs`), the two-row card's height morph, the Send/Queue/Stop morph,
 //! optimistic send with failure recovery, per-chat drafts, and the question
 //! wizard that replaces the composer while a run awaits input.
 //!
-//! Pure decision logic (flip, auto-grow math, button morph, wizard reducer,
+//! Pure decision logic (height morph, auto-grow math, button morph, wizard reducer,
 //! pending-input detection) lives in free functions/structs with unit tests;
 //! the gpui element only feeds them measurements.
 
@@ -75,9 +75,9 @@ pub(crate) const COMPOSER_RADIUS: f32 = 19.2;
 /// Expanded composer bounds: 120px when empty, 304px at the content cap.
 pub const COMPOSER_MIN_HEIGHT: f32 = TEXTAREA_MIN + ACTIONS_ROW_HEIGHT + PILL_BORDER_V;
 pub const COMPOSER_MAX_HEIGHT: f32 = TEXTAREA_MAX + ACTIONS_ROW_HEIGHT + PILL_BORDER_V;
-/// Compact pill, border-box: one-line textarea `py-3` (24) + one 22.75px line
-/// (scrollHeight rounds to 47 in the original) + the 2px hairline = 49. The
-/// compact cluster (`py-1.5` + h-8 = 44) is shorter, so the textarea wins.
+/// A single-line pill, border-box: one-line textarea `py-3` (24) + one
+/// 22.75px line + the 2px hairline = 49. The message composer is always the
+/// two-row card; other one-line comment composers share this height.
 pub const COMPACT_TOTAL_HEIGHT: f32 = 49.0;
 /// `max-w-3xl`: outer width of the new-chat composer, also used when no shell
 /// width is supplied. Established threads follow the conversation column.
@@ -86,7 +86,30 @@ pub const COMPOSER_MAX_WIDTH: f32 = 768.0;
 /// from behind it instead of as a separate rounded pill.
 pub(crate) const QUEUE_COMPOSER_OVERLAP: f32 = 18.0;
 /// The inset new-chat toolbar has room around its compact selector chips.
-const NEW_THREAD_SELECTOR_ROW_HEIGHT: f32 = 40.0;
+pub(crate) const NEW_THREAD_SELECTOR_ROW_HEIGHT: f32 = 40.0;
+/// How far the context tray runs under the card's top edge, past the card's
+/// corner radius so no seam shows beside the rounded corners.
+const CONTEXT_TRAY_TUCK: f32 = COMPOSER_RADIUS + 2.0;
+
+/// The context tray's tonal fill: a step darker than the composer card on
+/// dark (`hsl(120 2% 8.5% / 0.96)` on Zuse Dark), a soft grey-green wash on
+/// light.
+fn context_tray_fill(theme: &Theme) -> gpui::Hsla {
+    match theme.appearance {
+        crate::theme::Appearance::Dark if theme.variant_id.as_ref() == "zuse-dark" => {
+            gpui::hsla(120.0 / 360.0, 0.02, 0.085, 0.96)
+        }
+        crate::theme::Appearance::Dark => crate::theme::flatten(
+            gpui::hsla(0.0, 0.0, 0.0, 0.28),
+            theme.composer_glass_bg().opacity(1.0),
+        )
+        .opacity(0.96),
+        crate::theme::Appearance::Light => crate::theme::flatten(
+            theme.text.opacity(0.07),
+            theme.composer_glass_bg().opacity(1.0),
+        ),
+    }
+}
 // Accommodate the 24px usage indicator and PR badge without overflowing the
 // row's equal 8px top/bottom gutters.
 pub(crate) const SESSION_FOOTER_HEIGHT: f32 = 24.0;
@@ -101,8 +124,6 @@ fn route_chrome_opacities(new_thread_chrome: f32) -> (f32, f32) {
 }
 /// Ignore subpixel noise when the shell reports the conversation width.
 const COMPOSER_WIDTH_EPSILON: f32 = 0.5;
-/// Below this pill input width the composer always expands.
-pub const MIN_COMPACT_INPUT_WIDTH: f32 = 200.0;
 /// Input text metrics: `text-[14px] leading-relaxed` = 14 × 1.625 = 22.75.
 pub const INPUT_LINE_HEIGHT: f32 = 22.75;
 pub const INPUT_TEXT_SIZE: f32 = 14.0;
@@ -112,45 +133,6 @@ const INPUT_FADE_BAND: f32 = 12.0;
 pub const AUTO_ADVANCE_MS: u64 = 220;
 /// Drag-selection autoscroll runs at the display-friendly 60fps cadence.
 pub const DRAG_SCROLL_FRAME_MS: u64 = 16;
-
-/// Hysteresis slack for the expanded→compact flip: once expanded, the composer
-/// only collapses when the text is comfortably narrower than the compact
-/// capacity — expanding and collapsing share no boundary, so a width right at
-/// the flip threshold can't oscillate between the two layouts.
-pub const COLLAPSE_HYSTERESIS: f32 = 32.0;
-/// During an interactive resize, collapsing back to the compact mode waits
-/// until the measured widths have been stable this long. Expansion remains
-/// immediate so a narrowing panel never traps the controls in a compact row.
-pub const RESIZE_SETTLE_MS: u64 = 150;
-
-/// Compact↔expanded flip with hysteresis. `capacity` is the *compact-mode*
-/// input capacity (a layout-stable width: measured while compact, tracked by
-/// container-width deltas while expanded — never the post-flip measured width,
-/// which differs per mode and would feed back into the decision):
-/// - a newline always expands;
-/// - while `resizing`, an expanded composer stays expanded until sizes settle;
-/// - a too-narrow pill (`capacity < MIN_COMPACT_INPUT_WIDTH`) always expands;
-/// - compact expands only when `text_width > capacity`; expanded collapses
-///   only when `text_width < capacity - COLLAPSE_HYSTERESIS`.
-pub fn composer_flip(
-    expanded: bool,
-    text_width: f32,
-    capacity: f32,
-    has_newline: bool,
-    resizing: bool,
-) -> bool {
-    if has_newline {
-        return true;
-    }
-    if capacity < MIN_COMPACT_INPUT_WIDTH {
-        return true;
-    }
-    if expanded {
-        resizing || text_width >= capacity - COLLAPSE_HYSTERESIS
-    } else {
-        text_width > capacity
-    }
-}
 
 fn composer_width_changed(previous: Option<f32>, current: f32) -> bool {
     previous.is_none_or(|previous| (current - previous).abs() > COMPOSER_WIDTH_EPSILON)
@@ -177,6 +159,14 @@ pub fn input_content_height(wrapped_lines: usize) -> f32 {
 /// ride on top. Range 120–304.
 pub fn composer_total_height(content_height: f32) -> f32 {
     (content_height + TEXTAREA_PAD_V).clamp(TEXTAREA_MIN, TEXTAREA_MAX)
+        + ACTIONS_ROW_HEIGHT
+        + PILL_BORDER_V
+}
+
+/// A docked thread's card: the same two rows, with a lower empty-editor floor
+/// than the new-chat hero (60px editor box instead of 76).
+pub fn thread_composer_height(content_height: f32) -> f32 {
+    (content_height + TEXTAREA_PAD_V).clamp(TEXTAREA_MIN - 16.0, TEXTAREA_MAX)
         + ACTIONS_ROW_HEIGHT
         + PILL_BORDER_V
 }
@@ -316,23 +306,19 @@ pub fn comment_strip_height(count: usize) -> f32 {
     STRIP_PAD_TOP + crate::badges::BADGE_HEIGHT
 }
 
-/// Compact↔expanded flip morph (round 9): the flip used to snap between the
-/// two pill layouts. The original has no height transition (its shell carries
-/// only `transition-colors`), so this is a native nicety: ONE committed flip
-/// starts exactly one 180ms ease-out morph ([`motion::COLLAPSE`]); the blank-
-/// thread handoff swaps in the coordinated 420ms route-transition spec. Both use the
-/// manual-drive pattern from shell.rs `WidthTween` — never `with_animation`,
-/// whose element-id keying replays tweens on remount, round-6 §1–3.
+/// Height morph for the composer card. A committed height change (the draft
+/// growing, attachments arriving) starts exactly one 180ms ease-out morph
+/// ([`motion::COLLAPSE`]); the blank-thread handoff swaps in the coordinated
+/// 420ms route-transition spec. Both use the manual-drive pattern from
+/// shell.rs `WidthTween` — never `with_animation`, whose element-id keying
+/// replays tweens on remount, round-6 §1–3.
 ///
-/// The morph animates the pill's COMMITTED height: the flip commits its final
-/// layout immediately (the input entity never remounts — the caret survives,
-/// exactly as before) while the pill clips toward the live target. The pill's
-/// bottom edge is stationary on screen, so the controls stay pinned to it
-/// (constant screen-y; see the anchoring helpers below) and only the text
-/// glides with the sweeping top edge. [`composer_flip`]'s hysteresis already
-/// guarantees no oscillation at the boundary, and [`flip_morph_step`] never
-/// restarts a morph while the committed mode holds. Reduced motion snaps: no
-/// morph is ever created.
+/// The layout commits immediately (the input entity never remounts — the
+/// caret survives) while the card clips toward the live target. Its bottom
+/// edge is stationary on screen, so the toolbar row stays pinned to it and
+/// only the editor grows with the sweeping top edge. [`flip_morph_step`]
+/// never restarts a morph while the committed height holds. Reduced motion
+/// snaps: no morph is ever created.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlipMorph {
     /// Rendered height when the flip committed — the animation's start point.
@@ -384,64 +370,16 @@ impl FlipMorph {
     }
 }
 
-// -- morph anchoring (round-9 follow-up) ------------------------------------
-// The pill sits at the BOTTOM of the shell column: growing it moves its TOP
-// edge; the bottom edge is stationary on screen. The first morph cut anchored
-// the pill's inner content to the top, so the actions/cluster (laid out at
-// the inner bottom) rode the animating height up and down. The controls are
-// therefore pinned to the stationary bottom edge (absolute bottom row when
-// expanded, a bottom-justified row when compact) and only the TEXT glides
-// with the sweeping top edge. The helpers below are the pure math.
-
-/// Send/attach center sits 25px above the expanded pill's bottom (8px
-/// padding + half the 32px control zone + 1px border), versus 24.5px in
-/// compact. The morph glides this optical adjustment instead of snapping.
-pub const CLUSTER_Y_DELTA: f32 =
-    ACTIONS_BOTTOM_PAD + 16.0 + PILL_BORDER_V / 2.0 - COMPACT_TOTAL_HEIGHT / 2.0;
-
-/// Attachment and Send share an outer inset: compact 8px, expanded 12px.
-/// Keep both action groups aligned with the changing surface inset.
-pub const CLUSTER_X_DELTA: f32 = 4.0;
+/// The toolbar's outer inset on both sides of the card.
+pub const ACTION_INSET: f32 = 12.0;
+/// The editor's top padding (`pt-4`).
+pub const TEXT_TOP_PAD: f32 = 16.0;
 /// Optical join between the picker group and the paperclip. This is tighter
 /// than the structural spacing ladder because the narrow paperclip glyph
 /// otherwise looks farther away than its hit target actually is.
 pub const ACTION_UTILITY_GAP: f32 = 2.0;
 /// Structural separation between utility actions and the primary Send action.
 pub const ACTION_PRIMARY_GAP: f32 = Theme::SPACE_SM;
-
-/// The shared outer inset for the in-flight morph: eases from the OLD mode's resting
-/// inset to the committed mode's (compact 8 ↔ expanded 12).
-pub fn morph_cluster_inset(expanded: bool, progress: f32) -> f32 {
-    let (from, to) = if expanded {
-        (8.0, 8.0 + CLUSTER_X_DELTA)
-    } else {
-        (8.0 + CLUSTER_X_DELTA, 8.0)
-    };
-    motion::lerp(from, to, progress)
-}
-
-/// Expanded text top padding across the morph: starts at the compact resting
-/// inset (12 ≈ `py-3`) and eases to `pt-4` (16) — the first line glides with
-/// the rising top edge instead of jumping at the commit.
-pub fn morph_text_pad(progress: f32) -> f32 {
-    motion::lerp(12.0, 16.0, progress)
-}
-
-/// Collapse-morph text glide: the committed compact row is bottom-anchored
-/// (text resting top = 36px above the pill's outer bottom: 49 − 1 hairline −
-/// 12 centering inset), while at the commit instant the text sat 17px below
-/// the expanded pill's top (1 hairline + 16 `pt-4`) — i.e. `from − 17` above
-/// the bottom. The decaying relative offset walks it down smoothly.
-pub fn collapse_text_glide(from: f32, progress: f32) -> f32 {
-    (from - 53.0).max(0.0) * (1.0 - progress)
-}
-
-/// The decaying [`CLUSTER_Y_DELTA`] offset for the in-flight morph.
-/// Controls share this bottom anchor; the model's horizontal fade is applied
-/// independently so its endpoint matches Attachment and Send.
-pub fn morph_cluster_dy(progress: f32) -> f32 {
-    CLUSTER_Y_DELTA * (1.0 - progress)
-}
 
 /// Session/route changes SNAP the composer (same rule as the header inset
 /// tween, round 6: route swaps remount in the original — zero motion). The
@@ -2002,9 +1940,7 @@ pub struct ComposerInput {
     /// File mentions are a composer feature, not a behavior of generic inputs
     /// (picker searches and rename fields also use this type).
     mentions_enabled: bool,
-    /// Bumped once per `layout_text` pass — the flip logic uses it to apply at
-    /// most one compact↔expanded flip per layout (a flip is only re-evaluated
-    /// after the input has been measured in the new mode).
+    /// Bumped once per `layout_text` pass.
     layout_epoch: u64,
     display_is_placeholder: bool,
     /// Caret blink anchor: reset on every keystroke/caret move so the caret is
@@ -2509,7 +2445,7 @@ impl ComposerInput {
         self.content.contains('\n')
     }
 
-    /// Unwrapped width of the widest line — feeds the compact/expanded flip.
+    /// Unwrapped width of the widest line.
     pub fn measured_text_width(&self) -> f32 {
         self.max_line_width
     }
@@ -5702,6 +5638,8 @@ pub enum WorkspaceCommand {
     Terminal,
     Rename,
     Stop,
+    /// The toolbar's plugins button; not offered as a slash command.
+    Plugins,
 }
 
 impl WorkspaceCommand {
@@ -6095,30 +6033,15 @@ pub struct Composer {
     /// another chat's request when the user navigates quickly.
     interrupting: HashSet<String>,
     interrupt_tasks: HashMap<String, Task<()>>,
-    // -- compact/expanded flip state (hysteresis; see `composer_flip`) --
-    /// Current layout mode (persisted across frames — never derived fresh).
-    expanded_mode: bool,
-    /// `layout_epoch` of the measurement that caused the last flip: the flip is
-    /// re-evaluated only after the input has been laid out in the new mode, so
-    /// at most one flip can happen per layout pass.
-    flip_epoch: u64,
-    /// Compact-mode input capacity, learned while compact (layout-stable).
-    compact_capacity: f32,
-    /// Input width first measured after expanding — container-width deltas
-    /// while expanded shift `compact_capacity` by the same amount.
-    expanded_anchor: f32,
-    /// Last input width seen in the current mode (resize detection).
-    last_seen_width: f32,
     /// Stable outer composer width supplied by the shell. Unlike Taffy's
     /// provisional input measurements, this changes only when the actual
     /// conversation column changes and can safely drive a follow-up render.
     last_available_width: Option<f32>,
-    /// Set while an interactive resize is in flight; collapse is deferred
-    /// until widths have settled for [`RESIZE_SETTLE_MS`].
-    width_changed_at: Option<Instant>,
-    settle_task: Option<Task<()>>,
-    /// In-flight compact↔expanded morph (one per committed flip; manual
-    /// drive — see [`FlipMorph`]).
+    /// The editor width the last frame measured against. A height change that
+    /// comes from rewrapping at a new width (resize, first measure) snaps;
+    /// only edits at a stable width glide.
+    last_input_width: f32,
+    /// In-flight route-transition morph (manual drive — see [`FlipMorph`]).
     flip_morph: Option<FlipMorph>,
     /// Pill height actually rendered last frame — a committed flip morphs
     /// from here, so mid-flight reversals hand off without a jump.
@@ -6181,6 +6104,14 @@ impl Composer {
 
     pub(crate) fn dock_clearance_correction(&self) -> f32 {
         self.dock_clearance_correction
+    }
+
+    /// Review fixtures: type `text` into the prompt.
+    #[cfg(feature = "browser-fixture")]
+    pub fn fixture_set_draft(&mut self, text: &str, cx: &mut Context<Self>) {
+        let text = text.to_string();
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
+        cx.notify();
     }
 
     pub(crate) fn surface_bounds(&self) -> crate::new_thread_background_mask::SurfaceBounds {
@@ -6387,14 +6318,8 @@ impl Composer {
             todo_panels: HashMap::new(),
             todo_scroll: gpui::ScrollHandle::new(),
             queue_shortcut_revealed: false,
-            expanded_mode: false,
-            flip_epoch: 0,
-            compact_capacity: 0.0,
-            expanded_anchor: 0.0,
-            last_seen_width: 0.0,
             last_available_width: None,
-            width_changed_at: None,
-            settle_task: None,
+            last_input_width: 0.0,
             flip_morph: None,
             last_rendered_height: 0.0,
             #[cfg(test)]
@@ -8576,9 +8501,7 @@ impl Composer {
                 && !motion::reduced_motion(cx)
                 && self.last_rendered_height > 0.0
             {
-                // Both directions share one timeline. The blank canvas is
-                // always expanded; an established session begins compact.
-                self.expanded_mode = returning_to_new_thread;
+                // Both directions share one timeline.
                 let now_ms =
                     self.morph_clock.elapsed().as_secs_f32() * 1000.0 / motion::speed_scale();
                 self.flip_morph = Some(FlipMorph::new_thread_transition(
@@ -10640,7 +10563,16 @@ impl Composer {
                 // Share the submission guard with Enter, including pending
                 // edits and the new-session runnable-agent check.
                 let blocked = self.send_blocked(cx);
-                send_circle("composer-send", blocked, theme)
+                // An empty draft rests on the muted key too; only the visual
+                // changes, so Enter/click keep their existing guards.
+                let empty = self.editing_queued.is_none()
+                    && !self.input.read(cx).dictation.phase.active()
+                    && !composer_has_content(
+                        self.input.read(cx).text(),
+                        self.staged().len() + self.staged_appshots().len(),
+                        self.staged_comments(cx).len(),
+                    );
+                send_circle("composer-send", blocked || empty, theme)
                     .when(!blocked, |el| {
                         el.on_click(cx.listener(|this, _, _, cx| this.on_submit(cx)))
                     })
@@ -10663,35 +10595,110 @@ pub(crate) fn send_circle(
     blocked: bool,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
-    // A lime `rounded-md` key with the accent's own foreground arrow; an
-    // empty or blocked draft rests on the muted fill instead.
+    // An olive `rounded-md` key with the ordered-dither fill and a white
+    // paper plane; an empty or blocked draft rests on the muted fill with no
+    // texture.
     div()
         .id(id)
         .debug_selector(move || id.into())
         .size(px(SEND_BUTTON_SIZE))
         .flex_none()
         .relative()
-        .rounded(px(7.0))
+        .rounded(px(SEND_BUTTON_RADIUS))
         .flex()
         .items_center()
         .justify_center()
         .when(blocked, |el| el.bg(theme.muted_fill()))
         .when(!blocked, |el| {
-            el.bg(theme.accent)
-                .border_1()
-                .border_color(theme.accent_strong.opacity(0.4))
-                .cursor_pointer()
-                .hover(|s| s.opacity(0.88))
+            // The texture is tuned for a dark plate; a light card gets a
+            // deep olive base so the white glyph keeps its contrast.
+            el.when(theme.appearance == crate::theme::Appearance::Light, |el| {
+                el.bg(gpui::hsla(80.0 / 360.0, 0.28, 0.2, 1.0))
+            })
+            .border_1()
+            .border_color(theme.accent.opacity(0.4))
+            .cursor_pointer()
+            .hover(|s| s.opacity(0.88))
+            .child(dither_fill(SEND_DITHER_RGB, SEND_BUTTON_RADIUS))
         })
         .child(
-            crate::icons::icon(crate::icons::ARROW_UP)
+            crate::icons::icon(crate::icons::SEND)
                 .size(px(14.0))
                 .text_color(if blocked {
                     theme.text_muted
                 } else {
-                    theme.on_accent
+                    gpui::white()
                 }),
         )
+}
+
+/// The send key's dither ink: `rgb(151 183 76)`.
+const SEND_DITHER_RGB: [u8; 3] = [151, 183, 76];
+const SEND_BUTTON_RADIUS: f32 = 7.0;
+/// One dither cell, in logical pixels.
+const DITHER_CELL: f32 = 2.0;
+const BAYER_4: [f32; 16] = [
+    0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0,
+];
+
+/// Whether dither cell `(x, y)` of a `rows`-tall grid is lit, and its alpha.
+/// The density ramps from a quarter at the top to full at the bottom
+/// (the `gradient` variant), thresholded by a 4x4 Bayer matrix; unlit cells
+/// keep a faint 40% wash so the key never reads as holes.
+fn dither_cell(x: usize, y: usize, rows: usize) -> (bool, f32) {
+    let density = 0.25 + 0.75 * ((y as f32 + 0.5) / rows as f32);
+    let threshold = BAYER_4[(y & 3) * 4 + (x & 3)] / 16.0 + 0.5 / 16.0;
+    let lit = density > threshold;
+    let alpha = (0.3 + density * 0.7) * if lit { 1.0 } else { 0.4 };
+    (lit, alpha.clamp(0.0, 1.0))
+}
+
+/// Paint an ordered-dither texture over the parent's box: 2px cells, denser
+/// toward the bottom, clipped to the parent's rounded corners.
+fn dither_fill(rgb: [u8; 3], radius: f32) -> impl IntoElement {
+    let color = gpui::Rgba {
+        r: rgb[0] as f32 / 255.0,
+        g: rgb[1] as f32 / 255.0,
+        b: rgb[2] as f32 / 255.0,
+        a: 1.0,
+    };
+    let color: gpui::Hsla = color.into();
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let width = f32::from(bounds.size.width);
+            let height = f32::from(bounds.size.height);
+            let columns = (width / DITHER_CELL).round().max(4.0) as usize;
+            let rows = (height / DITHER_CELL).round().max(4.0) as usize;
+            let cell_w = width / columns as f32;
+            let cell_h = height / rows as f32;
+            for y in 0..rows {
+                for x in 0..columns {
+                    // Skip cells whose centre falls outside the rounded rect.
+                    let cx = (x as f32 + 0.5) * cell_w;
+                    let cy = (y as f32 + 0.5) * cell_h;
+                    let dx = (radius - cx).max(cx - (width - radius)).max(0.0);
+                    let dy = (radius - cy).max(cy - (height - radius)).max(0.0);
+                    if dx * dx + dy * dy > radius * radius {
+                        continue;
+                    }
+                    // The outer ring of cells draws the key's soft frame.
+                    let edge = x == 0 || y == 0 || x + 1 == columns || y + 1 == rows;
+                    let alpha = if edge { 0.5 } else { dither_cell(x, y, rows).1 };
+                    window.paint_quad(gpui::fill(
+                        gpui::Bounds::new(
+                            bounds.origin
+                                + gpui::point(px(x as f32 * cell_w), px(y as f32 * cell_h)),
+                            gpui::size(px(cell_w), px(cell_h)),
+                        ),
+                        color.opacity(alpha),
+                    ));
+                }
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
 }
 
 /// The Send / Stop key: a 28px square, matching the attach button.
@@ -10804,90 +10811,12 @@ impl Render for Composer {
                 input.layout_text(px(input.last_width), &style, window, cx);
             }
         });
-        let (text_width, has_newline, content_height, last_width, epoch) = {
+        let (content_height, input_width) = {
             let input = self.input.read(cx);
-            (
-                input.measured_text_width(),
-                input.has_newline(),
-                input.measured_content_height(),
-                input.last_width,
-                input.layout_epoch,
-            )
+            (input.measured_content_height(), input.last_width)
         };
-        let now = Instant::now();
-        // Only measurements taken *after* the last flip may drive the next one
-        // (at most one flip per layout pass — a flip invalidates the widths).
-        let measured_since_flip = epoch > self.flip_epoch && last_width > 0.0;
-        if measured_since_flip {
-            // A same-mode width change is an interactive window/pane resize:
-            // defer collapse until sizes settle for RESIZE_SETTLE_MS. Expansion
-            // remains live so compact controls never squeeze the input away.
-            if self.last_seen_width > 0.0 && (last_width - self.last_seen_width).abs() > 0.5 {
-                self.width_changed_at = Some(now);
-            }
-            self.last_seen_width = last_width;
-            if self.expanded_mode {
-                if self.expanded_anchor <= 0.0 {
-                    self.expanded_anchor = last_width;
-                }
-            } else {
-                // The compact pill's content box is the layout-stable capacity
-                // both thresholds measure against.
-                self.compact_capacity = last_width - 8.0;
-            }
-        }
-        let resizing = self
-            .width_changed_at
-            .is_some_and(|t| now.duration_since(t) < Duration::from_millis(RESIZE_SETTLE_MS));
-        if resizing && self.settle_task.is_none() {
-            // Re-evaluate once the settle window has passed.
-            self.settle_task = Some(cx.spawn(async move |this, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(RESIZE_SETTLE_MS + 20))
-                    .await;
-                this.update(cx, |composer, cx| {
-                    composer.settle_task = None;
-                    cx.notify();
-                })
-                .ok();
-            }));
-        }
-        // Layout-stable compact capacity: measured directly while compact;
-        // while expanded, the learned value shifted by any container resize
-        // (the expanded input width tracks the container 1:1).
-        let capacity = if !self.expanded_mode {
-            if last_width > 0.0 {
-                last_width - 8.0
-            } else {
-                f32::MAX // before first measure default to compact
-            }
-        } else if self.compact_capacity > 0.0 {
-            if self.expanded_anchor > 0.0 && last_width > 0.0 {
-                self.compact_capacity + (last_width - self.expanded_anchor)
-            } else {
-                self.compact_capacity
-            }
-        } else {
-            f32::MAX
-        };
-        let next = composer_flip(
-            self.expanded_mode,
-            text_width,
-            capacity,
-            has_newline,
-            resizing,
-        );
-        let committed_flip = next != self.expanded_mode && measured_since_flip;
-        if committed_flip {
-            self.expanded_mode = next;
-            self.flip_epoch = epoch;
-            self.expanded_anchor = 0.0;
-            // The mode change moves the input width; don't read that jump as
-            // an interactive resize.
-            self.last_seen_width = 0.0;
-        }
-        // New chats render expanded regardless of `expanded_mode` (see below),
-        // so a mode flip there changes nothing visible — never morph it.
+        let rewrapped = (input_width - self.last_input_width).abs() > 0.5;
+        self.last_input_width = input_width;
         let new_chat = self.state.read(cx).selected_chat.is_none();
         // Morph clock in ms; dividing by the measurement knob stretches the
         // timeline exactly like shell.rs eval_tween's scaled duration.
@@ -10896,6 +10825,8 @@ impl Render for Composer {
             .route_snap_until
             .is_some_and(|until| Instant::now() < until);
         let dock_height_changed = std::mem::take(&mut self.dock_height_changed);
+        // The composer is always the two-row card, so only a route transition
+        // (armed on navigation) can morph it; this just retires a finished one.
         self.flip_morph = if dock_height_changed
             || self.dock_frame.is_some_and(|frame| frame.active)
             || self.dock_reflow.active()
@@ -10904,14 +10835,13 @@ impl Render for Composer {
         } else {
             flip_morph_step(
                 self.flip_morph,
-                committed_flip && !new_chat,
+                false,
                 self.last_rendered_height,
                 now_ms,
                 motion::reduced_motion(cx),
                 route_snap,
             )
         };
-        let expanded = self.expanded_mode;
 
         let failure = self.visible_failure();
         // Composer honesty: when the target's delivery path is degraded, say
@@ -11059,33 +10989,23 @@ impl Render for Composer {
             }))
         });
 
-        // Route coordination must not force an established thread into the
-        // two-row layout. Short drafts keep the original skinny composer.
-        let session_expanded = expanded;
-        let expanded = expanded || new_chat;
+        // Every route uses the same two-row card: the editor on top, the
+        // toolbar row below. Docked threads only trim the empty editor floor.
         let dock_amount = self.dock_frame.map_or(0.0, |frame| frame.amount);
         let mut dock_layout = crate::composer_dock::DockLayout {
             hero_height: composer_total_height(content_height),
-            thread_height: if session_expanded {
-                (content_height + TEXTAREA_PAD_V).clamp(TEXTAREA_MIN - 16.0, TEXTAREA_MAX)
-                    + ACTIONS_ROW_HEIGHT
-                    + PILL_BORDER_V
-            } else {
-                COMPACT_TOTAL_HEIGHT
-            },
+            thread_height: thread_composer_height(content_height),
             extra_height: 0.0,
-            compact: !session_expanded,
+            compact: false,
         };
 
-        // Committed-height morph: the layout below is already the NEW mode's;
-        // only the pill's height (and the entrance fade/text glide driven by
-        // `morph_t`) animates. Steady state renders exactly the target.
-        // Staged attachments add the wrap strip's height to the pill in BOTH
-        // modes (attachment-ui.tsx AttachmentStrip sits above the input row).
+        // Height morph: only the pill's height animates toward the target.
+        // Steady state renders exactly the target. Staged attachments add the
+        // wrap strip's height above the editor (attachment-ui.tsx
+        // AttachmentStrip).
         let staged_count = self.tiled_attachments(cx).len();
-        // The input width excludes the inline controls in compact mode.
-        // Wrap against the pill's content width in both modes, accounting
-        // for the outer container padding and the pill's 1px borders.
+        // Wrap against the pill's content width, accounting for the outer
+        // container padding and the pill's 1px borders.
         let strip_width_hint =
             self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH) - 2.0 * Theme::SPACE_LG - 2.0;
         let appshot_count = self.staged_appshots().len();
@@ -11093,10 +11013,8 @@ impl Render for Composer {
         let comment_strip_h = comment_strip_height(self.staged_comments(cx).len());
         let base_height = if self.dock_frame.is_some() {
             dock_layout.height(dock_amount)
-        } else if expanded {
-            composer_total_height(content_height)
         } else {
-            COMPACT_TOTAL_HEIGHT
+            composer_total_height(content_height)
         };
         let target_height =
             base_height + strip_h + appshot_strip_height(appshot_count) + comment_strip_h;
@@ -11104,11 +11022,14 @@ impl Render for Composer {
         let dock_owns_layout = self.dock_frame.is_some_and(|frame| frame.active)
             || dock_height_changed
             || self.dock_reflow.active();
-        let (reflow_height, dock_compact_amount) =
-            self.dock_frame.map_or((0.0, dock_amount), |frame| {
-                self.dock_reflow
-                    .sample(dock_layout, frame, motion::reduced_motion(cx), now)
-            });
+        let (reflow_height, _) = self.dock_frame.map_or((0.0, dock_amount), |frame| {
+            self.dock_reflow.sample(
+                dock_layout,
+                frame,
+                motion::reduced_motion(cx),
+                Instant::now(),
+            )
+        });
         let coordinated_route_morph = self
             .flip_morph
             .filter(|m| m.spec == motion::NEW_THREAD_TRANSITION && !m.done(now_ms));
@@ -11143,7 +11064,7 @@ impl Render for Composer {
                 self.last_rendered_height,
                 now_ms,
                 motion::reduced_motion(cx),
-                route_snap,
+                route_snap || rewrapped,
             )
         };
         self.last_target_height = target_height;
@@ -11154,12 +11075,7 @@ impl Render for Composer {
         if self.height_morph.is_some() || self.dock_reflow.active() {
             window.request_animation_frame();
         }
-        let (_, morph_t, morphing) = match self.flip_morph {
-            Some(m) if !m.done(now_ms) => {
-                (m.height(target_height, now_ms), m.progress(now_ms), true)
-            }
-            _ => (target_height, 1.0, false),
-        };
+        let morphing = self.flip_morph.is_some_and(|m| !m.done(now_ms));
         if !morphing {
             self.flip_morph = None;
         } else {
@@ -11170,51 +11086,21 @@ impl Render for Composer {
         self.dock_clearance_correction = self.dock_frame.map_or(0.0, |frame| {
             dock_layout.height(if frame.docked { 1.0 } else { 0.0 }) - pill_height
         });
-        // Route morphs use the dock's reversible clock; typing flips keep
-        // their existing local clock once the composer reaches its dock.
-        let layout_morph_t = if dock_owns_layout {
-            if expanded {
-                1.0 - dock_compact_amount
-            } else {
-                dock_compact_amount
-            }
-        } else {
-            morph_t
-        };
-        let text_pt = morph_text_pad(layout_morph_t);
+        let text_pt = TEXT_TOP_PAD;
         let surface_radius = COMPOSER_RADIUS;
-        let route_to_single_line =
-            self.dock_frame.is_some_and(|frame| frame.active) && !session_expanded;
         let textarea_height = (pill_height
             - strip_h
             - appshot_strip_height(appshot_count)
             - comment_strip_h
             - PILL_BORDER_V
             - ACTIONS_ROW_HEIGHT)
-            .max(if route_to_single_line {
-                INPUT_LINE_HEIGHT + text_pt + 4.0
-            } else {
-                0.0
-            });
+            .max(0.0);
         self.input.update(cx, |input, cx| {
-            let height = if expanded {
-                (textarea_height - text_pt - 4.0).max(0.0)
-            } else {
-                INPUT_LINE_HEIGHT
-            };
-            let settled_height = if expanded {
-                (base_height - PILL_BORDER_V - ACTIONS_ROW_HEIGHT - TEXTAREA_PAD_V).max(
-                    if route_to_single_line {
-                        INPUT_LINE_HEIGHT
-                    } else {
-                        0.0
-                    },
-                )
-            } else {
-                INPUT_LINE_HEIGHT
-            };
+            let height = (textarea_height - text_pt - 4.0).max(0.0);
+            let settled_height =
+                (base_height - PILL_BORDER_V - ACTIONS_ROW_HEIGHT - TEXTAREA_PAD_V).max(0.0);
             let resizing = self.height_morph.is_some() || self.dock_reflow.active();
-            let top_padding = if expanded { text_pt } else { 0.0 };
+            let top_padding = text_pt;
             if input.viewport_height != Some(height)
                 || input.settled_viewport_height != Some(settled_height)
                 || input.resizing != resizing
@@ -11367,10 +11253,8 @@ impl Render for Composer {
             .shadow(theme.composer_glass_shadows());
         // The pill's bottom edge is stationary on screen (the composer sits at
         // the bottom of the shell column; growth moves the TOP edge), so the
-        // controls pin to the bottom and only the text glides with the reveal
-        // while the model selector stays in the right action group.
-        let cluster_dy = morph_cluster_dy(layout_morph_t);
-        let action_inset = morph_cluster_inset(expanded, layout_morph_t);
+        // toolbar pins to the bottom and only the editor grows.
+        let action_inset = ACTION_INSET;
         let surface_width = self.last_available_width.map_or_else(
             || {
                 self.surface_bounds
@@ -11398,185 +11282,140 @@ impl Render for Composer {
                 .inset_0(),
             )
         };
-        // The model chip already contributes 6px of trailing padding. Remove
-        // that from its gap to the narrow microphone glyph so the visible
-        // label–mic and mic–Send spaces balance without shrinking hit targets.
-        let model_action_gap = if microphone.is_some() {
-            ACTION_PRIMARY_GAP - 6.0
-        } else {
-            ACTION_PRIMARY_GAP
-        };
-        // The voice track spans from the attachment slot to Stop, over the
-        // model selector (and, compact, the text), which fade beneath it.
+        // The voice track spans the leading group from the attachment slot
+        // to the microphone (the group's trailing edge plus the primary gap
+        // that matches the track's own), so it follows the microphone while
+        // the model selector folds away beneath it.
         let voice_track = voice_frame
             .as_ref()
             .filter(|_| voice_t > 0.0 && microphone.is_some())
             .map(|frame| {
-                // Expanded: the row's 2px top pad; compact: centred in the
-                // 47px line, riding the same cluster glide as the buttons.
-                let top = if expanded {
-                    2.0
-                } else {
-                    (COMPACT_TOTAL_HEIGHT - PILL_BORDER_V - VOICE_TRACK_HEIGHT) / 2.0 - cluster_dy
-                };
                 self.render_voice_track(
                     voice_t,
                     frame,
-                    action_inset + 28.0 + VOICE_TRACK_GAP,
-                    action_inset + 28.0 + ACTION_PRIMARY_GAP + 28.0 + VOICE_TRACK_GAP,
-                    top,
+                    28.0 + VOICE_TRACK_GAP,
+                    ACTION_PRIMARY_GAP - VOICE_TRACK_GAP,
+                    0.0,
                     cx,
                 )
             });
         let beneath_voice = 1.0 - voice_t.clamp(0.0, 1.0);
-        let model_picker = model_picker.opacity(beneath_voice);
+        // The model selector sits between the microphone and Send. While
+        // dictating it fades and folds to zero width, so the microphone
+        // slides in beside Send and the track takes the row.
+        let model_picker = model_picker
+            .opacity(beneath_voice)
+            .ml(px(ACTION_PRIMARY_GAP * beneath_voice))
+            .when(voice_t > 0.0, |el| {
+                el.max_w(px(surface_width * 0.45 * beneath_voice))
+                    .overflow_hidden()
+            });
         let permission = self
-            .render_permission_control(expanded, &theme, cx)
+            .render_permission_control(&theme, cx)
             .opacity(beneath_voice);
-        let body = if expanded {
-            // Expanded: textarea on top (`px-4 pb-1 pt-4`), actions row
-            // (8px bottom + 2px top, 32px chips → 42px) ABSOLUTE at the pill's
-            // stationary bottom — constant screen-y through the morph, with
-            // the compact↔expanded centering delta gliding out. The
-            // text viewport follows the animated height so it cannot paint
-            // over the controls. Its width stays fixed (no tween rewraps);
-            // top padding eases 12→16. Attachment and Send stay on the bottom
-            // anchor with the model selector always beside Send.
-            pill.h(px(pill_height))
-                .overflow_hidden()
-                .relative()
-                .flex()
-                .flex_col()
-                .children(comments_chip)
-                .children(appshot_strip)
-                .children(strip)
-                .child(
-                    div()
-                        .h(px(textarea_height))
-                        .flex_none()
-                        .overflow_hidden()
-                        .px(px(16.0))
-                        .pt(px(text_pt))
-                        .pb(px(4.0))
-                        .child(self.render_input_with_completion()),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .bottom(px(-cluster_dy))
-                        .h(px(ACTIONS_ROW_HEIGHT))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        // Attachment stays left; model, microphone and Send stay right.
-                        .gap(px(model_action_gap))
-                        .px(px(action_inset))
-                        .pt(px(2.0))
-                        .pb(px(ACTIONS_BOTTOM_PAD))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(ACTION_UTILITY_GAP))
-                                .child(attach)
-                                .child(permission),
-                        )
-                        .child(model_picker)
-                        .child(
-                            div()
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .gap(px(ACTION_PRIMARY_GAP))
-                                .children(microphone)
-                                .child(send_button),
-                        )
-                        .children(voice_track),
-                )
-        } else {
-            // Compact pill: attachment on the left, input in the middle,
-            // then model, microphone and Send on the right, all on one 47px line.
-            // The row is BOTTOM-justified: during the collapse morph the pill
-            // top sweeps down over a stationary row, the text walks down from
-            // its expanded resting place via a decaying relative offset, and
-            // attachment/Send hold their spots (the centering delta gliding
-            // in). The model selector remains beside microphone and Send.
-            let text_glide = if dock_owns_layout {
-                collapse_text_glide(dock_layout.hero_height, dock_compact_amount)
-            } else {
-                match self.flip_morph {
-                    Some(m) if morphing => collapse_text_glide(m.from, morph_t),
-                    _ => 0.0,
-                }
-            };
-            pill.h(px(pill_height))
-                .overflow_hidden()
-                .flex()
-                .flex_col()
-                .justify_end()
-                .children(comments_chip)
-                .children(appshot_strip)
-                .children(strip)
-                .child(
-                    div()
-                        .h(px(COMPACT_TOTAL_HEIGHT - PILL_BORDER_V))
-                        .relative()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .child(
-                            div()
-                                .flex_none()
-                                .pl(px(action_inset))
-                                .relative()
-                                .top(px(-cluster_dy))
-                                .flex()
-                                .items_center()
-                                .gap(px(ACTION_UTILITY_GAP))
-                                .child(attach)
-                                .child(permission),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .px(px(8.0))
-                                .relative()
-                                .top(px(-text_glide))
-                                // The draft waits under the voice track and
-                                // fades back as the transcript lands in it.
-                                .opacity(beneath_voice)
-                                .child(self.render_input_with_completion()),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .max_w(px(surface_width * 0.45))
-                                .relative()
-                                .top(px(-cluster_dy))
-                                .child(model_picker),
-                        )
-                        .child(
-                            div()
-                                .flex_none()
-                                .pl(px(model_action_gap))
-                                .pr(px(action_inset))
-                                .relative()
-                                .top(px(-cluster_dy))
-                                .flex()
-                                .items_center()
-                                .gap(px(ACTION_PRIMARY_GAP))
-                                .children(microphone)
-                                .child(send_button),
-                        )
-                        .children(voice_track),
-                )
-        };
+        // Plugins: a quiet `size-7` icon key beside the access chip that opens
+        // the plugins page.
+        let plugins_hover_key: SharedString = format!("composer-plugins-{}", cx.entity_id()).into();
+        let plugins = div()
+            .id("composer-plugins")
+            .size(px(28.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(7.0))
+            .cursor_pointer()
+            .bg(motion::hover_blend(
+                &plugins_hover_key,
+                theme.muted_fill().opacity(0.0),
+                theme.muted_fill().opacity(0.6),
+            ))
+            .on_hover(motion::hover_listener(plugins_hover_key.clone()))
+            .role(Role::Button)
+            .aria_label("Plugins")
+            .tooltip(crate::settings::widgets::text_tooltip("Plugins"))
+            .opacity(beneath_voice)
+            .on_click(cx.listener(|_, _, _, cx| {
+                cx.emit(ComposerEvent::WorkspaceCommand(WorkspaceCommand::Plugins));
+            }))
+            .child(
+                crate::icons::icon(crate::icons::SETTINGS_PLUGINS)
+                    .size(px(15.0))
+                    .text_color(motion::hover_blend(
+                        &plugins_hover_key,
+                        theme.text_muted,
+                        theme.text,
+                    )),
+            );
+        // Editor on top (`px-4 pb-1 pt-4`); the toolbar row (2px top + 32px
+        // controls + 8px bottom) is ABSOLUTE at the pill's stationary bottom,
+        // `[+][access][plugins] … [mic][model][send]`. The editor viewport
+        // follows the animated height so it cannot paint over the controls;
+        // its width stays fixed (no tween rewraps).
+        let body = pill
+            .h(px(pill_height))
+            .overflow_hidden()
+            .relative()
+            .flex()
+            .flex_col()
+            .children(comments_chip)
+            .children(appshot_strip)
+            .children(strip)
+            .child(
+                div()
+                    .h(px(textarea_height))
+                    .flex_none()
+                    .overflow_hidden()
+                    .px(px(16.0))
+                    .pt(px(text_pt))
+                    .pb(px(4.0))
+                    .child(self.render_input_with_completion()),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(px(ACTIONS_ROW_HEIGHT))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .px(px(action_inset))
+                    .pt(px(2.0))
+                    .pb(px(ACTIONS_BOTTOM_PAD))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(VOICE_TRACK_HEIGHT))
+                            .relative()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(ACTION_UTILITY_GAP))
+                            .child(attach)
+                            .child(permission)
+                            .when(!self.side_chat, |el| el.child(plugins))
+                            .children(voice_track),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .pl(px(ACTION_PRIMARY_GAP))
+                            .children(microphone)
+                            .child(model_picker),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .pl(px(ACTION_PRIMARY_GAP))
+                            .child(send_button),
+                    ),
+            );
         let new_thread_target_selectors = (new_thread_chrome_opacity > 0.0).then(|| {
             self.pickers.update(cx, |pickers, cx| {
                 pickers.render_new_thread_target_selectors(cx)
@@ -11615,46 +11454,56 @@ impl Render for Composer {
             // the file-mention and slash tokens are mutually exclusive.
             .children(self.render_file_mention_popup(&theme, cx))
             .children(self.render_slash_popup(&theme, cx));
-        // An inset toolbar meets the composer plate above its input.
-        // Keep the destination and checkout controls on one shared surface.
+        // The context tray: a tonal tab tucked behind the card's top edge,
+        // one step narrower than the card (`w-14/15`), carrying the
+        // destination and checkout chips. It reaches down under the card so
+        // the card painted after it reads as sitting on top of the tray.
+        let tray_inset = (surface_width / 30.0).clamp(12.0, 32.0);
+        let tray = |tuck: f32| {
+            div()
+                .id("composer-context-tray")
+                .absolute()
+                .top_0()
+                .left(px(tray_inset))
+                .right(px(tray_inset))
+                .h(px(NEW_THREAD_SELECTOR_ROW_HEIGHT + tuck))
+                .rounded_t(px(surface_radius))
+                .bg(context_tray_fill(&theme))
+                .opacity(new_thread_chrome_opacity)
+                .child(
+                    div()
+                        .h(px(NEW_THREAD_SELECTOR_ROW_HEIGHT))
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .justify_start()
+                        .gap(px(2.0))
+                        .px(px(8.0))
+                        .children(new_thread_target_selectors)
+                        .children(new_thread_git_selectors),
+                )
+        };
         let container = if self.dock_frame.is_some() {
             // Floating selectors share the surface's origin and never change its height.
             container.relative().child(
                 div()
                     .id("dock-target-selectors")
                     .absolute()
-                    .top(px(-40.0))
-                    .left(px(Theme::SPACE_LG + 10.0))
-                    .right(px(Theme::SPACE_LG + 10.0))
-                    .h(px(40.0))
-                    .flex()
-                    .items_center()
-                    .justify_start()
-                    .gap(px(10.0))
-                    .px(px(8.0))
-                    .rounded_t(px(20.0))
-                    .bg(theme.surface.opacity(1.0))
-                    .opacity(new_thread_chrome_opacity)
-                    .children(new_thread_target_selectors)
-                    .children(new_thread_git_selectors),
+                    .top(px(-NEW_THREAD_SELECTOR_ROW_HEIGHT))
+                    .left(px(Theme::SPACE_LG))
+                    .right(px(Theme::SPACE_LG))
+                    .h(px(NEW_THREAD_SELECTOR_ROW_HEIGHT))
+                    .child(tray(CONTEXT_TRAY_TUCK)),
             )
         } else if new_thread_chrome > 0.0 {
             container.child(
                 div()
                     .w_full()
+                    .relative()
                     .h(px(NEW_THREAD_SELECTOR_ROW_HEIGHT * new_thread_chrome))
                     .mb(px(-Theme::SPACE_SM * (1.0 - new_thread_chrome)))
-                    .px(px(10.0))
-                    .flex()
-                    .items_center()
-                    .justify_start()
-                    .gap(px(10.0))
-                    .px(px(8.0))
-                    .rounded_t(px(20.0))
-                    .bg(theme.surface.opacity(1.0))
-                    .opacity(new_thread_chrome_opacity)
-                    .children(new_thread_target_selectors)
-                    .children(new_thread_git_selectors),
+                    // Bridge the column gap so the tray runs under the card.
+                    .child(tray(Theme::SPACE_SM + CONTEXT_TRAY_TUCK)),
             )
         } else {
             container
@@ -11863,7 +11712,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn dock_morph_restores_skinny_height_with_a_continuous_editor_origin(
+    fn dock_morph_keeps_the_two_row_card_with_a_continuous_editor_origin(
         cx: &mut gpui::TestAppContext,
     ) {
         let (_dir, handle) = composer_focus_window(cx);
@@ -11898,7 +11747,6 @@ mod tests {
                                 composer
                                     .input
                                     .update(cx, |input, cx| input.set_text("Hi", cx));
-                                composer.expanded_mode = false;
                                 let mut frame = crate::composer_dock::DockFrame::settled(docked);
                                 frame.amount = amount;
                                 frame.active = amount != if docked { 1.0 } else { 0.0 };
@@ -11917,17 +11765,23 @@ mod tests {
                         let surface = composer.surface_bounds.get().unwrap();
                         assert!((f32::from(surface.size.width) - (outer_width - 2.0 * Theme::SPACE_LG)).abs() <= 1.0,
                             "surface width clipped: docked={docked}, amount={amount}, outer={outer_width}, surface={surface:?}");
+                        // The editor stays at the card's top inset on both
+                        // routes: one hairline plus `pt-4`.
                         let origin = input.read(cx).last_bounds.unwrap().origin;
-                        assert!((f32::from(origin.y - surface.top()) - (17.0 - 4.0 * amount)).abs() <= 1.0,
+                        assert!((f32::from(origin.y - surface.top()) - (1.0 + TEXT_TOP_PAD)).abs() <= 1.0,
                             "editor jumped: docked={docked}, amount={amount}, origin={origin:?}, surface={surface:?}");
                         let model = composer.model_bounds.get().unwrap();
-                        let inset = motion::lerp(12.0, 8.0, amount);
-                        let expected_right = surface.right() - px(1.0 + inset + 28.0 + ACTION_PRIMARY_GAP);
+                        let expected_right = surface.right() - px(1.0 + ACTION_INSET + 28.0 + ACTION_PRIMARY_GAP);
                         assert!((f32::from(model.right() - expected_right)).abs() <= 1.0,
                             "model must stay right aligned: compact_picker={compact_picker}, docked={docked}, amount={amount}, actual={model:?}, expected={expected_right:?}");
-                        let expected = if docked { COMPACT_TOTAL_HEIGHT } else { COMPOSER_MIN_HEIGHT };
+                        // Only the empty editor floor changes between routes;
+                        // the toolbar row is present throughout.
+                        let content = input.read(cx).measured_content_height();
+                        let thread = thread_composer_height(content);
+                        let expected = if docked { thread } else { COMPOSER_MIN_HEIGHT };
+                        assert!(thread > COMPACT_TOTAL_HEIGHT + ACTIONS_ROW_HEIGHT / 2.0);
                         assert!((composer.last_rendered_height + composer.dock_clearance_correction - expected).abs() < 0.1);
-                        assert!((composer.last_rendered_height - motion::lerp(COMPOSER_MIN_HEIGHT, COMPACT_TOTAL_HEIGHT, amount)).abs() < 0.1);
+                        assert!((composer.last_rendered_height - motion::lerp(COMPOSER_MIN_HEIGHT, thread, amount)).abs() < 0.1);
                             }).unwrap();
                         });
                     }
@@ -11997,9 +11851,11 @@ mod tests {
                     );
                     assert!(composer.dock_reflow.active());
                     assert!(composer.height_morph.is_none());
+                    let thread =
+                        thread_composer_height(composer.input.read(cx).measured_content_height());
                     assert!(
                         (composer.last_rendered_height + composer.dock_clearance_correction
-                            - (COMPACT_TOTAL_HEIGHT + 132.0))
+                            - (thread + 132.0))
                             .abs()
                             < 0.1,
                         "transcript clearance must reserve the destination height"
@@ -12055,7 +11911,6 @@ mod tests {
             .unwrap();
             handle
                 .read_with(cx, |composer, _| {
-                    assert!(composer.expanded_mode);
                     assert!(composer.dock_reflow.active());
                     assert!(composer.flip_morph.is_none());
                     assert!(
@@ -12067,7 +11922,7 @@ mod tests {
                         (f32::from(composer.model_bounds.get().unwrap().left() - model_before))
                             .abs()
                             <= 1.0,
-                        "model selector jumped on the compact/expanded commit"
+                        "model selector jumped while the draft grew"
                     );
                 })
                 .unwrap();
@@ -12075,11 +11930,11 @@ mod tests {
     }
 
     #[gpui::test]
-    fn conversation_resize_reflows_the_live_draft_and_preserves_the_flip(
+    fn conversation_resize_reflows_the_live_draft_in_the_two_row_card(
         cx: &mut gpui::TestAppContext,
     ) {
         let (_dir, handle) = composer_focus_window(cx);
-        let draft = "A draft near the compact boundary. ".repeat(2);
+        let draft = "A draft that wraps once the column narrows. ".repeat(2);
         handle
             .update(cx, |composer, window, cx| {
                 composer
@@ -12101,11 +11956,8 @@ mod tests {
         for _ in 0..3 {
             draw(cx);
         }
-        // Finish measuring the wide input before typing; the hero's previous
-        // width must not accidentally put this fixture into the resize hold.
         handle
             .update(cx, |composer, _, cx| {
-                composer.width_changed_at = None;
                 composer.input.update(cx, |input, cx| {
                     input.set_text(draft.clone(), cx);
                     input.selected_range = 2..8;
@@ -12115,55 +11967,47 @@ mod tests {
         for _ in 0..3 {
             draw(cx);
         }
-        let input = handle
-            .read_with(cx, |composer, cx| {
-                assert!(
-                    !composer.expanded_mode,
-                    "draft must fit the wide compact input: text={}, capacity={}",
-                    composer.input.read(cx).measured_text_width(),
-                    composer.compact_capacity,
-                );
-                assert!(composer.input.read(cx).measured_text_width() < composer.compact_capacity);
-                composer.input.clone()
-            })
-            .unwrap();
-
+        // Every width keeps the toolbar row under the editor, Send and the
+        // model selector on the right, and the same live input and caret.
+        let check = |cx: &mut gpui::TestAppContext, width: f32| -> f32 {
+            handle
+                .read_with(cx, |composer, cx| {
+                    let surface = composer.surface_bounds.get().unwrap();
+                    let model = composer.model_bounds.get().unwrap();
+                    let right =
+                        surface.right() - px(1.0 + ACTION_INSET + 28.0 + ACTION_PRIMARY_GAP);
+                    assert!(
+                        (f32::from(model.right() - right)).abs() <= 1.0,
+                        "controls must remain on the right at {width}px"
+                    );
+                    let editor = composer.input.read(cx).last_bounds.unwrap();
+                    assert!(
+                        editor.bottom() <= model.top() + px(1.0),
+                        "the editor must sit above the toolbar row at {width}px"
+                    );
+                    assert!(
+                        composer.flip_morph.is_none(),
+                        "a resize never morphs the layout"
+                    );
+                    assert!(composer.last_target_height >= thread_composer_height(0.0));
+                    assert_eq!(composer.input.read(cx).text(), draft);
+                    assert_eq!(composer.input.read(cx).selected_range, 2..8);
+                    composer.last_target_height
+                })
+                .unwrap()
+        };
+        let wide = check(cx, 1232.0);
         handle
             .update(cx, |composer, window, cx| {
-                composer.set_available_width(592.0, cx);
-                window.resize(size(px(592.0), px(800.0)));
+                composer.set_available_width(436.0, cx);
+                window.resize(size(px(436.0), px(800.0)));
             })
             .unwrap();
         for _ in 0..3 {
             draw(cx);
         }
-        handle
-            .update(cx, |composer, _, _| {
-                assert!(
-                    composer.expanded_mode,
-                    "narrowing must expand the overflowing draft immediately"
-                );
-                assert!(
-                    composer.flip_morph.is_some(),
-                    "resize must retain the height/controls morph"
-                );
-                assert!(composer.last_target_height > COMPACT_TOTAL_HEIGHT);
-                composer.morph_clock -= Duration::from_secs(1);
-            })
-            .unwrap();
-        draw(cx);
-        handle
-            .read_with(cx, |composer, _| {
-                let surface = composer.surface_bounds.get().unwrap();
-                let model = composer.model_bounds.get().unwrap();
-                let right = surface.right() - px(1.0 + 12.0 + 28.0 + ACTION_PRIMARY_GAP);
-                assert!(
-                    (f32::from(model.right() - right)).abs() <= 1.0,
-                    "expanded controls must remain on the right"
-                );
-            })
-            .unwrap();
-
+        let narrow = check(cx, 436.0);
+        assert!(narrow > wide, "the narrowed draft wraps onto more lines");
         handle
             .update(cx, |composer, window, cx| {
                 composer.set_available_width(1232.0, cx);
@@ -12173,27 +12017,7 @@ mod tests {
         for _ in 0..3 {
             draw(cx);
         }
-        handle
-            .update(cx, |composer, _, _| {
-                assert!(
-                    composer.expanded_mode,
-                    "widening must wait for resize to settle before collapsing"
-                );
-                composer.width_changed_at =
-                    Some(Instant::now() - Duration::from_millis(RESIZE_SETTLE_MS + 1));
-            })
-            .unwrap();
-        draw(cx);
-        handle
-            .read_with(cx, |composer, cx| {
-                assert!(!composer.expanded_mode);
-                assert!(composer.flip_morph.is_some());
-                assert_eq!(composer.last_target_height, COMPACT_TOTAL_HEIGHT);
-                assert_eq!(composer.input, input);
-                assert_eq!(input.read(cx).text(), draft);
-                assert_eq!(input.read(cx).selected_range, 2..8);
-            })
-            .unwrap();
+        assert_eq!(check(cx, 1232.0), wide);
     }
 
     #[gpui::test]
@@ -15263,55 +15087,23 @@ mod tests {
     }
 
     #[test]
-    fn flip_decision() {
-        // Fits in the pill → compact stays compact.
-        assert!(!composer_flip(false, 150.0, 300.0, false, false));
-        // Overflow → expand.
-        assert!(composer_flip(false, 320.0, 300.0, false, false));
-        // Newline always expands (either mode, even mid-resize).
-        assert!(composer_flip(false, 10.0, 300.0, true, false));
-        assert!(composer_flip(true, 10.0, 300.0, true, true));
-        // Narrow column (< MIN_COMPACT_INPUT_WIDTH) always expands.
-        assert!(composer_flip(false, 10.0, 199.0, false, false));
-        assert!(!composer_flip(false, 10.0, 200.0, false, false));
-    }
-
-    #[test]
-    fn flip_hysteresis_band_prevents_oscillation() {
-        let cap = 300.0;
-        // Text just over capacity expands…
-        assert!(composer_flip(false, cap + 1.0, cap, false, false));
-        // …and the SAME width, now expanded, does NOT collapse back — the
-        // collapse threshold sits COLLAPSE_HYSTERESIS below the expand one.
-        assert!(composer_flip(true, cap + 1.0, cap, false, false));
-        // Anywhere inside the band the two modes are both stable (no width in
-        // (cap - 32, cap] flips in either direction).
-        let in_band = cap - COLLAPSE_HYSTERESIS + 1.0;
-        assert!(!composer_flip(false, in_band, cap, false, false));
-        assert!(composer_flip(true, in_band, cap, false, false));
-        // Comfortably under the band → collapses.
-        assert!(!composer_flip(
-            true,
-            cap - COLLAPSE_HYSTERESIS - 1.0,
-            cap,
-            false,
-            false
-        ));
-    }
-
-    #[test]
-    fn resize_expands_live_but_defers_collapse() {
-        // A compact composer expands immediately as its text or controls stop
-        // fitting, even while the divider is moving.
-        assert!(composer_flip(false, 500.0, 300.0, false, true));
-        assert!(composer_flip(false, 10.0, 150.0, false, true));
-        // An expanded composer waits for the drag to settle before collapsing,
-        // avoiding mode chatter while the user reverses direction.
-        assert!(composer_flip(true, 0.0, 300.0, false, true));
-        // Once settled, the same wide layout may collapse.
-        assert!(composer_flip(false, 500.0, 300.0, false, false));
-        assert!(!composer_flip(true, 0.0, 300.0, false, false));
-        assert!(composer_flip(false, 10.0, 150.0, false, false));
+    fn every_route_uses_the_two_row_card() {
+        // An empty editor keeps both rows: the hero's 76px editor floor, a
+        // docked thread's 60px floor, the 42px toolbar and the hairline.
+        assert_eq!(composer_total_height(0.0), COMPOSER_MIN_HEIGHT);
+        assert_eq!(
+            thread_composer_height(0.0),
+            60.0 + ACTIONS_ROW_HEIGHT + PILL_BORDER_V
+        );
+        assert!(thread_composer_height(0.0) > COMPACT_TOTAL_HEIGHT + ACTIONS_ROW_HEIGHT / 2.0);
+        // One line of text never collapses the toolbar row into the editor.
+        let one_line = INPUT_LINE_HEIGHT;
+        assert!(thread_composer_height(one_line) >= one_line + TEXTAREA_PAD_V + ACTIONS_ROW_HEIGHT);
+        // Growth matches between routes once the draft clears both floors,
+        // and both stop at the same content cap.
+        assert_eq!(composer_total_height(120.0), thread_composer_height(120.0));
+        assert_eq!(composer_total_height(1000.0), COMPOSER_MAX_HEIGHT);
+        assert_eq!(thread_composer_height(1000.0), COMPOSER_MAX_HEIGHT);
     }
 
     #[test]
@@ -15803,50 +15595,14 @@ mod tests {
     }
 
     #[test]
-    fn morph_anchoring_holds_controls_and_glides_text() {
-        // Steady state (progress 1): no offsets, everything at rest.
-        assert_eq!(morph_cluster_dy(1.0), 0.0);
-        assert_eq!(morph_text_pad(1.0), 16.0);
-        assert_eq!(collapse_text_glide(124.0, 1.0), 0.0);
-        // At the commit instant the pieces start from the OLD mode's resting
-        // geometry: text pad at the compact 12px inset, cluster displaced by
-        // exactly the 4.5px centering delta.
-        assert_eq!(morph_text_pad(0.0), 12.0);
-        assert_eq!(morph_cluster_dy(0.0), CLUSTER_Y_DELTA);
-        // Collapse glide: starts where the expanded text sat (17px below the
-        // committed pill top → `from − 53` above the compact resting spot)…
-        assert_eq!(collapse_text_glide(124.0, 0.0), 71.0);
-        // …decays monotonically to zero…
-        let mut prev = collapse_text_glide(124.0, 0.0);
-        for step in 1..=10 {
-            let g = collapse_text_glide(124.0, step as f32 / 10.0);
-            assert!(g <= prev, "glide regressed at {step}");
-            prev = g;
-        }
-        // …and can't go negative on shallow mid-flight reversals.
-        assert_eq!(collapse_text_glide(50.0, 0.0), 0.0);
-    }
-
-    #[test]
-    fn cluster_inset_glides_between_the_source_endpoints() {
+    fn toolbar_geometry_is_shared_by_every_route() {
+        assert_eq!(ACTION_INSET, 12.0);
+        assert_eq!(TEXT_TOP_PAD, 16.0);
         assert_eq!(ACTION_UTILITY_GAP, 2.0);
         assert_eq!(ACTION_PRIMARY_GAP, Theme::SPACE_SM);
         assert!(ACTION_UTILITY_GAP < ACTION_PRIMARY_GAP);
-        // The morph starts from the OLD mode's resting inset (no sideways
-        // step at the commit) and eases to the committed mode's…
-        assert_eq!(morph_cluster_inset(true, 0.0), 8.0); // expand: from compact pr-2
-        assert_eq!(morph_cluster_inset(true, 1.0), 12.0); // …to expanded px-3
-        assert_eq!(morph_cluster_inset(false, 0.0), 12.0); // collapse: from px-3
-        assert_eq!(morph_cluster_inset(false, 1.0), 8.0); // …to pr-2
-        // …monotonically, bounded by the 4px source delta.
-        let mut prev = morph_cluster_inset(true, 0.0);
-        for step in 1..=10 {
-            let v = morph_cluster_inset(true, step as f32 / 10.0);
-            assert!(v >= prev && v <= 8.0 + CLUSTER_X_DELTA);
-            prev = v;
-        }
-        // Internal group spacing is shared between modes — only this wrapper
-        // inset may differ across the flip.
+        // The editor's padding is the `pt-4 pb-1` split of TEXTAREA_PAD_V.
+        assert_eq!(TEXT_TOP_PAD + 4.0, TEXTAREA_PAD_V);
     }
 
     #[test]

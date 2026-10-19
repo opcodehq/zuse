@@ -965,6 +965,7 @@ impl Client {
             git_checked_at: None,
             checkout_id: None,
             repository_id: None,
+            remote_repository: None,
             created_at: Utc::now(),
         };
         let id = space.id.clone();

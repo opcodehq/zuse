@@ -141,6 +141,15 @@ struct ReopenState {
 
 impl gpui::Global for ReopenState {}
 
+/// The app's public image transport, for review fixtures that show remote
+/// artwork (repository owner avatars) the way the app does.
+#[cfg(feature = "browser-fixture")]
+pub fn fixture_http_client(
+    runtime: tokio::runtime::Handle,
+) -> std::sync::Arc<dyn gpui::http_client::HttpClient> {
+    asset_http::AssetHttpClient::new(runtime)
+}
+
 /// Run the headed app: tokio bridge up, engine bootstrap kicked off (probe →
 /// connect-or-embed), 1320×880 window (min 900×600) with [`shell::Shell`] as the
 /// root view, boot splash overlaid until the engine reports ready.

@@ -1018,16 +1018,19 @@ impl Render for ShortcutsPage {
             .size_full()
             .on_hover(cx.listener(Self::on_scroll_hovered))
             .child(
-                crate::edge_fade::edge_faded(16.0, true, true, div()
-                    .id("shortcuts-page")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll.scroll)
-                    .track_focus(&self.focus)
-                    .child(
-                        widgets::page_column()
-                            .child(
-                                widgets::section_title_with_action(
+                crate::edge_fade::edge_faded(
+                    16.0,
+                    true,
+                    true,
+                    div()
+                        .id("shortcuts-page")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll.scroll)
+                        .track_focus(&self.focus)
+                        .child(
+                            widgets::page_column()
+                                .child(widgets::section_title_with_action(
                                     &theme,
                                     "Keyboard shortcuts",
                                     None,
@@ -1041,21 +1044,17 @@ impl Render for ShortcutsPage {
                                             .flex_none()
                                             .when(disabled, |el| el.opacity(0.35))
                                             .when(!disabled, |el| {
-                                                el.on_click(
-                                                    cx.listener(|this, _, _, cx| {
-                                                        this.keymap = KeymapConfig::default();
-                                                        this.stop_recording();
-                                                        this.conflict_notice = None;
-                                                        this.commit(cx);
-                                                        this.set_escape_stops_active_agent(
-                                                            false, cx,
-                                                        );
-                                                        this.set_composer_send_behavior(
-                                                            ComposerSendBehavior::Enter,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                )
+                                                el.on_click(cx.listener(|this, _, _, cx| {
+                                                    this.keymap = KeymapConfig::default();
+                                                    this.stop_recording();
+                                                    this.conflict_notice = None;
+                                                    this.commit(cx);
+                                                    this.set_escape_stops_active_agent(false, cx);
+                                                    this.set_composer_send_behavior(
+                                                        ComposerSendBehavior::Enter,
+                                                        cx,
+                                                    );
+                                                }))
                                             })
                                             .child(
                                                 crate::icons::icon(crate::icons::RESTART)
@@ -1065,22 +1064,22 @@ impl Render for ShortcutsPage {
                                             .child(SharedString::from("Restore defaults"))
                                             .into_any_element()
                                     }),
+                                ))
+                                .child(widgets::section_stack().children(groups))
+                                .child(
+                                    div()
+                                        .mt(px(12.0))
+                                        .px(px(4.0))
+                                        .min_h(px(20.0))
+                                        .flex()
+                                        .justify_center()
+                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .text_color(theme.text_muted)
+                                        .child(helper),
                                 ),
-                            )
-                            .child(widgets::section_stack().children(groups))
-                            .child(
-                                div()
-                                    .mt(px(12.0))
-                                    .px(px(4.0))
-                                    .min_h(px(20.0))
-                                    .flex()
-                                    .justify_center()
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .text_color(theme.text_muted)
-                                    .child(helper),
-                            )
-                            ,
-                    )).fade_overflow_y(&self.scroll.scroll),
+                        ),
+                )
+                .fade_overflow_y(&self.scroll.scroll),
             )
             .children(scrollbar)
             .into_any_element()

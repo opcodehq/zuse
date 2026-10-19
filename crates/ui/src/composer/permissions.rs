@@ -105,17 +105,20 @@ impl Composer {
     }
     pub(super) fn render_permission_control(
         &self,
-        expanded: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let selected = self.pickers.read(cx).resolved(cx).sandbox;
         let pending = self.state.read(cx).configuration_saving();
         let unconfirmed = !pending && self.state.read(cx).configuration_blocked();
-        let tint = if selected == SandboxLevel::DangerFullAccess {
+        // Safe modes rest muted and brighten on hover; full access stays in
+        // the warning tone so the unlocked state is never mistaken for them.
+        let full_access = selected == SandboxLevel::DangerFullAccess;
+        let hover_key: SharedString = format!("composer-permission-{}", cx.entity_id()).into();
+        let tint = if full_access {
             theme.warning
         } else {
-            theme.text_muted
+            motion::hover_blend(&hover_key, theme.text_muted, theme.text)
         };
         div()
             .id("composer-permissions")
@@ -132,7 +135,7 @@ impl Composer {
                     .aria_expanded(self.permission_open)
                     .tab_index(0)
                     .h(px(28.))
-                    .px(px(if expanded { 10. } else { 6. }))
+                    .px(px(10.))
                     .flex()
                     .items_center()
                     .gap(px(6.))
@@ -142,25 +145,32 @@ impl Composer {
                     .text_color(tint)
                     .cursor_pointer()
                     .when(pending, |view| view.opacity(0.5))
-                    .hover(|view| view.bg(theme.muted_fill().opacity(0.6)))
+                    .bg(if self.permission_open {
+                        theme.muted_fill().opacity(0.7)
+                    } else {
+                        motion::hover_blend(
+                            &hover_key,
+                            theme.muted_fill().opacity(0.0),
+                            theme.muted_fill().opacity(0.6),
+                        )
+                    })
+                    .on_hover(motion::hover_listener(hover_key.clone()))
                     .child(
                         icons::icon(access_details(selected).icon)
                             .size(px(14.))
                             .text_color(tint),
                     )
-                    .when(expanded, |view| {
-                        view.child(if pending {
-                            "Saving…"
-                        } else if unconfirmed {
-                            "Check access"
-                        } else {
-                            label(selected)
-                        })
+                    .child(if pending {
+                        "Saving…"
+                    } else if unconfirmed {
+                        "Check access"
+                    } else {
+                        label(selected)
                     })
                     .child(
                         icons::icon(icons::ALT_ARROW_DOWN)
                             .size(px(12.))
-                            .text_color(tint),
+                            .text_color(tint.opacity(tint.a * 0.6)),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if !pending {
@@ -176,11 +186,12 @@ impl Composer {
             )
             .when(self.permission_open, |view| {
                 let popup_theme = theme.for_popup();
-                let menu = div()
+                // The shared popover card: without it the rows painted
+                // straight over the composer with no fill of their own.
+                let menu = popover::popover_card(&popup_theme)
                     .id("composer-permission-menu")
                     .role(Role::ListBox)
                     .w(px(256.))
-                    .p(px(4.))
                     .flex()
                     .flex_col()
                     .gap(px(0.))
@@ -266,6 +277,15 @@ impl Composer {
                     None,
                 ))
             })
+    }
+}
+
+#[cfg(feature = "browser-fixture")]
+impl Composer {
+    /// Review fixture: open the agent access menu.
+    pub fn fixture_open_permissions(&mut self, cx: &mut Context<Self>) {
+        self.permission_open = true;
+        cx.notify();
     }
 }
 

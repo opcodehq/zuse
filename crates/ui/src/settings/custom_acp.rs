@@ -568,11 +568,8 @@ impl CustomAcpCard {
         let card = div()
             .id("acp-registry-dialog")
             .w(px(448.))
-            .rounded(px(12.))
-            .bg(popover::surface_bg(&theme))
-            .border_1()
-            .border_color(crate::theme::hairline(0.10))
-            .when(!theme.is_frost(), |el| el.shadow_lg())
+            .rounded(px(popover::CARD_RADIUS))
+            .map(|el| popover::glass_surface(&theme, el))
             .overflow_hidden()
             .flex()
             .flex_col()
@@ -651,7 +648,7 @@ impl CustomAcpCard {
             "acp-registry-modal",
             window.viewport_size(),
             card.into_any_element(),
-            12.,
+            popover::CARD_RADIUS,
         ))
     }
 

@@ -516,9 +516,7 @@ impl DefaultsPage {
             .flex()
             .rounded(px(16.))
             .overflow_hidden()
-            .bg(theme.surface_dialog)
-            .border_1()
-            .border_color(theme.border)
+            .map(|el| crate::popover::glass_surface(theme, el))
             .child(rail)
             .child(
                 div()

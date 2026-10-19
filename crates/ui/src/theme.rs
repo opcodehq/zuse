@@ -1097,26 +1097,39 @@ impl Theme {
         ))
     }
 
-    /// Whether floating popovers and menus wear the glass material: a
-    /// translucent elevated tone over a backdrop blur. Dark appearances use
-    /// it whatever the window treatment — the blur is scene-level, so it needs
-    /// no compositor vibrancy. Light popovers stay opaque, as authored.
+    /// Whether floating popovers, menus and dialogs wear the glass material:
+    /// a translucent tone over a backdrop blur. Every appearance uses it
+    /// whatever the window treatment — the blur is scene-level, so it needs
+    /// no compositor vibrancy, and the tint is dense enough to read alone.
     pub fn floating_glass(&self) -> bool {
-        matches!(self.appearance, Appearance::Dark)
-            && cfg!(any(
-                target_os = "macos",
-                target_os = "linux",
-                target_os = "windows"
-            ))
+        cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        ))
     }
 
-    /// Coverage of the glass popover tint: 72% of the elevated tone, raised
-    /// only as far as text contrast needs over a bright scene underneath.
+    /// The tone glass popovers tint with: the elevated tone on dark, the
+    /// card tone (white) on light.
+    fn popover_glass_tint(&self) -> Hsla {
+        match self.appearance {
+            Appearance::Dark => self.surface_raised,
+            Appearance::Light => self.surface_card,
+        }
+    }
+
+    /// Coverage of the glass popover tint: 78% of the elevated tone on dark,
+    /// 82% of the card tone on light, raised only as far as text contrast
+    /// needs over the most adverse scene underneath.
     pub fn popover_glass_alpha(&self) -> f32 {
-        self.contrast_checked_tint_alpha(self.surface_raised, 0.72, self.adverse_backdrop())
+        let base = match self.appearance {
+            Appearance::Dark => 0.78,
+            Appearance::Light => 0.82,
+        };
+        self.contrast_checked_tint_alpha(self.popover_glass_tint(), base, self.adverse_backdrop())
     }
 
-    /// Fill for glass popovers and menus: the elevated tone at
+    /// Fill for glass popovers, menus and dialogs: the tint at
     /// [`Self::popover_glass_alpha`] under a faint top-to-bottom white sheen.
     /// Without [`Self::floating_glass`] it is the opaque overlay tone.
     pub fn popover_glass_fill(&self) -> gpui::Background {
@@ -1124,23 +1137,43 @@ impl Theme {
             return self.surface_overlay.opacity(1.0).into();
         }
         let alpha = self.popover_glass_alpha();
-        let sheen = |strength: f32| {
-            flatten(hsla(0.0, 0.0, 1.0, strength), self.surface_raised).opacity(alpha)
+        let tint = self.popover_glass_tint();
+        let (top, bottom) = match self.appearance {
+            Appearance::Dark => {
+                let sheen = |strength: f32| flatten(hsla(0.0, 0.0, 1.0, strength), tint);
+                (sheen(0.045).opacity(alpha), sheen(0.008).opacity(alpha))
+            }
+            // White cannot brighten white: the sheen is a denser top edge.
+            Appearance::Light => (tint.opacity((alpha + 0.06).min(1.0)), tint.opacity(alpha)),
         };
         gpui::linear_gradient(
             180.0,
-            gpui::linear_color_stop(sheen(0.045), 0.0),
-            gpui::linear_color_stop(sheen(0.008), 1.0),
+            gpui::linear_color_stop(top, 0.0),
+            gpui::linear_color_stop(bottom, 1.0),
         )
+    }
+
+    /// The glass card's hairline ring (its 1px border): white on dark, ink
+    /// on light.
+    pub fn popover_glass_border(&self) -> Hsla {
+        match self.appearance {
+            Appearance::Dark => hsla(0.0, 0.0, 1.0, 0.075),
+            Appearance::Light => hsla(0.0, 0.0, 0.0, 0.09),
+        }
     }
 
     /// Edge treatment for glass popovers: a 1px top highlight and a soft
     /// drop. A spread ring would paint under the whole translucent card, so
     /// the hairline ring is the card's border instead.
     pub fn popover_glass_shadows(&self) -> Vec<gpui::BoxShadow> {
+        let (highlight, drop) = match self.appearance {
+            Appearance::Dark => (0.09, 0.45),
+            Appearance::Light => (0.8, 0.16),
+        };
         vec![
-            gpui::BoxShadow::new(gpui::px(0.0), gpui::px(1.0), hsla(0.0, 0.0, 1.0, 0.09)).inset(),
-            gpui::BoxShadow::new(gpui::px(0.0), gpui::px(10.0), hsla(0.0, 0.0, 0.0, 0.45))
+            gpui::BoxShadow::new(gpui::px(0.0), gpui::px(1.0), hsla(0.0, 0.0, 1.0, highlight))
+                .inset(),
+            gpui::BoxShadow::new(gpui::px(0.0), gpui::px(10.0), hsla(0.0, 0.0, 0.0, drop))
                 .blur_radius(gpui::px(28.0))
                 .spread_radius(gpui::px(-10.0)),
         ]
@@ -3091,26 +3124,24 @@ mod tests {
         }
     }
 
-    /// Dark popovers are glass under every window treatment: the 72% tint
-    /// stays translucent while keeping text readable over a white scene.
-    /// Light popovers stay opaque.
+    /// Popovers are glass in both appearances under every window treatment:
+    /// the tint stays translucent while keeping text readable over the most
+    /// adverse scene underneath (white under dark glass, black under light).
     #[test]
-    fn dark_popovers_are_glass_and_light_popovers_opaque() {
+    fn popovers_are_readable_glass_in_both_appearances() {
         for treatment in [SurfaceTreatment::Opaque, SurfaceTreatment::Frosted] {
-            let mut dark = Theme::dark();
-            dark.surface_treatment = treatment;
-            let alpha = dark.popover_glass_alpha();
-            assert!((0.72..1.0).contains(&alpha), "{alpha}");
-            let surface = flatten(dark.surface_raised.opacity(alpha), grey(0xff));
-            assert!(painted_contrast(dark.text, surface) >= 4.5);
-            assert!(painted_contrast(dark.text_muted, surface) >= 3.0);
-            let mut light = Theme::light();
-            light.surface_treatment = treatment;
-            assert!(!light.floating_glass());
-            assert_eq!(
-                light.popover_glass_fill(),
-                gpui::Background::from(light.surface_overlay.opacity(1.0))
-            );
+            for (mut theme, base) in [(Theme::dark(), 0.78), (Theme::light(), 0.82)] {
+                theme.surface_treatment = treatment;
+                assert!(theme.floating_glass());
+                let alpha = theme.popover_glass_alpha();
+                assert!((base..1.0).contains(&alpha), "{alpha}");
+                let surface = flatten(
+                    theme.popover_glass_tint().opacity(alpha),
+                    theme.adverse_backdrop(),
+                );
+                assert!(painted_contrast(theme.text, surface) >= 4.5);
+                assert!(painted_contrast(theme.text_muted, surface) >= 3.0);
+            }
         }
     }
 

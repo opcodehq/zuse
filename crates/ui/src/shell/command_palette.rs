@@ -1367,10 +1367,7 @@ pub(super) fn palette_card(
         .flex()
         .flex_col()
         .rounded(px(16.0))
-        .border_1()
-        .border_color(theme.border)
-        .when(!theme.is_frost(), |el| el.shadow_lg())
-        .bg(popover::surface_bg(theme))
+        .map(|el| popover::glass_surface(theme, el))
         .text_color(theme.text)
 }
 
@@ -1415,7 +1412,7 @@ pub(super) fn palette_overlay(
     card: gpui::Stateful<gpui::Div>,
 ) -> AnyElement {
     // Match the composer's 16px backdrop blur, including its opaque fallback.
-    let card = crate::frost::frosted(16.0, crate::frost::MENU_BLUR, card);
+    let card = crate::frost::floating_glass(16.0, crate::frost::MENU_BLUR, card);
     gpui::deferred(
         gpui::anchored()
             .position(gpui::point(px(0.0), px(0.0)))
