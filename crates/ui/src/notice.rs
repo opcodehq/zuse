@@ -105,7 +105,7 @@ pub fn notice_chip(
             div()
                 .min_w_0()
                 .w_full()
-                .text_color(theme.text.opacity(0.8))
+                .text_color(theme.text)
                 .child(message),
         )
 }

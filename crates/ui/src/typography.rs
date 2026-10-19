@@ -12,13 +12,25 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::settings::{self, SavePolicy};
 
 /// A bundled, virtual, or device-local interface font choice.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum UiFontFamily {
-    #[default]
     Geist,
     GeistMono,
     System,
     Installed(String),
+}
+
+/// The default interface face is SF Pro, the macOS system UI font, used at
+/// regular (400) and medium (500) weights. SF Pro is not installed on Linux or
+/// Windows, so those platforms keep the bundled Geist instead.
+impl Default for UiFontFamily {
+    fn default() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::System
+        } else {
+            Self::Geist
+        }
+    }
 }
 
 impl UiFontFamily {
@@ -26,6 +38,7 @@ impl UiFontFamily {
         match self {
             Self::Geist => "Geist",
             Self::GeistMono => "Geist Mono",
+            Self::System if cfg!(target_os = "macos") => "SF Pro",
             Self::System => "System UI",
             Self::Installed(name) => name,
         }
@@ -47,7 +60,9 @@ impl Serialize for UiFontFamily {
         S: Serializer,
     {
         match self {
-            Self::Geist => serializer.serialize_str("geist"),
+            // "geist" was also what every build wrote for the old default, so
+            // an explicit Geist choice gets its own wire value.
+            Self::Geist => serializer.serialize_str("geistSans"),
             Self::GeistMono => serializer.serialize_str("geistMono"),
             Self::System => serializer.serialize_str("system"),
             Self::Installed(name) => serializer.serialize_str(&format!("installed:{name}")),
@@ -62,7 +77,10 @@ impl<'de> Deserialize<'de> for UiFontFamily {
     {
         let value = String::deserialize(deserializer)?;
         Ok(match value.as_str() {
-            "geist" => Self::Geist,
+            // Written by builds whose default was Geist, whether or not the
+            // user picked it: follow the current default (SF Pro on macOS).
+            "geist" => Self::default(),
+            "geistSans" => Self::Geist,
             "geistMono" => Self::GeistMono,
             "system" => Self::System,
             // Preserve selections written by the previous fixed catalog. They
@@ -72,7 +90,7 @@ impl<'de> Deserialize<'de> for UiFontFamily {
             value if value.starts_with("installed:") && value.len() > "installed:".len() => {
                 Self::Installed(value["installed:".len()..].to_owned())
             }
-            _ => Self::Geist,
+            _ => Self::default(),
         })
     }
 }
@@ -120,6 +138,54 @@ impl Default for UiFontSize {
 /// Code, diffs, and terminal text deliberately keep absolute pixel sizes.
 pub const fn ui_rems(pixels_at_default: f32) -> Rems {
     rems(pixels_at_default / 16.0)
+}
+
+// The interface type scale, in px at the default UI size. Every interface
+// text size is one of these six steps; the `text_*` functions return them as
+// rems so the user's UI font-size preference scales the whole ladder.
+
+/// Extra small: badges, keycaps, counters, dense metadata.
+pub const TEXT_XS: f32 = 12.0;
+/// Small — the base size: body copy, rows, menus and controls.
+pub const TEXT_SM: f32 = 13.0;
+/// Medium: conversational prose, the composer, emphasized rows.
+pub const TEXT_MD: f32 = 14.0;
+/// Large: section and dialog titles.
+pub const TEXT_LG: f32 = 16.0;
+/// Extra large: page titles.
+pub const TEXT_XL: f32 = 18.0;
+/// The biggest step: the hero heading.
+pub const TEXT_2XL: f32 = 24.0;
+/// The base interface size.
+pub const TEXT_BASE: f32 = TEXT_SM;
+
+pub const fn text_xs() -> Rems {
+    ui_rems(TEXT_XS)
+}
+
+pub const fn text_sm() -> Rems {
+    ui_rems(TEXT_SM)
+}
+
+pub const fn text_md() -> Rems {
+    ui_rems(TEXT_MD)
+}
+
+pub const fn text_lg() -> Rems {
+    ui_rems(TEXT_LG)
+}
+
+pub const fn text_xl() -> Rems {
+    ui_rems(TEXT_XL)
+}
+
+pub const fn text_2xl() -> Rems {
+    ui_rems(TEXT_2XL)
+}
+
+/// The base interface size, [`TEXT_BASE`].
+pub const fn text_base() -> Rems {
+    ui_rems(TEXT_BASE)
 }
 
 pub const CODE_FONT_SIZE_DEFAULT: f32 = 12.5;
@@ -713,8 +779,48 @@ mod tests {
         }
         assert_eq!(
             serde_json::from_str::<UiFontFamily>(r#""futureFont""#).unwrap(),
+            UiFontFamily::default()
+        );
+    }
+
+    #[test]
+    fn default_family_is_sf_pro_on_macos_and_geist_elsewhere() {
+        let expected = if cfg!(target_os = "macos") {
+            UiFontFamily::System
+        } else {
+            UiFontFamily::Geist
+        };
+        assert_eq!(UiFontFamily::default(), expected);
+        if cfg!(target_os = "macos") {
+            assert_eq!(UiFontFamily::default().family_name(), ".SystemUIFont");
+            assert_eq!(UiFontFamily::default().label(), "SF Pro");
+        }
+        // The old default's wire value follows the new default; an explicit
+        // Geist choice written from now on survives.
+        assert_eq!(
+            serde_json::from_str::<UiFontFamily>(r#""geist""#).unwrap(),
+            expected
+        );
+        assert_eq!(
+            serde_json::to_string(&UiFontFamily::Geist).unwrap(),
+            r#""geistSans""#
+        );
+        assert_eq!(
+            serde_json::from_str::<UiFontFamily>(r#""geistSans""#).unwrap(),
             UiFontFamily::Geist
         );
+    }
+
+    #[test]
+    fn type_scale_is_the_six_design_steps_on_a_13px_base() {
+        assert_eq!(
+            [TEXT_XS, TEXT_SM, TEXT_MD, TEXT_LG, TEXT_XL, TEXT_2XL],
+            [12.0, 13.0, 14.0, 16.0, 18.0, 24.0]
+        );
+        assert_eq!(TEXT_BASE, 13.0);
+        // Steps are rems, so the UI font-size preference scales them.
+        assert_eq!(text_sm().0, ui_rems(13.0).0);
+        assert_eq!(text_2xl().0, 1.5);
     }
 
     #[test]

@@ -30,7 +30,7 @@ use super::veil::{RowVeil, apply_veil, slice_spans};
 /// Gap between markdown blocks inside one message (zuse mdBlockGap).
 pub const MD_BLOCK_GAP: f32 = 12.0;
 /// Body text size / line height (zuse: 14px / 22px).
-pub const MD_TEXT_SIZE: f32 = 14.0;
+pub const MD_TEXT_SIZE: f32 = crate::typography::TEXT_MD;
 pub const MD_LINE_HEIGHT: f32 = 22.0;
 /// Default code block metrics; the rendered size comes from the theme.
 pub const CODE_TEXT_SIZE: f32 = 12.5;
@@ -764,14 +764,13 @@ pub fn render_block(
     }
 }
 
-/// Tight monochrome heading scale (zuse: h2 ≈ 16px semibold; headings step
-/// down quickly toward body size).
+/// Tight monochrome heading scale on the interface type steps: h1 18px,
+/// h2 16px, then body size (headings step down quickly toward body size).
 fn heading_metrics(level: u8) -> (f32, f32) {
     match level {
-        1 => (19.0, 27.0),
-        2 => (16.0, 24.0),
-        3 => (15.0, 22.0),
-        _ => (14.0, 22.0),
+        1 => (crate::typography::TEXT_XL, 26.0),
+        2 => (crate::typography::TEXT_LG, 24.0),
+        _ => (crate::typography::TEXT_MD, 22.0),
     }
 }
 

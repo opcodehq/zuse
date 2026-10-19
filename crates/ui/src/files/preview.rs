@@ -947,8 +947,10 @@ impl FilesSurface {
             "Add a comment…"
         };
         let input = cx.new(|cx| {
-            ComposerInput::new(placeholder, cx)
-                .with_text_metrics(12.0, crate::composer::INPUT_LINE_HEIGHT)
+            ComposerInput::new(placeholder, cx).with_text_metrics(
+                crate::typography::TEXT_XS,
+                crate::composer::INPUT_LINE_HEIGHT,
+            )
         });
         let events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
             ComposerInputEvent::Submitted => this.commit_editor_comment(cx),

@@ -26,9 +26,11 @@
 //!    fall to 2–4:1 and fail WCAG AA. Light mode uses the 600-level siblings at the
 //!    same hue, which restores the *contrast ratio* the dark token had.
 //!
-//! Text tones are chosen so each light token lands within ~0.5 of its dark
-//! counterpart's contrast ratio against its own background — the pairing is
-//! verified in [`tests::text_contrast_is_paired_across_appearances`], not eyeballed.
+//! Text follows one ladder in both appearances — strong, default, subtle,
+//! faint — and each step must read weaker than the one above it; that ordering
+//! is verified in [`tests::text_ladder_steps_down_in_both_appearances`]. Light
+//! uses the design system's authored neutrals (#292929 / #5D5D5D / #7F7F7F)
+//! rather than tones matched to dark's contrast ratios.
 //!
 //! Installed as a gpui [`Global`] at boot; read with [`Theme::of`].
 
@@ -643,17 +645,28 @@ pub struct Theme {
     pub element_hover: Hsla,
     /// Active/selected wash.
     pub element_active: Hsla,
-    /// Hairline border.
+    /// Selected rows, tabs and navigation items (the design system's
+    /// `bg-selected`: #F5F5F5 in Zuse Light).
+    pub bg_selected: Hsla,
+    /// Hairline border (#F2F2F2 in Zuse Light).
     pub border: Hsla,
     /// Stronger border for focused/raised edges.
     pub border_strong: Hsla,
 
     // ---- paint: text ----
-    /// Primary text. ~17.5:1 on its own background in both appearances.
+    //
+    // The design system's text ladder is strong → default → subtle:
+    // `text_strong` for primary headings, titles and selected labels, `text`
+    // for body copy, `text_muted` (the subtle role) for metadata.
+    /// Strong text: primary headings, titles and selected labels (#292929 in
+    /// Zuse Light).
+    pub text_strong: Hsla,
+    /// Default body text (#5D5D5D in Zuse Light).
     pub text: Hsla,
-    /// Muted text: timestamps, secondary labels. ~7.5–8:1.
+    /// Subtle text: timestamps, metadata, secondary labels (#7F7F7F in Zuse
+    /// Light).
     pub text_muted: Hsla,
-    /// Faint text: placeholders, disabled. ~4.5:1 — AA for body copy.
+    /// Faint text: placeholders, disabled.
     pub text_faint: Hsla,
     /// One notch below `text_muted` — the diff file-path tone. It exists as its
     /// own token rather than being folded into `text_muted` because the dark
@@ -738,8 +751,9 @@ pub struct Theme {
     pub terminal: TerminalColors,
 
     // ---- fonts ----
-    /// UI font family (bundling of Geist lands with asset work; until then the
-    /// text system falls back to the system sans when the family is missing).
+    /// UI font family: SF Pro (the macOS system UI font) by default, bundled
+    /// Geist on platforms without it, or the user's device-local choice. The
+    /// interface uses only its regular (400) and medium (500) weights.
     pub font_sans: SharedString,
     /// Fixed Geist chrome for code-adjacent surfaces and recovery controls.
     pub font_sans_fixed: SharedString,
@@ -996,7 +1010,7 @@ impl Theme {
     pub fn settings_frame_bg(&self) -> Hsla {
         match self.variant_id.as_ref() {
             "zuse-dark" => zuse_viewport::settings_style::FRAME_BG,
-            "zuse-light" => hsla(105. / 360., 0.18, 0.94, 1.),
+            "zuse-light" => self.bg_selected,
             _ => self.surface_raised,
         }
     }
@@ -1229,7 +1243,7 @@ impl Theme {
     pub fn muted_fill(&self) -> Hsla {
         match self.variant_id.as_ref() {
             "zuse-dark" => hsla(132.0 / 360.0, 0.05, 0.14, 1.0),
-            "zuse-light" => hsla(105.0 / 360.0, 0.18, 0.94, 1.0),
+            "zuse-light" => self.bg_selected,
             _ => flatten(self.text.opacity(0.04), self.surface_raised),
         }
     }
@@ -1238,7 +1252,7 @@ impl Theme {
     pub fn accent_fill(&self) -> Hsla {
         match self.variant_id.as_ref() {
             "zuse-dark" => hsla(130.0 / 360.0, 0.06, 0.165, 1.0),
-            "zuse-light" => hsla(106.0 / 360.0, 0.16, 0.89, 1.0),
+            "zuse-light" => self.bg_selected,
             _ => self.element_hover,
         }
     }
@@ -1312,8 +1326,10 @@ impl Theme {
             surface_overlay: hsla(128. / 360., 0.05, 0.15, 1.),
             element_hover: hsla(0.0, 0.0, 0.92, 0.11),
             element_active: hsla(0.0, 0.0, 0.92, 0.16),
+            bg_selected: hsla(0.0, 0.0, 0.92, 0.11),
             border: hsla(132. / 360., 0.04, 0.125, 1.),
             border_strong: hsla(128. / 360., 0.05, 0.17, 1.),
+            text_strong: hsla(100. / 360., 0.04, 0.955, 1.),
             text: hsla(100. / 360., 0.04, 0.91, 1.),
             text_muted: hsla(105. / 360., 0.03, 0.65, 1.),
             text_faint: hsla(110. / 360., 0.03, 0.43, 1.),
@@ -1355,7 +1371,10 @@ impl Theme {
             diff_del: oklch(0.704, 0.191, 22.216),  // red-400
             diff_hunk_bg: hsla(0.6, 0.35, 0.6, 0.05),
             terminal: TerminalColors::zuse(Appearance::Dark),
-            font_sans: "Geist".into(),
+            font_sans: crate::typography::UiFontFamily::default()
+                .family_name()
+                .to_owned()
+                .into(),
             font_sans_fixed: "Geist".into(),
             font_mono: "Geist Mono".into(),
             font_terminal: "Geist Mono".into(),
@@ -1389,20 +1408,23 @@ impl Theme {
             surface_preference: SurfacePreference::ThemeDefault,
             surface_treatment: SurfaceTreatment::Opaque,
             accent_color,
-            bg: hsla(90. / 360., 0.20, 0.97, 1.),
-            surface: hsla(105. / 360., 0.22, 0.95, 1.),
-            surface_raised: hsla(110. / 360., 0.14, 0.90, 1.),
+            // The design system's neutrals on a white canvas.
+            bg: grey(0xff),
+            surface: grey(0xfa),
+            surface_raised: grey(0xef),
             surface_card: grey(0xff),
             surface_dialog: grey(0xff),
-            surface_overlay: hsla(112. / 360., 0.12, 0.84, 1.),
-            element_hover: hsla(106. / 360., 0.18, 0.89, 1.),
-            element_active: hsla(106. / 360., 0.18, 0.89, 1.),
-            border: hsla(110. / 360., 0.13, 0.89, 1.),
-            border_strong: hsla(112. / 360., 0.12, 0.82, 1.),
-            text: hsla(132. / 360., 0.14, 0.13, 1.),
-            text_muted: hsla(125. / 360., 0.07, 0.38, 1.),
-            text_faint: hsla(125. / 360., 0.05, 0.48, 1.),
-            text_dim: hsla(125. / 360., 0.05, 0.48, 1.),
+            surface_overlay: grey(0xff),
+            element_hover: grey(0xf7),
+            element_active: grey(0xf5),
+            bg_selected: grey(0xf5),
+            border: grey(0xf2),
+            border_strong: grey(0xe5),
+            text_strong: grey(0x29),
+            text: grey(0x5d),
+            text_muted: grey(0x7f),
+            text_faint: grey(0xa3),
+            text_dim: grey(0x7f),
             solid: neutral(0.205),    // near-black plate, deeper than body text
             on_solid: neutral(0.985), // near-white label
             accent: accent.primary,
@@ -1444,7 +1466,10 @@ impl Theme {
             diff_del: oklch(0.577, 0.245, 27.325),  // red-600
             diff_hunk_bg: hsla(0.6, 0.35, 0.35, 0.07),
             terminal: TerminalColors::zuse(Appearance::Light),
-            font_sans: "Geist".into(),
+            font_sans: crate::typography::UiFontFamily::default()
+                .family_name()
+                .to_owned()
+                .into(),
             font_sans_fixed: "Geist".into(),
             font_mono: "Geist Mono".into(),
             font_terminal: "Geist Mono".into(),
@@ -1539,6 +1564,7 @@ impl Theme {
                 // dark wallpaper accent over the translucent surface.
                 theme.element_hover = gpui::white().opacity(0.09);
                 theme.element_active = gpui::white().opacity(0.15);
+                theme.bg_selected = gpui::white().opacity(0.12);
                 theme.band = theme.element_hover;
             }
             theme
@@ -1577,6 +1603,11 @@ impl Theme {
         } else {
             harden_model_foreground(colors.text, &text_backgrounds, 4.5, None)
         };
+        let safe_text_strong = if is_curated_builtin {
+            colors.text_strong
+        } else {
+            harden_model_foreground(colors.text_strong, &text_backgrounds, 4.5, Some(safe_text))
+        };
         let safe_text_muted = if is_curated_builtin {
             colors.text_muted
         } else {
@@ -1595,8 +1626,10 @@ impl Theme {
         theme.surface_overlay = model_color(colors.overlay);
         theme.element_hover = model_color(colors.hover);
         theme.element_active = model_color(colors.active);
+        theme.bg_selected = model_color(colors.selected);
         theme.border = model_color(colors.border);
         theme.border_strong = model_color(colors.border_strong);
+        theme.text_strong = model_color(safe_text_strong);
         theme.text = model_color(safe_text);
         theme.text_muted = model_color(safe_text_muted);
         theme.text_faint = model_color(colors.text_faint);
@@ -1914,16 +1947,23 @@ fn band_for(appearance: Appearance) -> Hsla {
 
 /// Selected-state glass treatment (tabs, session rows, space rows): a
 /// TRANSLUCENT wash the vibrancy reads through — heavier flat washes blocked
-/// the glass (user request). Dark: the 11% [`wash`]. Light: the tone-flipped
-/// wash at 6% — 11% black read too dark over the bright frost (user report;
-/// light also previously ran a near-opaque white chip, rejected the same
-/// way). Same fill as [`Theme::glass_hover`] — the ring in
+/// the glass (user request). Dark: the 11% [`wash`]. Light: a 4% black wash,
+/// the design system's `bg-selected` — 11% black read too dark over the
+/// bright frost (user report; light also previously ran a near-opaque white
+/// chip, rejected the same way). Same fill as [`Theme::glass_hover`] — the ring in
 /// [`glass_selected_shadows`] is what distinguishes selection. Selection
 /// *inside floating cards* is different — see [`card_selected_bg`].
 pub fn glass_selected_bg() -> Hsla {
+    selected_wash()
+}
+
+/// The context-free twin of [`Theme::bg_selected`]: the dark 11% soft-white
+/// wash, and on light a 4% black wash that lands on the design system's
+/// `bg-selected` (#F5F5F5) over a white plane.
+fn selected_wash() -> Hsla {
     match current_appearance() {
         Appearance::Dark => wash(0.11),
-        Appearance::Light => wash(0.06),
+        Appearance::Light => hsla(0.0, 0.0, 0.0, 0.04),
     }
 }
 
@@ -1941,13 +1981,10 @@ pub fn user_bubble_bg() -> Hsla {
 /// Selected/keyboard-active treatment for rows and chips INSIDE a floating
 /// card (menu rows, the picker rail, segmented chips). The card is already the
 /// bright plane in light mode, so a white lift can't read there — selection is
-/// the tone-flipped grey wash, at 6% (dark's 11% read too dark on the bright
-/// plane, user report).
+/// the light `bg-selected` wash (dark's 11% read too dark on the bright plane,
+/// user report).
 pub fn card_selected_bg() -> Hsla {
-    match current_appearance() {
-        Appearance::Dark => wash(0.11),
-        Appearance::Light => wash(0.06),
-    }
+    selected_wash()
 }
 
 /// The selected chip's bright outline, as an INSET shadow: gpui paints inset
@@ -2558,22 +2595,47 @@ mod tests {
         }
     }
 
-    /// The core claim of the light palette: it is *paired* to dark by contrast
-    /// ratio, not mirrored by lightness. Each text token must land within 1.0 of
-    /// its counterpart's ratio against its own background.
+    /// The text roles form one ladder in both appearances: strong (titles)
+    /// over default (body) over subtle (metadata) over faint (placeholders).
     #[test]
-    fn text_contrast_is_paired_across_appearances() {
-        let (d, l) = (Theme::dark(), Theme::light());
-        for (name, dark_fg, light_fg) in [
-            ("text", d.text, l.text),
-            ("text_muted", d.text_muted, l.text_muted),
-            ("text_faint", d.text_faint, l.text_faint),
-        ] {
-            let dr = contrast_ratio(dark_fg, d.bg);
-            let lr = contrast_ratio(light_fg, l.bg);
+    fn text_ladder_steps_down_in_both_appearances() {
+        for t in [Theme::dark(), Theme::light()] {
+            let ratios = [t.text_strong, t.text, t.text_muted, t.text_faint]
+                .map(|color| contrast_ratio(color, t.bg));
             assert!(
-                (dr - lr).abs() < 1.0,
-                "{name}: dark {dr:.2}:1 vs light {lr:.2}:1 — not a matched pair"
+                ratios.windows(2).all(|pair| pair[0] > pair[1]),
+                "{:?} text ladder is not ordered: {ratios:?}",
+                t.appearance
+            );
+        }
+    }
+
+    #[test]
+    fn light_text_and_lines_are_the_design_system_neutrals() {
+        let l = Theme::light();
+        assert_eq!(l.text_strong, grey(0x29));
+        assert_eq!(l.text, grey(0x5d));
+        assert_eq!(l.text_muted, grey(0x7f));
+        assert_eq!(l.bg_selected, grey(0xf5));
+        assert_eq!(l.border, grey(0xf2));
+        // The registry's Zuse Light resolves to the same roles.
+        let resolved = Theme::for_selection(
+            Appearance::Light,
+            "zuse-light",
+            AccentSelection::ThemeDefault,
+            SurfacePreference::Opaque,
+        );
+        for (name, a, b) in [
+            ("text_strong", resolved.text_strong, l.text_strong),
+            ("text", resolved.text, l.text),
+            ("text_muted", resolved.text_muted, l.text_muted),
+            ("bg_selected", resolved.bg_selected, l.bg_selected),
+            ("border", resolved.border, l.border),
+            ("bg", resolved.bg, l.bg),
+        ] {
+            assert!(
+                (contrast_ratio(a, b) - 1.0).abs() < 0.01,
+                "zuse-light {name} {a:?} differs from Theme::light {b:?}"
             );
         }
     }
@@ -2587,14 +2649,23 @@ mod tests {
     /// light tone is matched to that inherited number rather than raised past it,
     /// so the two appearances stay siblings; raising the floor is a palette
     /// decision for both modes at once, not something light mode should do alone.
+    ///
+    /// Light's subtle and faint tones are the design system's authored
+    /// #7F7F7F (4:1 on white, ~3.8:1 on the #FAFAFA shell) and #A3A3A3
+    /// placeholder grey; they are held to those numbers so they cannot drift
+    /// fainter, while strong and default text keep the full AA bar.
     #[test]
     fn text_tones_clear_wcag_aa() {
         for t in [Theme::dark(), Theme::light()] {
+            let light = t.appearance.is_light();
+            let subtle_floor = if light { 3.8 } else { 4.5 };
+            let faint_floor = if light { 2.35 } else { 4.1 };
             for (name, fg, floor) in [
+                ("text_strong", t.text_strong, 4.5),
                 ("text", t.text, 4.5),
-                ("text_muted", t.text_muted, 4.5),
-                ("text_dim", t.text_dim, 4.5),
-                ("text_faint", t.text_faint, 4.1),
+                ("text_muted", t.text_muted, subtle_floor),
+                ("text_dim", t.text_dim, subtle_floor),
+                ("text_faint", t.text_faint, faint_floor),
             ] {
                 let on_bg = contrast_ratio(fg, t.bg);
                 let on_surface = contrast_ratio(fg, t.surface);
@@ -2786,8 +2857,9 @@ mod tests {
             "light: sidebar must be visibly separated from the panel"
         );
         // Raised surfaces are white in light mode; separation comes from the
-        // border, so the border must be strong enough to carry it alone.
-        assert!(contrast_ratio(flatten(l.border, l.bg), l.bg) > 1.15);
+        // border, so the border must still register — the design system's
+        // #F2F2F2 hairline is deliberately faint (~1.12:1 on white).
+        assert!(contrast_ratio(flatten(l.border, l.bg), l.bg) > 1.1);
     }
 
     /// The dark elevation steps are small but deliberate, and each plane must
@@ -2829,8 +2901,9 @@ mod tests {
             assert_eq!(c.l, 1.0, "light {name} should be white");
         }
         // With no lightness step available, the border is the only separator —
-        // it has to actually register against the plane behind it.
-        assert!(contrast_ratio(flatten(l.border, l.bg), l.bg) > 1.15);
+        // it has to actually register against the plane behind it (the
+        // design system's #F2F2F2 hairline is ~1.12:1 on white).
+        assert!(contrast_ratio(flatten(l.border, l.bg), l.bg) > 1.1);
     }
 
     /// `surface_raised` is the *bare plate* tone — user message bubbles, the

@@ -71,7 +71,7 @@ impl Shell {
             .flex()
             .items_center()
             .justify_center()
-            .text_size(crate::typography::ui_rems(13.0))
+            .text_size(crate::typography::text_sm())
             .text_color(theme.text)
             .drag_over::<SidebarSessionDrag>(|style, _, _, _| style.opacity(1.0))
             .child("Drop to mention")

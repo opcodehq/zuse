@@ -194,12 +194,12 @@ pub(crate) fn chip_icon(
 }
 
 /// The chip plate: the palette's chip tone (a step below the card in dark,
-/// a soft sage in light).
+/// the theme's raised neutral in light).
 pub(crate) fn chip_bg(theme: &Theme) -> gpui::Hsla {
     if theme.appearance.is_dark() {
         gpui::hsla(136.0 / 360.0, 0.05, 0.075, 1.0)
     } else {
-        gpui::hsla(110.0 / 360.0, 0.14, 0.90, 1.0)
+        theme.surface_raised
     }
 }
 

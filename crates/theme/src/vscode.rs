@@ -13,8 +13,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    AccentRoles, Appearance, Color, SurfaceTreatment, ThemeFamily, ThemeRegistry, ThemeSource,
-    ThemeVariant, ValidationIssue,
+    AccentRoles, Appearance, Color, SurfaceTreatment, ThemeColors, ThemeFamily, ThemeRegistry,
+    ThemeSource, ThemeVariant, ValidationIssue,
 };
 
 const MAX_SOURCE_BYTES: u64 = 4 * 1024 * 1024;
@@ -996,6 +996,11 @@ fn harden_variant(
         3.0,
         Some(output.colors.text_muted),
     );
+    // VS Code has no title/emphasis or neutral selection role; derive both
+    // from the hardened body text and the theme's own background so the Zuse
+    // base theme's values never leak into an import.
+    output.colors.text_strong = ThemeColors::derive_text_strong(output.colors.text, background);
+    output.colors.selected = ThemeColors::derive_selected(background);
     output.colors.on_solid = harden_foreground(
         source,
         report,

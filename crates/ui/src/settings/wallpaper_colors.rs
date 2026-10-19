@@ -70,6 +70,7 @@ pub(crate) fn tint_variant(variant: &mut ThemeVariant, color: Color) {
     variant.accent = AccentRoles::derive(color, variant.appearance, colors.background);
     colors.hover = variant.accent.primary.with_alpha(0.09);
     colors.active = variant.accent.primary.with_alpha(0.15);
+    colors.selected = variant.accent.primary.with_alpha(0.12);
     colors.border = variant.accent.primary.with_alpha(0.14);
     colors.border_strong = variant.accent.primary.with_alpha(0.3);
     variant.terminal.background = variant.terminal.background.mix(tint, 0.4);

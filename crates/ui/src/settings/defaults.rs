@@ -42,7 +42,7 @@ impl DefaultsPage {
         let search = cx.new(|cx| {
             ComposerInput::with_context("Search models…", "PaletteSearch", cx)
                 .with_single_line()
-                .with_text_metrics(12., 16.)
+                .with_text_metrics(crate::typography::TEXT_XS, 16.)
         });
         let input_events = cx.subscribe(
             &search,
@@ -333,7 +333,7 @@ impl DefaultsPage {
                     .items_center()
                     .justify_center()
                     .rounded(px(7.))
-                    .text_size(crate::typography::ui_rems(11.))
+                    .text_size(crate::typography::text_xs())
                     .when(self.scope.is_none(), |view| {
                         view.bg(theme.accent.opacity(0.12))
                     })
@@ -410,9 +410,9 @@ impl DefaultsPage {
                     .px(px(8.))
                     .pt(px(10.))
                     .pb(px(4.))
-                    .text_size(crate::typography::ui_rems(12.))
+                    .text_size(crate::typography::text_xs())
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_strong)
                     .child(descriptor.name.clone())
                     .into_any_element(),
             );
@@ -450,15 +450,15 @@ impl DefaultsPage {
                                 .min_w_0()
                                 .child(
                                     div()
-                                        .text_size(crate::typography::ui_rems(12.))
+                                        .text_size(crate::typography::text_xs())
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.text)
+                                        .text_color(theme.text_strong)
                                         .child(model.label.clone()),
                                 )
                                 .when_some(model.description.clone(), |view, description| {
                                     view.child(
                                         div()
-                                            .text_size(crate::typography::ui_rems(11.))
+                                            .text_size(crate::typography::text_xs())
                                             .line_height(px(16.))
                                             .text_color(theme.text_muted)
                                             .child(description),
@@ -502,7 +502,7 @@ impl DefaultsPage {
                     div()
                         .px(px(12.))
                         .py(px(24.))
-                        .text_size(crate::typography::ui_rems(12.))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child("No models found."),
                 )
@@ -657,7 +657,7 @@ fn details(theme: &Theme, title: &str, description: &str) -> Div {
         ))
         .child(
             div()
-                .text_size(crate::typography::ui_rems(11.))
+                .text_size(crate::typography::text_xs())
                 .line_height(px(16.))
                 .text_color(theme.text_muted)
                 .child(SharedString::from(description.to_owned())),

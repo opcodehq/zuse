@@ -117,8 +117,10 @@ fn variant(seed: Seeds<'_>) -> ThemeVariant {
         overlay: card.mix(raised, if dark { 0.34 } else { 0.02 }),
         hover: border_tone.with_alpha(if dark { 0.11 } else { 0.06 }),
         active: accent.primary.with_alpha(if dark { 0.18 } else { 0.10 }),
+        selected: ThemeColors::derive_selected(background),
         border: border_tone.with_alpha(if dark { 0.10 } else { 0.12 }),
         border_strong: border_tone.with_alpha(if dark { 0.18 } else { 0.22 }),
+        text_strong: ThemeColors::derive_text_strong(text, background),
         text,
         text_muted: muted,
         text_faint: faint,
@@ -279,13 +281,13 @@ fn zuse_light() -> ThemeVariant {
         name: "Zuse Light",
         appearance: Appearance::Light,
         treatment: SurfaceTreatment::Opaque,
-        background: "#f7f9f6",
-        shell: "#f1f5ef",
-        raised: "#e3e9e2",
+        background: "#ffffff",
+        shell: "#fafafa",
+        raised: "#efefef",
         card: "#ffffff",
-        text: "#1d261e",
-        muted: "#5a685b",
-        faint: "#748175",
+        text: "#5d5d5d",
+        muted: "#7f7f7f",
+        faint: "#a3a3a3",
         accent: "#81bf1d",
         danger: "#dc2626",
         warning: "#a16207",
@@ -304,9 +306,19 @@ fn zuse_light() -> ThemeVariant {
             "MIT",
         ),
     });
-    palette.colors.border = c("#e1e7df");
-    palette.colors.border_strong = c("#cdd7cc");
-    palette.colors.input = c("#cdd7cc");
+    // The design system's neutrals: strong #292929 for titles and selected
+    // labels, default #5d5d5d for body copy, subtle #7f7f7f for metadata,
+    // #f5f5f5 selected rows and #f2f2f2 hairlines on a white canvas. The
+    // subtle tone is authored, so undo the seed's 4.5:1 hardening of it.
+    palette.colors.text_strong = c("#292929");
+    palette.colors.text_muted = c("#7f7f7f");
+    palette.colors.selected = c("#f5f5f5");
+    palette.colors.hover = c("#f7f7f7");
+    palette.colors.border = c("#f2f2f2");
+    palette.colors.border_strong = c("#e5e5e5");
+    palette.colors.input = c("#e5e5e5");
+    palette.colors.overlay = c("#ffffff");
+    palette.colors.dialog = c("#ffffff");
     palette.accent.primary = c("#81bf1d");
     palette.accent.strong = c("#81bf1d");
     palette.accent.on = c("#0c170f");

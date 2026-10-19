@@ -301,7 +301,7 @@ impl RenderOnce for CountBadge {
             window,
             self.count,
             &self.family,
-            gpui::FontWeight::SEMIBOLD,
+            gpui::FontWeight::MEDIUM,
             gpui::white(),
             font_size,
         );

@@ -2906,7 +2906,7 @@ impl Pickers {
         let body: AnyElement = if rows.is_empty() {
             div()
                 .p(px(Theme::SPACE_SM))
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_faint)
                 .child(SharedString::from("No devices match."))
                 .into_any_element()
@@ -2961,7 +2961,7 @@ impl Pickers {
                                                 div()
                                                     .min_w_0()
                                                     .truncate()
-                                                    .text_size(crate::typography::ui_rems(10.0))
+                                                    .text_size(crate::typography::text_xs())
                                                     .text_color(theme.text_muted)
                                                     .child(detail),
                                             )
@@ -2973,7 +2973,7 @@ impl Pickers {
                                     el.child(
                                         div()
                                             .flex_none()
-                                            .text_size(crate::typography::ui_rems(10.0))
+                                            .text_size(crate::typography::text_xs())
                                             .text_color(theme.text_muted)
                                             .child(SharedString::from("You")),
                                     )
@@ -3058,7 +3058,7 @@ impl Pickers {
             };
             div()
                 .p(px(Theme::SPACE_SM))
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_faint)
                 .child(SharedString::from(empty.to_string()))
                 .into_any_element()
@@ -3412,7 +3412,7 @@ impl Pickers {
         cx: &App,
     ) -> f32 {
         const GAP: f32 = 6.0;
-        let size = crate::typography::ui_rems(11.0).to_pixels(window.rem_size());
+        let size = crate::typography::text_xs().to_pixels(window.rem_size());
         let mut font = window.text_style().font();
         font.weight = gpui::FontWeight::MEDIUM;
         let measure = |text: &SharedString| -> f32 {
@@ -3513,20 +3513,18 @@ impl Pickers {
             .px(px(10.0))
             .when(model, |el| el.rounded_full())
             .when(!model, |el| el.rounded(px(8.0)))
-            .text_size(crate::typography::ui_rems(if model { 11.0 } else { 12.0 }))
+            .text_size(crate::typography::text_xs())
             .font_weight(gpui::FontWeight::MEDIUM)
             // zuse composer/styles.tsx `pill`: `transition-colors` — the wash
             // and text brighten fade over 150ms.
             .text_color(motion::hover_blend(
                 &id,
-                if model {
+                if model || set {
                     theme.text
-                } else if set {
-                    theme.text.opacity(0.9)
                 } else {
                     theme.text_muted
                 },
-                theme.text,
+                theme.text_strong,
             ))
             .bg(match (model, open) {
                 (true, true) => pill_hover,
@@ -3641,13 +3639,9 @@ impl Pickers {
             .gap(px(6.0))
             .px(px(10.0))
             .rounded(px(8.0))
-            .text_size(crate::typography::ui_rems(12.0))
+            .text_size(crate::typography::text_xs())
             .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(motion::hover_blend(
-                &id,
-                theme.text.opacity(0.85),
-                theme.text,
-            ))
+            .text_color(motion::hover_blend(&id, theme.text, theme.text_strong))
             .bg(if open {
                 theme.element_hover
             } else {
@@ -3666,7 +3660,7 @@ impl Pickers {
                 crate::icons::icon(icon_path)
                     .size(px(14.0))
                     .flex_none()
-                    .text_color(theme.text.opacity(0.8)),
+                    .text_color(theme.text),
             )
             .child(roll_text(format!("{id}-label"), label, cx.reduce_motion()))
             .child(
@@ -3995,7 +3989,7 @@ impl Pickers {
         if self.state.read(cx).selected_space_row().is_none() {
             return div()
                 .p(px(Theme::SPACE_SM))
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_faint)
                 .child(SharedString::from("No project selected"))
                 .into_any_element();
@@ -4023,7 +4017,7 @@ impl Pickers {
             }
             Loadable::Ready(_) if rows.is_empty() => div()
                 .p(px(Theme::SPACE_SM))
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_faint)
                 .child(SharedString::from("No refs found."))
                 .into_any_element(),
@@ -4071,7 +4065,7 @@ impl Pickers {
                                         el.child(
                                             div()
                                                 .flex_none()
-                                                .text_size(crate::typography::ui_rems(10.0))
+                                                .text_size(crate::typography::text_xs())
                                                 .text_color(theme.text_muted)
                                                 .child(SharedString::from("switching…")),
                                         )
@@ -4082,7 +4076,7 @@ impl Pickers {
                                             el.child(
                                                 div()
                                                     .flex_none()
-                                                    .text_size(crate::typography::ui_rems(10.0))
+                                                    .text_size(crate::typography::text_xs())
                                                     .text_color(theme.text_muted)
                                                     .child(SharedString::from(tag)),
                                             )
@@ -4108,7 +4102,7 @@ impl Pickers {
                     div()
                         .px(px(Theme::SPACE_SM))
                         .py(px(4.0))
-                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.danger.opacity(0.9))
                         .child(SharedString::from(error.clone())),
                 ),
@@ -4120,7 +4114,7 @@ impl Pickers {
                     div()
                         .px(px(Theme::SPACE_SM))
                         .py(px(4.0))
-                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_faint)
                         .child(SharedString::from(format!(
                             "Showing {shown} of {total} refs"
@@ -4258,13 +4252,13 @@ impl Pickers {
                 )
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(13.0))
+                        .text_size(crate::typography::text_sm())
                         .text_color(theme.text)
                         .child(SharedString::from("No agents available")),
                 )
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .text_center()
                         .child(SharedString::from(
@@ -4317,7 +4311,7 @@ impl Pickers {
                 .child(
                     div()
                         .text_size(px(11.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(if all_view {
                             theme.text
                         } else {
@@ -4406,7 +4400,7 @@ impl Pickers {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .child(self.search.clone()),
                     ),
             );
@@ -4653,9 +4647,9 @@ impl Pickers {
                         .flex_none()
                         .max_w_full()
                         .truncate()
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_strong)
                         .child(label),
                 )
                 .when_some(attribution, |el, attribution| {
@@ -4663,7 +4657,7 @@ impl Pickers {
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
                             .child(attribution),
                     )
@@ -4680,9 +4674,9 @@ impl Pickers {
                     div()
                         .w_full()
                         .truncate()
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_strong)
                         .child(label),
                 )
                 .child(
@@ -4702,7 +4696,7 @@ impl Pickers {
                         .child(
                             div()
                                 .flex_none()
-                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_size(crate::typography::text_xs())
                                 .text_color(theme.text_muted)
                                 .child(harness_name),
                         )
@@ -4710,7 +4704,7 @@ impl Pickers {
                             el.child(
                                 div()
                                     .flex_none()
-                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_size(crate::typography::text_xs())
                                     .text_color(theme.text_muted)
                                     .child(SharedString::from("·")),
                             )
@@ -4718,7 +4712,7 @@ impl Pickers {
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_size(crate::typography::text_xs())
                                     .text_color(theme.text_muted)
                                     .child(attribution),
                             )
@@ -4923,9 +4917,9 @@ impl Pickers {
                 div()
                     .px(px(8.0))
                     .pt(px(6.0))
-                    .text_size(crate::typography::ui_rems(12.5))
+                    .text_size(crate::typography::text_sm())
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_strong)
                     .child(SharedString::from(row.model.label.clone())),
             )
             .child(settings)
@@ -5782,8 +5776,8 @@ fn build_setting_groups(
 fn default_badge(theme: &Theme) -> gpui::Div {
     div()
         .flex_none()
-        .text_size(crate::typography::ui_rems(10.0))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_size(crate::typography::text_xs())
+        .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.for_popup().text_muted)
         .child(SharedString::from("Default"))
 }
@@ -5900,7 +5894,7 @@ fn empty_list_note(theme: &Theme, copy: &str) -> AnyElement {
     div()
         .px(px(8.0))
         .py(px(24.0))
-        .text_size(crate::typography::ui_rems(12.0))
+        .text_size(crate::typography::text_xs())
         .text_color(theme.for_popup().text_muted)
         .text_center()
         .child(SharedString::from(copy.to_string()))
@@ -6433,7 +6427,7 @@ impl Render for Pickers {
                 crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
                     .size(px(12.0))
                     .ml_auto()
-                    .text_color(theme.text.opacity(0.6)),
+                    .text_color(theme.text_muted),
             );
         let model_chip = model_chip.w(px(chip_width));
         // Both presentations align to the chip's trailing edge beside Send.

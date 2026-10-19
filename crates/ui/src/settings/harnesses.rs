@@ -806,7 +806,7 @@ impl HarnessesPage {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .text_size(crate::typography::ui_rems(11.))
+                    .text_size(crate::typography::text_xs())
                     .line_height(crate::typography::ui_rems(16.))
                     .text_color(theme.text_muted)
                     .map(|line| {
@@ -883,7 +883,7 @@ impl HarnessesPage {
                             .aria_label(label)
                             .tooltip(widgets::text_tooltip(tooltip))
                             .rounded(px(6.0))
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1000,7 +1000,7 @@ impl HarnessesPage {
                                                     div()
                                                         .flex_none()
                                                         .font_family(theme.font_mono.clone())
-                                                        .text_size(crate::typography::ui_rems(10.))
+                                                        .text_size(crate::typography::text_xs())
                                                         .text_color(theme.text_muted)
                                                         .child(version),
                                                 )
@@ -1322,7 +1322,7 @@ impl Render for HarnessesPage {
             .gap(px(6.))
             .child(
                 div()
-                    .text_size(crate::typography::ui_rems(11.))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(status),
             )

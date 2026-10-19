@@ -65,7 +65,7 @@ pub(crate) fn tab_frame(
         .tab_index(0)
         .text_size(px(11.0))
         .text_color(if selected {
-            theme.text
+            theme.text_strong
         } else {
             theme.text_muted
         })
@@ -168,7 +168,7 @@ pub(crate) fn tab_chip(
                 .min_w_0()
                 .ml(px(2.0))
                 .truncate()
-                .text_size(crate::typography::ui_rems(11.0))
+                .text_size(crate::typography::text_xs())
                 .child(title),
         )
         .child(

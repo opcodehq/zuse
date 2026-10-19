@@ -2080,7 +2080,7 @@ impl Render for SidebarViewOptionsTooltip {
             .border_color(theme.border_strong)
             .bg(theme.surface_raised)
             .shadow_md()
-            .text_size(crate::typography::ui_rems(11.0))
+            .text_size(crate::typography::text_xs())
             .text_color(theme.text)
             .child("View options")
     }
@@ -2241,7 +2241,7 @@ pub(super) fn sidebar_disclosure_header(
             "sidebar-disclosure-label".into(),
             false,
             div()
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.text_muted.opacity(0.5))
                 .child(label),
@@ -2308,8 +2308,8 @@ pub(super) fn sidebar_project_header(
             "sidebar-disclosure-label".into(),
             false,
             div()
-                .text_size(crate::typography::ui_rems(12.0))
-                .text_color(theme.text.opacity(0.85))
+                .text_size(crate::typography::text_xs())
+                .text_color(theme.text)
                 .child(label),
         ))
         .children(count.map(|count| sidebar_count_badge(theme, count)))
@@ -2640,7 +2640,7 @@ fn home_folders_header(theme: &Theme, status: Option<&'static str>) -> gpui::Div
         .flex()
         .items_center()
         .gap(px(8.0))
-        .text_size(crate::typography::ui_rems(11.0))
+        .text_size(crate::typography::text_xs())
         .text_color(theme.text_muted)
         .child("In Home")
         .when_some(status, |header, status| {
@@ -4554,11 +4554,11 @@ impl Shell {
             .pr(px(2.0))
             .border_1()
             .border_color(theme.border_strong)
-            .text_size(crate::typography::ui_rems(12.0))
+            .text_size(crate::typography::text_xs())
             .text_color(motion::hover_blend(
                 "spaces-filter",
-                theme.text.opacity(0.8),
                 theme.text,
+                theme.text_strong,
             ))
             .bg(if open {
                 theme.glass_hover()
@@ -4693,7 +4693,7 @@ impl Shell {
                     .debug_selector(|| "sidebar-view-label".into())
                     .flex_1()
                     .min_w_0()
-                    .text_size(crate::typography::ui_rems(12.))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(label),
             )
@@ -7124,7 +7124,7 @@ impl Shell {
                     .px(px(16.0))
                     .pb(px(8.0))
                     .text_color(theme.text_muted)
-                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_size(crate::typography::text_xs())
                     .child("Loading locations…"),
             );
         }
@@ -7338,7 +7338,7 @@ impl Shell {
             .gap(px(6.0))
             .border_b_1()
             .border_color(crate::theme::hairline(0.06))
-            .text_size(crate::typography::ui_rems(12.0))
+            .text_size(crate::typography::text_xs())
             .child(
                 div()
                     .id("project-crumb-back")
@@ -7429,9 +7429,9 @@ impl Shell {
                         ))
                         .child(
                             div()
-                                .text_size(crate::typography::ui_rems(10.0))
+                                .text_size(crate::typography::text_xs())
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(theme.text)
+                                .text_color(theme.text_strong)
                                 .child(if busy { "Adding…" } else { "Add project" }),
                         ),
                 )
@@ -7461,7 +7461,7 @@ impl Shell {
                         div()
                             .px(px(16.0))
                             .pb(px(8.0))
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.danger)
                             .child(error),
                     )

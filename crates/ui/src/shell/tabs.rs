@@ -575,10 +575,10 @@ impl Shell {
                 .items_center()
                 .gap(px(6.))
                 .rounded(px(7.))
-                .text_size(crate::typography::ui_rems(12.))
+                .text_size(crate::typography::text_xs())
                 .when(active, |d| {
                     d.bg(theme.accent_fill())
-                        .text_color(theme.text)
+                        .text_color(theme.text_strong)
                         .font_weight(gpui::FontWeight::MEDIUM)
                 })
                 .when(!active, |d| {
@@ -963,7 +963,7 @@ impl Shell {
                 .child(
                     div()
                         .flex_none()
-                        .text_size(crate::typography::ui_rems(12.))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child(history_time(
                             chat.last_message_at.unwrap_or(chat.created_at),
@@ -1230,12 +1230,12 @@ impl Shell {
                             div()
                                 .min_w_0()
                                 .flex_1()
-                                .text_size(crate::typography::ui_rems(12.0))
+                                .text_size(crate::typography::text_xs())
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(if on_canvas {
                                     theme.text_muted.opacity(0.7)
                                 } else {
-                                    theme.text.opacity(0.85)
+                                    theme.text
                                 })
                                 .child(self.render_thread_conversations(cx)),
                         ),

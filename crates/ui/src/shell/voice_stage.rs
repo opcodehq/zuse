@@ -232,7 +232,7 @@ impl Shell {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(popup_theme.text_muted)
                     .child(SharedString::from(failure)),
             )
@@ -477,7 +477,7 @@ impl Shell {
                     .h(px(48.0))
                     .overflow_hidden()
                     .text_center()
-                    .text_size(crate::typography::ui_rems(14.0))
+                    .text_size(crate::typography::text_md())
                     .line_height(px(22.0))
                     .text_color(theme.text_muted)
                     .child(veiled_caption(caption.text, &caption.spans, &theme, window))
@@ -594,14 +594,14 @@ impl Shell {
                 div()
                     .min_w(px(40.0))
                     .font_family(popup.font_mono.clone())
-                    .text_size(crate::typography::ui_rems(13.0))
+                    .text_size(crate::typography::text_sm())
                     .text_color(popup.text_muted)
                     .child(SharedString::from(elapsed.unwrap_or_else(|| "–:––".into()))),
             );
 
         let clock = clock.children(voice.host_name.clone().map(|name| {
             div()
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(popup.text_faint)
                 .child(name)
         }));
@@ -694,8 +694,8 @@ impl Shell {
             )
             .child(
                 div()
-                    .text_size(crate::typography::ui_rems(13.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_size(crate::typography::text_sm())
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(gpui::white())
                     .child(SharedString::from("End")),
             );

@@ -417,7 +417,7 @@ pub(crate) fn tray_text_action(
         .cursor_pointer()
         .role(gpui::Role::Button)
         .font_weight(FontWeight::MEDIUM)
-        .text_color(theme.text)
+        .text_color(theme.text_strong)
         .hover(move |s| s.bg(hover))
         .children(glyph.map(|glyph| icon(glyph).size(px(GLYPH)).text_color(theme.text_muted)))
         .child(label.into())
@@ -1660,7 +1660,7 @@ fn annotation_file_chip(comment: &crate::comments::ReviewComment, theme: &Theme)
                 .min_w_0()
                 .truncate()
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_strong)
                 .child(SharedString::from(name)),
         )
         .child(

@@ -440,7 +440,7 @@ impl CustomAcpCard {
                 .flex()
                 .items_center()
                 .gap(px(4.))
-                .text_size(crate::typography::ui_rems(11.))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted)
                 .child(label)
         };
@@ -462,7 +462,7 @@ impl CustomAcpCard {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(crate::typography::ui_rems(12.))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted)
                 .child(match icon {
                     Some(image) => gpui::img(image).size(px(16.)).into_any_element(),
@@ -543,7 +543,7 @@ impl CustomAcpCard {
             div()
                 .px(px(8.))
                 .py(px(16.))
-                .text_size(crate::typography::ui_rems(11.))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted)
                 .child(text)
         };
@@ -556,9 +556,9 @@ impl CustomAcpCard {
                 .rounded(px(7.))
                 .flex()
                 .items_center()
-                .text_size(crate::typography::ui_rems(12.))
+                .text_size(crate::typography::text_xs())
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_strong)
                 .cursor_pointer()
                 .tab_index(0)
                 .role(gpui::Role::Button)
@@ -741,7 +741,7 @@ impl Render for CustomAcpCard {
                 div()
                     .px(px(12.))
                     .pt(px(10.))
-                    .text_size(crate::typography::ui_rems(11.))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.danger_muted)
                     .child(error.clone()),
             );
@@ -787,7 +787,7 @@ impl Render for CustomAcpCard {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_size(crate::typography::ui_rems(12.))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child(initial),
                 )
@@ -803,7 +803,7 @@ impl Render for CustomAcpCard {
                                 .mt(px(2.))
                                 .truncate()
                                 .font_family(theme.font_mono.clone())
-                                .text_size(crate::typography::ui_rems(10.))
+                                .text_size(crate::typography::text_xs())
                                 .text_color(theme.text_muted)
                                 .child(command),
                         ),
@@ -846,10 +846,10 @@ impl Render for CustomAcpCard {
                 .flex()
                 .flex_col()
                 .gap(px(12.))
-                .text_size(crate::typography::ui_rems(12.))
+                .text_size(crate::typography::text_xs())
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(11.))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child("Runs on the selected computer. Arguments have no shell expansion. Use JSON quotes for empty or multiline values. Environment values stay in that computer’s private configuration."),
                 );
@@ -860,7 +860,7 @@ impl Render for CustomAcpCard {
                     form = form.child(
                         div()
                             .font_family(theme.font_mono.clone())
-                            .text_size(crate::typography::ui_rems(11.))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
                             .child(String::from(id)),
                     );
@@ -873,7 +873,7 @@ impl Render for CustomAcpCard {
                         .gap(px(6.))
                         .child(
                             div()
-                                .text_size(crate::typography::ui_rems(11.))
+                                .text_size(crate::typography::text_xs())
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(theme.text_muted)
                                 .child(*label),

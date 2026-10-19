@@ -519,7 +519,7 @@ impl PullRequestDetailPage {
                     cx,
                 )
                 .with_single_line()
-                .with_text_metrics(12.0, 16.0)
+                .with_text_metrics(crate::typography::TEXT_XS, 16.0)
                 .with_tab_stop()
             }),
             file_search_subscription: None,
@@ -701,9 +701,9 @@ impl PullRequestDetailPage {
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text.opacity(0.85))
+                            .text_color(theme.text)
                             .child(title),
                     ),
             )
@@ -1082,7 +1082,7 @@ impl PullRequestDetailPage {
                             .items_center()
                             .justify_center()
                             .gap(px(6.0))
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(crate::motion::mix(theme.text_muted, theme.text, emphasis))
                             .bg(crate::motion::mix(
@@ -1113,7 +1113,7 @@ impl PullRequestDetailPage {
                                     .children(count.map(|count| {
                                         div()
                                             .flex_none()
-                                            .text_size(crate::typography::ui_rems(11.0))
+                                            .text_size(crate::typography::text_xs())
                                             .font_weight(gpui::FontWeight::NORMAL)
                                             .text_color(theme.text_muted)
                                             .child(count.to_string())
@@ -1435,7 +1435,7 @@ fn status_chip(raw: &str, theme: &Theme) -> AnyElement {
         .rounded(px(6.0))
         .bg(color.opacity(0.08))
         .text_color(theme.text)
-        .text_size(crate::typography::ui_rems(12.0))
+        .text_size(crate::typography::text_xs())
         .child(crate::icons::icon(glyph).size(px(14.0)).text_color(color))
         .child(label)
         .into_any_element()
@@ -1464,10 +1464,10 @@ fn detail_header(
                 .debug_selector(|| "pr-detail-title".into())
                 .px(px(8.0))
                 .min_w_0()
-                .text_size(crate::typography::ui_rems(20.0))
+                .text_size(crate::typography::text_xl())
                 .line_height(crate::typography::ui_rems(26.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_strong)
                 .child(title.to_owned()),
         )
         .child(
@@ -1477,7 +1477,7 @@ fn detail_header(
                 .flex_none()
                 .mt(px(12.0))
                 .px(px(8.0))
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .flex()
                 .flex_wrap()
                 .items_center()
@@ -1567,7 +1567,7 @@ fn field(label: &str, value: String, first: bool, theme: &Theme) -> AnyElement {
         div()
             .min_w_0()
             .font_family(theme.font_mono.clone())
-            .text_size(crate::typography::ui_rems(12.0))
+            .text_size(crate::typography::text_xs())
             .child(value)
             .into_any_element()
     };
@@ -1644,7 +1644,7 @@ impl Render for PullRequestDetailPage {
                     Tab::Code => 0.0,
                     Tab::Summary => 76.0,
                 }))
-                .text_size(crate::typography::ui_rems(13.0))
+                .text_size(crate::typography::text_sm())
                 .text_color(theme.text);
             if let Some(error) = &self.error {
                 column = column
@@ -1876,7 +1876,7 @@ impl Render for PullRequestDetailPage {
                                             .child(widgets::row_title(&theme, "Current assessment"))
                                             .child(
                                                 div()
-                                                    .text_size(crate::typography::ui_rems(12.0))
+                                                    .text_size(crate::typography::text_xs())
                                                     .text_color(theme.text_muted)
                                                     .child(if assessment.blockers.is_empty() {
                                                         if assessment.missing.is_empty() {
@@ -1895,13 +1895,13 @@ impl Render for PullRequestDetailPage {
                                             )
                                             .children(assessment.actions.first().map(|action| {
                                                 div()
-                                                    .text_size(crate::typography::ui_rems(12.0))
+                                                    .text_size(crate::typography::text_xs())
                                                     .text_color(theme.text)
                                                     .child(format!("Next: {}", action.label()))
                                             }))
                                             .children(assessment.missing.iter().map(|missing| {
                                                 div()
-                                                    .text_size(crate::typography::ui_rems(11.0))
+                                                    .text_size(crate::typography::text_xs())
                                                     .text_color(theme.text_muted)
                                                     .child(missing.label())
                                             }))
@@ -1917,7 +1917,7 @@ impl Render for PullRequestDetailPage {
                                                             detail.head_ref_oid.clone()
                                                         },
                                                     ))
-                                                    .text_size(crate::typography::ui_rems(11.0))
+                                                    .text_size(crate::typography::text_xs())
                                                     .font_family(theme.font_mono.clone())
                                                     .text_color(theme.text_muted)
                                                     .child(if detail.head_ref_oid.is_empty() {
@@ -2040,8 +2040,8 @@ impl Render for PullRequestDetailPage {
                                     .child(
                                         div()
                                             .w_full()
-                                            .text_size(crate::typography::ui_rems(15.0))
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_size(crate::typography::text_lg())
+                                            .font_weight(gpui::FontWeight::MEDIUM)
                                             .child(if detail.review_threads.is_some() { "No activity yet" } else { "No conversation yet" }),
                                     )
                                     .child(
@@ -2119,9 +2119,7 @@ impl Render for PullRequestDetailPage {
                                                     })
                                                     .child(
                                                         div()
-                                                            .text_size(crate::typography::ui_rems(
-                                                                11.0,
-                                                            ))
+                                                            .text_size(crate::typography::text_xs())
                                                             .text_color(theme.text_muted)
                                                             .child(activity_time(
                                                                 if comment.created_at.is_empty() {
@@ -2166,7 +2164,7 @@ impl Render for PullRequestDetailPage {
                                                     .flex()
                                                     .items_center()
                                                     .gap(px(8.0))
-                                                    .text_size(crate::typography::ui_rems(12.0))
+                                                    .text_size(crate::typography::text_xs())
                                                     .text_color(theme.text_muted)
                                                     .child(
                                                         div()

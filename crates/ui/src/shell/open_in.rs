@@ -717,7 +717,7 @@ impl Shell {
                 .role(gpui::Role::MenuItem)
                 .aria_label(label)
                 .gap(px(12.0))
-                .text_size(crate::typography::ui_rems(14.0))
+                .text_size(crate::typography::text_md())
                 .child(glyph)
                 .child(div().flex_1().min_w_0().truncate().child(label))
                 .child(popover::kbd_hint(&theme, &(index + 1).to_string()))
@@ -737,7 +737,7 @@ impl Shell {
                     div()
                         .px(px(8.0))
                         .py(px(6.0))
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child("This workspace is on another computer"),
                 )
@@ -749,7 +749,7 @@ impl Shell {
                     .debug_selector(|| "open-in-copy-path".into())
                     .role(gpui::Role::MenuItem)
                     .aria_label("Copy path")
-                    .text_size(crate::typography::ui_rems(14.0))
+                    .text_size(crate::typography::text_md())
                     .child(
                         icon(icons::COPY)
                             .size(px(16.0))

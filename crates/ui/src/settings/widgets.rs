@@ -303,8 +303,8 @@ pub fn rail<V: 'static>(
 /// Shared typography for a settings component's title and description. The
 /// Shortcuts page established this compact rhythm; list-style settings reuse
 /// it instead of drifting by page.
-pub const ROW_TITLE_SIZE: f32 = zuse_viewport::settings_style::TITLE_SIZE;
-pub const ROW_DESCRIPTION_SIZE: f32 = zuse_viewport::settings_style::DESCRIPTION_SIZE;
+pub const ROW_TITLE_SIZE: f32 = crate::typography::TEXT_SM;
+pub const ROW_DESCRIPTION_SIZE: f32 = crate::typography::TEXT_XS;
 
 /// The page column's outer max width and side padding: a centered 768px
 /// content measure with generous air on either side.
@@ -336,16 +336,16 @@ pub fn page_header(theme: &Theme, title: &str, count: Option<usize>) -> gpui::Di
         .gap(px(10.0))
         .child(
             div()
-                .text_size(crate::typography::ui_rems(20.0))
+                .text_size(crate::typography::text_xl())
                 .line_height(crate::typography::ui_rems(26.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_strong)
                 .child(SharedString::from(title.to_string())),
         )
         .when_some(count, |el, count| {
             el.child(
                 div()
-                    .text_size(crate::typography::ui_rems(13.0))
+                    .text_size(crate::typography::text_sm())
                     .text_color(theme.text_muted)
                     .child(SharedString::from(format!("{count}"))),
             )
@@ -380,16 +380,16 @@ pub fn section_title_with_action(
                 .gap(px(8.))
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(20.))
+                        .text_size(crate::typography::text_xl())
                         .line_height(crate::typography::ui_rems(28.))
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_strong)
                         .child(SharedString::from(title.to_owned())),
                 )
                 .when_some(count, |row, count| {
                     row.child(
                         div()
-                            .text_size(crate::typography::ui_rems(13.))
+                            .text_size(crate::typography::text_sm())
                             .text_color(theme.text_muted)
                             .child(SharedString::from(count.to_string())),
                     )
@@ -397,7 +397,7 @@ pub fn section_title_with_action(
         )
         .child(
             div()
-                .text_size(crate::typography::ui_rems(12.))
+                .text_size(crate::typography::text_xs())
                 .line_height(crate::typography::ui_rems(20.))
                 .text_color(theme.text_muted)
                 .child(SharedString::from(description.to_owned())),
@@ -421,7 +421,7 @@ pub fn page_subtitle(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div 
         .mt(px(4.0))
         .px(px(SECTION_LABEL_INSET))
         .min_w_0()
-        .text_size(crate::typography::ui_rems(13.0))
+        .text_size(crate::typography::text_sm())
         .line_height(crate::typography::ui_rems(17.0))
         .text_color(theme.text_muted)
         .child(copy.into())
@@ -431,9 +431,9 @@ pub fn page_subtitle(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div 
 /// "Theme" caption over a picker, not a page headline.
 pub fn field_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
     div()
-        .text_size(crate::typography::ui_rems(13.0))
+        .text_size(crate::typography::text_sm())
         .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.text)
+        .text_color(theme.text_strong)
         .child(label.into())
 }
 
@@ -500,7 +500,7 @@ pub fn option_card(
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .text_size(crate::typography::ui_rems(13.0))
+                .text_size(crate::typography::text_sm())
                 .font_weight(if selected {
                     gpui::FontWeight::MEDIUM
                 } else {
@@ -528,7 +528,7 @@ const FRAME_GAP: f32 = 16.0;
 pub fn section_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
     div()
         .px(px(SECTION_LABEL_INSET))
-        .text_size(crate::typography::ui_rems(13.0))
+        .text_size(crate::typography::text_sm())
         .line_height(crate::typography::ui_rems(17.0))
         .text_color(theme.text_muted)
         .child(label.into())
@@ -543,7 +543,7 @@ pub fn details_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div
         .flex()
         .flex_row()
         .items_center()
-        .text_size(crate::typography::ui_rems(11.0))
+        .text_size(crate::typography::text_xs())
         .line_height(crate::typography::ui_rems(14.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.text_muted)
@@ -598,16 +598,16 @@ pub fn details_text(
         .child(
             div()
                 .truncate()
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .line_height(crate::typography::ui_rems(16.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_strong)
                 .child(title.into()),
         )
         .child(
             div()
                 .truncate()
-                .text_size(crate::typography::ui_rems(11.0))
+                .text_size(crate::typography::text_xs())
                 .line_height(crate::typography::ui_rems(14.0))
                 .text_color(theme.text_muted)
                 .child(description.into()),
@@ -703,7 +703,13 @@ pub fn block_fill(theme: &Theme) -> gpui::Hsla {
 
 /// The hairline between rows inside a block.
 pub fn row_divider(theme: &Theme) -> gpui::Hsla {
-    theme.border.opacity(0.6)
+    // Light hairlines are already the design system's faint #F2F2F2 border;
+    // thinning them further would erase the divider.
+    if theme.appearance.is_light() {
+        theme.border
+    } else {
+        theme.border.opacity(0.6)
+    }
 }
 
 /// A bordered, rounded card of related settings rows. Standalone blocks keep
@@ -770,7 +776,7 @@ pub fn row_title(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {
         .text_size(crate::typography::ui_rems(ROW_TITLE_SIZE))
         .line_height(crate::typography::ui_rems(16.0))
         .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.text)
+        .text_color(theme.text_strong)
         .child(title.into())
 }
 
@@ -814,7 +820,7 @@ pub fn badge(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
         .py(px(2.0))
         .rounded_full()
         .bg(theme.wash(0.08))
-        .text_size(crate::typography::ui_rems(10.5))
+        .text_size(crate::typography::text_xs())
         .text_color(theme.text_muted)
         .child(label.into())
 }
@@ -830,7 +836,7 @@ pub fn badge_active(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div 
         .py(px(2.0))
         .rounded_full()
         .bg(emerald.opacity(0.12))
-        .text_size(crate::typography::ui_rems(10.5))
+        .text_size(crate::typography::text_xs())
         .text_color(emerald_text.opacity(0.9))
         .child(label.into())
 }
@@ -1085,10 +1091,10 @@ pub fn section_tab(
     let active_bg = if theme.variant_id.as_ref() == "zuse-dark" {
         zuse_viewport::settings_style::SIDEBAR_ACTIVE
     } else {
-        theme.element_active
+        theme.bg_selected
     };
     let base_bg = crate::motion::mix(crate::theme::wash(0.0), active_bg, selection_t);
-    let base_text = crate::motion::mix(theme.text_muted, theme.text, selection_t);
+    let base_text = crate::motion::mix(theme.text_muted, theme.text_strong, selection_t);
     // Hover previews the active fill at reduced strength.
     let hover_bg = if selected {
         base_bg
@@ -1105,10 +1111,12 @@ pub fn section_tab(
         .py(px(4.0))
         .min_h(px(28.0))
         .flex_shrink_0()
-        .text_size(crate::typography::ui_rems(12.0))
+        .text_size(crate::typography::text_xs())
         .when(selected, |el| el.font_weight(gpui::FontWeight::MEDIUM))
         .text_color(crate::motion::hover_blend(
-            &hover_key, base_text, theme.text,
+            &hover_key,
+            base_text,
+            theme.text_strong,
         ))
         .bg(crate::motion::hover_blend(&hover_key, base_bg, hover_bg))
         .id(id.into())
@@ -1162,7 +1170,7 @@ pub fn select_trigger(
         .items_center()
         .gap(px(8.0))
         .cursor_pointer()
-        .text_size(crate::typography::ui_rems(12.0))
+        .text_size(crate::typography::text_xs())
         .text_color(theme.text)
         .tab_index(0)
         .role(gpui::Role::Button)
@@ -1514,7 +1522,7 @@ impl<V: 'static> Select<V> {
                         row.child(
                             div()
                                 .flex_none()
-                                .text_size(crate::typography::ui_rems(10.5))
+                                .text_size(crate::typography::text_xs())
                                 .text_color(theme.text_muted)
                                 .child(detail),
                         )
@@ -1576,7 +1584,7 @@ pub fn action_button(theme: &Theme, tone: ActionTone) -> gpui::Div {
         .min_h(px(zuse_viewport::settings_style::CONTROL_HEIGHT))
         .px(px(16.0))
         .py(px(4.0))
-        .text_size(crate::typography::ui_rems(11.0))
+        .text_size(crate::typography::text_xs())
         .cursor_pointer();
     match tone {
         ActionTone::Quiet => button
@@ -1630,7 +1638,7 @@ pub fn error_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div
         .border_1()
         .border_color(red.opacity(0.2))
         .bg(red.opacity(0.06))
-        .text_size(crate::typography::ui_rems(12.5))
+        .text_size(crate::typography::text_sm())
         .text_color(red_text.opacity(0.9))
         .flex()
         .flex_row()
@@ -1660,7 +1668,7 @@ pub fn warning_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::D
         .border_1()
         .border_color(amber.opacity(0.2))
         .bg(amber.opacity(0.06))
-        .text_size(crate::typography::ui_rems(12.0))
+        .text_size(crate::typography::text_xs())
         .text_color(amber_text.opacity(0.9))
         .flex()
         .flex_row()

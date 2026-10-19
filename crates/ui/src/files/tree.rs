@@ -301,7 +301,7 @@ impl FilesSurface {
                 let text_color = if let Some(decoration) = decoration {
                     decoration.color(&theme)
                 } else if selected {
-                    theme.text
+                    theme.text_strong
                 } else {
                     theme.text_muted
                 };
@@ -433,7 +433,7 @@ impl FilesSurface {
                             .min_w_0()
                             .truncate()
                             .font_family(theme.font_sans.clone())
-                            .text_size(crate::typography::ui_rems(13.0))
+                            .text_size(crate::typography::text_sm())
                             .text_color(text_color)
                             .child(node.entry.name)
                             .into_any_element()

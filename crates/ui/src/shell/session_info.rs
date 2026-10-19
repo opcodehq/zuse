@@ -51,7 +51,7 @@ fn summary_row(theme: &Theme) -> gpui::Div {
         .min_h(px(SUMMARY_ROW_HEIGHT))
         .px(px(10.0))
         .rounded(px(6.0))
-        .text_size(crate::typography::ui_rems(12.0))
+        .text_size(crate::typography::text_xs())
         .text_color(theme.text)
 }
 
@@ -79,7 +79,7 @@ fn sub_row(theme: &Theme) -> gpui::Div {
         .min_h(px(24.0))
         .pl(px(SUMMARY_LABEL_INSET))
         .pr(px(10.0))
-        .text_size(crate::typography::ui_rems(11.0))
+        .text_size(crate::typography::text_xs())
         .text_color(theme.text_muted)
 }
 
@@ -441,7 +441,7 @@ impl Shell {
             .child(
                 div()
                     .flex_none()
-                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .when(count > 0, |meta| {
                         meta.child(SharedString::from(count.to_string()))
@@ -555,7 +555,7 @@ impl Shell {
                     .child(
                         div()
                             .flex_none()
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
                             .child("Import"),
                     )

@@ -182,7 +182,7 @@ impl Pickers {
                     .flex()
                     .items_baseline()
                     .gap(px(6.0))
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .child(
                         div()
                             .flex_none()
@@ -196,7 +196,7 @@ impl Pickers {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_size(crate::typography::text_xs())
                                 .text_color(theme.text_muted)
                                 .child(attribution),
                         )
@@ -326,7 +326,7 @@ impl Pickers {
             CompactItem::Label(label) => el
                 .items_end()
                 .pb(px(6.0))
-                .text_size(crate::typography::ui_rems(10.0))
+                .text_size(crate::typography::text_xs())
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.text_muted)
                 .child(SharedString::from(popover::tracked_upper(label)))
@@ -351,14 +351,14 @@ impl Pickers {
                         .text_color(theme.accent),
                 };
                 el.items_center()
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .child(icon)
                     .child(
                         div()
                             .min_w_0()
                             .truncate()
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_strong)
                             .child(name.clone()),
                     )
                     .when(*current, |el| el.child(lime_badge(&theme, "Current")))
@@ -366,7 +366,7 @@ impl Pickers {
                         div()
                             .ml_auto()
                             .pr(px(4.0))
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
                             .child(SharedString::from(count.to_string())),
                     )
@@ -676,7 +676,7 @@ impl Pickers {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .text_size(crate::typography::ui_rems(12.))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child("Advanced")
                     .children(fast.map(|(option, choice, default, on)| {
@@ -913,7 +913,7 @@ fn shortcut_chip(theme: &Theme, slot: usize) -> gpui::Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(crate::typography::ui_rems(10.0))
+        .text_size(crate::typography::text_xs())
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.text_muted)
         .child(SharedString::from(slot.to_string()))
@@ -940,8 +940,8 @@ fn lime_badge(theme: &Theme, label: &str) -> gpui::Div {
         .py(px(1.0))
         .rounded(px(4.0))
         .bg(theme.accent.opacity(if dark { 0.15 } else { 0.35 }))
-        .text_size(crate::typography::ui_rems(9.0))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_size(crate::typography::text_xs())
+        .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(if dark { theme.accent } else { theme.on_accent })
         .child(SharedString::from(popover::tracked_upper(label)))
 }

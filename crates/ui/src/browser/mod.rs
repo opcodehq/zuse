@@ -150,7 +150,7 @@ impl BrowserSurface {
     ) -> Self {
         let address = cx.new(|cx| {
             ComposerInput::with_context("Website or localhost:3000", "PaletteSearch", cx)
-                .with_text_metrics(11.0, 16.0)
+                .with_text_metrics(crate::typography::TEXT_XS, 16.0)
                 .with_single_line()
                 .with_accessibility_role(gpui::Role::TextInput)
         });

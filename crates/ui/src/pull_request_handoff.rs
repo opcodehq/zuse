@@ -451,7 +451,7 @@ impl PullRequestDetailPage {
                             .child(widgets::row_title(theme, "Hand off to an agent"))
                             .child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(12.0))
+                                    .text_size(crate::typography::text_xs())
                                     .text_color(theme.text_muted)
                                     .child("Opens a new session with the prompt ready to send."),
                             ),
@@ -495,7 +495,7 @@ impl PullRequestDetailPage {
                                     .role(gpui::Role::Button)
                                     .aria_label(platform.label())
                                     .aria_selected(selected)
-                                    .text_size(crate::typography::ui_rems(12.0))
+                                    .text_size(crate::typography::text_xs())
                                     .line_height(crate::typography::ui_rems(16.0))
                                     .px(px(10.0))
                                     .child(
@@ -536,7 +536,7 @@ impl PullRequestDetailPage {
                             .min_w_0()
                             .truncate()
                             .font_family(theme.font_mono.clone())
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .child(command),
                     )
                     .child(

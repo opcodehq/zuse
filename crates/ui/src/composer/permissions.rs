@@ -168,7 +168,7 @@ impl Composer {
                     .items_center()
                     .gap(px(6.))
                     .rounded(px(7.))
-                    .text_size(crate::typography::ui_rems(12.))
+                    .text_size(crate::typography::text_xs())
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(tint)
                     .cursor_pointer()
@@ -258,7 +258,7 @@ impl Composer {
                                 div()
                                     .truncate()
                                     .line_height(px(17.))
-                                    .text_size(crate::typography::ui_rems(13.))
+                                    .text_size(crate::typography::text_sm())
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(popup_theme.text)
                                     .child(label(level)),
@@ -267,7 +267,7 @@ impl Composer {
                                 div()
                                     .truncate()
                                     .line_height(px(15.))
-                                    .text_size(crate::typography::ui_rems(11.))
+                                    .text_size(crate::typography::text_xs())
                                     .text_color(popup_theme.text_muted)
                                     .child(blocked.unwrap_or(description(level))),
                             ),
@@ -316,7 +316,7 @@ impl Composer {
                             .cursor_pointer()
                             .px(px(8.))
                             .py(px(8.))
-                            .text_size(crate::typography::ui_rems(12.))
+                            .text_size(crate::typography::text_xs())
                             .text_color(popup_theme.accent)
                             .child(if pending {
                                 "Reading saved chat choices…"

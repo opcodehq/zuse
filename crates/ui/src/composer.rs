@@ -131,7 +131,7 @@ fn route_chrome_opacities(new_thread_chrome: f32) -> (f32, f32) {
 const COMPOSER_WIDTH_EPSILON: f32 = 0.5;
 /// Input text metrics: `text-[14px] leading-relaxed` = 14 × 1.625 = 22.75.
 pub const INPUT_LINE_HEIGHT: f32 = 22.75;
-pub const INPUT_TEXT_SIZE: f32 = 14.0;
+pub const INPUT_TEXT_SIZE: f32 = crate::typography::TEXT_MD;
 /// A compact ramp; the glyph-ascent inset keeps the clip edge invisible.
 const INPUT_FADE_BAND: f32 = 12.0;
 /// Single-select questions auto-advance after this long.
@@ -846,7 +846,7 @@ fn mention_file_row(
                 .max_w(gpui::relative(0.6))
                 .truncate()
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_strong)
                 .child(name),
         )
         .child(
@@ -856,7 +856,7 @@ fn mention_file_row(
                 .flex_1()
                 .text_right()
                 .truncate()
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted)
                 .child(directory),
         )
@@ -7459,7 +7459,7 @@ impl Composer {
                         .text_center()
                         .text_size(px(12.5))
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_strong)
                         .child(source),
                 );
             if let Some(icon) = &appshot.app_icon {
@@ -8081,7 +8081,7 @@ impl Composer {
                 div()
                     .px(px(12.0))
                     .py(px(10.0))
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.danger_muted)
                     .child(error),
             );
@@ -8090,7 +8090,7 @@ impl Composer {
                 div()
                     .px(px(12.0))
                     .py(px(10.0))
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(if token.query.is_empty() {
                         "No files available"
@@ -8517,7 +8517,7 @@ impl Composer {
                 div()
                     .px(px(12.0))
                     .py(px(10.0))
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.danger_muted)
                     .child(error),
             );
@@ -8535,7 +8535,7 @@ impl Composer {
                 div()
                     .px(px(12.0))
                     .py(px(10.0))
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(if commands.is_empty() {
                         if self.slash.skill {
@@ -10161,12 +10161,12 @@ impl Composer {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .text_size(crate::typography::ui_rems(13.5))
+                        .text_size(crate::typography::text_md())
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(if picked {
-                            theme.text
+                            theme.text_strong
                         } else {
-                            theme.text.opacity(0.9)
+                            theme.text
                         })
                         .child(SharedString::from(label.clone())),
                 )
@@ -10185,7 +10185,7 @@ impl Composer {
                             } else {
                                 crate::theme::ink(0.05)
                             })
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(if picked {
                                 theme.text
                             } else {
@@ -10228,7 +10228,7 @@ impl Composer {
                             .gap(px(10.0))
                             .child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(10.5))
+                                    .text_size(crate::typography::text_xs())
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(theme.text_muted.opacity(0.6))
                                     .child(SharedString::from(crate::popover::tracked_upper(
@@ -10244,7 +10244,7 @@ impl Composer {
                                         .items_center()
                                         .rounded(px(6.0))
                                         .bg(crate::theme::ink(0.06))
-                                        .text_size(crate::typography::ui_rems(10.0))
+                                        .text_size(crate::typography::text_xs())
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(theme.text_muted.opacity(0.6))
                                         .child(SharedString::from(counter)),
@@ -10254,17 +10254,17 @@ impl Composer {
                     .child(
                         div()
                             .mt(px(6.0))
-                            .text_size(crate::typography::ui_rems(15.0))
+                            .text_size(crate::typography::text_md())
                             .line_height(px(20.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_strong)
                             .child(SharedString::from(question.question.clone())),
                     )
                     .when(question.multi_select, |el| {
                         el.child(
                             div()
                                 .mt(px(4.0))
-                                .text_size(crate::typography::ui_rems(12.0))
+                                .text_size(crate::typography::text_xs())
                                 .text_color(theme.text_muted.opacity(0.65))
                                 .child(SharedString::from("Select one or more options.")),
                         )
@@ -15529,7 +15529,7 @@ mod tests {
                     cx.new(|cx| {
                         ComposerInput::new("Address", cx)
                             .with_single_line()
-                            .with_text_metrics(11.0, 16.0)
+                            .with_text_metrics(crate::typography::TEXT_XS, 16.0)
                     })
                 })
                 .unwrap();

@@ -389,7 +389,7 @@ impl Render for DevicesPage {
             widgets::section_card(&theme).mt_0().child(
                 widgets::card_row(&theme, true).child(
                     div()
-                        .text_size(crate::typography::ui_rems(13.0))
+                        .text_size(crate::typography::text_sm())
                         .text_color(theme.text_muted)
                         .child(SharedString::from(
                             "Sign in on another device to see it here.",

@@ -6672,7 +6672,7 @@ impl Transcript {
             .flex()
             .items_center()
             .gap(px(5.0))
-            .text_size(crate::typography::ui_rems(14.0))
+            .text_size(crate::typography::text_md())
             .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
             .text_color(theme.text_muted)
             .cursor_pointer()
@@ -7375,7 +7375,7 @@ impl Transcript {
                         .items_center()
                         .gap(px(Theme::SPACE_SM))
                         .pt(px(Theme::SPACE_LG))
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.danger)
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, _, cx| this.retry_send(cx)))
@@ -7449,7 +7449,7 @@ impl Transcript {
                 .items_center()
                 .gap(px(Theme::SPACE_SM))
                 .pt(px(Theme::SPACE_LG))
-                .text_size(crate::typography::ui_rems(11.0))
+                .text_size(crate::typography::text_xs())
                 .child(crate::loaders::gradient_spinner(
                     "working-indicator",
                     &theme,
@@ -7460,7 +7460,7 @@ impl Transcript {
                 .child(
                     // The flavour word rotates every 7s; roll it as it turns.
                     div()
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(if queued {
                             theme.warning
                         } else {
@@ -7603,7 +7603,7 @@ impl Transcript {
                                 .rounded_tr(px(4.0))
                                 .px(px(14.0))
                                 .py(px(8.0))
-                                .text_size(crate::typography::ui_rems(14.0))
+                                .text_size(crate::typography::text_md())
                                 .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
                                 .text_color(theme.text)
                                 .when(pending, |el| el.opacity(0.65))
@@ -7820,7 +7820,7 @@ impl Transcript {
             .is_some_and(|menu| menu.entry_id == row.entry_id);
         let strip = row.timestamp.map(|ms| {
             let timestamp = div()
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted.opacity(0.55))
                 .child(SharedString::from(format_timestamp(ms, &chrono::Local)));
             let copy = copy_text.map(|text| {
@@ -9040,7 +9040,7 @@ fn user_bubble_runs(
                     let mut piece = run.clone();
                     piece.len = next - offset;
                     if in_name {
-                        piece.font.weight = gpui::FontWeight::BOLD;
+                        piece.font.weight = gpui::FontWeight::MEDIUM;
                     }
                     pieces.push(piece);
                     offset = next;
@@ -9317,7 +9317,7 @@ fn user_file_pill(name: &str, theme: &Theme) -> AnyElement {
         .pl(px(2.0))
         .pr(px(10.0))
         .text_size(px(13.0))
-        .text_color(theme.text.opacity(0.85))
+        .text_color(theme.text)
         .child(
             div()
                 .size(px(24.0))
@@ -9386,7 +9386,7 @@ fn fork_marker(source_title: SharedString, theme: &Theme) -> AnyElement {
                 .child(
                     div()
                         .flex_none()
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted.opacity(0.7))
                         .child("Forked from"),
                 )
@@ -9398,7 +9398,7 @@ fn fork_marker(source_title: SharedString, theme: &Theme) -> AnyElement {
                 .min_w_0()
                 .truncate()
                 .text_center()
-                .text_size(crate::typography::ui_rems(13.0))
+                .text_size(crate::typography::text_sm())
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.text_muted)
                 .child(source_title),
@@ -9463,7 +9463,7 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
                         .min_w_0()
                         .flex_1()
                         .truncate()
-                        .text_color(theme.text.opacity(0.9))
+                        .text_color(theme.text)
                         .child(value),
                 ),
         )
@@ -10144,7 +10144,7 @@ fn subagent_header_row(
                 .max_w(px(224.0))
                 .truncate()
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text.opacity(0.9))
+                .text_color(theme.text)
                 .child(title),
         )
         .child(
