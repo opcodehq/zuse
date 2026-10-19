@@ -849,89 +849,88 @@ impl HarnessesPage {
                 // The row's one update action sits inside the trigger, before
                 // the chevron, so it appearing never moves the chevron; the
                 // update policy lives in the expanded details.
-                let update_action =
-                    update.and_then(|status| {
-                        let (id, label, primary) = match status.phase {
-                            HarnessUpdatePhase::Available
-                            | HarnessUpdatePhase::ManualActionRequired
-                                if status.can_apply =>
-                            {
-                                ("harness-update", "Update", true)
+                let update_action = update.and_then(|status| {
+                    let (id, label, primary) = match status.phase {
+                        HarnessUpdatePhase::Available
+                        | HarnessUpdatePhase::ManualActionRequired
+                            if status.can_apply =>
+                        {
+                            ("harness-update", "Update", true)
+                        }
+                        HarnessUpdatePhase::WaitingForIdle
+                        | HarnessUpdatePhase::Preparing
+                        | HarnessUpdatePhase::Downloading => {
+                            ("harness-update-cancel", "Cancel", false)
+                        }
+                        _ => return None,
+                    };
+                    let tooltip = match (primary, status.latest_version.as_deref()) {
+                        (true, Some(latest)) => format!("Update to v{latest}"),
+                        (true, None) => "Update to the latest version".to_owned(),
+                        (false, _) => "Cancel update".to_owned(),
+                    };
+                    let button = div()
+                        .id((id, ix))
+                        .flex_none()
+                        .h(px(24.0))
+                        .relative()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(4.0))
+                        .role(gpui::Role::Button)
+                        .aria_label(label)
+                        .tooltip(widgets::text_tooltip(tooltip))
+                        .rounded(px(6.0))
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            // Inside the details trigger: act, don't expand.
+                            cx.stop_propagation();
+                            if primary {
+                                this.apply_harness_update(harness, cx)
+                            } else {
+                                this.cancel_harness_update(harness, cx)
                             }
-                            HarnessUpdatePhase::WaitingForIdle
-                            | HarnessUpdatePhase::Preparing
-                            | HarnessUpdatePhase::Downloading => {
-                                ("harness-update-cancel", "Cancel", false)
-                            }
-                            _ => return None,
-                        };
-                        let tooltip = match (primary, status.latest_version.as_deref()) {
-                            (true, Some(latest)) => format!("Update to v{latest}"),
-                            (true, None) => "Update to the latest version".to_owned(),
-                            (false, _) => "Cancel update".to_owned(),
-                        };
-                        let button = div()
-                            .id((id, ix))
-                            .flex_none()
-                            .h(px(24.0))
-                            .relative()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(4.0))
-                            .role(gpui::Role::Button)
-                            .aria_label(label)
-                            .tooltip(widgets::text_tooltip(tooltip))
-                            .rounded(px(6.0))
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                // Inside the details trigger: act, don't expand.
-                                cx.stop_propagation();
-                                if primary {
-                                    this.apply_harness_update(harness, cx)
-                                } else {
-                                    this.cancel_harness_update(harness, cx)
-                                }
-                            }));
-                        // gpui SVGs don't inherit the parent's text color, so
-                        // every glyph here sets its own ink.
-                        Some(if primary {
-                            // The composer send key's material: an olive
-                            // dither plate with white ink, labeled so it
-                            // reads as "Update" rather than a bare texture.
-                            button
-                                .pl(px(7.0))
-                                .pr(px(9.0))
-                                .overflow_hidden()
-                                .border_1()
-                                .border_color(theme.accent.opacity(0.4))
-                                .when(theme.appearance == crate::theme::Appearance::Light, |el| {
-                                    el.bg(gpui::hsla(80.0 / 360.0, 0.28, 0.2, 1.0))
-                                })
-                                .text_color(gpui::white())
-                                .hover(|style| style.opacity(0.88))
-                                .child(zuse_viewport::styling::dither_background(true, true))
-                                .child(
-                                    crate::icons::icon(crate::icons::ARROW_UP)
-                                        .relative()
-                                        .size(px(12.0))
-                                        .text_color(gpui::white()),
-                                )
-                                .child(div().relative().child(SharedString::from(label)))
-                        } else {
-                            button
-                                .size(px(24.0))
-                                .text_color(theme.text_muted)
-                                .hover(|style| style.bg(crate::theme::ink(0.05)))
-                                .child(
-                                    crate::icons::icon(crate::icons::CLOSE)
-                                        .size(px(13.0))
-                                        .text_color(theme.text_muted),
-                                )
-                        })
-                    });
+                        }));
+                    // gpui SVGs don't inherit the parent's text color, so
+                    // every glyph here sets its own ink.
+                    Some(if primary {
+                        // The composer send key's material: an olive
+                        // dither plate with white ink, labeled so it
+                        // reads as "Update" rather than a bare texture.
+                        button
+                            .pl(px(7.0))
+                            .pr(px(9.0))
+                            .overflow_hidden()
+                            .border_1()
+                            .border_color(theme.accent.opacity(0.4))
+                            .when(theme.appearance == crate::theme::Appearance::Light, |el| {
+                                el.bg(gpui::hsla(80.0 / 360.0, 0.28, 0.2, 1.0))
+                            })
+                            .text_color(gpui::white())
+                            .hover(|style| style.opacity(0.88))
+                            .child(zuse_viewport::styling::dither_background(true, true))
+                            .child(
+                                crate::icons::icon(crate::icons::ARROW_UP)
+                                    .relative()
+                                    .size(px(12.0))
+                                    .text_color(gpui::white()),
+                            )
+                            .child(div().relative().child(SharedString::from(label)))
+                    } else {
+                        button
+                            .size(px(24.0))
+                            .text_color(theme.text_muted)
+                            .hover(|style| style.bg(crate::theme::ink(0.05)))
+                            .child(
+                                crate::icons::icon(crate::icons::CLOSE)
+                                    .size(px(13.0))
+                                    .text_color(theme.text_muted),
+                            )
+                    })
+                });
                 let header = widgets::card_row(&theme, ix == 0)
                     .py(px(8.))
                     .min_h(px(48.))

@@ -63,7 +63,8 @@ impl RpcService for Host {
     }
 }
 struct Controller {
-    origin: String,
+    origin: RwLock<String>,
+    remembered: std::sync::Mutex<Vec<String>>,
     account: tokio::sync::watch::Sender<Value>,
     grants: AtomicUsize,
 }
@@ -88,10 +89,16 @@ impl RpcService for Controller {
                 assert_eq!(params["environmentId"], info().device_id);
                 self.grants.fetch_add(1, Ordering::SeqCst);
                 RpcReply::value(
-                    &json!({"environmentId":info().device_id,"origin":self.origin,"connectToken":"account-test-grant","expiresAt":chrono::Utc::now().timestamp_millis()+60000}),
+                    &json!({"environmentId":info().device_id,"origin":self.origin.read().unwrap().clone(),"connectToken":"account-test-grant","expiresAt":chrono::Utc::now().timestamp_millis()+60000}),
                 )
             }
-            methods::REMEMBER_ACCOUNT_ROUTE => RpcReply::value(&json!({"computers":[]})),
+            methods::REMEMBER_ACCOUNT_ROUTE => {
+                self.remembered
+                    .lock()
+                    .unwrap()
+                    .push(params["origin"].as_str().unwrap().to_owned());
+                RpcReply::value(&json!({"computers":[]}))
+            }
             _ => Err(RpcError::UnknownMethod(method.into())),
         }
     }
@@ -119,7 +126,8 @@ async fn native_account_reconnect_preserves_handle_drops_lost_write_and_stops_on
     ));
     let (account, _) = tokio::sync::watch::channel(json!({"user":{"id":"account-test-user"}}));
     let controller = Arc::new(Controller {
-        origin,
+        origin: RwLock::new(origin),
+        remembered: std::sync::Mutex::new(vec![]),
         account,
         grants: AtomicUsize::new(0),
     });
@@ -264,4 +272,117 @@ async fn native_account_reconnect_preserves_handle_drops_lost_write_and_stops_on
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn account_verified_main_endpoint_is_not_changed_by_auxiliary_grants() {
+    async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
+        tokio::time::timeout(std::time::Duration::from_secs(5), future)
+            .await
+            .unwrap()
+    }
+    let root = tempfile::tempdir().unwrap();
+    let host = Arc::new(Host {
+        generation: RwLock::new(CancellationToken::new()),
+        writes: AtomicUsize::new(0),
+        watches: AtomicUsize::new(0),
+        changed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let mut servers = Vec::new();
+    let mut origins = Vec::new();
+    for _ in 0..2 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        origins.push(format!("http://{}", listener.local_addr().unwrap()));
+        let server = zuse_serve::BrowserServer::new(host.clone(), "x".repeat(64), None)
+            .unwrap()
+            .with_managed_authority(host.clone());
+        let stop = CancellationToken::new();
+        let task = tokio::spawn(server.serve_with_shutdown(
+            listener,
+            root.path().into(),
+            None,
+            stop.clone().cancelled_owned(),
+        ));
+        servers.push((stop, task));
+    }
+    let (account, _) = tokio::sync::watch::channel(json!({"user":{"id":"account-test-user"}}));
+    let controller = Arc::new(Controller {
+        origin: RwLock::new(origins[0].clone()),
+        remembered: std::sync::Mutex::new(vec![]),
+        account,
+        grants: AtomicUsize::new(0),
+    });
+    let target = AccountTarget {
+        controller: EngineHandle::from_test_client(zuse_rpc::memory_client(controller.clone())),
+        subject: "account-test-user".into(),
+        environment: info().device_id,
+        label: "Route host".into(),
+    };
+    let engine = bounded(bootstrap(target)).await.unwrap();
+    let mut status = engine.inner.remote_status().unwrap();
+    assert_eq!(
+        engine.mode(),
+        EngineMode::Remote {
+            url: origins[0].clone()
+        }
+    );
+    *controller.origin.write().unwrap() = origins[1].clone();
+    let media = bounded(engine.media_client()).await.unwrap();
+    assert_eq!(
+        bounded(media.call("Read", json!({}))).await.unwrap(),
+        "fresh"
+    );
+    assert_eq!(
+        engine.mode(),
+        EngineMode::Remote {
+            url: origins[0].clone()
+        }
+    );
+    assert_eq!(
+        *controller.remembered.lock().unwrap(),
+        vec![origins[0].clone()]
+    );
+    drop(media);
+    let old = std::mem::replace(
+        &mut *host.generation.write().unwrap(),
+        CancellationToken::new(),
+    );
+    old.cancel();
+    bounded(async {
+        loop {
+            if !engine.same_connection(&engine.current_connection())
+                && *status.borrow_and_update() == Status::Ready
+            {
+                break;
+            }
+            status.changed().await.unwrap();
+        }
+    })
+    .await;
+    assert_eq!(
+        engine.mode(),
+        EngineMode::Remote {
+            url: origins[1].clone()
+        }
+    );
+    *controller.origin.write().unwrap() = origins[0].clone();
+    let media = bounded(engine.media_client()).await.unwrap();
+    assert_eq!(
+        bounded(media.call("Read", json!({}))).await.unwrap(),
+        "fresh"
+    );
+    assert_eq!(
+        engine.mode(),
+        EngineMode::Remote {
+            url: origins[1].clone()
+        }
+    );
+    assert_eq!(*controller.remembered.lock().unwrap(), origins);
+    assert_eq!(host.writes.load(Ordering::SeqCst), 0);
+    engine.shutdown().await;
+    drop(media);
+    for (stop, task) in servers {
+        stop.cancel();
+        bounded(task).await.unwrap().unwrap();
+    }
 }

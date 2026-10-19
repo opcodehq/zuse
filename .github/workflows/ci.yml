@@ -120,7 +120,7 @@ jobs:
         run: cargo test -p zuse-viewport --lib history::tests
       - name: Native remote connection recovery
         run: |
-          cargo test -p zuse-ui --lib native_account_reconnect_preserves_handle
+          cargo test -p zuse-ui --lib state::account_connection::tests
           cargo test -p zuse-ui --lib native_paired_reconnect_uses_fresh_encryption
       - name: Browser motion settings
         if: runner.os == 'Linux'

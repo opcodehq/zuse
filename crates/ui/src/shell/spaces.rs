@@ -5447,8 +5447,8 @@ impl Shell {
         sections.extend(regular_groups);
 
         let returning = self.sidebar_session_transfer.is_none();
-        let (compact_rows, project_labels) =
-            (self.sidebar_compact_rows(), self.sidebar_project_labels());
+        let compact_rows = self.sidebar_compact_rows();
+        let project_labels = self.sidebar_project_labels();
         let transfer = self.sidebar_session_transfer.as_mut().or_else(|| {
             self.sidebar_session_return
                 .as_mut()

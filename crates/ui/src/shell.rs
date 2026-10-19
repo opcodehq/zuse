@@ -8782,9 +8782,8 @@ impl Shell {
             // queued) on the avatar and set an unseen finish in bold, as the
             // reference thread list does.
             let avatar_badge = !nested && working && project_icon.is_some();
-            let finished_unseen = status == zuse_protocol::ChatIndicator::Completed
-                && !queued
-                && !undelivered;
+            let finished_unseen =
+                status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered;
             let unread = two_line && finished_unseen;
             let attention_badge = two_line
                 && !working
@@ -8793,14 +8792,13 @@ impl Shell {
                 && project_icon.is_some();
             // Waiting on the user reads amber on the card, apart from the
             // routine activity tones.
-            let attention_color = if status == zuse_protocol::ChatIndicator::AwaitingInput
-                && !queued
-                && !undelivered
-            {
-                theme.warning
-            } else {
-                status_color
-            };
+            let attention_color =
+                if status == zuse_protocol::ChatIndicator::AwaitingInput && !queued && !undelivered
+                {
+                    theme.warning
+                } else {
+                    status_color
+                };
             let faint = theme.text_muted.opacity(0.6);
             let show_legend = compact_jump_label.is_some();
             let show_archive = corner_hovered && !show_legend && !preview;
@@ -8836,7 +8834,11 @@ impl Shell {
                     .text_size(crate::typography::ui_rems(11.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(attention_color)
-                    .child(if label == "Input" { "Needs input" } else { label })
+                    .child(if label == "Input" {
+                        "Needs input"
+                    } else {
+                        label
+                    })
                     .into_any_element()
             } else {
                 let label: SharedString = match compact_jump_label.clone() {
@@ -19005,16 +19007,27 @@ impl Shell {
                                 (
                                     "",
                                     &[
-                                        ".github/", "apps/", "crates/", "docs/", ".gitignore",
-                                        "Cargo.toml", "README.md", "package.json", "tsconfig.json",
+                                        ".github/",
+                                        "apps/",
+                                        "crates/",
+                                        "docs/",
+                                        ".gitignore",
+                                        "Cargo.toml",
+                                        "README.md",
+                                        "package.json",
+                                        "tsconfig.json",
                                     ],
                                 ),
                                 ("apps", &["desktop/", "web/"]),
                                 (
                                     "apps/desktop",
                                     &[
-                                        "src/", "electron-builder.yml", "index.html",
-                                        "main.ts", "vite.config.ts", "styles.css",
+                                        "src/",
+                                        "electron-builder.yml",
+                                        "index.html",
+                                        "main.ts",
+                                        "vite.config.ts",
+                                        "styles.css",
                                     ],
                                 ),
                                 ("apps/desktop/src", &["App.tsx", "main.rs", "logo.svg"]),
@@ -19200,7 +19213,9 @@ impl Shell {
         let now = Utc::now().timestamp_millis();
         let tool = |id: &str, call: serde_json::Value, extra: serde_json::Value| {
             let mut part = serde_json::json!({"kind":"tool","id":id,"call":call,"resolved":true});
-            part.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            part.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
             part
         };
         let entry = |id: &str, role: &str, parts: Vec<serde_json::Value>, ago_ms: i64| {
@@ -19212,28 +19227,88 @@ impl Shell {
         };
         let none = serde_json::json!({});
         let entries = vec![
-            entry("u1", "user", vec![serde_json::json!({"kind":"text","id":"t","text":"Give me an overview of this repo and fix the login redirect."})], 600_000),
-            entry("a1", "assistant", vec![
-                serde_json::json!({"kind":"reasoning","id":"r1","text":"Let me look at the layout of the workspace first. Then the auth crate."}),
-                tool("x1", serde_json::json!({"kind":"exec","command":"ls && cat package.json | head -60 && ls apps packages"}), none.clone()),
-                tool("x2", serde_json::json!({"kind":"readFile","path":"crates/auth/src/redirect.rs"}), none.clone()),
-                tool("x3", serde_json::json!({"kind":"search","pattern":"fn redirect_target","path":"crates"}), none.clone()),
-                serde_json::json!({"kind":"reasoning","id":"r2","text":"The redirect keeps the original query string. It should drop the token."}),
-                tool("x4", serde_json::json!({"kind":"editFile","path":"crates/auth/src/redirect.rs"}), serde_json::json!({"diffStats":[{"path":"crates/auth/src/redirect.rs","additions":12,"deletions":3}]})),
-                tool("x5", serde_json::json!({"kind":"exec","command":"cargo test -p auth redirect"}), serde_json::json!({"isError":true,"output":"1 failed"})),
-                tool("x6", serde_json::json!({"kind":"webSearch","query":"oauth redirect uri token leak"}), none.clone()),
-                tool("x7", serde_json::json!({"kind":"mcp","server":"github","tool":"list_pull_requests"}), none.clone()),
-                serde_json::json!({"kind":"text","id":"t1","text":"Here's the overview. The redirect now drops the token before returning to the app."}),
-            ], 540_000),
-            entry("a2", "assistant", vec![
-                tool("s1", serde_json::json!({"kind":"unknown","name":"Agent: audit session expiry"}), serde_json::json!({"subagentRef":"chat--sub--s1","subagentStatus":"running","subagentTail":"Reading crates/auth/src/session.rs"})),
-                tool("s2", serde_json::json!({"kind":"unknown","name":"Agent: check cookie flags"}), serde_json::json!({"subagentRef":"chat--sub--s2","subagentStatus":"done"})),
-                serde_json::json!({"kind":"text","id":"t2","text":"Two audits are under way."}),
-            ], 240_000),
+            entry(
+                "u1",
+                "user",
+                vec![
+                    serde_json::json!({"kind":"text","id":"t","text":"Give me an overview of this repo and fix the login redirect."}),
+                ],
+                600_000,
+            ),
+            entry(
+                "a1",
+                "assistant",
+                vec![
+                    serde_json::json!({"kind":"reasoning","id":"r1","text":"Let me look at the layout of the workspace first. Then the auth crate."}),
+                    tool(
+                        "x1",
+                        serde_json::json!({"kind":"exec","command":"ls && cat package.json | head -60 && ls apps packages"}),
+                        none.clone(),
+                    ),
+                    tool(
+                        "x2",
+                        serde_json::json!({"kind":"readFile","path":"crates/auth/src/redirect.rs"}),
+                        none.clone(),
+                    ),
+                    tool(
+                        "x3",
+                        serde_json::json!({"kind":"search","pattern":"fn redirect_target","path":"crates"}),
+                        none.clone(),
+                    ),
+                    serde_json::json!({"kind":"reasoning","id":"r2","text":"The redirect keeps the original query string. It should drop the token."}),
+                    tool(
+                        "x4",
+                        serde_json::json!({"kind":"editFile","path":"crates/auth/src/redirect.rs"}),
+                        serde_json::json!({"diffStats":[{"path":"crates/auth/src/redirect.rs","additions":12,"deletions":3}]}),
+                    ),
+                    tool(
+                        "x5",
+                        serde_json::json!({"kind":"exec","command":"cargo test -p auth redirect"}),
+                        serde_json::json!({"isError":true,"output":"1 failed"}),
+                    ),
+                    tool(
+                        "x6",
+                        serde_json::json!({"kind":"webSearch","query":"oauth redirect uri token leak"}),
+                        none.clone(),
+                    ),
+                    tool(
+                        "x7",
+                        serde_json::json!({"kind":"mcp","server":"github","tool":"list_pull_requests"}),
+                        none.clone(),
+                    ),
+                    serde_json::json!({"kind":"text","id":"t1","text":"Here's the overview. The redirect now drops the token before returning to the app."}),
+                ],
+                540_000,
+            ),
+            entry(
+                "a2",
+                "assistant",
+                vec![
+                    tool(
+                        "s1",
+                        serde_json::json!({"kind":"unknown","name":"Agent: audit session expiry"}),
+                        serde_json::json!({"subagentRef":"chat--sub--s1","subagentStatus":"running","subagentTail":"Reading crates/auth/src/session.rs"}),
+                    ),
+                    tool(
+                        "s2",
+                        serde_json::json!({"kind":"unknown","name":"Agent: check cookie flags"}),
+                        serde_json::json!({"subagentRef":"chat--sub--s2","subagentStatus":"done"}),
+                    ),
+                    serde_json::json!({"kind":"text","id":"t2","text":"Two audits are under way."}),
+                ],
+                240_000,
+            ),
         ];
         let mut entries = entries;
         if follow_up {
-            entries.push(entry("u2", "user", vec![serde_json::json!({"kind":"text","id":"t","text":"Now add a regression test."})], 60_000));
+            entries.push(entry(
+                "u2",
+                "user",
+                vec![
+                    serde_json::json!({"kind":"text","id":"t","text":"Now add a regression test."}),
+                ],
+                60_000,
+            ));
         }
         self.state.update(cx, |state, cx| {
             state.apply_transcript(entries);

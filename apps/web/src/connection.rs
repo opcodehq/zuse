@@ -110,6 +110,22 @@ async fn wait_offline(
         }
     }
 }
+// Keep navigation, draft storage and explicit rejection responsive while a
+// controller chain is authenticating. Unsent workspace actions are not queued.
+async fn connecting<T>(
+    work: impl std::future::Future<Output = T>,
+    outbound: &mut mpsc::UnboundedReceiver<Value>,
+    events: &Sender,
+) -> Option<T> {
+    let work = work.fuse();
+    futures::pin_mut!(work);
+    loop {
+        futures::select_biased! {
+            frame=outbound.next().fuse()=>match frame{Some(frame)=>{if !local_action(&frame,events){reject(events,&frame);}},None=>return None},
+            value=work=>return Some(value),
+        }
+    }
+}
 fn mutation(frame: &Value) -> bool {
     !methods::retryable_read(
         frame["method"].as_str().unwrap_or_default(),
@@ -244,10 +260,16 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             }
         }
         let controller = if let Some(account) = account_target.clone() {
-            match crate::account_connection::Controller::open(account, &url, target.as_ref()).await
+            match connecting(
+                crate::account_connection::Controller::open(account, &url, target.as_ref()),
+                &mut outbound,
+                &events,
+            )
+            .await
             {
-                Ok(controller) => Some(controller),
-                Err(message) => {
+                Some(Ok(controller)) => Some(controller),
+                None => return,
+                Some(Err(message)) => {
                     let _ = events.unbounded_send(
                         json!({"connection":"retrying","accountRemote":true,"message":message}),
                     );
@@ -261,12 +283,22 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
         } else {
             None
         };
-        let socket = match &controller {
-            Some(controller) => super::socket::Socket::connect_account(controller.clone()).await,
-            None => {
-                super::socket::Socket::connect(&url, target.as_ref().map(PairedTarget::invitation))
+        let establish = async {
+            match &controller {
+                Some(controller) => {
+                    super::socket::Socket::connect_account(controller.clone()).await
+                }
+                None => {
+                    super::socket::Socket::connect(
+                        &url,
+                        target.as_ref().map(PairedTarget::invitation),
+                    )
                     .await
+                }
             }
+        };
+        let Some(socket) = connecting(establish, &mut outbound, &events).await else {
+            return;
         };
         let mut socket = match socket {
             Ok(socket) => socket,
@@ -286,21 +318,15 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
         };
         if let Some(controller) = &controller {
             // Verify the actual canonical engine before any workspace read or write.
-            let verify = async {
-                socket
-                    .send(&json!({"id":0,"method":methods::ENGINE_INFO,"params":{}}).to_string())?;
-                let text = socket.receive().await?;
-                let value: Value =
-                    serde_json::from_str(&text).map_err(|_| "Invalid computer identity")?;
-                if value["id"] != 0
-                    || value["ok"]["deviceId"].as_str()
-                        != Some(controller.target.environment.as_str())
-                {
-                    return Err("The selected computer returned another identity".to_owned());
-                }
-                Ok::<_, String>(())
+            let Some(verified) = connecting(
+                socket.verify_environment(&controller.target.environment),
+                &mut outbound,
+                &events,
+            )
+            .await
+            else {
+                return;
             };
-            let verified = futures::select_biased! {value=verify.fuse()=>value,_=delay(10000).fuse()=>Err("Computer identity verification timed out".into())};
             if let Err(message) = verified {
                 let _ = events
                     .unbounded_send(json!({"connection":"accountRequired","message":message}));
@@ -312,8 +338,7 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             let _ = events.unbounded_send(
                 json!({"pairingOrigin":origin,"accountRemote":true,"paired":false}),
             );
-            let remember=controller.call(methods::REMEMBER_ACCOUNT_ROUTE,json!({"expectedSubject":controller.target.subject,"environmentId":controller.target.environment,"label":controller.target.label,"origin":origin}));
-            futures::select_biased! {_=remember.fuse()=>{},_=delay(2000).fuse()=>{}}
+            controller.remember(&origin).await;
         }
         let upload_target = controller
             .clone()

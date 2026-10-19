@@ -13,32 +13,14 @@ use std::{
 use zuse_protocol::{managed_connection::Bootstrap, methods};
 
 const SAVED: &str = "zuse.account-target.v1";
-#[derive(Clone)]
-pub(super) struct Target {
-    pub environment: String,
-    pub subject: String,
-    pub label: String,
-}
-impl Target {
-    fn parse(value: &Value) -> Result<Self, String> {
-        let field = |key: &str, max: usize| {
-            value[key]
-                .as_str()
-                .filter(|s| !s.is_empty() && s.len() <= max && !s.chars().any(char::is_control))
-                .map(str::to_owned)
-                .ok_or_else(|| "Invalid account computer link".to_owned())
-        };
-        Ok(Self {
-            environment: field("environmentId", 256)?,
-            subject: field("expectedSubject", 256)?,
-            label: field("label", 128)?,
-        })
-    }
-    fn value(&self) -> Value {
-        json!({"environmentId":self.environment,"expectedSubject":self.subject,"label":self.label})
-    }
-}
+pub(super) use zuse_protocol::managed_connection::ComputerTarget as Target;
+thread_local! {static CURRENT:RefCell<Option<Target>>=const{RefCell::new(None)};}
 pub(super) fn selected() -> Result<Option<Target>, String> {
+    let target = read_selected()?;
+    CURRENT.with(|current| *current.borrow_mut() = target.clone());
+    Ok(target)
+}
+fn read_selected() -> Result<Option<Target>, String> {
     let window = web_sys::window().unwrap();
     let storage = window.session_storage().ok().flatten();
     let hash = window
@@ -55,7 +37,7 @@ pub(super) fn selected() -> Result<Option<Target>, String> {
         if let Some(storage) = &storage {
             let _ = storage.remove_item(SAVED);
         }
-        if raw.len() > 8192 {
+        if raw.len() > 24576 {
             return Err("Invalid computer link".into());
         }
         let raw = js_sys::decode_uri_component(raw)
@@ -94,24 +76,27 @@ pub(super) fn selected() -> Result<Option<Target>, String> {
 pub(super) fn action(frame: &Value, events: &mpsc::UnboundedSender<Value>) -> bool {
     let window = web_sys::window().unwrap();
     if frame["ui"] == "returnToController" {
+        let parent =
+            CURRENT.with(|current| current.borrow().as_ref().and_then(|target| target.parent()));
         if let Ok(Some(storage)) = window.session_storage() {
             let _ = storage.remove_item(SAVED);
         }
-        if window
-            .location()
-            .hash()
-            .ok()
-            .is_some_and(|h| h.starts_with("#computer="))
-        {
-            let clean = format!(
-                "{}{}",
-                window.location().pathname().unwrap_or_else(|_| "/".into()),
-                window.location().search().unwrap_or_default()
-            );
-            if let Ok(history) = window.history() {
-                let _ =
-                    history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&clean));
-            }
+        let hash = parent
+            .map(|target| {
+                format!(
+                    "#computer={}",
+                    js_sys::encode_uri_component(&target.value().to_string())
+                )
+            })
+            .unwrap_or_default();
+        let clean = format!(
+            "{}{}{}",
+            window.location().pathname().unwrap_or_else(|_| "/".into()),
+            window.location().search().unwrap_or_default(),
+            hash
+        );
+        if let Ok(history) = window.history() {
+            let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&clean));
         }
         let _ = window.location().reload();
         return true;
@@ -120,7 +105,12 @@ pub(super) fn action(frame: &Value, events: &mpsc::UnboundedSender<Value>) -> bo
         return false;
     }
     let result = (|| {
-        let target = Target::parse(frame)?;
+        let value = json!({"environmentId":frame["environmentId"],"expectedSubject":frame["expectedSubject"],"label":frame["label"]});
+        let next = Target::parse(&value)?;
+        let target = CURRENT.with(|current| match current.borrow().as_ref() {
+            Some(parent) => parent.append(next),
+            None => Ok(next),
+        })?;
         let location = window.location();
         let url = format!(
             "{}{}{}#computer={}",
@@ -185,7 +175,37 @@ impl Controller {
         url: &str,
         paired: Option<&zuse_remote::PairedTarget>,
     ) -> Result<Self, String> {
+        let mut hops = target.controllers.clone();
+        let mut terminal = target;
+        terminal.controllers.clear();
+        hops.push(terminal);
         let mut socket = Socket::connect(url, paired.map(|p| p.invitation())).await?;
+        let count = hops.len();
+        for (index, target) in hops.into_iter().enumerate() {
+            let controller = Self::from_socket(target, socket).await?;
+            if index + 1 == count {
+                return Ok(controller);
+            }
+            socket = Socket::connect_account(controller.clone()).await?;
+            socket
+                .verify_environment(&controller.target.environment)
+                .await?;
+            controller
+                .remember(
+                    socket
+                        .account_origin()
+                        .as_deref()
+                        .ok_or("Computer endpoint unavailable")?,
+                )
+                .await;
+        }
+        unreachable!("A connection path always includes its terminal computer")
+    }
+    pub async fn remember(&self, origin: &str) {
+        let request=self.call(methods::REMEMBER_ACCOUNT_ROUTE,json!({"expectedSubject":self.target.subject,"environmentId":self.target.environment,"label":self.target.label,"origin":origin}));
+        futures::select_biased! {_=request.fuse()=>{},_=delay(2000).fuse()=>{}}
+    }
+    async fn from_socket(target: Target, mut socket: Socket) -> Result<Self, String> {
         socket.send(
             &json!({"id":1,"method":methods::CLOUD_ACCOUNT_STATUS,"params":{}}).to_string(),
         )?;
@@ -250,7 +270,13 @@ impl Controller {
                             }
                         }
                     }
-                    Next::Frame(Err(_)) | Next::Request(None) => return,
+                    Next::Frame(Err(_)) => {
+                        if socket.account_dependency_blocked() {
+                            block.set(true);
+                        }
+                        return;
+                    }
+                    Next::Request(None) => return,
                     Next::Request(Some(call)) => {
                         if pending.len() >= 64 {
                             let _ = call

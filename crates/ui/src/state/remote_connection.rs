@@ -6,7 +6,6 @@ mod tests;
 #[async_trait]
 pub(super) trait Source: Send + Sync {
     fn cancellation(&self) -> CancellationToken;
-    fn origin(&self) -> String;
     fn closed_message(&self) -> &'static str;
     fn blocked_error(&self, _: &RpcError) -> bool {
         false
@@ -14,8 +13,8 @@ pub(super) trait Source: Send + Sync {
     fn legacy_identity(&self) -> bool {
         false
     }
-    async fn connect(self: Arc<Self>) -> Result<zuse_rpc::reconnect::Channel, RpcError>;
-    async fn connected(&self) {}
+    async fn connect(self: Arc<Self>) -> Result<(zuse_rpc::reconnect::Channel, String), RpcError>;
+    async fn connected(&self, _origin: &str) {}
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Status {
@@ -26,6 +25,7 @@ pub(super) enum Status {
 struct RemoteEngine {
     client: Arc<RpcClient>,
     expected: EngineInfo,
+    origin: Arc<std::sync::RwLock<String>>,
     source: Arc<dyn Source>,
     control: zuse_rpc::reconnect::Control,
     status: tokio::sync::watch::Receiver<Status>,
@@ -52,11 +52,15 @@ impl EngineBackend for RemoteEngine {
     }
     fn mode(&self) -> EngineMode {
         EngineMode::Remote {
-            url: self.source.origin(),
+            url: self
+                .origin
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
         }
     }
     async fn media_client(&self) -> Result<RpcClient, RpcError> {
-        let (channel, info) = verified(self.source.clone()).await?;
+        let (channel, info, _) = verified(self.source.clone()).await?;
         if info != self.expected {
             self.source.cancellation().cancel();
             return Err(RpcError::Failed(
@@ -73,15 +77,15 @@ impl EngineBackend for RemoteEngine {
 /// Identity is verified before a channel can enter the stable RPC client.
 async fn verified(
     source: Arc<dyn Source>,
-) -> Result<(zuse_rpc::reconnect::Channel, EngineInfo), RpcError> {
+) -> Result<(zuse_rpc::reconnect::Channel, EngineInfo, String), RpcError> {
     let cancelled = source.cancellation();
     tokio::select! {biased;_=cancelled.cancelled()=>Err(RpcError::Closed),value=verify_identity(source)=>value}
 }
 async fn verify_identity(
     source: Arc<dyn Source>,
-) -> Result<(zuse_rpc::reconnect::Channel, EngineInfo), RpcError> {
+) -> Result<(zuse_rpc::reconnect::Channel, EngineInfo, String), RpcError> {
     let legacy = source.legacy_identity();
-    let mut channel = source.connect().await?;
+    let (mut channel, origin) = source.connect().await?;
     let verify = async {
         async fn query(
             channel: &mut zuse_rpc::reconnect::Channel,
@@ -132,11 +136,12 @@ async fn verify_identity(
     let info = tokio::time::timeout(std::time::Duration::from_secs(10), verify)
         .await
         .map_err(|_| RpcError::Transport("Computer identity timed out".into()))??;
-    Ok((channel, info))
+    Ok((channel, info, origin))
 }
 async fn reconnect(
     source: Arc<dyn Source>,
     expected: EngineInfo,
+    origin: Arc<std::sync::RwLock<String>>,
     control: zuse_rpc::reconnect::Control,
     status: tokio::sync::watch::Sender<Status>,
     retry: Arc<tokio::sync::Notify>,
@@ -160,14 +165,14 @@ async fn reconnect(
             tokio::select! {biased;_=stopped.cancelled()=>return,_=cancelled.cancelled()=>break,_=retry.notified()=>{},_=tokio::time::sleep(delay)=>{}}
             let result = tokio::select! {biased;_=stopped.cancelled()=>return,_=cancelled.cancelled()=>break,result=verified(source.clone())=>result};
             match result {
-                Ok((channel, info)) => {
+                Ok((channel, info, next)) => {
                     if info != expected {
                         cancelled.cancel();
                         control.close();
                         status.send_replace(Status::Blocked("The computer identity or runtime changed. Reopen it from Remote access before continuing; local edits are preserved.".into()));
                         return;
                     }
-                    source.connected().await;
+                    source.connected(&next).await;
                     if cancelled.is_cancelled() {
                         break;
                     }
@@ -175,6 +180,7 @@ async fn reconnect(
                         Ok(next) => lease = next,
                         Err(_) => return,
                     }
+                    *origin.write().unwrap_or_else(|e| e.into_inner()) = next;
                     status.send_replace(Status::Ready);
                     break;
                 }
@@ -195,12 +201,12 @@ pub(super) async fn bootstrap(
     source: Arc<dyn Source>,
     expected_device: Option<&str>,
 ) -> anyhow::Result<EngineHandle> {
-    let (channel, info) = verified(source.clone()).await?;
+    let (channel, info, origin) = verified(source.clone()).await?;
     anyhow::ensure!(
         expected_device.is_none_or(|device| info.device_id == device),
         "The selected computer returned a different identity"
     );
-    source.connected().await;
+    source.connected(&origin).await;
     anyhow::ensure!(
         !source.cancellation().is_cancelled(),
         "The controller account connection closed"
@@ -209,9 +215,11 @@ pub(super) async fn bootstrap(
     let lease = control.attach(channel)?;
     let (status, snapshots) = tokio::sync::watch::channel(Status::Ready);
     let retry = Arc::new(tokio::sync::Notify::new());
+    let origin = Arc::new(std::sync::RwLock::new(origin));
     let task = tokio::spawn(reconnect(
         source.clone(),
         info.clone(),
+        origin.clone(),
         control.clone(),
         status,
         retry.clone(),
@@ -223,6 +231,7 @@ pub(super) async fn bootstrap(
         inner: Arc::new(RemoteEngine {
             client: Arc::new(client),
             expected: info.clone(),
+            origin,
             source,
             control,
             status: snapshots,
@@ -243,9 +252,6 @@ impl Source for Pairing {
     fn cancellation(&self) -> CancellationToken {
         self.closed.clone()
     }
-    fn origin(&self) -> String {
-        self.target.origin().into()
-    }
     fn closed_message(&self) -> &'static str {
         "Paired access ended. Open a new invitation before reconnecting."
     }
@@ -255,8 +261,9 @@ impl Source for Pairing {
     fn legacy_identity(&self) -> bool {
         true
     }
-    async fn connect(self: Arc<Self>) -> Result<zuse_rpc::reconnect::Channel, RpcError> {
-        zuse_rpc::connect_paired_channel(&self.target, self.closed.clone()).await
+    async fn connect(self: Arc<Self>) -> Result<(zuse_rpc::reconnect::Channel, String), RpcError> {
+        let channel = zuse_rpc::connect_paired_channel(&self.target, self.closed.clone()).await?;
+        Ok((channel, self.target.origin().into()))
     }
 }
 pub(super) async fn paired(target: zuse_remote::PairedTarget) -> anyhow::Result<EngineHandle> {

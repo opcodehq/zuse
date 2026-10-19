@@ -41,6 +41,25 @@ pub(super) struct Socket {
     _message: Closure<dyn FnMut(MessageEvent)>,
 }
 impl Socket {
+    pub fn account_dependency_blocked(&self) -> bool {
+        self.account
+            .as_ref()
+            .is_some_and(|account| account.controller.is_blocked())
+    }
+    pub async fn verify_environment(&mut self, environment: &str) -> Result<(), String> {
+        let verify = async {
+            self.send(&serde_json::json!({"id":0,"method":zuse_protocol::methods::ENGINE_INFO,"params":{}}).to_string())?;
+            let text = self.receive().await?;
+            let value: serde_json::Value =
+                serde_json::from_str(&text).map_err(|_| "Invalid computer identity")?;
+            if value["id"] != 0 || value["ok"]["deviceId"].as_str() != Some(environment) {
+                return Err("The selected computer returned another identity".to_owned());
+            }
+            Ok(())
+        };
+        futures::select_biased! {value=verify.fuse()=>value,_=super::connection::delay(10000).fuse()=>Err("Computer identity verification timed out".into())}
+    }
+
     pub fn account_origin(&self) -> Option<String> {
         self.account.as_ref().map(|a| {
             a.origin

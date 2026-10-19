@@ -32,7 +32,6 @@ impl std::fmt::Debug for RemoteTarget {
 struct Source {
     target: AccountTarget,
     closed: CancellationToken,
-    origin: std::sync::RwLock<String>,
     remembered: std::sync::Mutex<String>,
     _watch: AbortOnDropHandle<()>,
 }
@@ -69,7 +68,6 @@ impl Source {
         Ok(Arc::new(Self {
             target,
             closed,
-            origin: std::sync::RwLock::new(String::new()),
             remembered: std::sync::Mutex::new(String::new()),
             _watch: AbortOnDropHandle::new(watch),
         }))
@@ -95,18 +93,30 @@ impl zuse_rpc::managed::GrantSource for Source {
         if grant.environment_id != self.target.environment {
             return Err(RpcError::Failed("The selected computer changed".into()));
         }
-        let origin = zuse_remote::normalized_origin(&grant.origin)
-            .map_err(|_| RpcError::Failed("Invalid computer endpoint".into()))?;
-        *self.origin.write().unwrap_or_else(|e| e.into_inner()) = origin;
         Ok(grant)
     }
 }
-fn origin(source: &Source) -> String {
-    source
-        .origin
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
+// Each socket retains its first normalized grant origin. Later auxiliary dials
+// and renewals cannot change another channel's verified endpoint receipt.
+struct Dial {
+    source: Arc<Source>,
+    origin: std::sync::OnceLock<String>,
+}
+#[async_trait]
+impl zuse_rpc::managed::GrantSource for Dial {
+    fn environment(&self) -> &str {
+        &self.source.target.environment
+    }
+    fn cancellation(&self) -> CancellationToken {
+        self.source.closed.clone()
+    }
+    async fn grant(&self) -> Result<Bootstrap, RpcError> {
+        let grant = zuse_rpc::managed::GrantSource::grant(self.source.as_ref()).await?;
+        let origin = zuse_remote::normalized_origin(&grant.origin)
+            .map_err(|_| RpcError::Failed("Invalid computer endpoint".into()))?;
+        self.origin.get_or_init(|| origin);
+        Ok(grant)
+    }
 }
 async fn remember(source: &Source, origin: &str) {
     let remember=source.target.controller.client().call_scoped(methods::REMEMBER_ACCOUNT_ROUTE,serde_json::json!({"expectedSubject":source.target.subject,"environmentId":source.target.environment,"label":source.target.label,"origin":origin}));
@@ -123,22 +133,28 @@ impl super::remote_connection::Source for Source {
     fn cancellation(&self) -> CancellationToken {
         self.closed.clone()
     }
-    fn origin(&self) -> String {
-        origin(self)
-    }
     fn closed_message(&self) -> &'static str {
         "Account access ended. Check the controller account and select this computer again."
     }
-    async fn connect(self: Arc<Self>) -> Result<zuse_rpc::reconnect::Channel, RpcError> {
-        zuse_rpc::managed::connect_channel(self).await
+    async fn connect(self: Arc<Self>) -> Result<(zuse_rpc::reconnect::Channel, String), RpcError> {
+        let dial = Arc::new(Dial {
+            source: self,
+            origin: std::sync::OnceLock::new(),
+        });
+        let channel = zuse_rpc::managed::connect_channel(dial.clone()).await?;
+        let origin = dial
+            .origin
+            .get()
+            .cloned()
+            .ok_or_else(|| RpcError::Transport("Computer endpoint unavailable".into()))?;
+        Ok((channel, origin))
     }
-    async fn connected(&self) {
-        let next = origin(self);
+    async fn connected(&self, next: &str) {
         if *self.remembered.lock().unwrap_or_else(|e| e.into_inner()) == next {
             return;
         }
-        remember(self, &next).await;
-        *self.remembered.lock().unwrap_or_else(|e| e.into_inner()) = next;
+        remember(self, next).await;
+        *self.remembered.lock().unwrap_or_else(|e| e.into_inner()) = next.to_owned();
     }
 }
 pub(super) async fn bootstrap(target: AccountTarget) -> anyhow::Result<EngineHandle> {

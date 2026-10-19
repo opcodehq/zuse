@@ -204,7 +204,7 @@ impl WorkspaceView {
                             let id=computer["environmentId"].as_str().unwrap_or_default().to_owned();
                             let remembered=self.managed_access.saved.iter().any(|saved|saved["environmentId"]==computer["environmentId"]);
                             let current=self.device_id.as_deref()==Some(id.as_str());
-                            let connect=!self.account_remote && !current && zuse_protocol::managed_connection::supports_record(computer);
+                            let connect=!current && zuse_protocol::managed_connection::supports_record(computer);
                             let environment=id.clone();let label=computer["label"].as_str().unwrap_or("Linked computer").to_owned();
                             let subject=self.cloud_account["user"]["id"].as_str().unwrap_or_default().to_owned();
                             let connect_subject=subject.clone();
