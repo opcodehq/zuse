@@ -1328,7 +1328,8 @@ mod pinned_session_tests {
         assert_eq!(dragged_card.origin.x, source_bounds.origin.x);
         assert_eq!(
             f32::from(dragged_card.size.height),
-            super::super::sidebar_row_height(compact, show_label, false)
+            // The flat Threads list keeps two-line rows whatever Compact says.
+            super::super::sidebar_row_height(false, true, false)
         );
         // Even a sub-row move follows the pointer immediately, before a drop slot changes.
         let pointer = from + gpui::point(px(8.0), px(7.0));
@@ -5364,8 +5365,8 @@ impl Shell {
             .iter()
             .map(|_| {
                 sidebar_row_height(
-                    self.settings.sidebar_compact,
-                    self.settings.sidebar_show_project_label,
+                    self.sidebar_compact_rows(),
+                    self.sidebar_project_labels(),
                     false,
                 )
             })
@@ -5446,6 +5447,8 @@ impl Shell {
         sections.extend(regular_groups);
 
         let returning = self.sidebar_session_transfer.is_none();
+        let (compact_rows, project_labels) =
+            (self.sidebar_compact_rows(), self.sidebar_project_labels());
         let transfer = self.sidebar_session_transfer.as_mut().or_else(|| {
             self.sidebar_session_return
                 .as_mut()
@@ -5472,11 +5475,7 @@ impl Shell {
                     && group
                         .as_ref()
                         .is_some_and(|(key, _)| !key.starts_with("section:"));
-                drag.row_height = sidebar_row_height(
-                    self.settings.sidebar_compact,
-                    self.settings.sidebar_show_project_label,
-                    nested,
-                );
+                drag.row_height = sidebar_row_height(compact_rows, project_labels, nested);
                 // Move the vacant slot to the destination instead of keeping two
                 // holes. Sample layout and paint with the same reversible easing.
                 let collapse = !returning
@@ -5601,8 +5600,8 @@ impl Shell {
                     .then(|| chat.config.as_ref().map(|c| c.harness))
                     .flatten();
                 let height = sidebar_row_height(
-                    self.settings.sidebar_compact,
-                    self.settings.sidebar_show_project_label,
+                    self.sidebar_compact_rows(),
+                    self.sidebar_project_labels(),
                     project_group,
                 );
                 // Only rows a jump slot can reach wear a chip; row 10 onward

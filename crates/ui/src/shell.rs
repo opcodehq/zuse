@@ -1009,6 +1009,20 @@ pub(super) fn chat_row_height(shows_branch: bool, shows_pull_request: bool) -> f
 /// Exact sidebar session row height. Rows nested under a project heading,
 /// compact rows and rows without the project line are one line; one-list
 /// rows add the project line beneath the title.
+impl Shell {
+    /// The Threads view's second line (project, PR, diff) is the point of the
+    /// flat list, so Compact and a hidden project label only shape Projects.
+    pub(crate) fn sidebar_compact_rows(&self) -> bool {
+        self.settings.sidebar_compact
+            && self.settings.sidebar_organization != SidebarOrganization::InOneList
+    }
+
+    pub(crate) fn sidebar_project_labels(&self) -> bool {
+        self.settings.sidebar_show_project_label
+            || self.settings.sidebar_organization == SidebarOrganization::InOneList
+    }
+}
+
 fn sidebar_row_height(compact: bool, show_label: bool, nested: bool) -> f32 {
     if compact || nested || !show_label {
         SIDEBAR_ROW_SINGLE_HEIGHT
@@ -8281,8 +8295,8 @@ impl Shell {
             .map(|chat| chat.device_id.clone());
         // The sidebar's own row layout; the palette keeps its three-line card.
         let sidebar = search_query.is_none();
-        let compact = sidebar && self.settings.sidebar_compact;
-        let show_label = search_query.is_some() || self.settings.sidebar_show_project_label;
+        let compact = sidebar && self.sidebar_compact_rows();
+        let show_label = search_query.is_some() || self.sidebar_project_labels();
         let diff_stat = sidebar
             .then(|| {
                 let state = self.state.read(cx);
