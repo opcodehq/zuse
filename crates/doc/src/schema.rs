@@ -49,6 +49,10 @@ struct DocPartJson {
     mime_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent: Option<zuse_model::AgentIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous_agent: Option<zuse_model::AgentIdentity>,
     /// Thinking body for `kind: "reasoning"` (additive). Deliberately NOT the
     /// `text` field: old readers' unknown-kind fallback renders `text` as
     /// prose, so reasoning riding `text` would leak raw thinking into old
@@ -104,6 +108,17 @@ struct DocPartJson {
 /// App parts → doc part json (mirror of `toDocParts`).
 fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
     Ok(match part {
+        MessagePart::AgentContext {
+            id,
+            agent,
+            previous_agent,
+        } => DocPartJson {
+            id: id.clone(),
+            kind: "agentContext".into(),
+            agent: Some(agent.clone()),
+            previous_agent: previous_agent.clone(),
+            ..Default::default()
+        },
         MessagePart::Image {
             id,
             path,
@@ -211,6 +226,17 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
 /// Doc part json → app part (mirror of `fromDocParts`; malformed degrades to empty text).
 fn from_doc_part(p: DocPartJson) -> MessagePart {
     match p.kind.as_str() {
+        "agentContext" => match p.agent {
+            Some(agent) => MessagePart::AgentContext {
+                id: p.id,
+                agent,
+                previous_agent: p.previous_agent,
+            },
+            None => MessagePart::Text {
+                id: p.id,
+                text: String::new(),
+            },
+        },
         "image" => image_part(p.id, p.path, p.name, p.mime_type),
         "visual" => match p.path.filter(|path| !path.is_empty()) {
             Some(path) => MessagePart::Visual {
@@ -619,6 +645,22 @@ impl SessionDoc {
         part_id: &str,
         message: &str,
     ) -> Result<bool, DocError> {
+        self.append_message_part(
+            message_id,
+            &MessagePart::Error {
+                id: part_id.into(),
+                message: message.into(),
+            },
+        )
+    }
+
+    /// Append host-owned metadata idempotently, including to a queued user entry.
+    pub fn append_message_part(
+        &self,
+        message_id: &str,
+        new_part: &MessagePart,
+    ) -> Result<bool, DocError> {
+        let part_id = new_part.id();
         let messages = self.doc.get_list("messages");
         for i in 0..messages.len() {
             let Some(loro::ValueOrContainer::Container(loro::Container::Map(entry))) =
@@ -650,13 +692,7 @@ impl SessionDoc {
                     return Ok(true);
                 }
             }
-            push_part(
-                &parts,
-                &MessagePart::Error {
-                    id: part_id.to_string(),
-                    message: message.to_string(),
-                },
-            )?;
+            push_part(&parts, new_part)?;
             self.doc.commit();
             return Ok(true);
         }
@@ -841,6 +877,15 @@ fn push_part(parts: &LoroList, part: &MessagePart) -> Result<(), DocError> {
         if let Some(value) = value {
             map.insert(key, value.as_str())?;
         }
+    }
+    if let Some(agent) = &doc_part.agent {
+        map.insert("agent", loro_value_from_json(&serde_json::to_value(agent)?))?;
+    }
+    if let Some(previous) = &doc_part.previous_agent {
+        map.insert(
+            "previousAgent",
+            loro_value_from_json(&serde_json::to_value(previous)?),
+        )?;
     }
     if let Some(call) = &doc_part.call {
         map.insert("call", loro_value_from_json(call))?;
@@ -1402,6 +1447,49 @@ pub fn materialize_tail(
 mod tests {
     use super::*;
     use crate::parts::fold_event_into_parts;
+
+    #[test]
+    fn agent_context_round_trips_and_append_is_idempotent() {
+        let doc = SessionDoc::init("chat").unwrap();
+        let from = zuse_model::AgentIdentity {
+            harness: zuse_protocol::HarnessId::Codex,
+            model: Some("gpt-6.1-sol".into()),
+        };
+        let to = zuse_model::AgentIdentity {
+            harness: zuse_protocol::HarnessId::ClaudeCode,
+            model: Some("claude-opus-5-5".into()),
+        };
+        doc.push_message(&SessionMessageEntry {
+            id: "sent".into(),
+            role: MessageRole::User,
+            parts: vec![MessagePart::Text {
+                id: "text".into(),
+                text: "Continue".into(),
+            }],
+            created_at: 1,
+            device_id: "host".into(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+            duration_ms: None,
+        })
+        .unwrap();
+        let context = MessagePart::AgentContext {
+            id: "agent-context".into(),
+            agent: to,
+            previous_agent: Some(from),
+        };
+        for _ in 0..2 {
+            assert!(doc.append_message_part("sent", &context).unwrap());
+        }
+        let replica = SessionDoc::init("chat").unwrap();
+        replica
+            .doc()
+            .import(&doc.doc().export(ExportMode::Snapshot).unwrap())
+            .unwrap();
+        let entries = replica.read_entries().unwrap();
+        assert_eq!(entries[0].parts.len(), 2);
+        assert_eq!(entries[0].parts[1], context);
+    }
 
     #[test]
     fn fork_seam_round_trips_through_the_doc() {

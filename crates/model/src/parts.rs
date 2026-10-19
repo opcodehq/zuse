@@ -119,10 +119,91 @@ pub enum SubagentStatus {
     Failed,
 }
 
+/// Provider/model selected for one dispatched user message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentIdentity {
+    pub harness: zuse_protocol::HarnessId,
+    pub model: Option<String>,
+}
+
+impl AgentIdentity {
+    /// Model providers can differ while using the same engine adapter.
+    pub fn brand(&self) -> zuse_protocol::HarnessId {
+        let model = self
+            .model
+            .as_deref()
+            .unwrap_or("")
+            .rsplit('/')
+            .next()
+            .unwrap_or("");
+        if model.starts_with("claude-") {
+            zuse_protocol::HarnessId::ClaudeCode
+        } else if model.starts_with("gpt-")
+            || model.starts_with("o1")
+            || model.starts_with("o3")
+            || model.starts_with("o4")
+        {
+            zuse_protocol::HarnessId::Codex
+        } else {
+            self.harness
+        }
+    }
+
+    pub fn label(&self) -> String {
+        let Some(model) = self.model.as_deref().filter(|name| !name.is_empty()) else {
+            return String::from(self.harness)
+                .split('-')
+                .map(title_case)
+                .collect::<Vec<_>>()
+                .join(" ");
+        };
+        let model = model.rsplit('/').next().unwrap_or(model);
+        if let Some(name) = model.strip_prefix("claude-") {
+            let mut parts = name.split('-');
+            let family = parts.next().unwrap_or(name);
+            let version = parts
+                .take_while(|part| part.len() <= 2 && part.chars().all(|c| c.is_ascii_digit()))
+                .collect::<Vec<_>>()
+                .join(".");
+            let mut title = family.to_owned();
+            if let Some(first) = title.get_mut(..1) {
+                first.make_ascii_uppercase();
+            }
+            return if version.is_empty() {
+                title
+            } else {
+                format!("{title} {version}")
+            };
+        }
+        if let Some(name) = model.strip_prefix("gpt-") {
+            let mut parts = name.split('-');
+            let version = parts.next().unwrap_or(name);
+            let suffix = parts.map(title_case).collect::<Vec<_>>().join(" ");
+            return format!("GPT-{version} {suffix}").trim_end().to_owned();
+        }
+        model.to_owned()
+    }
+}
+
+fn title_case(value: &str) -> String {
+    let mut value = value.to_owned();
+    if let Some(first) = value.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    value
+}
+
 /// One rendered part of an assistant message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MessagePart {
+    /// Invisible dispatch metadata; a changed identity renders above the user message.
+    #[serde(rename_all = "camelCase")]
+    AgentContext {
+        id: String,
+        agent: AgentIdentity,
+        previous_agent: Option<AgentIdentity>,
+    },
     Text {
         id: String,
         text: String,
@@ -231,7 +312,8 @@ pub enum MessagePart {
 impl MessagePart {
     pub fn id(&self) -> &str {
         match self {
-            MessagePart::Text { id, .. }
+            MessagePart::AgentContext { id, .. }
+            | MessagePart::Text { id, .. }
             | MessagePart::Image { id, .. }
             | MessagePart::Visual { id, .. }
             | MessagePart::Reasoning { id, .. }
@@ -244,6 +326,11 @@ impl MessagePart {
 
     pub fn byte_len(&self) -> usize {
         match self {
+            MessagePart::AgentContext {
+                agent,
+                previous_agent,
+                ..
+            } => serde_json::to_vec(&(agent, previous_agent)).map_or(0, |value| value.len()),
             MessagePart::Text { text, .. } | MessagePart::Reasoning { text, .. } => text.len(),
             MessagePart::Tool {
                 call,

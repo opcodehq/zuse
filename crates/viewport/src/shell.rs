@@ -596,6 +596,11 @@ impl WorkspaceView {
                     .w_full().max_w(px(796.)).self_center()
                     .flex_shrink_0()
                     .gap_3()
+                    .children(entry.parts.iter().filter_map(|part| {
+                        if let zuse_model::MessagePart::AgentContext { agent, previous_agent: Some(previous), .. } = part {
+                            Some(crate::activity::agent_switch_notice(previous, agent, rgb(MUTED).into()))
+                        } else { None }
+                    }))
                     .children(
                         message["parts"]
                             .as_array()

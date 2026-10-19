@@ -1,7 +1,7 @@
 //! Browser-compatible GPUI views. Native process/filesystem access stays behind RPC.
 
 mod access;
-mod activity;
+pub mod activity;
 pub mod assets;
 #[cfg(test)]
 mod attachment_tests;

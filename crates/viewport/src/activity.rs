@@ -234,3 +234,34 @@ impl WorkspaceView {
         view.into_any_element()
     }
 }
+
+/// Dispatch metadata rendered consistently in native and browser transcripts.
+pub fn agent_switch_notice(
+    from: &zuse_model::AgentIdentity,
+    to: &zuse_model::AgentIdentity,
+    color: Hsla,
+) -> Div {
+    row()
+        .flex_wrap()
+        .items_center()
+        .gap(px(5.))
+        .py_2()
+        .text_size(px(12.))
+        .line_height(px(20.))
+        .text_color(color)
+        .child("Model switched from")
+        .child(
+            icon(crate::shell::provider_icon(&String::from(from.brand())))
+                .size(px(14.))
+                .text_color(color),
+        )
+        .child(from.label())
+        .child("to")
+        .child(
+            icon(crate::shell::provider_icon(&String::from(to.brand())))
+                .size(px(14.))
+                .text_color(color),
+        )
+        .child(to.label())
+        .child("· Context handed off.")
+}

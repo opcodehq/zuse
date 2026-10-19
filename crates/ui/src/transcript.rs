@@ -1019,6 +1019,10 @@ pub fn diff_to_file(diff: &zuse_protocol::ToolDiff) -> crate::changes::FileDiff 
 
 #[derive(Clone)]
 pub enum RowKind {
+    AgentSwitch {
+        from: zuse_doc::parts::AgentIdentity,
+        to: zuse_doc::parts::AgentIdentity,
+    },
     GeneratedImage {
         owner: String,
         path: String,
@@ -1372,10 +1376,34 @@ pub fn rows_for_entry(
                     .any(|chip| crate::attachments::chip_names_attachment(chip, &att.path))
         });
         let copy_text = (!text.trim().is_empty()).then(|| SharedString::from(text.clone()));
-        return vec![Row {
+        let mut rows = Vec::new();
+        for part in &entry.parts {
+            if let MessagePart::AgentContext {
+                agent,
+                previous_agent: Some(previous),
+                ..
+            } = part
+            {
+                rows.push(Row {
+                    id: format!("{}#agent-switch", entry.id).into(),
+                    version: fnv1a(&serde_json::to_vec(part).unwrap_or_default()),
+                    turn_start: true,
+                    kind: RowKind::AgentSwitch {
+                        from: previous.clone(),
+                        to: agent.clone(),
+                    },
+                    entry_id: entry_id.clone(),
+                    timestamp: None,
+                    copy_text: None,
+                    compact_fold: None,
+                });
+            }
+        }
+        let turn_start = rows.is_empty();
+        rows.push(Row {
             id: entry.id.clone().into(),
-            version: (raw.len() as u64) << 1 | pending as u64,
-            turn_start: true,
+            version: (raw.len() as u64) << 1 | pending as u64 | ((!turn_start) as u64) << 62,
+            turn_start,
             kind: RowKind::User {
                 text: text.into(),
                 mentions: Arc::new(mentions),
@@ -1389,7 +1417,8 @@ pub fn rows_for_entry(
             timestamp: Some(entry.created_at),
             copy_text,
             compact_fold: None,
-        }];
+        });
+        return rows;
     }
 
     // Assistant/system: split parts into block rows, folding consecutive
@@ -1720,7 +1749,9 @@ pub fn rows_for_entry(
                     }
                     // Tools and thoughts are grouped by the outer arms;
                     // nothing reaches here.
-                    MessagePart::Tool { .. } | MessagePart::Reasoning { .. } => {}
+                    MessagePart::Tool { .. }
+                    | MessagePart::Reasoning { .. }
+                    | MessagePart::AgentContext { .. } => {}
                 }
             }
         }
@@ -7562,6 +7593,10 @@ impl Transcript {
             RowKind::Visual { owner, path, title } => {
                 self.render_visual(&row.id, owner, path, title, cx)
             }
+            RowKind::AgentSwitch { from, to } => {
+                zuse_viewport::activity::agent_switch_notice(from, to, theme.text_muted)
+                    .into_any_element()
+            }
             RowKind::ErrorChip { message } => error_chip(message.clone(), &theme),
             RowKind::ForkMarker { source_title, .. } => fork_marker(source_title.clone(), &theme),
         };
@@ -10265,6 +10300,9 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
     for part in &entry.parts {
         acc.extend_from_slice(part.id().as_bytes());
         acc.extend_from_slice(&(part.byte_len() as u64).to_le_bytes());
+        if matches!(part, MessagePart::AgentContext { .. }) {
+            acc.extend_from_slice(&serde_json::to_vec(part).unwrap_or_default());
+        }
         if let MessagePart::Tool {
             is_error,
             resolved,

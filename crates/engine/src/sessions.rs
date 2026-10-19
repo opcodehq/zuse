@@ -826,6 +826,7 @@ impl SessionsEngine {
                 }
                 let handle = self.doc_handle(chat_id)?;
                 handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+                self.record_agent_context(chat_id, &user_id, harness_id, request.model.clone())?;
                 if self.is_live(chat_id, &run_id) {
                     if bootstrap.is_some() {
                         history_sent.store(true, std::sync::atomic::Ordering::Release);
@@ -885,6 +886,7 @@ impl SessionsEngine {
         let user_id = message_id.unwrap_or_else(new_id);
         if !idle {
             handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+            self.record_agent_context(chat_id, &user_id, harness_id, request.model.clone())?;
         }
 
         // Engine-owned resume (zuse sessions.ts:736 — every dispatch read the
@@ -1022,6 +1024,38 @@ impl SessionsEngine {
         Ok(run_id)
     }
 
+    fn record_agent_context(
+        &self,
+        chat_id: &str,
+        message_id: &str,
+        harness: HarnessId,
+        model: Option<String>,
+    ) -> Result<(), EngineError> {
+        let fallback = self
+            .inner
+            .journal
+            .events_rev(chat_id)
+            .ok()
+            .and_then(|events| {
+                events.filter_map(Result::ok).find_map(|(_, event)| {
+                    if let AgentEvent::SessionStarted { harness, model, .. } = event {
+                        Some(zuse_model::AgentIdentity {
+                            harness,
+                            model: (!model.is_empty()).then_some(model),
+                        })
+                    } else {
+                        None
+                    }
+                })
+            });
+        self.doc_handle(chat_id)?.record_agent_context(
+            message_id,
+            zuse_model::AgentIdentity { harness, model },
+            fallback,
+        )?;
+        Ok(())
+    }
+
     /// A warm send's prompt with the fork's copied history in front, when the
     /// live provider session never received it (the fork's first turns were
     /// native commands) and no earlier send in this runtime carries it
@@ -1103,6 +1137,7 @@ impl SessionsEngine {
             request.attachments = Vec::new();
             Box::new(request)
         });
+        let sent_model = sent_with.as_ref().and_then(|request| request.model.clone());
         let message = SteerMessage {
             prompt: if harness_id == HarnessId::Opencode {
                 delivered.to_owned()
@@ -1148,6 +1183,7 @@ impl SessionsEngine {
         }
         let handle = self.doc_handle(chat_id)?;
         handle.write_user_message(&user_id, prompt, issued_at.min(now_ms()))?;
+        self.record_agent_context(chat_id, &user_id, harness_id, sent_model)?;
         if self.is_live(chat_id, &run_id) {
             if bootstrap.is_some() {
                 history_sent.store(true, std::sync::atomic::Ordering::Release);
@@ -4891,6 +4927,45 @@ mod tests {
         let back = continuity_turn(&core, &mut rx, HarnessId::ClaudeCode, "switch back").await;
         assert!(back.resume.is_none());
         assert!(back.prompt.contains("Zuse answer 0"));
+        assert!(!back.prompt.contains("agentContext"));
+        let entries = core
+            .doc_host
+            .open("continuity")
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap();
+        let contexts = entries
+            .iter()
+            .flat_map(|entry| &entry.parts)
+            .filter_map(|part| {
+                if let zuse_doc::MessagePart::AgentContext {
+                    agent,
+                    previous_agent,
+                    ..
+                } = part
+                {
+                    Some((
+                        agent.harness,
+                        previous_agent.as_ref().map(|agent| agent.harness),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            contexts,
+            vec![
+                (HarnessId::ClaudeCode, None),
+                (HarnessId::ClaudeCode, None),
+                (HarnessId::Codex, Some(HarnessId::ClaudeCode)),
+                (HarnessId::Codex, None),
+                (HarnessId::Zuse, Some(HarnessId::Codex)),
+                (HarnessId::Cursor, Some(HarnessId::Zuse)),
+                (HarnessId::ClaudeCode, Some(HarnessId::Cursor)),
+            ]
+        );
         core.shutdown().await;
     }
 }

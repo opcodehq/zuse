@@ -864,6 +864,45 @@ impl ChatDocHandle {
         })
     }
 
+    /// Stamp the actual dispatched selection, never the current picker draft.
+    pub fn record_agent_context(
+        &self,
+        message_id: &str,
+        agent: zuse_model::AgentIdentity,
+        fallback: Option<zuse_model::AgentIdentity>,
+    ) -> Result<(), DocError> {
+        let mut previous = fallback;
+        for entry in self.doc.read_entries()? {
+            if entry.id == message_id {
+                if entry
+                    .parts
+                    .iter()
+                    .any(|part| matches!(part, MessagePart::AgentContext { .. }))
+                {
+                    return Ok(());
+                }
+                break;
+            }
+            if entry.role == MessageRole::User {
+                for part in entry.parts {
+                    if let MessagePart::AgentContext { agent, .. } = part {
+                        previous = Some(agent);
+                    }
+                }
+            }
+        }
+        let previous_agent = previous.filter(|previous| previous != &agent);
+        self.doc.append_message_part(
+            message_id,
+            &MessagePart::AgentContext {
+                id: "agent-context".into(),
+                agent,
+                previous_agent,
+            },
+        )?;
+        Ok(())
+    }
+
     /// Recovery sweep: settle this device's running subagent chips (including
     /// chips in completed parent turns), then stamp abandoned `streaming`
     /// entries `aborted`, appending
