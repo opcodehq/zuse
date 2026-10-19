@@ -984,6 +984,17 @@ pub struct FlatText {
     /// Reserved slots after resolved file links — displayed-text
     /// coordinates. Each slot paints the trailing open glyph.
     pub file_glyphs: Vec<Range<usize>>,
+    /// Reserved slots before web links, with each link's URL — displayed-
+    /// text coordinates. Each slot paints the site's favicon.
+    pub favicons: Vec<(Range<usize>, String)>,
+}
+
+/// An `http(s)` destination: a web link, which gets a favicon and the link
+/// colour (files and internal links keep the monochrome treatment).
+pub(crate) fn is_web_link(url: &str) -> bool {
+    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://"))
+        && crate::site_links::host(url).is_some()
 }
 
 /// Inline-code tint: a text-safe use of the selected accent identity.
@@ -1021,14 +1032,31 @@ fn flatten_runs_weighted(runs: &[InlineRun], theme: &Theme, base_weight: FontWei
     let mut code_ranges: Vec<Range<usize>> = Vec::new();
     // A run may stand for a longer source text than it shows (a file link
     // labeled by its file name). The source is only kept when some run does.
-    let relabeled = runs.iter().any(|run| run.style.file_label.is_some());
+    // A bare link to a known site shows its short label (`owner/repo#12`),
+    // as the composer and sent messages do; the URL stays the copy source.
+    let site_label = |run: &InlineRun| {
+        run.style
+            .link
+            .as_deref()
+            .filter(|url| *url == run.text.as_str() && is_web_link(url))
+            .and_then(crate::site_links::known_site_link)
+            .map(|(_, label)| label)
+    };
+    let site_labels: Vec<Option<String>> = runs.iter().map(site_label).collect();
+    let relabeled = runs.iter().any(|run| run.style.file_label.is_some())
+        || site_labels.iter().any(Option::is_some);
     let mut source = String::new();
     let mut omissions: Vec<(Range<usize>, Range<usize>)> = Vec::new();
-    for run in runs {
+    for (run, site_label) in runs.iter().zip(&site_labels) {
         if run.text.is_empty() {
             continue;
         }
-        let shown = run.style.file_label.as_deref().unwrap_or(&run.text);
+        let shown = run
+            .style
+            .file_label
+            .as_deref()
+            .or(site_label.as_deref())
+            .unwrap_or(&run.text);
         let start = text.len();
         text.push_str(shown);
         if relabeled {
@@ -1053,14 +1081,20 @@ fn flatten_runs_weighted(runs: &[InlineRun], theme: &Theme, base_weight: FontWei
         } else {
             FontStyle::Normal
         };
-        // Links stay monochrome — foreground with an underline (zuse's md
-        // theme underlines in the text color; indigo is reserved for primary
-        // actions).
+        // Web links read info blue at medium weight with a soft underline
+        // and lead with their favicon; other links (files, internal) stay
+        // monochrome — foreground with an underline.
         let is_link = run.style.link.is_some();
+        let web = run.style.link.as_deref().is_some_and(is_web_link);
+        if web && !run.style.code && f.weight.0 < FontWeight::MEDIUM.0 {
+            f.weight = FontWeight::MEDIUM;
+        }
         // Inline code uses the spectrum's code tone; everything else
         // stays the monochrome foreground.
         let color = if run.style.code {
             inline_code_text(theme)
+        } else if web {
+            crate::site_links::link_color(theme)
         } else {
             theme.text
         };
@@ -1094,7 +1128,11 @@ fn flatten_runs_weighted(runs: &[InlineRun], theme: &Theme, base_weight: FontWei
             // only be a square box.
             background_color: None,
             underline: is_link.then_some(UnderlineStyle {
-                color: Some(theme.text_muted),
+                color: Some(if web {
+                    crate::site_links::link_underline(theme)
+                } else {
+                    theme.text_muted
+                }),
                 thickness: px(1.0),
                 wavy: false,
             }),
@@ -1119,6 +1157,7 @@ fn flatten_runs_weighted(runs: &[InlineRun], theme: &Theme, base_weight: FontWei
         links,
         code_ranges,
         file_glyphs: Vec::new(),
+        favicons: Vec::new(),
     }
 }
 
@@ -1295,6 +1334,13 @@ pub(super) fn flat_text_presented_element(
             .find(|slot| slot.start == range.end)
             .map_or(range.end, |slot| slot.end)
     };
+    // A web link's favicon slot activates the link too.
+    let favicon_start = |range: &std::ops::Range<usize>| {
+        flat.favicons
+            .iter()
+            .find(|(slot, _)| slot.end == range.start)
+            .map_or(range.start, |(slot, _)| slot.start)
+    };
     let child = super::link_interaction::LinkRanges {
         id: format!(
             "{}-{}-t{ix}",
@@ -1312,7 +1358,7 @@ pub(super) fn flat_text_presented_element(
             .iter()
             .map(|(range, url)| {
                 (
-                    range.start..glyph_end(range),
+                    favicon_start(range)..glyph_end(range),
                     LinkTarget::new(
                         flat.original
                             .as_ref()
@@ -1328,8 +1374,9 @@ pub(super) fn flat_text_presented_element(
         ui: opts.link.clone(),
     }
     .into_any_element();
-    // Trailing open glyphs of resolved file links paint over the shaped text.
-    if flat.file_glyphs.is_empty() {
+    // Trailing open glyphs of resolved file links and leading favicons of
+    // web links paint over the shaped text.
+    if flat.file_glyphs.is_empty() && flat.favicons.is_empty() {
         return child;
     }
     super::link_presentation::FileLinkGlyphs {
@@ -1337,6 +1384,7 @@ pub(super) fn flat_text_presented_element(
         child,
         layout: link_layout,
         slots: flat.file_glyphs.clone(),
+        favicons: flat.favicons.clone(),
     }
     .into_any_element()
 }
@@ -3677,8 +3725,9 @@ mod tests {
         assert_eq!(flat.links, vec![(3..7, "https://x.dev".to_string())]);
         let total: usize = flat.runs.iter().map(|r| r.len).sum();
         assert_eq!(total, flat.text.len());
-        // Links stay monochrome (foreground + underline), never accent-tinted.
-        assert_eq!(flat.runs[1].color, theme.text);
+        // Web links read info blue at medium weight, with a soft underline.
+        assert_eq!(flat.runs[1].color, crate::site_links::link_color(&theme));
+        assert_eq!(flat.runs[1].font.weight, FontWeight::MEDIUM);
         assert!(flat.runs[1].underline.is_some());
         assert_eq!(flat.runs[2].font.weight, FontWeight::SEMIBOLD);
     }
@@ -3760,6 +3809,7 @@ mod tests {
                     links: Vec::new(),
                     code_ranges: Vec::new(),
                     file_glyphs: Vec::new(),
+                    favicons: Vec::new(),
                 }),
             );
             cache.code.insert(
@@ -3805,6 +3855,7 @@ mod tests {
                 links: Vec::new(),
                 code_ranges: Vec::new(),
                 file_glyphs: Vec::new(),
+                favicons: Vec::new(),
             }),
         );
         cache.sync_generation(10);

@@ -19,6 +19,7 @@ use crate::{
 
 pub mod client;
 mod context_menu;
+mod create;
 pub mod document;
 mod drag;
 pub mod editor;
@@ -294,6 +295,8 @@ pub struct FilesSurface {
     tree_drag: drag::TreeDrag,
     tree_rename: Option<rename::TreeRename>,
     tree_delete: Option<rename::TreeDelete>,
+    /// The header's inline new file / new folder field.
+    tree_create: Option<create::TreeCreate>,
     state: Entity<AppState>,
     chat_id: String,
     review_comment_flush_source: u64,
@@ -311,6 +314,8 @@ pub struct FilesSurface {
     tree_bar: crate::popover::MenuScrollbarState,
     tree_focus: FocusHandle,
     search: Entity<ComposerInput>,
+    /// The search row under the FILES header (its magnifier toggles it).
+    search_open: bool,
     search_restore_tree_focus: bool,
     search_state: FileSearchState,
     search_list: ListState,
@@ -483,6 +488,7 @@ impl FilesSurface {
                         .child(notice),
                 )
             })
+            .children(self.render_tree_create(cx))
             .when_some(watch_error, |element, error| {
                 element.child(
                     div()
@@ -640,6 +646,7 @@ impl FilesSurface {
             | ComposerInputEvent::PastedPaths(_)
             | ComposerInputEvent::PastedText { .. }
             | ComposerInputEvent::OpenAttachment(_)
+            | ComposerInputEvent::OpenFile(_)
             | ComposerInputEvent::CursorMoved
             | ComposerInputEvent::ViewportChanged => {}
         });
@@ -672,6 +679,7 @@ impl FilesSurface {
             tree_drag: drag::TreeDrag::default(),
             tree_rename: None,
             tree_delete: None,
+            tree_create: None,
             state,
             chat_id,
             review_comment_flush_source: NEXT_REVIEW_COMMENT_FLUSH_SOURCE
@@ -689,6 +697,7 @@ impl FilesSurface {
             tree_bar: crate::popover::MenuScrollbarState::default(),
             tree_focus: cx.focus_handle(),
             search,
+            search_open: false,
             search_restore_tree_focus: false,
             search_state: FileSearchState::default(),
             search_list: ListState::new(0, ListAlignment::Top, px(420.0)),
@@ -1280,13 +1289,112 @@ impl FilesSurface {
     /// to the tree.
     fn close_search(&mut self, cx: &mut Context<Self>) {
         self.clear_search(cx);
+        self.search_open = false;
         self.search_restore_tree_focus = true;
         cx.notify();
     }
 
-    /// The explorer's secondary header: the same toolbar band the editor
-    /// carries directly under the titlebar (search field + visibility eye).
+    /// Show or hide the search row; opening focuses the field.
+    fn toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::Focusable;
+        if self.search_open && self.search_state.query.is_empty() {
+            self.search_open = false;
+            self.tree_focus.focus(window, cx);
+        } else {
+            self.search_open = true;
+            let focus = self.search.focus_handle(cx);
+            window.focus(&focus, cx);
+        }
+        cx.notify();
+    }
+
+    /// The explorer's header (reference file tree): a FILES label and three
+    /// 24px buttons — new file, new folder, search. Search opens a row with
+    /// the filter field and the hidden-files toggle.
     fn render_explorer_header(
+        &mut self,
+        theme: &crate::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let partial = self
+            .tree
+            .node("")
+            .is_some_and(|root| {
+                matches!(
+                    root.load,
+                    DirectoryLoadState::Loaded {
+                        next_cursor: Some(_)
+                    }
+                )
+            });
+        let label = if partial { "Files (partial)" } else { "Files" };
+        let header_button = |id: &'static str, label: &'static str, glyph: &'static str| {
+            toolbar_button(id, label)
+                .debug_selector(move || id.into())
+                .child(
+                    crate::icons::icon(glyph)
+                        .size(px(15.0))
+                        .text_color(theme.text_muted),
+                )
+        };
+        let search_open = self.search_open || !self.search_state.query.is_empty();
+        let header = div()
+            .id("files-explorer-header")
+            .debug_selector(|| "files-explorer-header".into())
+            .flex_none()
+            .w_full()
+            .px(px(8.0))
+            .py(px(6.0))
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text_muted)
+                    .child(SharedString::from(crate::popover::tracked_upper(label))),
+            )
+            .child(
+                header_button("files-new-file", "New File", crate::icons::DOCUMENT_ADD).on_click(
+                    cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.begin_tree_create(create::CreateKind::File, window, cx);
+                    }),
+                ),
+            )
+            .child(
+                header_button("files-new-folder", "New Folder", crate::icons::FOLDER_ADD)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.begin_tree_create(create::CreateKind::Folder, window, cx);
+                    })),
+            )
+            .child(
+                header_button("files-search-toggle", "Search files", crate::icons::MAGNIFER)
+                    .when(search_open, |el| el.bg(crate::theme::wash(0.1)))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.toggle_search(window, cx);
+                    })),
+            );
+        div()
+            .flex_none()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(header)
+            .when(search_open, |el| {
+                el.child(self.render_explorer_search(theme, cx))
+            })
+            .into_any_element()
+    }
+
+    /// The search row: the filter field and the hidden-files toggle.
+    fn render_explorer_search(
         &mut self,
         theme: &crate::theme::Theme,
         cx: &mut Context<Self>,
@@ -1294,9 +1402,15 @@ impl FilesSurface {
         use gpui::Focusable;
         let include_ignored = self.tree.include_ignored();
         let search_focus = self.search.focus_handle(cx);
-        toolbar(theme)
-            .id("files-explorer-header")
-            .debug_selector(|| "files-explorer-header".into())
+        div()
+            .id("files-search-row")
+            .flex_none()
+            .w_full()
+            .px(px(8.0))
+            .pb(px(6.0))
+            .flex()
+            .items_center()
+            .gap(px(4.0))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
                     this.close_search(cx);
@@ -1393,11 +1507,20 @@ mod explorer_tests {
             })
         });
         cx.update(|window, cx| window.draw(cx).clear());
-        // The explorer header is the same band as the editor header.
+        // The header carries the FILES label and its three buttons; the
+        // search row opens under it from the magnifier.
         let header = cx.debug_bounds("files-explorer-header").unwrap();
-        assert_eq!(header.size.height, px(crate::surface_chrome::HEADER_HEIGHT));
+        for button in ["files-new-file", "files-new-folder", "files-search-toggle"] {
+            let bounds = cx.debug_bounds(button).unwrap();
+            assert_eq!(bounds.size.width, px(24.0));
+            assert!(bounds.top() >= header.top() && bounds.bottom() <= header.bottom());
+        }
+        assert!(cx.debug_bounds("files-search").is_none());
+        let toggle = cx.debug_bounds("files-search-toggle").unwrap().center();
+        cx.simulate_click(toggle, Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear());
         let bounds = cx.debug_bounds("files-search").unwrap();
-        assert!(bounds.top() >= header.top() && bounds.bottom() <= header.bottom());
+        assert!(bounds.top() >= header.bottom());
         // Click the field padding, not just the input's text hitbox.
         let padding = gpui::point(bounds.left() + px(2.0), bounds.center().y);
         cx.simulate_click(padding, Modifiers::default());

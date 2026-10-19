@@ -393,7 +393,7 @@ impl Shell {
         // A resting column resizes, so its content follows. One already
         // opening, closing or returning keeps its reveal.
         let files_to = self.files_settled_width(cx);
-        if self.files_panel_open(cx)
+        if self.files_column_open(cx)
             && skip != Some(AuxiliaryPanel::Files)
             && (files_to - before.files).abs() > 0.5
         {
@@ -441,11 +441,6 @@ impl Shell {
                 self.settings.sidebar_width = SIDEBAR_DEFAULT;
                 self.sidebar_edge_bounce = None;
                 self.sidebar_tween = Some(self.panel_tween(from, self.sidebar_target()));
-            }
-            PaneResizeKind::Files => {
-                self.settings.files_panel_width = settings::FILES_PANEL_DEFAULT;
-                let to = self.files_settled_width(cx);
-                self.transition_files(before.files, before.files_content, to);
             }
             PaneResizeKind::Right | PaneResizeKind::Terminal | PaneResizeKind::PullRequests => {}
         }

@@ -1,7 +1,6 @@
 //! Exercise the explorer and editors against an isolated real workspace/RPC.
 //! Set ZUSE_FILES_CAPTURES to a directory to run on X11 and capture the fixture.
 use super::*;
-use crate::settings::{FILES_PANEL_DEFAULT, RIGHT_PANE_DEFAULT};
 use gpui::{AppContext, AsyncApp, WindowHandle};
 use std::{path::Path, sync::Arc};
 
@@ -276,32 +275,6 @@ fn files_panel_workspace_navigation_and_external_updates() {
                     .unwrap();
                 window
                     .update(cx, |shell, window, cx| {
-                        shell.settings.files_panel_width = FILES_PANEL_MAX;
-                        shell.settings.right_pane_width = 760.0;
-                        shell.set_surfaces_open(true, cx);
-                        window.resize(gpui::size(px(1200.0), px(800.0)));
-                        window.bounds_changed(cx);
-                    })
-                    .unwrap();
-                frame(window, cx, output.as_deref(), "01b-picker-files-compact").await;
-                window
-                    .update(cx, |shell, window, cx| {
-                        assert_eq!(shell.files_visible_width(cx), 284.0);
-                        assert_eq!(shell.files_reserved_width(cx), 284.0);
-                        assert_eq!(shell.right_visible_width(cx), RIGHT_PANE_MIN);
-                        // Squeezed by the narrow window, Files keeps its own
-                        // width for when there is room again.
-                        assert_eq!(shell.settings.files_panel_width, FILES_PANEL_MAX);
-                        assert!(shell.right_surface_rows(cx).is_empty());
-                        shell.set_surfaces_open(false, cx);
-                        shell.settings.files_panel_width = FILES_PANEL_DEFAULT;
-                        shell.settings.right_pane_width = RIGHT_PANE_DEFAULT;
-                        window.resize(gpui::size(px(1400.0), px(800.0)));
-                        window.bounds_changed(cx);
-                    })
-                    .unwrap();
-                window
-                    .update(cx, |shell, window, cx| {
                         shell.add_file_surface("src/nested/main.rs".into(), window, cx)
                     })
                     .unwrap();
@@ -373,13 +346,10 @@ fn files_panel_workspace_navigation_and_external_updates() {
                 frame(window, cx, output.as_deref(), "04-narrow-files").await;
                 window
                     .update(cx, |shell, _, cx| {
-                        let files = shell.files_visible_width(cx);
-                        let surface = shell.right_visible_width(cx);
-                        let sidebar = shell.eval_tween(shell.sidebar_tween, shell.sidebar_target());
-                        assert_eq!(shell.files_reserved_width(cx), files);
-                        assert!(files > 0.0 && surface > 0.0);
-                        assert!(sidebar + files + surface < shell.viewport_width);
-                        assert_eq!(shell.settings.files_panel_width, FILES_PANEL_DEFAULT);
+                        // The tree is a pane tab: it never takes a column.
+                        assert_eq!(shell.files_reserved_width(cx), 0.0);
+                        assert!(shell.right_visible_width(cx) > 0.0);
+                        assert!(shell.files_tab_shown(cx));
                     })
                     .unwrap();
                 window
@@ -388,12 +358,9 @@ fn files_panel_workspace_navigation_and_external_updates() {
                 frame(window, cx, output.as_deref(), "04b-expanded-narrow-files").await;
                 window
                     .update(cx, |shell, _, cx| {
-                        // Takeover keeps Files at its own width.
-                        assert_eq!(shell.files_visible_width(cx), FILES_PANEL_DEFAULT);
-                        // The narrow fit already hid the sidebar. Takeover must
-                        // keep it hidden and give only the chat's space to the editor.
-                        assert_eq!(shell.sidebar_now(), 0.0);
-                        assert_eq!(shell.right_visible_width(cx), 1000.0 - FILES_PANEL_DEFAULT);
+                        // Takeover gives the conversation's space to the pane;
+                        // the sidebar keeps its own.
+                        assert_eq!(shell.right_visible_width(cx), 1000.0 - shell.sidebar_now());
                         shell.toggle_right_pane_expand(cx);
                     })
                     .unwrap();
@@ -502,13 +469,13 @@ fn files_panel_workspace_navigation_and_external_updates() {
                 .await;
                 window
                     .update(cx, |shell, window, cx| {
-                        assert!(shell.files_panel_open(cx));
+                        assert!(shell.files_tab_shown(cx));
                         assert_eq!(shell.files["first"].entity_id(), first_explorer.entity_id());
                         assert!(shell.files_subs.contains_key("first"));
                         shell.toggle_files_panel(window, cx);
-                        assert!(!shell.files_panel_open(cx));
+                        assert!(!shell.files_tab_shown(cx));
                         shell.toggle_files_panel(window, cx);
-                        assert!(shell.files_panel_open(cx));
+                        assert!(shell.files_tab_shown(cx));
                     })
                     .unwrap();
                 // An archived chat's explorer must survive subsequent state updates
@@ -516,7 +483,7 @@ fn files_panel_workspace_navigation_and_external_updates() {
                 state.update(cx, |_, cx| cx.notify());
                 std::fs::write(project.join("archived.txt"), "still accessible\n").unwrap();
                 wait_for(window, cx, "archived explorer update", |shell, cx| {
-                    shell.files_panel_open(cx)
+                    shell.files_tab_shown(cx)
                         && shell.files.get("first").is_some_and(|files| {
                             files.read(cx).tree().node("archived.txt").is_some()
                         })

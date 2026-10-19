@@ -32,7 +32,30 @@ fn absolute_workspace_path(root: &str, relative: &str) -> String {
     }
 }
 
+/// The tree menu's rows, in order.
+const TREE_MENU_ROWS: usize = 6;
+const MENU_REVEAL: usize = 4;
+const MENU_SHOW_HIDDEN: usize = 5;
+
+/// The platform's file manager, as its "Reveal in …" row names it.
+fn file_manager_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Reveal in Finder"
+    } else if cfg!(windows) {
+        "Reveal in File Explorer"
+    } else {
+        "Reveal in Files"
+    }
+}
+
 impl FilesSurface {
+    /// The workspace lives on this computer, so its paths open locally.
+    fn workspace_is_local(&self) -> bool {
+        self.request_context
+            .as_ref()
+            .is_some_and(|context| context.target_device_id.is_none())
+    }
+
     pub(super) fn open_tree_context_menu(
         &mut self,
         path: String,
@@ -74,8 +97,9 @@ impl FilesSurface {
 
     fn tree_menu_enabled(&self, paths: &[String], action: usize, cx: &gpui::App) -> bool {
         match action {
-            0 | 1 => true,
+            0 | 1 | MENU_SHOW_HIDDEN => true,
             2 => paths.len() == 1 && self.can_mutate_tree_entry(&paths[0], false, cx),
+            MENU_REVEAL => paths.len() == 1 && self.workspace_is_local(),
             _ => paths
                 .iter()
                 .all(|path| self.can_mutate_tree_entry(path, true, cx)),
@@ -107,10 +131,10 @@ impl FilesSurface {
             key @ (popover::MenuKey::Up | popover::MenuKey::Down) => {
                 if let Some(menu) = self.tree_context_menu.as_open() {
                     let mut next = menu.active;
-                    for _ in 0..4 {
+                    for _ in 0..TREE_MENU_ROWS {
                         next = popover::menu_step(
                             Some(next),
-                            4,
+                            TREE_MENU_ROWS,
                             if matches!(key, popover::MenuKey::Up) {
                                 -1
                             } else {
@@ -184,6 +208,14 @@ impl FilesSurface {
             }
             2 => self.begin_tree_rename(paths[0].clone(), window, cx),
             3 => self.begin_tree_delete(paths, window, cx),
+            MENU_REVEAL => {
+                let path = absolute_workspace_path(&origin.context.cwd, &paths[0]);
+                cx.reveal_path(std::path::Path::new(&path));
+            }
+            MENU_SHOW_HIDDEN => {
+                self.toggle_ignored(cx);
+                self.tree_focus.focus(window, cx);
+            }
             _ => {}
         }
     }
@@ -202,11 +234,12 @@ impl FilesSurface {
             "Delete…".into()
         };
         let mut card = popover::popover_card(&theme)
-            .w(px(190.0))
+            .w(px(210.0))
             .flex()
             .flex_col()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_tree_context_menu(cx)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        let include_ignored = self.tree.include_ignored();
         for (index, (label, icon_path)) in [
             ("Add to chat".to_string(), icons::CHAT_ROUND_LINE),
             (
@@ -215,11 +248,25 @@ impl FilesSurface {
             ),
             ("Rename…".to_string(), icons::PEN),
             (delete_label, icons::TRASH_BIN_MINIMALISTIC),
+            (file_manager_label().to_string(), icons::FOLDER_OPEN),
+            (
+                if include_ignored {
+                    "Hide hidden files"
+                } else {
+                    "Show hidden files"
+                }
+                .to_string(),
+                if include_ignored {
+                    icons::EYE_CLOSED
+                } else {
+                    icons::EYE
+                },
+            ),
         ]
         .into_iter()
         .enumerate()
         {
-            if index == 2 {
+            if index == 2 || index == MENU_REVEAL {
                 card = card.child(popover::menu_separator());
             }
             let enabled = self.tree_menu_enabled(&menu.paths, index, cx);

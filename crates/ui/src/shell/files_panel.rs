@@ -1,9 +1,11 @@
-//! Session-owned explorer chrome, independent of the surface tab host.
+//! The session-owned file tree, shown as the right pane's Files tab. Files
+//! it opens become main-area tabs (see `main_tabs`).
+//!
+//! The width plumbing below predates the tab: the tree used to dock as its
+//! own column. That column no longer opens (`ChatPanels::files_open` stays
+//! false), so every width here resolves to zero.
 
 use super::*;
-use crate::settings::{FILES_PANEL_MAX, FILES_PANEL_MIN};
-
-pub(super) struct FilesPanelResize;
 
 /// Files kept per chat for the command palette's Recent Files.
 const RECENT_FILES_PER_CHAT: usize = 20;
@@ -70,7 +72,7 @@ fn files_panel_layout(
 }
 
 impl Shell {
-    pub(super) fn files_panel_open(&self, cx: &App) -> bool {
+    pub(super) fn files_column_open(&self, cx: &App) -> bool {
         matches!(self.route, Route::Chat)
             && !self.active_chat.is_empty()
             && self.panels.get(&self.panel_key(cx)).files_open
@@ -81,7 +83,7 @@ impl Shell {
         files_panel_layout(
             self.viewport_width,
             self.sidebar_now(),
-            if fit.files && (self.files_panel_open(cx) || self.tween_active(self.files_tween)) {
+            if fit.files && (self.files_column_open(cx) || self.tween_active(self.files_tween)) {
                 self.settings.files_panel_width
             } else {
                 0.0
@@ -116,7 +118,7 @@ impl Shell {
 
     pub(super) fn files_target(&self, cx: &App) -> f32 {
         self.files_layout(
-            if self.files_panel_open(cx) {
+            if self.files_column_open(cx) {
                 self.settings.files_panel_width
             } else {
                 0.0
@@ -157,7 +159,7 @@ impl Shell {
     /// Files' width for a given fit and sidebar width: its own width, as far
     /// as the conversation and the surface host's minimums leave room.
     pub(super) fn files_width_for(&self, fit: HorizontalPanelFit, sidebar: f32, cx: &App) -> f32 {
-        let preferred = if fit.files && self.files_panel_open(cx) {
+        let preferred = if fit.files && self.files_column_open(cx) {
             self.settings.files_panel_width
         } else {
             0.0
@@ -250,8 +252,9 @@ impl Shell {
         self.files_subs.retain(|key, _| live.contains(key.as_str()));
     }
 
+    /// Keep the tree's selection on the file tab the main area shows.
     pub(super) fn sync_explorer_selection(&mut self, cx: &mut Context<Self>) {
-        let RightSurface::File(id) = self.resolved_right_active(cx) else {
+        let Some(id) = self.active_main_file(cx) else {
             return;
         };
         let Some(path) = self.file_surface_paths.get(&id).cloned() else {
@@ -260,6 +263,11 @@ impl Shell {
         if let Some(files) = self.files.get(&self.panel_key(cx)).cloned() {
             files.update(cx, |files, cx| files.reveal_file(path, cx));
         }
+    }
+
+    /// Whether the right pane shows the Files tab.
+    pub(super) fn files_tab_shown(&self, cx: &App) -> bool {
+        self.right_pane_open(cx) && self.resolved_right_active(cx) == RightSurface::Files
     }
 
     pub(super) fn add_files_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -338,16 +346,9 @@ impl Shell {
             self.files.insert(key.clone(), files);
             self.files_subs.insert(key.clone(), sub);
         }
-        let before = self.painted_panels(cx);
-        let from = before.files;
-        let was_open = self.files_panel_open(cx);
-        let opening = !was_open || !self.horizontal_fit().files;
-        self.panels.update(&key, |p| p.files_open = true);
-        if opening {
-            self.record_panel_open(AuxiliaryPanel::Files, &key);
-            self.resplit_panels(before, Some(AuxiliaryPanel::Files), cx);
-            self.transition_files(from, before.files_content, self.files_settled_width(cx));
-        }
+        push_unique_right_surface(self.right_tabs.entry(key.clone()).or_default(), RightSurface::Files);
+        self.set_surfaces_open(true, cx);
+        self.set_right_active(RightSurface::Files, cx);
         if let Some(files) = self.files.get(&key).cloned() {
             files.update(cx, |files, cx| {
                 files.ensure_loaded(cx);
@@ -359,140 +360,28 @@ impl Shell {
         cx.notify();
     }
 
-    /// Undock the explorer portion. With the surface host closed too, this
-    /// closes the right pane entirely.
-    pub(super) fn close_files_panel(&mut self, cx: &mut Context<Self>) {
-        if !self.files_panel_open(cx) {
-            return;
+    /// Close the Files tab (the tree keeps its state for the next open).
+    #[cfg(feature = "browser-fixture")]
+    pub(super) fn close_files_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let has_tab = self
+            .right_tabs
+            .get(&self.panel_key(cx))
+            .is_some_and(|tabs| tabs.contains(&RightSurface::Files));
+        if has_tab {
+            self.close_right_surface(RightSurface::Files, window, cx);
         }
-        if let Some(files) = self.files.get(&self.panel_key(cx)).cloned() {
-            files.update(cx, |files, cx| files.suspend_tree_interactions(cx));
-        }
-        let before = self.painted_panels(cx);
-        self.panels
-            .update(&self.panel_key(cx), |p| p.files_open = false);
-        self.transition_files(before.files, before.files_content, 0.0);
-        self.resplit_panels(before, Some(AuxiliaryPanel::Files), cx);
-        cx.notify();
     }
 
-    /// The explorer's own toggle. Opening docks the explorer into the right
-    /// pane — opening the pane with just that portion when it was closed.
+    /// The Files shortcut: show the tree, or hide the pane while the tree is
+    /// what it shows.
     pub(super) fn toggle_files_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.files_panel_open(cx) {
-            self.add_files_surface(window, cx);
+        if self.files_tab_shown(cx) && self.horizontal_fit().right {
+            self.set_surfaces_open(false, cx);
+            window.focus(&self.composer.focus_handle(cx), cx);
+            cx.notify();
             return;
         }
-        if self.promote_hidden_panel(AuxiliaryPanel::Files, cx) {
-            self.add_files_surface(window, cx);
-            return;
-        }
-        self.close_files_panel(cx);
-        window.focus(&self.composer.focus_handle(cx), cx);
-        if self.right_pane_open(cx) {
-            self.focus_right_file_editor(self.resolved_right_active(cx), window, cx);
-        }
-        cx.notify();
-    }
-
-    pub(super) fn on_files_panel_drag(
-        &mut self,
-        event: &gpui::DragMoveEvent<FilesPanelResize>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let requested = f32::from(window.viewport_size().width) - f32::from(event.event.position.x);
-        self.settings.files_panel_width = requested.clamp(FILES_PANEL_MIN, FILES_PANEL_MAX);
-        self.pane_resize_dragging = Some(PaneResizeKind::Files);
-        self.pane_resize_active = (requested > FILES_PANEL_MIN && requested < FILES_PANEL_MAX)
-            .then_some(PaneResizeKind::Files);
-        self.files_tween = None;
-        self.schedule_save(cx);
-        cx.notify();
-    }
-
-    pub(super) fn render_files_panel(
-        &mut self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let active = self.panel_key(cx);
-        let visible = matches!(self.route, Route::Chat)
-            && self.horizontal_fit().files
-            && self.files_panel_open(cx);
-        for (key, files) in &self.files {
-            if !visible || *key != active {
-                files.update(cx, |files, _| files.release_git_status());
-            }
-        }
-        let exiting = self.fit_exit_width(2).is_some();
-        if !matches!(self.route, Route::Chat)
-            || self.active_chat.is_empty()
-            || (!self.horizontal_fit().files && !exiting)
-            || (!self.files_panel_open(cx) && !self.tween_active(self.files_tween) && !exiting)
-        {
-            return Empty.into_any_element();
-        }
-        let theme = Theme::of(cx).clone();
-        let content = self.files.get(&self.panel_key(cx)).cloned();
-        if let Some(files) = &content {
-            files.update(cx, |files, cx| {
-                files.ensure_loaded(cx);
-                if visible {
-                    files.ensure_git_status(cx);
-                }
-            });
-        }
-        self.sync_explorer_selection(cx);
-        let content_width = self.files_content_width(cx);
-        // The explorer is the right pane's rightmost column: its left hairline
-        // is the divider from the surface host (or the pane's own edge when
-        // that portion is closed), and it carries the CSD window's right
-        // corners in place of the surface column (see `render_right_pane`).
-        let corner = Self::window_corner_radius(window);
-        let inner = div()
-            .w(px(content_width))
-            .h_full()
-            .pt(px(Theme::TITLEBAR_HEIGHT))
-            .occlude()
-            .border_l_1()
-            .border_color(theme.border)
-            .bg(theme.panel_bg())
-            .when(corner > 0.0, |el| {
-                el.rounded_tr(px(corner)).rounded_br(px(corner))
-            })
-            .overflow_hidden()
-            .children(content);
-        div()
-            .id("files-panel")
-            .debug_selector(|| "files-panel".into())
-            .h_full()
-            .flex_none()
-            .relative()
-            .child(
-                div()
-                    .h_full()
-                    .relative()
-                    .w(px(self.files_visible_width(cx)))
-                    .overflow_hidden()
-                    .child(inner.absolute().top_0().right_0()),
-            )
-            .when(
-                self.files_panel_open(cx) && !self.tween_active(self.files_tween),
-                |panel| {
-                    panel.child(
-                        self.resize_handle(
-                            "files-panel-resize",
-                            PaneResizeKind::Files,
-                            || FilesPanelResize,
-                            |shell, cx| shell.reset_panel_widths(PaneResizeKind::Files, cx),
-                            cx,
-                        )
-                        .left(px(-PANE_RESIZE_HITBOX_HALF_WIDTH)),
-                    )
-                },
-            )
-            .into_any_element()
+        self.add_files_surface(window, cx);
     }
 }
 
@@ -623,40 +512,51 @@ mod tests {
                 shell.active_chat = "first".into();
                 shell.add_files_surface(window, cx);
                 let explorer = shell.files["first"].entity_id();
-                assert!(shell.files_panel_open(cx));
-                assert!(!shell.right_pane_open(cx));
-                assert!(shell.right_surface_rows(cx).is_empty());
+                // The tree is the right pane's Files tab, never a column.
+                assert!(shell.files_tab_shown(cx));
+                assert!(!shell.files_column_open(cx));
+                assert_eq!(shell.files_reserved_width(cx), 0.0);
+                let rows = shell.right_surface_rows(cx);
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].0, RightSurface::Files);
+                assert_eq!(rows[0].1.as_ref(), "Files");
+                // A second open focuses the same singleton tab.
                 shell.add_files_surface(window, cx);
                 assert_eq!(shell.files["first"].entity_id(), explorer);
+                assert_eq!(shell.right_surface_rows(cx).len(), 1);
+                // Files open in the main area, beside the conversation.
                 shell.add_file_surface("src/main.rs".into(), window, cx);
                 shell.add_file_surface("src/main.rs".into(), window, cx);
                 assert_eq!(shell.file_surfaces.len(), 1);
                 assert_eq!(shell.right_surface_rows(cx).len(), 1);
-                assert!(shell.right_pane_open(cx));
+                assert!(shell.active_main_file(cx).is_some());
+                assert_eq!(shell.main_tab_rows(cx).len(), 1);
+                assert!(shell.files_tab_shown(cx));
+                // The shortcut hides the pane while it shows the tree.
                 shell.toggle_files_panel(window, cx);
-                assert!(!shell.files_panel_open(cx));
-                assert!(shell.right_pane_open(cx));
+                assert!(!shell.right_pane_open(cx));
                 assert_eq!(shell.file_surfaces.len(), 1);
                 assert!(shell.pending_file_closes.is_empty());
                 shell.active_chat = "second".into();
-                assert!(!shell.files_panel_open(cx));
+                assert!(!shell.files_tab_shown(cx));
+                assert!(shell.active_main_file(cx).is_none());
                 shell.add_files_surface(window, cx);
                 assert_ne!(shell.files["second"].entity_id(), explorer);
                 shell.active_chat = "first".into();
-                assert!(!shell.files_panel_open(cx));
-                shell.add_files_surface(window, cx);
+                assert!(!shell.files_tab_shown(cx));
+                shell.toggle_files_panel(window, cx);
+                assert!(shell.files_tab_shown(cx));
                 assert_eq!(shell.files["first"].entity_id(), explorer);
                 shell.route = Route::Settings(SettingsSection::Files);
-                assert!(!shell.files_panel_open(cx));
-                assert_eq!(shell.files_reserved_width(cx), 0.0);
+                assert!(shell.active_main_file(cx).is_none());
                 shell.route = Route::Chat;
-                assert!(shell.files_panel_open(cx));
+                assert!(shell.active_main_file(cx).is_some());
             })
             .unwrap();
     }
 
     #[gpui::test]
-    fn pane_toggle_drives_surfaces_only_and_last_tab_close_collapses_them(cx: &mut TestAppContext) {
+    fn files_open_as_a_pane_tab_and_files_as_main_tabs(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
             gpui_base::init(cx);
@@ -685,55 +585,40 @@ mod tests {
                 shell.active_chat = "chat".into();
                 // Widths settle immediately so the assertions see end states.
                 shell.reduced_motion = true;
-                // A fresh pane toggle lands on the surface host alone.
+                // A fresh pane toggle lands on the launcher.
                 shell.toggle_right_pane(cx);
                 assert!(shell.right_pane_open(cx));
-                assert!(!shell.files_panel_open(cx));
+                assert_eq!(shell.resolved_right_active(cx), RightSurface::Picker);
                 shell.toggle_right_pane(cx);
                 assert!(!shell.right_pane_open(cx));
-                assert!(!shell.files_panel_open(cx));
 
-                // The explorer toggle opens the pane with only its portion.
+                // Files opens the pane on its tab.
                 shell.toggle_files_panel(window, cx);
-                assert!(shell.files_panel_open(cx));
-                assert!(!shell.right_pane_open(cx));
-                assert!(shell.files_visible_width(cx) > 0.0);
-                // With only the explorer docked, the pane toggle opens the
-                // surface host beside it instead of closing the pane, and it
-                // never hides the explorer.
-                shell.toggle_right_pane(cx);
-                assert!(shell.right_pane_open(cx) && shell.files_panel_open(cx));
-                shell.toggle_right_pane(cx);
-                assert!(!shell.right_pane_open(cx) && shell.files_panel_open(cx));
+                assert!(shell.right_pane_open(cx) && shell.files_tab_shown(cx));
+                assert_eq!(shell.files_visible_width(cx), 0.0);
 
-                // Opening a file docks the surface host beside the explorer;
-                // programmatic opens never close an open pane.
+                // Opening a file leaves the pane as it was; programmatic opens
+                // never close an open pane.
                 shell.add_file_surface("src/main.rs".into(), window, cx);
-                assert!(shell.right_pane_open(cx) && shell.files_panel_open(cx));
+                assert!(shell.files_tab_shown(cx));
                 shell.set_surfaces_open(true, cx);
-                assert!(shell.right_pane_open(cx) && shell.files_panel_open(cx));
+                assert!(shell.files_tab_shown(cx));
                 assert_eq!(shell.file_surfaces.len(), 1);
 
-                // Closing the last surface tab collapses the surface host and
-                // leaves the pane open with just the explorer.
-                let file = shell.right_surface_rows(cx)[0].0;
-                shell.close_right_surface(file, window, cx);
+                // Closing the file tab returns the main area to the chat and
+                // leaves the pane alone.
+                let file = shell.active_main_tab(cx).expect("file tab");
+                shell.close_main_tab(file, cx);
                 assert!(shell.file_surfaces.is_empty());
-                assert!(!shell.right_pane_open(cx) && shell.files_panel_open(cx));
+                assert!(shell.active_main_tab(cx).is_none());
+                assert!(shell.files_tab_shown(cx));
 
-                // Only the explorer toggle undocks it; with nothing else open
-                // that closes the pane entirely.
-                shell.toggle_files_panel(window, cx);
-                assert!(!shell.right_pane_open(cx) && !shell.files_panel_open(cx));
-                assert_eq!(shell.files_reserved_width(cx), 0.0);
-
-                // With the explorer undocked, the last tab close closes the
-                // whole pane.
-                shell.add_file_surface("src/main.rs".into(), window, cx);
-                assert!(shell.right_pane_open(cx));
-                let file = shell.right_surface_rows(cx)[0].0;
-                shell.close_right_surface(file, window, cx);
-                assert!(!shell.right_pane_open(cx) && !shell.files_panel_open(cx));
+                // Closing the last surface tab (Files) collapses the pane.
+                shell.close_right_surface(RightSurface::Files, window, cx);
+                assert!(!shell.right_pane_open(cx));
+                assert!(shell.right_surface_rows(cx).is_empty());
+                // The tree itself is kept for the next open.
+                assert!(shell.files.contains_key("chat"));
             })
             .unwrap();
     }

@@ -1375,7 +1375,8 @@ pub fn rows_for_entry(
                     .iter()
                     .any(|chip| crate::attachments::chip_names_attachment(chip, &att.path))
         });
-        let copy_text = (!text.trim().is_empty()).then(|| SharedString::from(text.clone()));
+        let copy_text = (!text.trim().is_empty())
+            .then(|| SharedString::from(crate::composer::display_with_link_urls(&text, &mentions)));
         let mut rows = Vec::new();
         for part in &entry.parts {
             if let MessagePart::AgentContext {
@@ -3345,8 +3346,8 @@ pub struct Transcript {
     /// transcript's bottom (measured last frame): the last row pads past it
     /// so pinned content rests above the glass chrome it scrolls under.
     bottom_clearance: f32,
-    /// Hovered rail tick (grows + shows the preview card).
-    rail_hover: Option<usize>,
+    /// The rail's outline list (see `crate::rail`).
+    outline_menu: crate::rail::OutlineMenu,
     /// `(row id, entry id)` under the pointer — reveals the entry's timestamp
     /// strip (zuse chat-view.tsx `group-hover`; the rows report hover
     /// themselves). Keyed by ROW so a row→row move within one entry can't
@@ -3675,7 +3676,7 @@ impl Transcript {
             selection_scroll_task: None,
             rail_enabled,
             bottom_clearance: 0.0,
-            rail_hover: None,
+            outline_menu: crate::rail::OutlineMenu::new(cx),
             hovered_entry: None,
             copied_code: None,
             copied_clear: None,
@@ -3770,12 +3771,12 @@ impl Transcript {
         }
     }
 
-    pub(crate) fn rail_hover(&self) -> Option<usize> {
-        self.rail_hover
+    pub(crate) fn outline_menu(&self) -> &crate::rail::OutlineMenu {
+        &self.outline_menu
     }
 
-    pub(crate) fn set_rail_hover(&mut self, hover: Option<usize>) {
-        self.rail_hover = hover;
+    pub(crate) fn outline_menu_mut(&mut self) -> &mut crate::rail::OutlineMenu {
+        &mut self.outline_menu
     }
 
     pub(crate) fn rows(&self) -> &[Row] {
@@ -4565,6 +4566,13 @@ impl Transcript {
     /// more than [`SCROLL_BUTTON_THRESHOLD_PX`] off the end, unpinned).
     pub fn jump_button_shown(&self) -> bool {
         self.show_jump_button
+    }
+
+    /// Review fixtures: show the jump-to-latest pill as if scrolled up.
+    #[cfg(feature = "browser-fixture")]
+    pub fn fixture_show_jump_button(&mut self, cx: &mut Context<Self>) {
+        self.show_jump_button = true;
+        cx.notify();
     }
 
     /// The scroll-to-bottom pill's click: glide back to the end and re-pin.
@@ -5902,12 +5910,27 @@ impl Transcript {
         cx: &mut Context<Self>,
     ) -> Vec<ChipOverlay> {
         use crate::attachments::AttachmentSnapshot;
-        if mentions.iter().all(|span| span.upload.is_none()) {
+        let is_link =
+            |span: &crate::composer::SentMentionSpan| span.kind == crate::composer::ChipKind::Link;
+        if mentions
+            .iter()
+            .all(|span| span.upload.is_none() && !is_link(span))
+        {
             return Vec::new();
         }
         let device_ids = self.attachment_device_ids(cx);
         let mut overlays = Vec::new();
         for (ix, span) in mentions.iter().enumerate() {
+            // A web link opens in the browser.
+            if is_link(span) {
+                overlays.push(ChipOverlay {
+                    range: span.range.clone(),
+                    open: Some(span.path.clone()),
+                    status: None,
+                    link: true,
+                });
+                continue;
+            }
             let Some(upload) = &span.upload else {
                 continue;
             };
@@ -5950,6 +5973,7 @@ impl Transcript {
                     range: span.range.clone(),
                     open,
                     status,
+                    link: false,
                 });
             }
         }
@@ -8785,6 +8809,12 @@ fn user_bubble_runs(
                 let mut run = body_run(len);
                 if pad {
                     run.font.family = crate::composer::CHIP_PAD_FAMILY.into();
+                } else if let Some((color, weight)) =
+                    crate::composer::chip_label_style(span.kind, theme)
+                {
+                    // Links read info blue, skills lime.
+                    run.color = color;
+                    run.font.weight = weight;
                 }
                 runs.push(run);
             }
@@ -8876,7 +8906,7 @@ fn user_bubble_text(
                     );
                     let rect = Bounds::new(rect.origin + point(px(0.0), offset), rect.size);
                     let icon = icon.as_ref().filter(|_| row == 0);
-                    crate::composer::paint_chip(window, rect, icon, &sel_theme, cx);
+                    crate::composer::paint_chip(window, rect, span.kind, icon, &sel_theme, cx);
                 }
             }
             render::paint_text_selection(window, hitbox, &sel_key, &text, &layout, &sel_theme);
@@ -8932,6 +8962,8 @@ struct ChipOverlay {
     range: Range<usize>,
     open: Option<SharedString>,
     status: Option<AnyElement>,
+    /// `open` is a web URL, not an attachment.
+    link: bool,
 }
 
 /// Wraps a sent bubble's text with its chips' overlays. They follow the
@@ -9011,6 +9043,7 @@ impl gpui::Element for ChipOverlays {
             let Some(path) = overlay.open.clone() else {
                 continue;
             };
+            let link = overlay.link;
             for (part, rect) in rects.into_iter().enumerate() {
                 let open = self.open.clone();
                 let path = path.clone();
@@ -9020,18 +9053,29 @@ impl gpui::Element for ChipOverlays {
                     .h(rect.size.height)
                     .cursor_pointer()
                     .role(gpui::Role::Button)
-                    .aria_label(format!(
-                        "Preview {}",
-                        crate::attachments::attachment_display_name(
-                            path.rsplit(['/', '\\']).next().unwrap_or(&path),
+                    .aria_label(if link {
+                        format!("Open {path}")
+                    } else {
+                        format!(
+                            "Preview {}",
+                            crate::attachments::attachment_display_name(
+                                path.rsplit(['/', '\\']).next().unwrap_or(&path),
+                            )
                         )
-                    ))
+                    })
+                    .when(link, |target| {
+                        target.tooltip(crate::settings::widgets::text_tooltip(path.to_string()))
+                    })
                     .on_click(move |event, window, cx| {
                         // A drag that selects text across the chip is not a click.
                         if event.click_count() == 1
                             && crate::markdown::selection::selected_text().is_none()
                         {
-                            open(&path, window, cx);
+                            if link {
+                                cx.open_url(&path);
+                            } else {
+                                open(&path, window, cx);
+                            }
                         }
                     })
                     .into_any_element();

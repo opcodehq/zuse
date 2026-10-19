@@ -71,6 +71,9 @@ icon_assets![
     (FLOPPY_DISK, "floppy-disk"),
     (FOLDER, "folder"),
     (FOLDER_OPEN, "folder-open"),
+    (FOLDER_ADD, "folder-add"),
+    // Lucide's panel-bottom: the bottom terminal dock toggle.
+    (PANEL_BOTTOM, "panel-bottom"),
     // The fork action's split-arrow glyph (a branch that leaves the line).
     (FORK, "fork-split"),
     (GIT_BRANCH, "git-branch"),
@@ -133,6 +136,10 @@ icon_assets![
     (WIDGET, "widget"),
     (MAGIC_STICK_3, "magic-stick-3"),
     (WIFI_OFF, "wifi-off"),
+    // Composer tray notices: the drop target, a usage limit, a failed run.
+    (UPLOAD, "upload"),
+    (DASHBOARD_SPEED, "dashboard-speed"),
+    (ALERT_CIRCLE, "alert-circle"),
     (CLOSE_CIRCLE, "close-circle"),
     (INFO_CIRCLE, "info-circle"),
     (DANGER_TRIANGLE, "danger-triangle"),
@@ -177,6 +184,14 @@ icon_assets![
     (PI_MARK, "pi-mark"),
     (OPENCODE_MARK, "opencode-mark"),
     (ANTIGRAVITY_MARK, "antigravity-mark"),
+    // Site marks for compact links (`site_links`), drawn in one tint.
+    (SITE_GITHUB, "site-github"),
+    (SITE_GITLAB, "site-gitlab"),
+    (SITE_FIGMA, "site-figma"),
+    (SITE_NOTION, "site-notion"),
+    (SITE_LINEAR, "site-linear"),
+    // A skill chip's stacked-block mark.
+    (SKILL, "skill"),
 ];
 
 pub const SETTINGS_GENERAL: &str = "icons/settings-general.svg";

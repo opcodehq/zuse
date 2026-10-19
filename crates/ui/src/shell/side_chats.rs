@@ -229,7 +229,8 @@ impl Shell {
                         // mounts, and it inherits its parent's checkout, so it
                         // never runs worktree setup of its own.
                         ComposerEvent::NewThreadTransitionStarted
-                        | ComposerEvent::WorktreeSetup { .. } => {}
+                        | ComposerEvent::WorktreeSetup { .. }
+                        | ComposerEvent::OpenFile(_) => {}
                         ComposerEvent::Sent {
                             chat_id,
                             message_id,
@@ -365,7 +366,6 @@ impl Shell {
                     .children(pill),
             )
             .child(div().flex_none().child(composer))
-            .child(Self::attachment_drop_overlay(Theme::of(cx)))
             .child(Self::mention_drop_overlay(Theme::of(cx)))
             .into_any_element()
     }
@@ -641,9 +641,10 @@ mod tests {
                 assert_eq!(shell.file_surfaces[&main_editor].read(cx).chat_id(), "main");
                 shell.activate_session_link(&file_link("side", "/tmp/other"), window, cx);
                 assert_eq!(shell.file_surface_seq, main_editor, "reused, not reopened");
+                // Files open as main-area tabs.
                 assert_eq!(
-                    shell.resolved_right_active(cx),
-                    RightSurface::File(side_editor)
+                    shell.active_main_tab(cx),
+                    Some(super::main_tabs::MainTab::File(side_editor))
                 );
                 // The side chat's model menu owns Cmd/Ctrl+digit.
                 let composer = shell.side_chats[&id].composer.clone();

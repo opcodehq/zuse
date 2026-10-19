@@ -99,11 +99,14 @@ fn pasting_images_numbers_them_and_mentions_each_at_the_caret(cx: &mut gpui::Tes
     );
     handle
         .read_with(cx, |composer, cx| {
+            // The prompt says `Image N`; the chips show the name each
+            // picture arrived with (a pasted one is `image.png`).
             let display = &composer.input.read(cx).projection.display;
             assert!(
-                display.contains(&format!("{CHIP_ICON_SLOT}Image\u{a0}1")),
+                display.contains(&format!("{CHIP_ICON_SLOT}image.png")),
                 "{display:?}"
             );
+            assert!(!display.contains("Image\u{a0}1"), "{display:?}");
             assert_eq!(composer.input.read(cx).projection.mentions.len(), 2);
         })
         .unwrap();
@@ -566,7 +569,7 @@ fn file_chips_use_the_file_theme_to_tell_formats_apart() {
     use crate::theme::Appearance::Dark;
     let themed = |kind, name| match chip_icon(kind, name, Dark) {
         ChipIcon::FileTheme(path) => path,
-        ChipIcon::Glyph(_) => panic!("{name} should use the file theme"),
+        _ => panic!("{name} should use the file theme"),
     };
     assert_ne!(
         themed(ChipKind::File, "README.md"),
@@ -763,7 +766,7 @@ fn click_first_chip(
 fn clicking_an_image_chip_opens_the_picture_full_size(cx: &mut gpui::TestAppContext) {
     let (_dir, handle) = composer_focus_window(cx);
     paste_images(&handle, cx, 1);
-    // Hovering shows no card: the click is how the picture is seen.
+    // Hovering previews the picture; the click opens it full size.
     cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
         .unwrap();
     handle
@@ -771,7 +774,12 @@ fn clicking_an_image_chip_opens_the_picture_full_size(cx: &mut gpui::TestAppCont
             composer.input.update(cx, |input, cx| {
                 let at = input.mention_hits[0].bounds.center();
                 input.on_mention_pointer_move(at, cx);
-                assert_eq!(input.mention_tooltip, MentionTooltipPhase::Hidden);
+                assert!(matches!(
+                    input.mention_tooltip,
+                    MentionTooltipPhase::Waiting { .. }
+                ));
+                input.invalidate_mention_tooltip();
+                input.mention_tooltip = MentionTooltipPhase::Hidden;
             });
         })
         .unwrap();

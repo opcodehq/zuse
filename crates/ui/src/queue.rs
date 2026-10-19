@@ -16,7 +16,7 @@ use gpui::{
 use zuse_doc::{QueueDeliveryGate, QueuedMessage};
 use zuse_rpc::methods;
 
-use crate::composer::{Composer, QUEUE_COMPOSER_OVERLAP};
+use crate::composer::Composer;
 use crate::icons::{self, icon};
 use crate::motion::{self, AnimationExt as _, TAB_SLIDE};
 use crate::settings::shortcuts::modifier_send_label;
@@ -252,24 +252,16 @@ fn queue_hidden_attachments_label(labels: &[String], shown: usize) -> Option<Str
 /// `dragging`: a drag is in flight. The tray stops occluding then, so files,
 /// workspace paths and chats dropped on it reach the conversation's drop zone
 /// beneath (and land in this composer); otherwise it keeps clicks and hover
-/// from falling through to the transcript behind it.
+/// from falling through to the transcript behind it. The composer's shared
+/// tray surface with the queue's row inset — what the queue looks like alone.
+#[cfg(test)]
 pub(crate) fn queue_panel_surface(theme: &Theme, dragging: bool) -> gpui::Div {
-    div()
-        .when(!dragging, |el| el.occlude())
-        .rounded_t(px(PANEL_RADIUS))
-        // The composer's context tray: its tonal fill and a faint hairline,
-        // no drop shadow — a tab behind the card, not a floating panel.
-        .bg(crate::composer::context_tray_fill(theme))
-        .border_1()
-        .border_color(theme.hairline(0.06))
+    crate::composer::tray::tray_surface(theme, dragging)
         // GPUI clips children to rectangles, so inset the rows to keep their
         // hover and editing backgrounds inside the tray's rounded corners.
-        // The composer covers the bottom overlap; the same inset shows above it.
         .px(px(PANEL_PAD_X))
         .pt(px(PANEL_PAD_TOP))
-        .pb(px(QUEUE_COMPOSER_OVERLAP + PANEL_PAD_TOP))
-        .flex()
-        .flex_col()
+        .pb(px(crate::composer::QUEUE_COMPOSER_OVERLAP + PANEL_PAD_TOP))
 }
 
 fn queue_rows(
@@ -319,9 +311,9 @@ fn visible_queue_rows(offset: f32, height: f32, count: usize) -> std::ops::Range
 }
 
 impl Composer {
-    /// The queue panel, or `None` when nothing is waiting. Like the composer,
-    /// it is one frosted surface; rows use spacing and hover wash rather than
-    /// nesting raised cards inside it.
+    /// The queue section of the composer's tray, or `None` when nothing is
+    /// waiting: a small "Queued" header over the rows, which use spacing and
+    /// hover wash rather than nesting raised cards inside the tray.
     pub(crate) fn render_queue_panel(
         &mut self,
         show_latest_shortcut: bool,
@@ -423,7 +415,28 @@ impl Composer {
             lifted,
         );
 
-        let panel = queue_panel_surface(&theme, cx.has_active_drag())
+        // The tray's own header: what the rows are waiting for.
+        let waiting = self.state.read(cx).chat_delivery_degraded(&chat_id);
+        let header = div()
+            .px(px(12.0))
+            .py(px(6.0))
+            .border_b_1()
+            .border_color(theme.border.opacity(0.4))
+            .text_size(px(11.0))
+            .line_height(px(14.0))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(theme.text_muted)
+            .child(if waiting {
+                "Waiting for connection"
+            } else {
+                "Queued"
+            });
+        // The rows section is the drop target, including its padding.
+        let panel = div()
+            .flex()
+            .flex_col()
+            .px(px(PANEL_PAD_X))
+            .py(px(PANEL_PAD_TOP))
             .debug_selector(|| "message-queue-panel".into())
             .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             // The complete glass surface is a drop target, including its
@@ -463,7 +476,7 @@ impl Composer {
                 cx.listener(|this, _, _, cx| this.cancel_queue_drag(cx)),
             )
             .child(rows);
-        Some(crate::frost::frosted(PANEL_RADIUS, crate::frost::MENU_BLUR, panel).into_any_element())
+        Some(div().child(header).child(panel).into_any_element())
     }
 
     /// One queued message: a quiet queue marker, the text, edit controls, and

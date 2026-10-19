@@ -106,6 +106,7 @@ impl Composer {
     pub(super) fn render_permission_control(
         &self,
         theme: &Theme,
+        icon_only: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let selected = self.pickers.read(cx).resolved(cx).sandbox;
@@ -135,7 +136,7 @@ impl Composer {
                     .aria_expanded(self.permission_open)
                     .tab_index(0)
                     .h(px(28.))
-                    .px(px(10.))
+                    .px(px(if icon_only { 7. } else { 10. }))
                     .flex()
                     .items_center()
                     .gap(px(6.))
@@ -160,12 +161,17 @@ impl Composer {
                             .size(px(14.))
                             .text_color(tint),
                     )
-                    .child(if pending {
-                        "Saving…"
-                    } else if unconfirmed {
-                        "Check access"
-                    } else {
-                        label(selected)
+                    .when(!icon_only, |el| {
+                        el.child(if pending {
+                            "Saving…"
+                        } else if unconfirmed {
+                            "Check access"
+                        } else {
+                            label(selected)
+                        })
+                    })
+                    .when(icon_only, |el| {
+                        el.tooltip(crate::settings::widgets::text_tooltip(label(selected)))
                     })
                     .child(
                         icons::icon(icons::ALT_ARROW_DOWN)

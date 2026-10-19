@@ -1,7 +1,8 @@
 //! MessageRail (feature-inventory §1.8): a compact outline of the user's
-//! prompts, a quiet control at the transcript's top right. The active tick brightens, hover grows the tick and shows a preview
-//! card (prompt + reply opening), click smooth-scrolls the transcript to that
-//! row. Hidden below a 48rem container width.
+//! prompts, a quiet control at the transcript's top right. The reading
+//! position's tick is lit; hovering the rail opens one list of every prompt
+//! to its left, and picking a row smooth-scrolls the transcript there.
+//! Hidden below a 48rem container width.
 //!
 //! Pure logic (tick extraction, active detection, width gate, previews) lives
 //! in free functions with unit tests; rendering is an `impl Transcript`
@@ -128,6 +129,14 @@ const OUTLINE_TOP: f32 = 12.0;
 const OUTLINE_RIGHT: f32 = 12.0;
 const OUTLINE_WIDTH: f32 = 40.0;
 const OUTLINE_TICK_PITCH: f32 = 6.0;
+/// The outline list (reference chat-turn-navigator): 288px wide, 32px rows,
+/// at most 320px tall, 8px left of the rail; it closes 140ms after the
+/// pointer leaves.
+const OUTLINE_LIST_WIDTH: f32 = 288.0;
+const OUTLINE_ROW_HEIGHT: f32 = 32.0;
+const OUTLINE_LIST_MAX_HEIGHT: f32 = 320.0;
+const OUTLINE_SIDE_OFFSET: f32 = 8.0;
+const OUTLINE_CLOSE_DELAY: Duration = Duration::from_millis(140);
 
 /// Hard cap on visible ticks — the always-compact shadcn outline (its demo
 /// trigger holds a small fixed stack of micro-marks regardless of window
@@ -414,8 +423,51 @@ impl Transcript {
         }));
     }
 
-    /// The outline element — a quiet icon-sized control floating at the
-    /// transcript's top right: a short stack of prompt marks, right-aligned.
+    /// Open the outline list (hover or click on the rail); cancels a
+    /// pending close.
+    fn open_outline(&mut self, active: Option<usize>, cx: &mut Context<Self>) {
+        let menu = self.outline_menu_mut();
+        menu.close_task = None;
+        if !menu.open {
+            menu.open = true;
+            menu.highlighted = active;
+            cx.notify();
+        }
+    }
+
+    /// Close after [`OUTLINE_CLOSE_DELAY`], so the pointer can cross the gap
+    /// between the rail and the list.
+    fn schedule_outline_close(&mut self, cx: &mut Context<Self>) {
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(OUTLINE_CLOSE_DELAY).await;
+            this.update(cx, |this, cx| this.close_outline(cx)).ok();
+        });
+        self.outline_menu_mut().close_task = Some(task);
+    }
+
+    fn close_outline(&mut self, cx: &mut Context<Self>) {
+        let menu = self.outline_menu_mut();
+        menu.close_task = None;
+        if menu.open {
+            menu.open = false;
+            menu.highlighted = None;
+            cx.notify();
+        }
+    }
+
+    fn move_outline_highlight(&mut self, delta: isize, count: usize, cx: &mut Context<Self>) {
+        let menu = self.outline_menu_mut();
+        menu.highlighted = popover::menu_step(menu.highlighted, count, delta);
+        if let Some(ix) = menu.highlighted {
+            menu.scroll.scroll_to_item(ix);
+        }
+        cx.notify();
+    }
+
+    /// The outline: a quiet stack of prompt marks at the transcript's top
+    /// right (the reading position's mark lit in the accent). Hovering or
+    /// clicking it opens one list of every prompt to its left; arrows, Enter
+    /// and Escape drive the list once it has focus.
     pub fn render_rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if !self.rail_enabled() {
             return gpui::Empty.into_any_element();
@@ -463,7 +515,6 @@ impl Transcript {
             }
         }
         let active = active_tick(&tick_rows, top_row);
-        let hover = self.rail_hover();
         let theme = Theme::of(cx).clone();
 
         // Fixed footprint (shadcn Transcript Outline): a compact stack of at
@@ -475,108 +526,227 @@ impl Transcript {
         let capacity = rail_slots(if viewport_h > 0.0 { viewport_h } else { 600.0 });
         let buckets = tick_buckets(pairs.len(), capacity);
         let active_bucket = active.and_then(|ix| bucket_of(&buckets, ix));
+        let open = self.outline_menu().open;
+        let count = pairs.len();
+        let focus = self.outline_menu().focus.clone();
 
-        let wash = theme.ink(0.06);
-        div()
-            .id("transcript-outline")
-            .absolute()
-            .top(px(Theme::TITLEBAR_HEIGHT + OUTLINE_TOP))
-            .right(px(OUTLINE_RIGHT + self.outline_inset()))
+        let marks = buckets.into_iter().enumerate().map(|(ix, _)| {
+            div()
+                .h(px(2.0))
+                .w(px(20.0))
+                .flex_none()
+                .rounded(px(1.0))
+                .bg(if active_bucket == Some(ix) {
+                    theme.accent
+                } else {
+                    theme.text_muted.opacity(0.35)
+                })
+        });
+        let trigger = div()
+            .id("transcript-outline-trigger")
+            .debug_selector(|| "transcript-outline-trigger".into())
+            .role(gpui::Role::Button)
+            .aria_label("Navigate conversation")
+            .aria_expanded(open)
             .w(px(OUTLINE_WIDTH))
-            .py(px(6.0))
+            .py(px(4.0))
             .pr(px(8.0))
             .rounded(px(6.0))
-            .hover(move |style| style.bg(wash))
+            .cursor_pointer()
+            .when(open, |el| el.bg(theme.ink(0.06)))
+            .hover(|style| style.bg(theme.ink(0.06)))
             .flex()
             .flex_col()
             .items_end()
-            .children(buckets.into_iter().enumerate().map(|(ix, (start, end))| {
-                // The bucket's representative prompt: the ACTIVE tick when it
-                // falls inside (hover then previews what you're reading),
-                // the first prompt of the range otherwise.
-                let rep = active.filter(|&a| a >= start && a < end).unwrap_or(start);
-                let (tick, row) = &pairs[rep];
-                let (tick, row) = (tick.clone(), *row);
-                let bucket_len = end - start;
-                let is_active = active_bucket == Some(ix);
-                let is_hovered = hover == Some(ix);
-                // Equal marks; the one you're reading is lit, hover brightens.
-                let bar_color = if is_active {
-                    theme.text.opacity(0.85)
-                } else if is_hovered {
-                    theme.text.opacity(0.55)
+            .gap(px(OUTLINE_TICK_PITCH - 2.0))
+            .children(marks)
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    this.open_outline(active, cx);
                 } else {
-                    theme.text_muted.opacity(0.35)
-                };
-                let prompt = truncate_preview(&tick.prompt, PREVIEW_PROMPT_CHARS);
-                let reply = tick
-                    .reply
-                    .as_deref()
-                    .map(|r| truncate_preview(r, PREVIEW_REPLY_CHARS));
-                let card: Option<AnyElement> = is_hovered.then(|| {
-                    let theme = theme.for_popup();
-                    let card = popover::popover_card(&theme)
-                        .w(px(280.0))
-                        .p(px(Theme::SPACE_SM))
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.0))
-                        .child(
-                            div()
-                                .text_size(crate::typography::ui_rems(12.0))
-                                .text_color(theme.text)
-                                .child(SharedString::from(prompt.clone())),
-                        )
-                        .when_some(reply.clone(), |el, reply| {
-                            el.child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.text_muted)
-                                    .child(SharedString::from(reply)),
-                            )
-                        })
-                        // Condensed bucket: say how many prompts it stands for
-                        // (the outline still spans the whole conversation).
-                        .when(bucket_len > 1, |el| {
-                            el.child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(10.0))
-                                    .text_color(theme.text_muted)
-                                    .child(SharedString::from(format!("{bucket_len} prompts"))),
-                            )
-                        });
-                    // Mounted straight through deferred/anchored (not a popover
-                    // mount helper), so the frost wrap happens here.
-                    crate::frost::frosted(12.0, crate::frost::MENU_BLUR, card).into_any_element()
-                });
+                    this.schedule_outline_close(cx);
+                }
+            }))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_outline(active, cx);
+                let focus = this.outline_menu().focus.clone();
+                window.focus(&focus, cx);
+            }));
+
+        let list: Option<AnyElement> = open.then(|| {
+            let popup = theme.for_popup();
+            let highlighted = self.outline_menu().highlighted;
+            let scroll = self.outline_menu().scroll.clone();
+            let rows = pairs.iter().enumerate().map(|(ix, (tick, row))| {
+                let row = *row;
+                let is_active = active == Some(ix);
+                let is_highlighted = highlighted == Some(ix);
+                let text = truncate_preview(&tick.prompt, PREVIEW_PROMPT_CHARS);
                 div()
-                    .id(("rail-tick", ix))
-                    .relative()
-                    .h(px(OUTLINE_TICK_PITCH))
+                    .id(("outline-turn", ix))
+                    .debug_selector(move || format!("outline-turn-{ix}"))
+                    .role(gpui::Role::ListBoxOption)
+                    .aria_selected(is_active)
+                    .h(px(OUTLINE_ROW_HEIGHT))
                     .w_full()
+                    .flex_none()
+                    .px(px(8.0))
+                    .rounded(px(6.0))
                     .flex()
                     .items_center()
-                    .justify_end()
+                    .gap(px(8.0))
                     .cursor_pointer()
-                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        this.set_rail_hover(if *hovered { Some(ix) } else { None });
-                        cx.notify();
+                    .text_size(crate::typography::ui_rems(13.0))
+                    .text_color(if is_active || is_highlighted {
+                        popup.text
+                    } else {
+                        popup.text.opacity(0.85)
+                    })
+                    .when(is_active, |el| el.bg(popup.muted_fill().opacity(0.45)))
+                    .when(is_highlighted, |el| el.bg(popup.muted_fill().opacity(0.7)))
+                    .hover(|style| style.bg(popup.muted_fill().opacity(0.7)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(SharedString::from(text)),
+                    )
+                    .when(is_active, |el| {
+                        el.child(
+                            div()
+                                .size(px(6.0))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(popup.text),
+                        )
+                    })
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if this.outline_menu().highlighted != Some(ix) {
+                            this.outline_menu_mut().highlighted = Some(ix);
+                            cx.notify();
+                        }
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        this.close_outline(cx);
                         this.scroll_to_row(row, cx);
                     }))
-                    .child(div().h(px(2.0)).w(px(20.0)).rounded(px(1.0)).bg(bar_color))
-                    // The preview opens to the left, clear of the control.
-                    .when_some(card, |el, card| {
-                        el.child(gpui::deferred(
-                            gpui::anchored()
-                                .anchor(gpui::Anchor::RightCenter)
-                                .snap_to_window_with_margin(px(8.0))
-                                .child(div().pr(px(14.0)).child(card)),
-                        ))
-                    })
-            }))
+            });
+            let height = (count as f32 * OUTLINE_ROW_HEIGHT + 8.0).min(OUTLINE_LIST_MAX_HEIGHT);
+            let rows_for_keys: Vec<usize> = pairs.iter().map(|(_, row)| *row).collect();
+            let card = popover::popover_card(&popup)
+                .id("transcript-outline-card")
+                .w(px(OUTLINE_LIST_WIDTH))
+                .p(px(0.0))
+                .track_focus(&focus)
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        this.outline_menu_mut().close_task = None;
+                    } else {
+                        this.schedule_outline_close(cx);
+                    }
+                }))
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_outline(cx)))
+                .on_key_down(
+                    cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                        match event.keystroke.key.as_str() {
+                            "up" => this.move_outline_highlight(-1, count, cx),
+                            "down" => this.move_outline_highlight(1, count, cx),
+                            "enter" => {
+                                if let Some(row) = this
+                                    .outline_menu()
+                                    .highlighted
+                                    .and_then(|ix| rows_for_keys.get(ix).copied())
+                                {
+                                    this.close_outline(cx);
+                                    this.scroll_to_row(row, cx);
+                                }
+                            }
+                            "escape" => {
+                                this.close_outline(cx);
+                                window.blur();
+                            }
+                            _ => return,
+                        }
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(
+                    div()
+                        .id("transcript-outline-list")
+                        .debug_selector(|| "transcript-outline-list".into())
+                        .role(gpui::Role::ListBox)
+                        .aria_label("Conversation turns")
+                        .h(px(height))
+                        .overflow_y_scroll()
+                        .track_scroll(&scroll)
+                        .p(px(4.0))
+                        .flex()
+                        .flex_col()
+                        .children(rows),
+                );
+            // Mounted straight through deferred/anchored (not a popover mount
+            // helper), so the frost wrap happens here. Anchored at a zero-size
+            // point 8px left of the rail's top: the list opens to the left,
+            // its top aligned with the rail.
+            let card = crate::frost::frosted(12.0, crate::frost::MENU_BLUR, card);
+            div()
+                .absolute()
+                .top_0()
+                .left(px(-OUTLINE_SIDE_OFFSET))
+                .size_0()
+                .child(
+                    gpui::deferred(
+                        gpui::anchored()
+                            .anchor(gpui::Anchor::TopRight)
+                            .snap_to_window_with_margin(px(8.0))
+                            .child(div().occlude().child(card)),
+                    )
+                    .priority(1),
+                )
+                .into_any_element()
+        });
+        div()
+            .id("transcript-outline")
+            .debug_selector(|| "transcript-outline".into())
+            .absolute()
+            .top(px(Theme::TITLEBAR_HEIGHT + OUTLINE_TOP))
+            .right(px(OUTLINE_RIGHT + self.outline_inset()))
+            .child(div().relative().child(trigger).children(list))
             .into_any_element()
+    }
+}
+
+/// The outline list's state (open, the keyboard highlight, the pending
+/// close).
+pub struct OutlineMenu {
+    pub(crate) open: bool,
+    pub(crate) highlighted: Option<usize>,
+    pub(crate) close_task: Option<gpui::Task<()>>,
+    pub(crate) focus: gpui::FocusHandle,
+    pub(crate) scroll: gpui::ScrollHandle,
+}
+
+#[cfg(feature = "browser-fixture")]
+impl Transcript {
+    /// Review fixture: the outline list open on the first prompt.
+    pub fn fixture_open_outline(&mut self, cx: &mut Context<Self>) {
+        let menu = self.outline_menu_mut();
+        menu.open = true;
+        menu.highlighted = Some(0);
+        cx.notify();
+    }
+}
+
+impl OutlineMenu {
+    pub fn new(cx: &mut gpui::App) -> Self {
+        Self {
+            open: false,
+            highlighted: None,
+            close_task: None,
+            focus: cx.focus_handle(),
+            scroll: gpui::ScrollHandle::new(),
+        }
     }
 }
 

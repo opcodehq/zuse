@@ -2,9 +2,8 @@
 //!
 //! Every harness that plans (Claude's TodoWrite, OpenCode, ACP and Codex
 //! plans) emits the *whole* list on each update, so the panel simply tracks the
-//! latest `Todo` tool part of the selected chat. It sits in the same tray stack
-//! as the message queue (`queue.rs`), one step narrower, so the two read as one
-//! object emerging from behind the composer.
+//! latest `Todo` tool part of the selected chat. It is one row of the
+//! composer's attached tray (`composer/tray.rs`), above the message queue.
 //!
 //! The first half of this file is pure — which list is current, what the header
 //! says, which rows a long list folds to — so it is unit-tested without a
@@ -13,7 +12,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::time::Duration;
 
 use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
@@ -23,7 +21,8 @@ use gpui::{
 use zuse_doc::{MessagePart, MessageRole, SessionMessageEntry};
 use zuse_protocol::{TodoItem, TodoStatus, ToolCall};
 
-use crate::composer::{Composer, QUEUE_COMPOSER_OVERLAP};
+use crate::composer::Composer;
+use crate::composer::tray::{TrayPill, TrayTone};
 use crate::icons::{self, icon};
 use crate::motion::{self, AnimationExt as _};
 use crate::theme::Theme;
@@ -261,27 +260,34 @@ impl TodoCache {
 // Rendering
 // ---------------------------------------------------------------------------
 
-const HEADER_HEIGHT: f32 = 32.0;
-const ROW_PAD_X: f32 = 8.0;
-/// Rows sit in the queue tray's surface, so they share its concentric radius.
-const ROW_RADIUS: f32 = crate::queue::ROW_RADIUS;
-const TEXT_SIZE: f32 = 12.5;
-const TEXT_LINE: f32 = 17.0;
+const ROW_PAD_X: f32 = 12.0;
+const TEXT_SIZE: f32 = 13.0;
+const TEXT_LINE: f32 = 18.0;
 const GLYPH_SLOT: f32 = 14.0;
-const ACTION_SIZE: f32 = 24.0;
-/// One step narrower than the queue tray, which is itself inset from the
-/// composer; stacked above a queue the todo tray steps in once more.
-const SIDE_INSET: f32 = 16.0;
 
 impl Composer {
-    /// The checklist tray, or `None` when the chat has no todo (or the user
-    /// dismissed a finished one). `below_queue`: a queue tray follows.
+    /// The checklist as a tray row, or `None` when the chat has no todo (or
+    /// the user dismissed it). Kept for callers that render it alone; the
+    /// composer stacks [`Self::todo_tray_pill`] in its tray.
+    #[cfg(test)]
     pub(crate) fn render_todo_panel(
         &mut self,
-        below_queue: bool,
+        _below_queue: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let theme = Theme::of(cx).clone();
+        self.todo_tray_pill(window, cx)
+            .map(|pill| pill.render(&theme, false))
+    }
+
+    /// The project plan row (`ProjectPlanTray`): a lime-washed pill naming
+    /// the current item with "N of M done"; the chevron opens the timeline.
+    pub(crate) fn todo_tray_pill(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<TrayPill> {
         let live = self.run_live(cx);
         let (chat_id, items) = {
             let state = self.state.read(cx);
@@ -305,224 +311,114 @@ impl Composer {
 
         let theme = Theme::of(cx).clone();
         let view = cx.entity_id();
-        // Dismissable whenever the turn is idle, finished or not.
-        let header = self.todo_header(&chat_id, &items, summary, expanded, !live, &theme, cx);
-
-        let surface = crate::queue::queue_panel_surface(&theme, cx.has_active_drag()).child(header);
-        let surface = if expanded {
-            let list = div().flex().flex_col().children(
-                rows(&items, show_earlier, show_later)
-                    .into_iter()
-                    .map(|row| match row {
-                        TodoRow::Item(ix) => todo_item_row(ix, &items[ix], live, &theme, view, cx),
-                        TodoRow::Fold { side, count, open } => {
-                            self.todo_fold_row(&chat_id, side, count, open, &theme, cx)
-                        }
-                    }),
-            );
-            // Same fade-and-scroll treatment as the queue's rows; a long
-            // expanded fold scrolls instead of pushing the transcript up.
-            let rows = crate::edge_fade::edge_faded(
-                Theme::TRANSCRIPT_FADE_BAND,
-                true,
-                true,
-                div()
-                    .id("todo-panel-rows")
-                    .max_h(window.viewport_size().height * 0.3)
-                    .overflow_y_scroll()
-                    .track_scroll(&self.todo_scroll)
-                    .child(list),
-            )
-            // The ramp ends at the clip edge; glyphs fade per pixel.
-            .fade_overflow_y(&self.todo_scroll);
-            surface.child(
-                div()
-                    .mt(px(2.0))
-                    // The tray's lowest strip hides behind the composer; keep
-                    // the last row clear of that edge.
-                    .pb(px(6.0))
-                    .child(rows)
-                    .with_animation(
-                        SharedString::from(format!("todo-rows-{epoch}")),
-                        motion::FADE_QUICK.animation(),
-                        |el, t| el.opacity(t),
-                    ),
-            )
-        } else {
-            surface
+        let headline = summary.headline();
+        let title: SharedString = match headline {
+            Some(ix) => items[ix].text.clone().into(),
+            None => "Project plan".into(),
         };
-
-        let inset = if below_queue {
-            SIDE_INSET * 2.0
-        } else {
-            SIDE_INSET
-        };
-        Some(
-            div()
-                .mx(px(inset))
-                // Cancel the column gap and tuck the tray behind what follows
-                // (the queue tray, or the composer itself).
-                .mb(px(-(Theme::SPACE_SM + QUEUE_COMPOSER_OVERLAP)))
-                .child(crate::frost::frosted(
-                    crate::queue::PANEL_RADIUS,
-                    crate::frost::MENU_BLUR,
-                    surface,
-                ))
+        let leading = match headline {
+            Some(ix) => status_glyph(ix, items[ix].status(), live, &theme, view, cx),
+            None => icon(icons::CHECKLIST)
+                .size(px(14.0))
+                .text_color(theme.accent)
                 .into_any_element(),
-        )
-    }
-
-    /// `Todo · 2/5` and what is being worked on; one button that toggles the
-    /// list, plus a dismiss while the turn is idle.
-    #[allow(clippy::too_many_arguments)]
-    fn todo_header(
-        &self,
-        chat_id: &str,
-        items: &[TodoItem],
-        summary: TodoSummary,
-        expanded: bool,
-        dismissable: bool,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let accent = theme.accent;
+        };
         let label = if expanded {
-            "Collapse todo list"
+            "Collapse plan"
         } else {
-            "Expand todo list"
+            "Expand plan"
         };
-        let headline: Option<(SharedString, gpui::Hsla)> = if summary.finished() {
-            Some(("All done".into(), theme.text_faint))
-        } else {
-            summary
-                .headline()
-                .map(|ix| (items[ix].text.clone().into(), theme.text_muted))
-        };
-
         let finished = summary.finished();
-        let toggle_chat = chat_id.to_owned();
-        let toggle =
-            div()
-                .id("todo-panel-toggle")
-                .role(gpui::Role::Button)
-                .aria_label(label)
-                .flex_1()
-                .min_w_0()
-                .h(px(HEADER_HEIGHT))
-                .px(px(ROW_PAD_X))
-                .rounded(px(ROW_RADIUS))
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .cursor_pointer()
-                .hover(|s| s.bg(theme.element_hover))
-                .tab_index(0)
-                .focus_visible(move |s| s.bg(accent.opacity(0.14)))
-                .on_click(cx.listener(move |this, _, _, cx| {
+        let weak = cx.weak_entity();
+        let toggle_chat = chat_id.clone();
+        let mut pill = TrayPill::new("todo-panel-toggle", title)
+            .tone(TrayTone::Accent)
+            .icon_element(leading)
+            .subtitle(format!("{} of {} done", summary.done, summary.total))
+            .fill(theme.accent.opacity(0.10), theme.accent.opacity(0.15))
+            .on_click(label, move |_, _, cx| {
+                weak.update(cx, |this, cx| {
                     this.todo_panels
                         .entry(toggle_chat.clone())
                         .or_default()
                         .toggle(finished);
                     cx.notify();
-                }))
-                .tooltip(crate::settings::widgets::text_tooltip(label))
-                .tooltip_show_delay(Duration::from_millis(350))
-                .child(
-                    icon(if summary.finished() {
-                        icons::CHECK
-                    } else {
-                        icons::CHECKLIST
-                    })
-                    .size(px(14.0))
-                    .text_color(if summary.finished() {
-                        theme.success
-                    } else {
-                        theme.text_muted
-                    }),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .flex()
-                        .items_baseline()
-                        .gap(px(6.0))
-                        .text_size(px(TEXT_SIZE))
-                        .child(
-                            div()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(theme.text)
-                                .child("Todo"),
-                        )
-                        .child(div().text_color(theme.text_faint).child(SharedString::from(
-                            format!("{}/{}", summary.done, summary.total),
-                        ))),
-                )
-                // The expanded list already names every item; the headline is the
-                // collapsed state's whole point.
-                .when(!expanded, |el| {
-                    el.when_some(headline, |el, (text, color)| {
-                        el.child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(TEXT_SIZE))
-                                .text_color(color)
-                                .child(text),
-                        )
-                    })
                 })
-                .when(expanded, |el| el.child(div().flex_1()))
-                .child(
-                    icon(if expanded {
-                        icons::ALT_ARROW_DOWN
-                    } else {
-                        icons::ALT_ARROW_UP
-                    })
-                    .size(px(13.0))
-                    .text_color(theme.text_muted.opacity(0.7)),
-                );
-
-        let dismiss_chat = chat_id.to_owned();
-        let dismiss_items = items.to_vec();
-        div()
-            .flex()
-            .items_center()
-            .gap(px(2.0))
-            .child(toggle)
-            .when(dismissable, |row| {
-                row.child(
-                    div()
-                        .id("todo-panel-dismiss")
-                        .role(gpui::Role::Button)
-                        .aria_label("Dismiss todo list")
-                        .size(px(ACTION_SIZE))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(5.0))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.element_hover))
-                        .tab_index(0)
-                        .focus_visible(move |s| s.bg(accent.opacity(0.18)))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.todo_panels
-                                .entry(dismiss_chat.clone())
-                                .or_default()
-                                .dismiss(&dismiss_items);
-                            cx.notify();
-                        }))
-                        .tooltip(crate::settings::widgets::text_tooltip("Dismiss"))
-                        .tooltip_show_delay(Duration::from_millis(350))
-                        .child(
-                            icon(icons::CLOSE)
-                                .size(px(11.0))
-                                .text_color(theme.text_muted.opacity(0.8)),
-                        ),
-                )
+                .ok();
             })
-            .into_any_element()
+            .action(
+                icon(if expanded {
+                    icons::ALT_ARROW_UP
+                } else {
+                    icons::ALT_ARROW_DOWN
+                })
+                .size(px(16.0))
+                .text_color(theme.text_muted),
+            );
+        // Dismissable whenever the turn is idle, finished or not.
+        if !live {
+            let dismiss_chat = chat_id.clone();
+            let dismiss_items = items.clone();
+            pill = pill.action(
+                crate::composer::tray::tray_icon_action(
+                    "todo-panel-dismiss",
+                    icons::CLOSE,
+                    "Dismiss plan",
+                    crate::composer::tray::ICON_ACTION,
+                    &theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.todo_panels
+                        .entry(dismiss_chat.clone())
+                        .or_default()
+                        .dismiss(&dismiss_items);
+                    cx.notify();
+                })),
+            );
+        }
+        if !expanded {
+            return Some(pill);
+        }
+        let rows = rows(&items, show_earlier, show_later);
+        let last = rows.len().saturating_sub(1);
+        let list = div()
+            .flex()
+            .flex_col()
+            .children(rows.into_iter().enumerate().map(|(row_ix, row)| match row {
+                TodoRow::Item(ix) => {
+                    todo_item_row(ix, &items[ix], row_ix < last, live, &theme, view, cx)
+                }
+                TodoRow::Fold { side, count, open } => {
+                    self.todo_fold_row(&chat_id, side, count, open, &theme, cx)
+                }
+            }));
+        // A long expanded fold scrolls instead of pushing the transcript up.
+        let timeline = crate::edge_fade::edge_faded(
+            Theme::TRANSCRIPT_FADE_BAND,
+            true,
+            true,
+            div()
+                .id("todo-panel-rows")
+                .max_h((window.viewport_size().height * 0.3).min(px(256.0)))
+                .overflow_y_scroll()
+                .track_scroll(&self.todo_scroll)
+                .px(px(ROW_PAD_X))
+                .py(px(8.0))
+                .child(list),
+        )
+        .fade_overflow_y(&self.todo_scroll);
+        Some(
+            pill.expanded(Some(
+                div()
+                    .child(timeline)
+                    .with_animation(
+                        SharedString::from(format!("todo-rows-{epoch}")),
+                        motion::FADE_QUICK.animation(),
+                        |el, t| el.opacity(t),
+                    )
+                    .into_any_element(),
+            )),
+        )
     }
 
     /// "N earlier" / "N later": stands in for the items folded off one end of a
@@ -558,11 +454,11 @@ impl Composer {
             .role(gpui::Role::Button)
             .aria_label(aria)
             .h(px(24.0))
-            .px(px(ROW_PAD_X))
+            .mb(px(4.0))
             .rounded(px(6.0))
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(px(10.0))
             .cursor_pointer()
             .hover(|s| s.bg(theme.element_hover))
             .tab_index(0)
@@ -592,30 +488,42 @@ impl Composer {
     }
 }
 
-/// One checklist row: status glyph + text. Completed work recedes, the
-/// in-progress item is the brightest thing in the list.
+/// One timeline row: the status glyph on a dashed connector to the next
+/// item, then the text. Completed work recedes.
 fn todo_item_row(
     ix: usize,
     item: &TodoItem,
+    connector: bool,
     live: bool,
     theme: &Theme,
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> AnyElement {
     let status = item.status();
-    let (color, weight) = match status {
-        TodoStatus::Completed => (theme.text_faint, gpui::FontWeight::NORMAL),
-        TodoStatus::InProgress => (theme.text, gpui::FontWeight::MEDIUM),
-        TodoStatus::Pending => (theme.text_muted, gpui::FontWeight::NORMAL),
+    let color = match status {
+        TodoStatus::Completed => theme.text_muted,
+        _ => theme.text,
     };
     div()
         .id(SharedString::from(format!("todo-item-{ix}")))
-        .min_h(px(26.0))
-        .px(px(ROW_PAD_X))
-        .py(px(4.0))
+        .relative()
         .flex()
         .items_start()
-        .gap(px(8.0))
+        .gap(px(10.0))
+        .pb(px(6.0))
+        .when(connector, |el| {
+            el.child(
+                div()
+                    .absolute()
+                    .left(px(GLYPH_SLOT / 2.0 - 0.5))
+                    .top(px(TEXT_LINE - 2.0))
+                    .bottom(px(-2.0))
+                    .w(px(1.0))
+                    .border_l_1()
+                    .border_dashed()
+                    .border_color(theme.text_muted.opacity(0.35)),
+            )
+        })
         .child(
             div()
                 .w(px(GLYPH_SLOT))
@@ -632,16 +540,15 @@ fn todo_item_row(
                 .min_w_0()
                 .text_size(px(TEXT_SIZE))
                 .line_height(px(TEXT_LINE))
-                .font_weight(weight)
                 .text_color(color)
                 .child(SharedString::from(item.text.clone())),
         )
         .into_any_element()
 }
 
-/// check / active / pending. An in-progress item only animates while the turn
-/// is live; on an idle chat it is a still ring (the agent is not working on
-/// it), so a stopped run does not look busy forever.
+/// Lime tick / active / dashed pending circle. An in-progress item only
+/// animates while the turn is live; on an idle chat it is a still ring, so a
+/// stopped run does not look busy forever.
 fn status_glyph(
     ix: usize,
     status: TodoStatus,
@@ -652,8 +559,8 @@ fn status_glyph(
 ) -> AnyElement {
     match status {
         TodoStatus::Completed => icon(icons::CHECK)
-            .size(px(12.0))
-            .text_color(theme.success)
+            .size(px(14.0))
+            .text_color(theme.accent)
             .into_any_element(),
         TodoStatus::InProgress if live => crate::loaders::mini_glyph_spinner(
             format!("todo-active-{ix}"),
@@ -664,7 +571,7 @@ fn status_glyph(
         )
         .into_any_element(),
         TodoStatus::InProgress => div()
-            .size(px(10.0))
+            .size(px(12.0))
             .rounded_full()
             .border_1()
             .border_color(theme.accent)
@@ -674,10 +581,11 @@ fn status_glyph(
             .child(div().size(px(4.0)).rounded_full().bg(theme.accent))
             .into_any_element(),
         TodoStatus::Pending => div()
-            .size(px(10.0))
+            .size(px(12.0))
             .rounded_full()
             .border_1()
-            .border_color(theme.text_faint.opacity(0.7))
+            .border_dashed()
+            .border_color(theme.text_muted.opacity(0.5))
             .into_any_element(),
     }
 }

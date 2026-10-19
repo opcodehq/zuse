@@ -5,6 +5,9 @@ use super::*;
 /// its picture on click.
 pub(super) struct ChipAttachment {
     pub(super) image: Option<std::sync::Arc<gpui::Image>>,
+    /// The file name the image arrived with; its chip shows this rather than
+    /// the canonical `Image N`.
+    pub(super) name: Option<SharedString>,
 }
 
 /// Spaces reserve room at the start of every chip for its icon well, which is
@@ -32,6 +35,10 @@ pub enum ChipKind {
     Directory,
     /// Another chat, dropped from the sidebar.
     Chat,
+    /// A bare web URL, shown as its favicon and short label. Unlike the
+    /// other kinds it has no pill and is not atomic: the caret can enter it,
+    /// and then the editor shows the raw URL.
+    Link,
 }
 
 /// What a chip's icon is painted from: a monochrome glyph tinted like the
@@ -40,6 +47,10 @@ pub enum ChipKind {
 pub(crate) enum ChipIcon {
     Glyph(&'static str),
     FileTheme(SharedString),
+    /// A link's site favicon (see [`crate::site_links::paint_favicon`]).
+    Favicon(SharedString),
+    /// An image chip's own picture, cropped to fill the well.
+    Thumbnail(std::sync::Arc<gpui::Image>),
 }
 
 /// The padding around the label in a chip's display `range`: the side
@@ -170,7 +181,8 @@ pub(crate) fn chip_icon(
     use crate::file_icons::{FileIconIdentity, asset_path};
     match kind {
         ChipKind::Image => ChipIcon::Glyph(crate::icons::GALLERY),
-        ChipKind::Skill => ChipIcon::Glyph(crate::icons::MAGIC_STICK_3),
+        ChipKind::Skill => ChipIcon::Glyph(crate::icons::SKILL),
+        ChipKind::Link => ChipIcon::Favicon(SharedString::from(path.to_string())),
         ChipKind::Command => ChipIcon::Glyph(crate::icons::COMMAND),
         ChipKind::Chat => ChipIcon::Glyph(crate::icons::CHAT_ROUND_LINE),
         ChipKind::File => ChipIcon::FileTheme(asset_path(FileIconIdentity::file(path), appearance)),
@@ -181,35 +193,156 @@ pub(crate) fn chip_icon(
     }
 }
 
-/// Paint a chip like the transcript's file badges: a soft rounded pill whose
-/// first row starts with the icon on a small well. Callers center `chip` on
-/// the label's cap height: the row's middle moved by [`chip_label_offset`],
-/// which is zero for Geist (ascent 1005, descent 295, cap 710 per 1000 units)
-/// and corrects for other interface fonts.
+/// The chip plate: the palette's chip tone (a step below the card in dark,
+/// a soft sage in light).
+pub(crate) fn chip_bg(theme: &Theme) -> gpui::Hsla {
+    if theme.appearance.is_dark() {
+        gpui::hsla(136.0 / 360.0, 0.05, 0.075, 1.0)
+    } else {
+        gpui::hsla(110.0 / 360.0, 0.14, 0.90, 1.0)
+    }
+}
+
+/// The icon well inside a chip: the plate lifted 6% toward the foreground.
+pub(crate) fn chip_well_bg(theme: &Theme) -> gpui::Hsla {
+    crate::theme::mix(chip_bg(theme), theme.text, 0.06)
+}
+
+/// A chip label's colour and weight, for kinds that differ from body text:
+/// links read info blue, skills lime, both medium.
+pub(crate) fn chip_label_style(
+    kind: ChipKind,
+    theme: &Theme,
+) -> Option<(gpui::Hsla, gpui::FontWeight)> {
+    match kind {
+        ChipKind::Link => Some((
+            crate::site_links::link_color(theme),
+            gpui::FontWeight::MEDIUM,
+        )),
+        ChipKind::Skill => Some((
+            crate::site_links::skill_color(theme),
+            gpui::FontWeight::MEDIUM,
+        )),
+        _ => None,
+    }
+}
+
+/// Paint a chip under its label. Most kinds are a soft rounded plate (radius
+/// 7, a 1px border at 45%) whose first row starts with the icon on a small
+/// well; links and skills have no plate, only their favicon or lime mark.
+/// Callers center `chip` on the label's cap height: the row's middle moved
+/// by [`chip_label_offset`], which is zero for Geist (ascent 1005, descent
+/// 295, cap 710 per 1000 units) and corrects for other interface fonts.
 pub(crate) fn paint_chip(
     window: &mut Window,
     chip: Bounds<Pixels>,
+    kind: ChipKind,
     icon: Option<&ChipIcon>,
     theme: &Theme,
-    cx: &App,
+    cx: &mut App,
 ) {
+    if matches!(kind, ChipKind::Link | ChipKind::Skill) {
+        let Some(icon) = icon else {
+            return;
+        };
+        // The 1em mark sits in the side pad and icon slot, just clear of
+        // the label (`margin-right: .3em`).
+        let side = px(CHIP_ICON_SIZE).min(chip.size.height);
+        let bounds = Bounds::new(
+            chip.origin + point(px(3.0), (chip.size.height - side) / 2.0),
+            size(side, side),
+        );
+        match icon {
+            ChipIcon::Favicon(url) => crate::site_links::paint_favicon(
+                window,
+                bounds,
+                url,
+                crate::site_links::link_color(theme),
+                cx,
+            ),
+            ChipIcon::Glyph(path) => {
+                let _ = window.paint_svg(
+                    bounds,
+                    (*path).into(),
+                    None,
+                    gpui::TransformationMatrix::default(),
+                    crate::site_links::skill_icon_color(theme),
+                    cx,
+                );
+            }
+            _ => {}
+        }
+        return;
+    }
+    let dark = theme.appearance.is_dark();
+    if dark {
+        // Dark plates sit a step below the card: a soft drop lifts them.
+        window.paint_drop_shadows(
+            chip,
+            gpui::Corners::all(px(7.0)),
+            &[gpui::BoxShadow {
+                color: gpui::black().opacity(0.22),
+                offset: point(px(0.0), px(1.0)),
+                blur_radius: px(2.0),
+                spread_radius: px(0.0),
+                inset: false,
+            }],
+        );
+    }
     window.paint_quad(quad(
         chip,
-        px(5.0),
-        theme.ink(0.09),
-        px(0.0),
-        gpui::transparent_black(),
+        px(7.0),
+        chip_bg(theme),
+        px(1.0),
+        theme.border.opacity(0.45),
         BorderStyle::default(),
     ));
+    if dark {
+        // …and a 1px inset highlight along the top edge.
+        window.paint_inset_shadows(
+            chip,
+            gpui::Corners::all(px(7.0)),
+            &[gpui::BoxShadow {
+                color: gpui::white().opacity(0.05),
+                offset: point(px(0.0), px(1.0)),
+                blur_radius: px(0.0),
+                spread_radius: px(0.0),
+                inset: true,
+            }],
+        );
+    }
     let Some(icon) = icon else {
         return;
     };
     let well = chip.size.height - px(2.0);
     let well_bounds = Bounds::new(chip.origin + point(px(1.0), px(1.0)), size(well, well));
+    if let ChipIcon::Thumbnail(image) = icon {
+        // `object-cover`: fill the well, cropping the longer side.
+        if let Some(render) = image.clone().use_render_image(window, cx) {
+            let frame = render.size(0);
+            let (w, h) = (frame.width.0 as f32, frame.height.0 as f32);
+            let scale = f32::from(well) / w.min(h).max(1.0);
+            let fitted = size(px(w * scale), px(h * scale));
+            let fitted = Bounds::new(
+                well_bounds.origin
+                    + point((well - fitted.width) / 2.0, (well - fitted.height) / 2.0),
+                fitted,
+            );
+            let _ = window.paint_image_fitted(
+                well_bounds,
+                fitted,
+                gpui::Corners::all(px(4.0)),
+                render,
+                0,
+                false,
+            );
+            return;
+        }
+    }
     window.paint_quad(quad(
         well_bounds,
         px(4.0),
-        crate::file_icons::well_bg(theme),
+        chip_well_bg(theme),
         px(0.0),
         gpui::transparent_black(),
         BorderStyle::default(),
@@ -236,6 +369,11 @@ pub(crate) fn paint_chip(
                 let _ = window.paint_image(bounds, Default::default(), image, 0, false);
             }
         }
+        ChipIcon::Favicon(url) => {
+            crate::site_links::paint_favicon(window, bounds, url, theme.text_muted, cx)
+        }
+        // A picture still decoding keeps the empty well.
+        ChipIcon::Thumbnail(_) => {}
     }
 }
 
@@ -253,11 +391,29 @@ pub(crate) fn chip_text(
     // Split runs at the padding (a default highlight changes nothing else),
     // so the family override lands on whole runs over the inherited style.
     let pads = chip_pad_overrides(&spans);
+    // Links and skills also tint their labels.
+    let mut highlights: Vec<(Range<usize>, gpui::HighlightStyle)> = pads
+        .iter()
+        .map(|range| (range.clone(), gpui::HighlightStyle::default()))
+        .collect();
+    for span in &spans {
+        if let Some((color, weight)) = chip_label_style(span.kind, theme) {
+            let [lead, trail] = chip_pad_ranges(&span.range);
+            if lead.end < trail.start {
+                highlights.push((
+                    lead.end..trail.start,
+                    gpui::HighlightStyle {
+                        color: Some(color),
+                        font_weight: Some(weight),
+                        ..Default::default()
+                    },
+                ));
+            }
+        }
+    }
+    highlights.sort_by_key(|(range, _)| range.start);
     let styled = gpui::StyledText::new(text)
-        .with_highlights(
-            pads.iter()
-                .map(|range| (range.clone(), gpui::HighlightStyle::default())),
-        )
+        .with_highlights(highlights)
         .with_font_family_overrides(
             pads.into_iter()
                 .map(|range| (range, SharedString::from(CHIP_PAD_FAMILY))),
@@ -281,7 +437,14 @@ pub(crate) fn chip_text(
                     let row_top = rect.origin.y - px(2.0);
                     let offset = text_chip_label_offset(&layout, label, row_top, px(2.0), window);
                     let rect = Bounds::new(rect.origin + point(px(0.0), offset), rect.size);
-                    paint_chip(window, rect, (row == 0).then_some(icon), &theme, cx);
+                    paint_chip(
+                        window,
+                        rect,
+                        span.kind,
+                        (row == 0).then_some(icon),
+                        &theme,
+                        cx,
+                    );
                 }
             }
         },

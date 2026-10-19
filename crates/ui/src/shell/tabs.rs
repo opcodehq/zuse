@@ -164,6 +164,7 @@ impl Shell {
             || self.user_menu.get().is_some()
             || self.spaces_menu.get().is_some()
             || self.right_plus.get().is_some()
+            || self.open_in.menu.get().is_some()
             || self.conversation_history.get().is_some()
             || !self.pending_file_closes.is_empty()
             || self.pending_exit.is_some()
@@ -534,7 +535,7 @@ impl Shell {
         }
     }
 
-    fn render_thread_conversations(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_thread_conversations(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         let Some((_, rows, closed_rows)) = self.thread_conversation_tabs(cx) else {
             return Empty.into_any_element();
@@ -556,10 +557,10 @@ impl Shell {
         side_chats.sort_by_key(|chat| chat.created_at);
         let selected_id = selected.id.clone();
         let archived = selected.archived;
-        let main_diff = self.active_main_diff(cx);
+        let main_tab = self.active_main_tab(cx);
         let main_tabs = self.main_tab_rows(cx);
         let closable = rows.len() > 1;
-        let tab = |id: SharedString, title: SharedString, active: bool| {
+        let tab_chip = |id: SharedString, title: SharedString, active: bool| {
             div()
                 .id(id)
                 .role(gpui::Role::Tab)
@@ -610,46 +611,108 @@ impl Shell {
             };
         let main_chips = main_tabs
             .into_iter()
-            .map(|(id, title, review)| {
-                let active = main_diff == Some(id);
-                let group = SharedString::from(format!("main-tab-{id}"));
-                tab(group.clone(), title.clone(), active)
+            .map(|row| {
+                let main_tabs::MainTabRow {
+                    tab,
+                    title,
+                    review,
+                    dirty,
+                    path,
+                } = row;
+                let active = main_tab == Some(tab);
+                // A file tab drags into a composer as a file mention.
+                let drag = match tab {
+                    main_tabs::MainTab::File(id) => {
+                        self.workspace_path_for_surface(RightSurface::File(id), cx)
+                    }
+                    main_tabs::MainTab::Diff(_) => None,
+                };
+                let key = match tab {
+                    main_tabs::MainTab::Diff(id) => format!("diff-{id}"),
+                    main_tabs::MainTab::File(id) => format!("file-{id}"),
+                };
+                let group = SharedString::from(format!("main-tab-{key}"));
+                let selector = group.to_string();
+                let leading = match &path {
+                    Some(path) => crate::file_icons::icon(
+                        crate::file_icons::FileIconIdentity::file(path.as_ref()),
+                        theme.appearance,
+                    )
+                    .size(px(14.))
+                    .flex_none()
+                    .into_any_element(),
+                    None => icon(if review {
+                        icons::GIT_COMPARE
+                    } else {
+                        icons::GIT_BRANCH
+                    })
+                    .size(px(13.))
+                    .flex_none()
+                    .text_color(theme.text_muted)
+                    .into_any_element(),
+                };
+                let close_label = match tab {
+                    main_tabs::MainTab::File(_) => "Close file",
+                    main_tabs::MainTab::Diff(_) if review => "Close review",
+                    main_tabs::MainTab::Diff(_) => "Close diff",
+                };
+                // An unsaved file keeps a dot in the close slot until hovered.
+                let close = close_button(
+                    SharedString::from(format!("main-tab-close-{key}")),
+                    close_label,
+                    active || dirty,
+                    group.clone(),
+                )
+                .relative()
+                .when(dirty, |slot| {
+                    slot.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(if active {
+                                theme.accent_fill()
+                            } else {
+                                theme.surface
+                            })
+                            .rounded(px(4.))
+                            .group_hover(group.clone(), |d| d.opacity(0.))
+                            .child(div().size(px(6.)).rounded_full().bg(theme.text_muted)),
+                    )
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.close_main_tab(tab, cx);
+                }));
+                tab_chip(group.clone(), title.clone(), active)
                     .group(group.clone())
                     .pr(px(4.))
-                    .debug_selector(move || format!("main-tab-{id}"))
-                    .child(
-                        icon(if review {
-                            icons::GIT_COMPARE
-                        } else {
-                            icons::GIT_BRANCH
-                        })
-                        .size(px(13.))
-                        .flex_none()
-                        .text_color(theme.text_muted),
-                    )
-                    .child(div().min_w_0().truncate().child(title))
-                    .child(
-                        close_button(
-                            SharedString::from(format!("main-tab-close-{id}")),
-                            if review { "Close review" } else { "Close diff" },
-                            active,
-                            group,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
+                    .debug_selector(move || selector.clone())
+                    .when_some(path, |chip, path| {
+                        chip.tooltip(crate::settings::widgets::text_tooltip(path))
+                            .tooltip_show_delay(std::time::Duration::from_millis(350))
+                    })
+                    .when_some(drag, |chip, drag| {
+                        chip.on_drag(drag, |payload, _, _, cx| {
                             cx.stop_propagation();
-                            this.close_main_tab(id, cx);
-                        })),
-                    )
+                            crate::files::workspace_path_drag_ghost(payload, cx)
+                        })
+                    })
+                    .child(leading)
+                    .child(div().min_w_0().truncate().child(title))
+                    .child(close)
                     .on_mouse_down(
                         MouseButton::Middle,
                         cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
-                            this.close_main_tab(id, cx);
+                            this.close_main_tab(tab, cx);
                         }),
                     )
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.activate_main_tab(Some(id), cx)),
-                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.focus_main_tab(Some(tab), window, cx)
+                    }))
                     .into_any_element()
             })
             .collect::<Vec<_>>();
@@ -657,7 +720,7 @@ impl Shell {
             .into_iter()
             .enumerate()
             .map(|(index, chat)| {
-                let active = chat.id == selected_id && main_diff.is_none();
+                let active = chat.id == selected_id && main_tab.is_none();
                 let title = chat
                     .title
                     .clone()
@@ -669,7 +732,7 @@ impl Shell {
                 let id = chat.id;
                 let group = SharedString::from(format!("thread-conversation-{id}"));
                 let (close_id, middle_id) = (id.clone(), id.clone());
-                tab(group.clone(), title.clone().into(), active)
+                tab_chip(group.clone(), title.clone().into(), active)
                     .group(group.clone())
                     .when(closable, |d| d.pr(px(4.)))
                     .debug_selector({
@@ -736,7 +799,7 @@ impl Shell {
                 let id = chat.id;
                 let rename = self.rename_input_for(&id, ChatRenameSurface::Tab);
                 let (open_id, menu_id, rename_id) = (id.clone(), id.clone(), id.clone());
-                tab(
+                tab_chip(
                     SharedString::from(format!("side-chat-tab-{id}")),
                     title.clone(),
                     false,
@@ -1073,7 +1136,7 @@ impl Shell {
                                             self.reduced_motion,
                                         ),
                                         true,
-                                        16.0,
+                                        14.0,
                                         theme.text_muted,
                                     ),
                                     ShortcutId::ToggleChanges.label(),
@@ -1100,27 +1163,47 @@ impl Shell {
         // The session card's toggle belongs to the transcript: it ends the
         // transcript's stretch of the titlebar, left of the side pane's tabs
         // when one is open, else just left of the explorer toggle.
+        // The conversation's own top-bar actions, in the reference order:
+        // Open in, the environment summary, then the bottom terminal; the
+        // right pane's toggle anchors the far edge.
         let session_info_toggle = (!takeover && !on_canvas).then(|| {
             let open = self.session_info_visible(cx);
-            let label = if open {
-                "Hide session details"
-            } else {
-                "Show session details"
-            };
-            header_icon_button_with(
+            header_icon_button(
                 "toggle-session-info",
-                icons::corner_card_glyph(16.0, theme.text_muted),
-                label,
+                icons::LIST,
+                "Toggle environment summary",
+                &theme,
                 cx.listener(|this, _, _, cx| this.toggle_session_info(cx)),
             )
             .role(gpui::Role::Button)
-            .aria_label(label)
+            .aria_label("Toggle environment summary")
+            .aria_selected(open)
             .flex_none()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| this.note_session_info_press()),
             )
-            .when(open, |button| button.bg(crate::theme::wash(0.09)))
+            .when(open, |button| button.bg(theme.text.opacity(0.10)))
+        });
+        let open_in = if !takeover && !on_canvas {
+            self.render_open_in(&theme, cx)
+        } else {
+            None
+        };
+        let terminal_toggle = (!takeover && !on_canvas).then(|| {
+            let open = self.terminal_open(cx);
+            header_icon_button(
+                "toggle-bottom-terminal",
+                icons::PANEL_BOTTOM,
+                "Toggle bottom terminal",
+                &theme,
+                cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)),
+            )
+            .role(gpui::Role::Button)
+            .aria_label("Toggle bottom terminal")
+            .aria_selected(open)
+            .flex_none()
+            .when(open, |button| button.bg(theme.text.opacity(0.10)))
         });
         let inner = div()
             .size_full()
@@ -1159,7 +1242,16 @@ impl Shell {
                 )
             })
             .when(takeover, |d| d.child(div().flex_1()))
-            .children(session_info_toggle)
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .children(open_in)
+                    .children(session_info_toggle)
+                    .children(terminal_toggle),
+            )
             .children(trailing);
 
         // The unified window titlebar: full-width on the glass shell, ABOVE

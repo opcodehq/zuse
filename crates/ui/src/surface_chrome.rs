@@ -63,14 +63,15 @@ pub(crate) fn tab_frame(
         .role(gpui::Role::Button)
         .aria_selected(selected)
         .tab_index(0)
-        .text_size(px(12.0))
+        .text_size(px(11.0))
         .text_color(if selected {
             theme.text
         } else {
             theme.text_muted
         })
         .focus_visible(|style| style.border_2().border_color(theme.accent))
-        .when(selected, |el| el.bg(crate::theme::wash(0.10)))
+        // Reference workspace-panel-tab: active `bg-muted`.
+        .when(selected, |el| el.bg(theme.muted_fill()))
 }
 
 pub(crate) fn tab(
@@ -78,8 +79,10 @@ pub(crate) fn tab(
     selected: bool,
     theme: &Theme,
 ) -> gpui::Stateful<Div> {
+    let hover = theme.muted_fill().opacity(0.6);
+    let hover_text = theme.text;
     tab_frame(id, selected, theme).when(!selected, |el| {
-        el.hover(|style| style.bg(crate::theme::wash(0.06)))
+        el.hover(move |style| style.bg(hover).text_color(hover_text))
     })
 }
 
@@ -107,7 +110,8 @@ pub(crate) struct TabChip {
     pub leading: gpui::AnyElement,
 }
 
-/// A pane tab: the leading icon, the truncated title, and a trailing slot
+/// A pane tab (reference workspace-panel-tab: 24px tall, `px-1.5`, 11px
+/// label): the leading icon, the truncated title, and a trailing 16px slot
 /// whose ✕ fades in on hover over the unsaved dot (same slot, no width jump).
 /// Callers add activation, menus, tooltips and drag behaviour.
 pub(crate) fn tab_chip(
@@ -132,12 +136,12 @@ pub(crate) fn tab_chip(
         .h(px(TAB_CHIP_HEIGHT))
         .w(px(TAB_CHIP_WIDTH))
         .flex_none()
-        .px(px(4.0))
-        .rounded(px(CONTROL_RADIUS))
+        .px(px(6.0))
+        .rounded(px(4.0))
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(3.0))
+        .gap(px(4.0))
         .cursor_pointer()
         .role(gpui::Role::Button)
         // The old session-tab strip's solved carve-out: NOT `.occlude()` — a
@@ -152,7 +156,7 @@ pub(crate) fn tab_chip(
         .child(
             div()
                 .flex_none()
-                .size(px(18.0))
+                .size(px(14.0))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -162,9 +166,9 @@ pub(crate) fn tab_chip(
             div()
                 .flex_1()
                 .min_w_0()
+                .ml(px(2.0))
                 .truncate()
-                .text_size(crate::typography::ui_rems(11.5))
-                .text_color(if active { theme.text } else { theme.text_muted })
+                .text_size(crate::typography::ui_rems(11.0))
                 .child(title),
         )
         .child(
@@ -174,13 +178,13 @@ pub(crate) fn tab_chip(
                 .id((close_id, ix))
                 .debug_selector(move || format!("{close_id}-{ix}"))
                 .flex_none()
-                .size(px(18.0))
+                .size(px(16.0))
                 .rounded(px(4.0))
                 .relative()
                 .role(gpui::Role::Button)
                 .aria_label("Close tab")
                 .tooltip(crate::settings::widgets::text_tooltip("Close tab"))
-                .hover(|s| s.bg(crate::theme::wash(0.12)))
+                .hover(|s| s.bg(theme.surface))
                 // The tab owns a drag payload. Claim the close press before
                 // it reaches that parent or GPUI starts a tab drag instead of
                 // delivering the close click.
@@ -222,15 +226,11 @@ pub(crate) fn tab_chip(
         )
 }
 
-/// A chip's leading glyph, quieter on inactive tabs.
+/// A chip's leading glyph: 14px at 80% of the label's colour.
 pub(crate) fn tab_chip_icon(path: &'static str, active: bool, theme: &Theme) -> gpui::AnyElement {
     crate::icons::icon(path)
-        .size(px(12.0))
-        .text_color(if active {
-            theme.text_muted
-        } else {
-            theme.text_muted.opacity(0.7)
-        })
+        .size(px(14.0))
+        .text_color(if active { theme.text } else { theme.text_muted }.opacity(0.8))
         .into_any_element()
 }
 

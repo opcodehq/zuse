@@ -3396,6 +3396,38 @@ fn read_only_message(reason: Option<WorkspaceReadOnlyReason>) -> SharedString {
     .into()
 }
 
+/// Review fixture: show `text` as the editor's file, as if it had loaded.
+#[cfg(feature = "browser-fixture")]
+impl FilesSurface {
+    pub fn fixture_seed_document(&mut self, text: &str, cx: &mut Context<Self>) {
+        let Some(path) = self.editor_path.clone() else {
+            return;
+        };
+        self.sync_target(cx);
+        let Some(context) = self.request_context.clone() else {
+            return;
+        };
+        let mut document = FileDocument::loading(document_key(&context, path.clone()));
+        document.set_loaded(zuse_protocol::WorkspaceFileText {
+            checkout_id: "fixture-checkout".into(),
+            path: path.clone(),
+            text: Some(text.into()),
+            content_hash: Some("fixture".into()),
+            size: text.len() as u64,
+            modified_at: None,
+            encoding: zuse_protocol::WorkspaceTextEncoding::Utf8,
+            line_ending: Some(zuse_protocol::WorkspaceLineEnding::Lf),
+            read_only_reason: None,
+            truncated: false,
+        });
+        self.preview.documents.insert(path.clone(), document);
+        self.preview.active = Some(path.clone());
+        self.sync_preview_list();
+        self.request_file_highlight(path, text.into(), "fixture".into(), cx);
+        cx.notify();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

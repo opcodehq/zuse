@@ -83,6 +83,7 @@ pub mod transcript;
 pub mod typography;
 pub mod visuals;
 pub mod voice;
+pub(crate) mod site_links;
 mod workspace_links;
 
 use std::path::PathBuf;

@@ -28,6 +28,13 @@ impl Render for DropHost {
                 .size_full()
                 .flex()
                 .flex_col()
+                // File tabs live in the conversation strip, beside the
+                // conversation; side chats in the right pane's strip.
+                .child(
+                    div()
+                        .h(px(28.))
+                        .child(shell.render_thread_conversations(cx)),
+                )
                 .child(div().h(px(40.)).child(shell.render_right_tab_strip(cx)))
                 // Supply the tree/search payload without needing an engine
                 // to enumerate a checkout. Targets and file tabs are real UI.
@@ -144,6 +151,8 @@ fn setup_with_shell(
     cx.update(|window, cx| {
         shell.update(cx, |shell, cx| {
             shell.add_file_surface("src/tab.rs".into(), window, cx);
+            // Back to the conversation; the file keeps its main-area tab.
+            shell.activate_main_tab(None, cx);
             let explorer = cx.new(|cx| {
                 crate::files::FilesSurface::new_explorer(
                     shell.state.clone(),
@@ -169,7 +178,9 @@ fn setup_with_shell(
 #[gpui::test]
 fn full_shell_file_tab_drops_reach_side_chat_body(cx: &mut TestAppContext) {
     let (shell, cx) = setup_with_shell(cx, true);
-    for expanded in [false, true] {
+    // The file's tab sits in the conversation strip, which the pane's
+    // takeover hides; drag it with the pane beside the conversation.
+    for expanded in [false] {
         cx.update(|window, cx| {
             shell.update(cx, |shell, cx| {
                 shell.right_pane_expanded = expanded;
@@ -193,7 +204,7 @@ fn full_shell_file_tab_drops_reach_side_chat_body(cx: &mut TestAppContext) {
                 }
             });
             let before = shell.read_with(cx, |shell, cx| text(&shell.side_chats[&2].composer, cx));
-            drag(cx, "right-surface-tab-0", to);
+            drag(cx, FILE_TAB, to);
             shell.read_with(cx, |shell, cx| {
                 let after = text(&shell.side_chats[&2].composer, cx);
                 assert_eq!(
@@ -206,6 +217,9 @@ fn full_shell_file_tab_drops_reach_side_chat_body(cx: &mut TestAppContext) {
         }
     }
 }
+
+/// The main-area tab of the file `setup` opens.
+const FILE_TAB: &str = "main-tab-file-1";
 
 fn drag(cx: &mut VisualTestContext, source: &'static str, to: Point<Pixels>) {
     let from = cx.debug_bounds(source).unwrap().center();
@@ -302,7 +316,7 @@ fn file_tab_drops_attach_to_side_chat_transcript_and_main_without_reordering(
             .unwrap();
         gpui::point(bounds.center().x, px(150.))
     });
-    drag(cx, "right-surface-tab-0", to);
+    drag(cx, FILE_TAB, to);
     shell.read_with(cx, |shell, cx| {
         assert!(text(&shell.side_chats[&2].composer, cx).contains("zuse-file:src/tab.rs"));
         assert!(text(&shell.side_chats[&1].composer, cx).is_empty());
@@ -310,14 +324,14 @@ fn file_tab_drops_attach_to_side_chat_transcript_and_main_without_reordering(
         assert_eq!(shell.resolved_right_active(cx), RightSurface::SideChat(2));
         assert_eq!(shell.right_tabs[&shell.panel_key(cx)], original_tabs);
     });
-    drag(cx, "right-surface-tab-0", gpui::point(px(200.), px(150.)));
+    drag(cx, FILE_TAB, gpui::point(px(200.), px(150.)));
     shell.read_with(cx, |shell, cx| {
         assert!(text(&shell.composer, cx).contains("zuse-file:src/tab.rs"));
         assert_eq!(shell.right_tabs[&shell.panel_key(cx)], original_tabs);
     });
     // Chat tabs have no workspace path and must not insert a mention.
     let before = shell.read_with(cx, |shell, cx| text(&shell.side_chats[&2].composer, cx));
-    drag(cx, "right-surface-tab-1", to);
+    drag(cx, "right-surface-tab-0", to);
     shell.read_with(cx, |shell, cx| {
         assert_eq!(text(&shell.side_chats[&2].composer, cx), before);
         assert_eq!(shell.right_tabs[&shell.panel_key(cx)], original_tabs);

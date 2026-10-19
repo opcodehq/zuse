@@ -117,6 +117,18 @@ pub fn truncate(
         }
         let label = &flat.text[range.clone()];
         let runs = slice_runs(&flat.runs, range.clone());
+        // A web link's favicon slot shares the row with its label.
+        let width = flat
+            .favicons
+            .iter()
+            .find(|(slot, _)| slot.end == range.start)
+            .map_or(width, |(slot, _)| {
+                width
+                    - measure(
+                        &flat.text[slot.clone()],
+                        &slice_runs(&flat.runs, slot.clone()),
+                    )
+            });
         if measure(label, &runs) <= width {
             continue;
         }
@@ -180,6 +192,11 @@ pub fn truncate(
             .collect(),
         code_ranges: flat.code_ranges.iter().map(shown).collect(),
         file_glyphs: flat.file_glyphs.iter().map(shown).collect(),
+        favicons: flat
+            .favicons
+            .iter()
+            .map(|(range, url)| (shown(range), url.clone()))
+            .collect(),
         original: Some(OriginalText {
             text: flat
                 .original
@@ -235,77 +252,106 @@ const FILE_GLYPH_SLOT: &str = "\u{00A0}\u{00A0}\u{00A0}\u{00A0}";
 pub(crate) const FILE_GLYPH_SIZE: f32 = 12.0;
 pub(crate) const FILE_GLYPH_GAP: f32 = 4.0;
 
-/// Reserve a slot after every file link the surface's roots resolve. Web
-/// links and targets no known root owns keep their shape, as does a
-/// paragraph that is nothing but one file link — that renders as the sole
-/// file row with its own icon tile.
+/// The slot reserved before a web link for its favicon: five NBSPs, holding
+/// the 1em icon with the reference's `.3em` gap before the label. Copy and
+/// selection map the slot back to the link start.
+const FAVICON_SLOT: &str = "\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}";
+pub(crate) const FAVICON_SIZE: f32 = 14.0;
+
+/// Reserve a slot after every file link the surface's roots resolve, and one
+/// before every web link for its favicon. Web links that no root owns, and
+/// targets no known root owns, keep their shape apart from the favicon, as
+/// does a paragraph that is nothing but one file link — that renders as the
+/// sole file row with its own icon tile.
 fn with_file_link_glyphs(flat: &FlatText, opts: &RenderOptions) -> FlatText {
-    let Some(ui) = opts.link.as_ref().filter(|ui| ui.file_roots.is_some()) else {
-        return flat.clone();
-    };
-    if flat.links.is_empty() || paragraph_is_sole_file_link(flat, opts.workspace_root.as_deref()) {
+    if flat.links.is_empty() {
         return flat.clone();
     }
-    let insertions: Vec<usize> = flat
+    // `(at, slot, favicon url)`: a favicon slot opens its link, a glyph
+    // slot closes its file link.
+    let mut insertions: Vec<(usize, &str, Option<String>)> = flat
         .links
         .iter()
-        .filter(|(_, target)| ui.file_link(target).is_some())
-        .map(|(range, _)| range.end)
+        .filter(|(_, target)| super::render::is_web_link(target))
+        .map(|(range, url)| (range.start, FAVICON_SLOT, Some(url.clone())))
         .collect();
+    if let Some(ui) = opts.link.as_ref().filter(|ui| ui.file_roots.is_some())
+        && !paragraph_is_sole_file_link(flat, opts.workspace_root.as_deref())
+    {
+        insertions.extend(
+            flat.links
+                .iter()
+                .filter(|(_, target)| ui.file_link(target).is_some())
+                .map(|(range, _)| (range.end, FILE_GLYPH_SLOT, None)),
+        );
+    }
     if insertions.is_empty() {
         return flat.clone();
     }
+    insertions.sort_by_key(|(at, _, _)| *at);
     // Positions after an insertion slide by the slot length; an insertion
     // point itself resolves to its "before" side so a range ending on it
     // never swallows its own slot.
     let shift_before = |offset: usize| -> usize {
         insertions
             .iter()
-            .filter(|at| **at < offset)
-            .map(|_| FILE_GLYPH_SLOT.len())
+            .filter(|(at, _, _)| *at < offset)
+            .map(|(_, slot, _)| slot.len())
             .sum()
     };
     let shift_through = |offset: usize| -> usize {
         insertions
             .iter()
-            .filter(|at| **at <= offset)
-            .map(|_| FILE_GLYPH_SLOT.len())
+            .filter(|(at, _, _)| *at <= offset)
+            .map(|(_, slot, _)| slot.len())
             .sum()
     };
     let map_range = |range: &Range<usize>| {
         range.start + shift_through(range.start)..range.end + shift_before(range.end)
     };
-    let slot_run = |at: usize| {
+    let slot_run = |at: usize, len: usize| {
         let mut run = slice_runs(&flat.runs, at..flat.text.len())
             .into_iter()
             .next()
             .or_else(|| flat.runs.first().cloned())?;
-        run.len = FILE_GLYPH_SLOT.len();
+        run.len = len;
         run.underline = None;
         run.strikethrough = None;
         Some(run)
     };
-    let Some(slot_runs): Option<Vec<TextRun>> = insertions.iter().map(|at| slot_run(*at)).collect()
+    let Some(slot_runs): Option<Vec<TextRun>> = insertions
+        .iter()
+        .map(|(at, slot, _)| slot_run(*at, slot.len()))
+        .collect()
     else {
         return flat.clone();
     };
 
-    let mut text =
-        String::with_capacity(flat.text.len() + insertions.len() * FILE_GLYPH_SLOT.len());
+    let mut text = String::with_capacity(
+        flat.text.len()
+            + insertions
+                .iter()
+                .map(|(_, slot, _)| slot.len())
+                .sum::<usize>(),
+    );
     let mut runs: Vec<TextRun> = Vec::new();
     let mut offsets = OffsetMap::default();
-    let mut glyphs = Vec::with_capacity(insertions.len());
+    let mut glyphs = Vec::new();
+    let mut favicons = Vec::new();
     let mut at = 0;
-    for (ix, insert_at) in insertions.iter().enumerate() {
+    for (ix, (insert_at, slot, favicon)) in insertions.iter().enumerate() {
         text.push_str(&flat.text[at..*insert_at]);
         runs.extend(slice_runs(&flat.runs, at..*insert_at));
         let start = text.len();
-        text.push_str(FILE_GLYPH_SLOT);
+        text.push_str(slot);
         runs.push(slot_runs[ix].clone());
         offsets
             .omissions
             .push((*insert_at..*insert_at, start..text.len()));
-        glyphs.push(start..text.len());
+        match favicon {
+            Some(url) => favicons.push((start..text.len(), url.clone())),
+            None => glyphs.push(start..text.len()),
+        }
         at = *insert_at;
     }
     text.push_str(&flat.text[at..]);
@@ -324,6 +370,7 @@ fn with_file_link_glyphs(flat: &FlatText, opts: &RenderOptions) -> FlatText {
             .collect(),
         code_ranges: flat.code_ranges.iter().map(&map_range).collect(),
         file_glyphs: glyphs,
+        favicons,
         original: Some(OriginalText {
             text: flat
                 .original
@@ -449,6 +496,8 @@ pub(crate) struct FileLinkGlyphs {
     pub child: AnyElement,
     pub layout: TextLayout,
     pub slots: Vec<Range<usize>>,
+    /// Leading favicon slots of web links, with their URLs.
+    pub favicons: Vec<(Range<usize>, String)>,
 }
 
 impl IntoElement for FileLinkGlyphs {
@@ -518,6 +567,36 @@ impl Element for FileLinkGlyphs {
                 cx,
             );
             overlays.push(icon_el);
+        }
+        let tint = crate::site_links::link_color(&theme);
+        for (slot, url) in &self.favicons {
+            let Some(rect) = range_rects(&self.layout, slot, 0.0, INLINE_CODE_INSET_Y)
+                .first()
+                .copied()
+            else {
+                continue;
+            };
+            let side = px(FAVICON_SIZE).min(rect.size.height);
+            let origin = point(
+                rect.origin.x + px(1.0),
+                rect.origin.y + (rect.size.height - side) / 2.0,
+            );
+            let url = url.clone();
+            let mut favicon = gpui::canvas(
+                |_, _, _| {},
+                move |bounds, _, window, cx| {
+                    crate::site_links::paint_favicon(window, bounds, &url, tint, cx)
+                },
+            )
+            .size(side)
+            .into_any_element();
+            favicon.prepaint_as_root(
+                origin,
+                size(side, side).map(AvailableSpace::Definite),
+                window,
+                cx,
+            );
+            overlays.push(favicon);
         }
         overlays
     }

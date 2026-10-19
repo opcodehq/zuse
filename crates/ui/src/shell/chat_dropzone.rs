@@ -3,6 +3,8 @@ use super::*;
 impl Shell {
     /// The entire conversation receives attachments in its own composer,
     /// regardless of which pane had keyboard focus when the drag started.
+    /// The drop target itself shows inside the composer card
+    /// (`composer::tray::drop_overlay`).
     pub(super) fn chat_dropzone(
         &self,
         id: impl Into<gpui::ElementId>,
@@ -56,33 +58,6 @@ impl Shell {
                     cx.notify();
                 },
             ))
-    }
-
-    pub(super) fn attachment_drop_overlay(theme: &Theme) -> gpui::Stateful<gpui::Div> {
-        // Use typed drag styles rather than cached shell state: an external
-        // FileDrop::Exited clears the payload without a final mouse move.
-        // Resize markers and non-file tabs must never reveal the overlay.
-        div()
-            .id("attachment-drop-overlay")
-            .absolute()
-            .inset_0()
-            .opacity(0.0)
-            .bg(theme.scrim().opacity(0.4 / 0.6))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(crate::typography::ui_rems(13.0))
-            .text_color(theme.text)
-            .drag_over::<gpui::ExternalPaths>(|style, _, _, _| style.opacity(1.0))
-            .drag_over::<WorkspacePathDrag>(|style, _, _, _| style.opacity(1.0))
-            .drag_over::<RightTabDrag>(|style, tab, _, _| {
-                if tab.workspace_path.is_some() {
-                    style.opacity(1.0)
-                } else {
-                    style
-                }
-            })
-            .child("Drop to attach")
     }
 
     /// The hint while a sidebar session is carried over a chat.
