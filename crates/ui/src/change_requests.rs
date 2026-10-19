@@ -35,6 +35,15 @@ impl ChangeRequestBadgeTone {
             Self::Closed => theme.danger,
         }
     }
+
+    /// The state's glyph: open and closed pull requests, or the merge.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::Open => crate::icons::PULL_REQUEST,
+            Self::Merged => crate::icons::GIT_MERGE,
+            Self::Closed => crate::icons::PULL_REQUEST_CLOSED,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +188,67 @@ fn render_pull_request_badge(
         device,
         theme,
     )
+}
+
+/// A Threads view row's pull request: the state glyph in its tone, then the
+/// number and state word in the row's quiet metadata tone ("#412 Open").
+/// Clicking opens the pull request; the tooltip carries its title.
+pub(crate) fn pull_request_state_inline(
+    id: SharedString,
+    summary: ChangeRequestSummary,
+    interactive: bool,
+    device: Option<String>,
+    muted: gpui::Hsla,
+    theme: &Theme,
+) -> AnyElement {
+    let model = ChangeRequestBadgeModel::from_summary(&summary);
+    let color = model.tone.color(theme);
+    let tooltip_model = model.clone();
+    let accessible_label = format!(
+        "Pull request {} {}: {}",
+        model.number, model.state_label, model.title
+    );
+    let url = summary.url;
+    div()
+        .id(id)
+        // The project name gives way first; the state stays whole.
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(4.0))
+        .whitespace_nowrap()
+        .text_color(muted)
+        .when(interactive, |el| {
+            el.role(gpui::Role::Link)
+                .aria_label(accessible_label)
+                .cursor_pointer()
+                .hover(move |style| style.text_color(color))
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    crate::pull_request_detail::open_on_device(&url, device.clone(), window, cx);
+                })
+                .tooltip(move |_, cx| {
+                    cx.new(|_| ChangeRequestTooltip {
+                        model: tooltip_model.clone(),
+                    })
+                    .into()
+                })
+                .tooltip_show_delay(std::time::Duration::from_millis(350))
+        })
+        .child(
+            crate::icons::icon(model.tone.glyph())
+                .size(px(12.0))
+                .flex_none()
+                .text_color(color.opacity(0.9)),
+        )
+        .child(
+            div()
+                .flex_none()
+                .child(SharedString::from(format!("#{}", model.number))),
+        )
+        .child(model.state_label)
+        .into_any_element()
 }
 
 /// Listing surfaces use the exact sidebar badge renderer without inventing

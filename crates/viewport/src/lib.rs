@@ -626,6 +626,8 @@ impl WorkspaceView {
     fn plugin_action(&mut self, request: Value) {
         self.plugin_request_with(methods::PLUGINS, request);
     }
+    // Kept for the organization workspace picker, hidden for now.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn plugin_select_workspace(&mut self, tenant: Value) {
         self.plugin_request_with(
             methods::SELECT_PLUGIN_WORKSPACE,

@@ -31,8 +31,10 @@ impl Shell {
             .update(cx, |composer, cx| composer.show_error(message, cx));
     }
 
-    /// The surface picker's "Side chat": fork the current conversation
-    /// through its latest completed response, as a child of it.
+    /// Fork the current conversation through its latest completed response,
+    /// as a child of it. The app forks from a reply's footer instead (see
+    /// [`Self::fork_chat`]); tests drive the whole-conversation fork.
+    #[cfg(test)]
     pub(super) fn create_side_chat(&mut self, cx: &mut Context<Self>) {
         let Some(source) = self.state.read(cx).selected_chat_row().cloned() else {
             self.show_side_chat_error("Start a conversation before creating a side chat.", cx);

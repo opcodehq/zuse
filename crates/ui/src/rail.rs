@@ -1,5 +1,5 @@
-//! MessageRail (feature-inventory §1.8): a left vertical minimap of the user's
-//! prompts. The active tick brightens, hover grows the tick and shows a preview
+//! MessageRail (feature-inventory §1.8): a compact outline of the user's
+//! prompts, a quiet control at the transcript's top right. The active tick brightens, hover grows the tick and shows a preview
 //! card (prompt + reply opening), click smooth-scrolls the transcript to that
 //! row. Hidden below a 48rem container width.
 //!
@@ -120,6 +120,14 @@ pub const TICK_SLOT: f32 = 10.0;
 pub const TICK_GAP: f32 = 3.0;
 /// Vertical breathing room kept clear above/below the tick stack.
 pub const RAIL_V_MARGIN: f32 = 24.0;
+
+/// The top-right outline control: its offset under the titlebar and from the
+/// transcript's right edge, its width, and one mark's row pitch (a 2px mark
+/// and its 4px gap).
+const OUTLINE_TOP: f32 = 12.0;
+const OUTLINE_RIGHT: f32 = 12.0;
+const OUTLINE_WIDTH: f32 = 40.0;
+const OUTLINE_TICK_PITCH: f32 = 6.0;
 
 /// Hard cap on visible ticks — the always-compact shadcn outline (its demo
 /// trigger holds a small fixed stack of micro-marks regardless of window
@@ -406,7 +414,8 @@ impl Transcript {
         }));
     }
 
-    /// The rail element — an absolute overlay along the transcript's left edge.
+    /// The outline element — a quiet icon-sized control floating at the
+    /// transcript's top right: a short stack of prompt marks, right-aligned.
     pub fn render_rail(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if !self.rail_enabled() {
             return gpui::Empty.into_any_element();
@@ -467,17 +476,20 @@ impl Transcript {
         let buckets = tick_buckets(pairs.len(), capacity);
         let active_bucket = active.and_then(|ix| bucket_of(&buckets, ix));
 
+        let wash = theme.ink(0.06);
         div()
+            .id("transcript-outline")
             .absolute()
-            .left(px(16.0))
-            .top_0()
-            .bottom_0()
-            .w(px(26.0))
+            .top(px(Theme::TITLEBAR_HEIGHT + OUTLINE_TOP))
+            .right(px(OUTLINE_RIGHT + self.outline_inset()))
+            .w(px(OUTLINE_WIDTH))
+            .py(px(6.0))
+            .pr(px(8.0))
+            .rounded(px(6.0))
+            .hover(move |style| style.bg(wash))
             .flex()
             .flex_col()
-            .items_start()
-            .justify_center()
-            .gap(px(TICK_GAP))
+            .items_end()
             .children(buckets.into_iter().enumerate().map(|(ix, (start, end))| {
                 // The bucket's representative prompt: the ACTIVE tick when it
                 // falls inside (hover then previews what you're reading),
@@ -488,13 +500,13 @@ impl Transcript {
                 let bucket_len = end - start;
                 let is_active = active_bucket == Some(ix);
                 let is_hovered = hover == Some(ix);
-                // Only hover grows the tick; the active one just reads brighter
-                // (message-rail.tsx: w-3 rest, w-5 hovered).
-                let bar_width = if is_hovered { 20.0 } else { 12.0 };
-                let bar_color = if is_active || is_hovered {
-                    theme.text.opacity(0.8)
+                // Equal marks; the one you're reading is lit, hover brightens.
+                let bar_color = if is_active {
+                    theme.text.opacity(0.85)
+                } else if is_hovered {
+                    theme.text.opacity(0.55)
                 } else {
-                    crate::theme::ink(0.16)
+                    theme.text_muted.opacity(0.35)
                 };
                 let prompt = truncate_preview(&tick.prompt, PREVIEW_PROMPT_CHARS);
                 let reply = tick
@@ -540,10 +552,11 @@ impl Transcript {
                 div()
                     .id(("rail-tick", ix))
                     .relative()
-                    .h(px(TICK_SLOT))
+                    .h(px(OUTLINE_TICK_PITCH))
                     .w_full()
                     .flex()
                     .items_center()
+                    .justify_end()
                     .cursor_pointer()
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         this.set_rail_hover(if *hovered { Some(ix) } else { None });
@@ -552,19 +565,14 @@ impl Transcript {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.scroll_to_row(row, cx);
                     }))
-                    .child(
-                        div()
-                            .h(px(2.0))
-                            .w(px(bar_width))
-                            .rounded(px(1.0))
-                            .bg(bar_color),
-                    )
+                    .child(div().h(px(2.0)).w(px(20.0)).rounded(px(1.0)).bg(bar_color))
+                    // The preview opens to the left, clear of the control.
                     .when_some(card, |el, card| {
                         el.child(gpui::deferred(
                             gpui::anchored()
-                                .anchor(gpui::Anchor::LeftCenter)
+                                .anchor(gpui::Anchor::RightCenter)
                                 .snap_to_window_with_margin(px(8.0))
-                                .child(div().pl(px(26.0)).child(card)),
+                                .child(div().pr(px(14.0)).child(card)),
                         ))
                     })
             }))

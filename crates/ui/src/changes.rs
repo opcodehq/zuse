@@ -5256,6 +5256,43 @@ impl Render for Changes {
     }
 }
 
+#[cfg(feature = "browser-fixture")]
+impl Changes {
+    /// Show `patch` as the selected chat's working-tree diff, for the
+    /// isolated review fixture (no engine streams one).
+    pub fn fixture_seed_diff(&mut self, patch: &str, cx: &mut Context<Self>) {
+        let Some(chat) = self.state.read(cx).selected_chat_row().cloned() else {
+            return;
+        };
+        let files = parse_patch(patch);
+        let summaries = files
+            .iter()
+            .map(|file| zuse_protocol::DiffFileSummary {
+                path: file.path.clone(),
+                old_path: None,
+                status: "modified".into(),
+                additions: file.additions,
+                deletions: file.deletions,
+                binary: false,
+            })
+            .collect::<Vec<_>>();
+        self.diffs = vec![CheckoutDiff {
+            checkout_id: chat.checkout_id.clone().unwrap_or_else(|| "fixture".into()),
+            device_id: chat.device_id.clone(),
+            cwd: chat.cwd.clone().unwrap_or_default(),
+            patch: patch.to_owned(),
+            additions: summaries.iter().map(|file| file.additions).sum(),
+            deletions: summaries.iter().map(|file| file.deletions).sum(),
+            files: summaries,
+            truncated: false,
+            checksum: format!("fixture-{}", patch.len()),
+            updated_at: chrono::Utc::now(),
+        }];
+        self.sync(cx);
+        cx.notify();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

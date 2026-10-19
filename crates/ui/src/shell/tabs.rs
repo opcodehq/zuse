@@ -52,11 +52,9 @@ pub(super) struct TitlebarTrailing {
     content_width: f32,
 }
 
-/// The two fixed right-edge anchors: the explorer toggle and the pane toggle
-/// (28px each) with the same 4px gap the surface strip keeps between its
-/// controls, so the two never render as one fused block.
-const PANEL_TOGGLE_GAP: f32 = 4.0;
-const PANEL_TOGGLE_SLOTS: f32 = 28.0 * 2.0 + PANEL_TOGGLE_GAP;
+/// The fixed right-edge anchor: the 28px pane toggle. Files opens from the
+/// pane's launcher list (and its shortcut), not from a titlebar button.
+const PANEL_TOGGLE_SLOTS: f32 = 28.0;
 
 fn panel_titlebar_widths(
     surfaces_visible: f32,
@@ -420,7 +418,7 @@ impl Shell {
     }
 
     fn render_thread_conversations(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::of(cx);
+        let theme = Theme::of(cx).clone();
         let state = self.state.read(cx);
         let Some(selected) = state.selected_chat_row() else {
             return Empty.into_any_element();
@@ -435,6 +433,161 @@ impl Shell {
             .cloned()
             .collect();
         rows.sort_by_key(|chat| (chat.id != root, chat.created_at));
+        // Side chats of the open conversation list after its siblings; they
+        // open in the right pane, beside the conversation they branch from.
+        let mut side_chats: Vec<_> = state
+            .chats
+            .iter()
+            .filter(|chat| {
+                chat.parent_chat_id.as_deref() == Some(selected.id.as_str()) && !chat.archived
+            })
+            .cloned()
+            .collect();
+        side_chats.sort_by_key(|chat| chat.created_at);
+        let selected_id = selected.id.clone();
+        let archived = selected.archived;
+        let main_diff = self.active_main_diff(cx);
+        let main_tabs = self.main_tab_rows(cx);
+        let tab = |id: SharedString, title: SharedString, active: bool| {
+            div()
+                .id(id)
+                .role(gpui::Role::Tab)
+                .aria_label(title)
+                .aria_selected(active)
+                .cursor_pointer()
+                .flex_none()
+                .max_w(px(160.))
+                .h(px(24.))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .rounded(px(7.))
+                .text_size(crate::typography::ui_rems(12.))
+                .when(active, |d| {
+                    d.bg(theme.accent_fill())
+                        .text_color(theme.text)
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                })
+                .when(!active, |d| {
+                    d.text_color(theme.text_muted)
+                        .hover(|d| d.bg(theme.muted_fill().opacity(0.6)).text_color(theme.text))
+                })
+        };
+        let main_chips = main_tabs.into_iter().map(|(id, title, review)| {
+            let active = main_diff == Some(id);
+            let group = SharedString::from(format!("main-tab-{id}"));
+            tab(group.clone(), title.clone(), active)
+                .group(group.clone())
+                .pr(px(4.))
+                .debug_selector(move || format!("main-tab-{id}"))
+                .child(
+                    icon(if review {
+                        icons::GIT_COMPARE
+                    } else {
+                        icons::GIT_BRANCH
+                    })
+                    .size(px(13.))
+                    .flex_none()
+                    .text_color(theme.text_muted),
+                )
+                .child(div().min_w_0().truncate().child(title))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("main-tab-close-{id}")))
+                        .role(gpui::Role::Button)
+                        .aria_label(if review { "Close review" } else { "Close diff" })
+                        .size(px(16.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .when(!active, |d| d.invisible())
+                        .group_hover(group, |d| d.visible())
+                        .hover(|d| d.bg(theme.muted_fill()))
+                        .child(
+                            icon(icons::CLOSE)
+                                .size(px(10.))
+                                .text_color(theme.text_muted),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.close_main_tab(id, cx);
+                        })),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.activate_main_tab(Some(id), cx)))
+                .into_any_element()
+        });
+        let conversation_chips = rows.into_iter().enumerate().map(|(index, chat)| {
+            let active = chat.id == selected_id && main_diff.is_none();
+            let title = chat
+                .title
+                .clone()
+                .unwrap_or_else(|| format!("Chat {}", index + 1));
+            let id = chat.id;
+            tab(
+                SharedString::from(format!("thread-conversation-{id}")),
+                title.clone().into(),
+                active,
+            )
+            .child(div().truncate().child(title))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.active_chat == id {
+                    this.activate_main_tab(None, cx);
+                } else {
+                    this.open_chat(id.clone(), cx);
+                }
+            }))
+            .into_any_element()
+        });
+        let side_chips = side_chats.into_iter().map(|chat| {
+            let title: SharedString = chat
+                .title
+                .clone()
+                .or_else(|| chat.last_message_preview.clone())
+                .unwrap_or_else(|| "Side chat".into())
+                .into();
+            let id = chat.id;
+            let rename = self.rename_input_for(&id, ChatRenameSurface::Tab);
+            let (open_id, menu_id, rename_id) = (id.clone(), id.clone(), id.clone());
+            tab(
+                SharedString::from(format!("side-chat-tab-{id}")),
+                title.clone(),
+                false,
+            )
+            .child(
+                icon(icons::CHAT_ROUND_LINE)
+                    .size(px(13.))
+                    .flex_none()
+                    .text_color(theme.text_muted),
+            )
+            .child(match rename {
+                Some(input) => div().w(px(120.)).child(input).into_any_element(),
+                None => div().min_w_0().truncate().child(title).into_any_element(),
+            })
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                if event.click_count() >= 2 {
+                    this.open_rename_chat(rename_id.clone(), cx);
+                } else {
+                    this.open_child_chat_tab(&open_id, cx);
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.chat_menu.open(ChatMenuState {
+                        chat_id: menu_id.clone(),
+                        tab: None,
+                        position: event.position,
+                        page: ChatMenuPage::Root,
+                    });
+                    cx.notify();
+                }),
+            )
+            .into_any_element()
+        });
         div()
             .flex()
             .items_center()
@@ -449,44 +602,11 @@ impl Shell {
                     .min_w_0()
                     .overflow_x_scroll()
                     .gap(px(4.))
-                    .children(rows.into_iter().enumerate().map(|(index, chat)| {
-                        let active = chat.id == selected.id;
-                        let title = chat
-                            .title
-                            .clone()
-                            .unwrap_or_else(|| format!("Chat {}", index + 1));
-                        let id = chat.id;
-                        div()
-                            .id(SharedString::from(format!("thread-conversation-{id}")))
-                            .role(gpui::Role::Tab)
-                            .aria_label(title.clone())
-                            .aria_selected(active)
-                            .cursor_pointer()
-                            .flex_none()
-                            .max_w(px(160.))
-                            .h(px(24.))
-                            .px(px(8.))
-                            .flex()
-                            .items_center()
-                            .rounded(px(7.))
-                            .text_size(crate::typography::ui_rems(12.))
-                            .when(active, |d| {
-                                d.bg(theme.accent_fill())
-                                    .text_color(theme.text)
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                            })
-                            .when(!active, |d| {
-                                d.text_color(theme.text_muted).hover(|d| {
-                                    d.bg(theme.muted_fill().opacity(0.6)).text_color(theme.text)
-                                })
-                            })
-                            .child(div().truncate().child(title))
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.open_chat(id.clone(), cx)),
-                            )
-                    })),
+                    .children(main_chips)
+                    .children(conversation_chips)
+                    .children(side_chips),
             )
-            .when(!selected.archived, |d| {
+            .when(!archived, |d| {
                 d.child(
                     div()
                         .id("add-thread-conversation")
@@ -621,16 +741,11 @@ impl Shell {
                         ),
                 );
             }
-            let files_panel_label = if self.files_panel_open(cx) && fit.files {
-                "Hide files panel"
-            } else {
-                "Show files panel"
-            };
             // The explorer slot sits over the explorer column and carries the
-            // two fixed right-edge anchors — the explorer toggle and,
-            // outermost, the pane toggle — which stay mounted at one position
-            // while the surface tabs reveal to their left. The explorer's own
-            // search and visibility controls live in its secondary header.
+            // fixed right-edge anchor — the pane toggle — which stays mounted
+            // at one position while the surface tabs reveal to its left. The
+            // explorer's own search and visibility controls live in its
+            // secondary header.
             Some(
                 controls
                     .child(
@@ -641,7 +756,6 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_end()
-                            .gap(px(PANEL_TOGGLE_GAP))
                             // No hairline here: the explorer column below is
                             // padded down by the titlebar height and its left
                             // border already runs through this band, so a
@@ -649,22 +763,24 @@ impl Shell {
                             // pixels and read lighter than the seam beneath
                             // it (user report).
                             .child(
-                                header_icon_button(
-                                    "toggle-files-panel",
-                                    icons::FOLDER_TREE,
-                                    files_panel_label,
-                                    &theme,
-                                    cx.listener(|this, _, window, cx| {
-                                        this.toggle_files_panel(window, cx)
-                                    }),
+                                header_icon_button_with(
+                                    "toggle-changes",
+                                    icons::sidebar_glyph(
+                                        motion::state_t(
+                                            "toggle-changes",
+                                            self.right_pane_open(cx) && fit.right,
+                                            motion::GLYPH_STATE,
+                                            self.reduced_motion,
+                                        ),
+                                        true,
+                                        16.0,
+                                        theme.text_muted,
+                                    ),
+                                    ShortcutId::ToggleChanges.label(),
+                                    cx.listener(|this, _, _, cx| this.toggle_right_pane(cx)),
                                 )
-                                .role(gpui::Role::Button)
-                                .aria_label(files_panel_label)
-                                .when(self.files_panel_open(cx) && fit.files, |button| {
-                                    button.bg(crate::theme::wash(0.09))
-                                })
-                                // Running subagents live in this panel: mark the
-                                // button so they are findable while it is closed.
+                                // Subagents open as tabs in this pane: mark its
+                                // toggle so running ones are findable while closed.
                                 .when(
                                     running_subagents > 0,
                                     |button| {
@@ -675,23 +791,7 @@ impl Shell {
                                         )
                                     },
                                 ),
-                            )
-                            .child(header_icon_button_with(
-                                "toggle-changes",
-                                icons::sidebar_glyph(
-                                    motion::state_t(
-                                        "toggle-changes",
-                                        self.right_pane_open(cx) && fit.right,
-                                        motion::GLYPH_STATE,
-                                        self.reduced_motion,
-                                    ),
-                                    true,
-                                    16.0,
-                                    theme.text_muted,
-                                ),
-                                ShortcutId::ToggleChanges.label(),
-                                cx.listener(|this, _, _, cx| this.toggle_right_pane(cx)),
-                            )),
+                            ),
                     )
                     .into_any_element(),
             )

@@ -27,6 +27,9 @@ gpui::actions!(
 
 /// How many featured plugins the browse page lists before "All plugins".
 const FEATURED_LIMIT: usize = 12;
+/// The plugin Workspace (Personal / organization) picker. Organization
+/// features are hidden for now; the selection logic stays for their return.
+const SHOW_PLUGIN_WORKSPACES: bool = false;
 
 pub struct PluginsCard {
     state: Entity<AppState>,
@@ -1141,7 +1144,9 @@ impl PluginsCard {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        let workspaces = (tenants.len() > 1).then(|| {
+        // Organization workspaces are hidden for now (they return later as
+        // their own feature); the engine's current tenant stays in effect.
+        let workspaces = (SHOW_PLUGIN_WORKSPACES && tenants.len() > 1).then(|| {
             let current = self.plugins.snapshot["tenantId"].clone();
             widgets::group(
                 theme,
@@ -1338,7 +1343,8 @@ pub fn fixture_seed(state: Entity<AppState>, variant: &str, cx: &mut App) {
             ])
         };
         card.plugins.snapshot =
-            json!({"tenantId":"fixture","canManage":true,"connections":connections});
+            json!({"tenantId":"fixture","canManage":true,"connections":connections,
+                "tenants":[{"id":"fixture","name":"Personal"},{"id":"org","name":"Fixture org"}]});
         cx.notify();
     });
 }

@@ -1,5 +1,7 @@
-//! The session card: where this chat runs (device, project, branch), its
-//! side-chat actions, and the project's run actions, in one toggleable card.
+//! The session card: where this chat runs (device, project, branch), a new
+//! side chat, and the project's run actions, in one toggleable card. Its
+//! rows follow the environment summary's idiom: 28px icon rows, 12px text,
+//! a glass card with no dividers.
 //! While the column has room, the card shows at its right on its own (until
 //! the user hides it), the transcript and composer shifting left as needed
 //! to clear it. Once clearing it would narrow the transcript, the card hides,
@@ -10,7 +12,7 @@ use crate::project_actions::{ProjectActionsStatus, action_icon};
 
 /// The card's width, its inset from the column's right edge, and the
 /// least gap the reading column keeps from it.
-pub(super) const SESSION_CARD_WIDTH: f32 = 272.0;
+pub(super) const SESSION_CARD_WIDTH: f32 = 288.0;
 const SESSION_CARD_INSET: f32 = 12.0;
 const SESSION_CARD_GAP: f32 = 24.0;
 /// The transcript's own side gutters (its rows pad 48px each side).
@@ -29,24 +31,60 @@ pub(super) fn session_card_reserve(main: f32, transcript: f32) -> Option<f32> {
     (main - reserve - 2.0 * TRANSCRIPT_GUTTER >= transcript - 0.5).then_some(reserve)
 }
 
-/// A non-interactive card row: icon slot, label, optional trailing detail.
-fn info_row(theme: &Theme, glyph: AnyElement, label: SharedString) -> gpui::Div {
+/// The card's row height, padding and corner radius.
+const SUMMARY_ROW_HEIGHT: f32 = 28.0;
+const SUMMARY_CARD_PADDING: f32 = 6.0;
+const SUMMARY_CARD_RADIUS: f32 = 12.0;
+/// Where a row's label starts (padding + icon + gap): sub-rows indent to it.
+const SUMMARY_LABEL_INSET: f32 = 34.0;
+
+/// One summary row: 16px icon slot, 12px label, trailing meta by the caller.
+fn summary_row(theme: &Theme) -> gpui::Div {
     div()
         .flex()
         .flex_row()
         .items_center()
         .gap(px(8.0))
-        .min_h(px(popover::PICKER_ROW_HEIGHT))
-        .px(px(9.0))
-        .text_size(crate::typography::ui_rems(13.0))
+        .w_full()
+        .min_w_0()
+        .min_h(px(SUMMARY_ROW_HEIGHT))
+        .px(px(10.0))
+        .rounded(px(6.0))
+        .text_size(crate::typography::ui_rems(12.0))
         .text_color(theme.text)
+}
+
+/// A non-interactive card row: icon slot and label.
+fn info_row(theme: &Theme, glyph: AnyElement, label: SharedString) -> gpui::Div {
+    summary_row(theme)
         .child(popover::picker_icon_slot(glyph))
         .child(div().flex_1().min_w_0().truncate().child(label))
 }
 
+/// A clickable card row, washed on hover.
+fn action_row(theme: &Theme, id: impl Into<SharedString>) -> gpui::Stateful<gpui::Div> {
+    let wash = theme.ink(0.06);
+    summary_row(theme)
+        .id(id.into())
+        .cursor_pointer()
+        .hover(move |style| style.bg(wash))
+}
+
+/// A quiet sub-row under a section, indented to its labels.
+fn sub_row(theme: &Theme) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .min_h(px(24.0))
+        .pl(px(SUMMARY_LABEL_INSET))
+        .pr(px(10.0))
+        .text_size(crate::typography::ui_rems(11.0))
+        .text_color(theme.text_muted)
+}
+
 fn row_glyph(path: &'static str, theme: &Theme) -> AnyElement {
     icon(path)
-        .size(px(15.0))
+        .size(px(16.0))
         .text_color(theme.text_muted)
         .into_any_element()
 }
@@ -217,10 +255,9 @@ impl Shell {
                 .tooltip(crate::settings::widgets::text_tooltip(branch))
         });
 
-        // ── This conversation.
+        // ── This conversation. Forking lives on each reply's footer.
         let busy = self.side_chat_creating;
-        let side_chat = popover::picker_row(&theme, false, false, "session-info-side-chat")
-            .id("session-info-side-chat")
+        let side_chat = action_row(&theme, "session-info-side-chat")
             .debug_selector(|| "session-info-side-chat".into())
             .when(busy, |row| row.opacity(0.5))
             .on_click(cx.listener(|this, _, _, cx| {
@@ -229,16 +266,6 @@ impl Shell {
             }))
             .child(popover::picker_icon_slot(row_glyph(icons::PLUS, &theme)))
             .child(div().flex_1().child("New side chat"));
-        let fork = popover::picker_row(&theme, false, false, "session-info-fork")
-            .id("session-info-fork")
-            .debug_selector(|| "session-info-fork".into())
-            .when(busy, |row| row.opacity(0.5))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.close_session_info_overlay(cx);
-                this.create_side_chat(cx)
-            }))
-            .child(popover::picker_icon_slot(row_glyph(icons::FORK, &theme)))
-            .child(div().flex_1().child("Fork chat"));
 
         // ── The project's run actions.
         let actions = self.render_session_info_actions(&theme, cx);
@@ -247,25 +274,27 @@ impl Shell {
             .id("session-info-body")
             .max_h(px(max_height.max(120.0)))
             .overflow_y_scroll()
-            // The card's inset lives inside the scroller, so dividers can
-            // bleed through it edge to edge without being clipped.
-            .p(px(popover::CARD_INSET))
+            .p(px(SUMMARY_CARD_PADDING))
             .flex()
             .flex_col()
-            .gap(px(popover::MENU_GAP))
             .child(device_row)
             .child(project_row)
             .children(branch_row)
-            .child(popover::picker_divider())
             .child(side_chat)
-            .child(fork)
             .children(actions)
-            .child(popover::picker_divider())
-            .child(self.recovery.clone());
+            .child(
+                // Its text lines up with the rows' labels.
+                div()
+                    .pt(px(6.0))
+                    .pl(px(SUMMARY_LABEL_INSET - 16.0))
+                    .pr(px(4.0))
+                    .pb(px(2.0))
+                    .child(self.recovery.clone()),
+            );
 
         let card = div()
             .w(px(SESSION_CARD_WIDTH))
-            .rounded(px(popover::CARD_RADIUS))
+            .rounded(px(SUMMARY_CARD_RADIUS))
             .overflow_hidden()
             .border_1()
             .border_color(theme.border)
@@ -299,7 +328,7 @@ impl Shell {
                     )
                 })
                 .child(crate::frost::frosted(
-                    popover::CARD_RADIUS,
+                    SUMMARY_CARD_RADIUS,
                     crate::frost::MENU_BLUR,
                     card,
                 ))
@@ -307,8 +336,9 @@ impl Shell {
         )
     }
 
-    /// The Actions section: a row per project action (click runs it; the
-    /// gear edits it), imports from zuse.json, and Add action.
+    /// The Actions section: a header row with the action count, a row per
+    /// project action (click runs it; the gear edits it), imports from
+    /// zuse.json, and a quiet Add action under them.
     fn render_session_info_actions(
         &mut self,
         theme: &Theme,
@@ -322,15 +352,27 @@ impl Shell {
         ) else {
             return Vec::new();
         };
+        let count = snapshot.actions.len();
         let mut rows: Vec<AnyElement> = vec![
-            popover::picker_divider().into_any_element(),
-            popover::menu_heading(theme, "Actions").into_any_element(),
+            info_row(
+                theme,
+                row_glyph(icons::ACTION_PLAY, theme),
+                "Actions".into(),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.text_muted)
+                    .when(count > 0, |meta| {
+                        meta.child(SharedString::from(count.to_string()))
+                    }),
+            )
+            .into_any_element(),
         ];
         let note = |text: SharedString, color| {
-            div()
-                .px(px(9.0))
-                .py(px(5.0))
-                .text_size(crate::typography::ui_rems(12.0))
+            sub_row(theme)
+                .py(px(4.0))
                 .text_color(color)
                 .child(text)
                 .into_any_element()
@@ -343,10 +385,11 @@ impl Shell {
             ProjectActionsStatus::Unavailable { message, .. } => {
                 rows.push(note(message.clone().into(), theme.text_muted));
                 rows.push(
-                    popover::picker_row(theme, false, false, "session-info-actions-retry")
+                    sub_row(theme)
                         .id("session-info-actions-retry")
+                        .cursor_pointer()
+                        .hover(|style| style.text_color(theme.text))
                         .on_click(cx.listener(|this, _, _, cx| this.retry_project_actions(cx)))
-                        .child(popover::picker_icon_slot(row_glyph(icons::REFRESH, theme)))
                         .child("Retry")
                         .into_any_element(),
                 );
@@ -366,8 +409,7 @@ impl Shell {
                 action.name.clone().into()
             };
             rows.push(
-                popover::picker_row(theme, false, false, row_id.clone())
-                    .id(row_id)
+                action_row(theme, row_id)
                     .group(group.clone())
                     .when(!can_run, |row| row.opacity(0.5).cursor_default())
                     .when(can_run, |row| {
@@ -387,7 +429,7 @@ impl Shell {
                                 "session-info-edit-action-{}",
                                 edit.id
                             )))
-                            .size(px(22.0))
+                            .size(px(20.0))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -415,8 +457,7 @@ impl Shell {
             let row_id = SharedString::from(format!("session-info-import-{}", draft.name));
             let import = draft.clone();
             rows.push(
-                popover::picker_row(theme, false, false, row_id.clone())
-                    .id(row_id)
+                action_row(theme, row_id)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.close_session_info_overlay(cx);
                         this.open_project_action_editor(None, Some(import.clone()), cx)
@@ -446,13 +487,14 @@ impl Shell {
             rows.push(note(issue.into(), theme.text_muted));
         }
         rows.push(
-            popover::picker_row(theme, false, false, "session-info-add-action")
+            sub_row(theme)
                 .id("session-info-add-action")
+                .cursor_pointer()
+                .hover(|style| style.text_color(theme.text))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.close_session_info_overlay(cx);
                     this.open_project_action_editor(None, None, cx)
                 }))
-                .child(popover::picker_icon_slot(row_glyph(icons::PLUS, theme)))
                 .child("Add action")
                 .into_any_element(),
         );

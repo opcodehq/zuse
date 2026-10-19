@@ -514,10 +514,9 @@ pub struct AccountsPage {
     embedded_harness: Option<HarnessId>,
     scroll: widgets::PageScroll,
     /// Which device's logins are shown; `None` = this device (no passthrough).
-    /// Retargeted by the page-header device switcher (zuse parity: the
-    /// accounts RPCs are relay-forwardable, CLI logins are per-device).
+    /// Retargeted with the Providers page (the accounts RPCs are
+    /// relay-forwardable, CLI logins are per-device).
     target_device: Option<String>,
-    device_select: widgets::SelectState,
     snapshot: Loadable<AgentAccountsSnapshot>,
     /// A list is in flight over an already-painted snapshot.
     refreshing: bool,
@@ -573,7 +572,6 @@ impl AccountsPage {
             embedded_harness,
             scroll: widgets::PageScroll::default(),
             target_device,
-            device_select: widgets::SelectState::default(),
             snapshot: Loadable::Idle,
             refreshing: false,
             busy_account: None,
@@ -599,7 +597,6 @@ impl AccountsPage {
     /// relay-forwardable, so the whole page — list, usage probes, switch,
     /// forget, login flows — follows the passthrough.
     pub(crate) fn set_target_device(&mut self, target: Option<String>, cx: &mut Context<Self>) {
-        widgets::close_select(self, |page: &mut Self| &mut page.device_select, cx);
         if self.target_device == target {
             cx.notify();
             return;
@@ -623,11 +620,31 @@ impl AccountsPage {
         }
     }
 
-    /// Review fixture: an empty, loaded account list (the sign-in state).
+    /// Review fixture: one live Claude login with usage meters.
     #[cfg(feature = "browser-fixture")]
     pub(crate) fn fixture_seed(&mut self, cx: &mut Context<Self>) {
+        let window = |label: &str, used_fraction| zuse_protocol::AgentUsageWindow {
+            label: label.into(),
+            used_fraction,
+            resets_at: None,
+        };
         self.snapshot = Loadable::Ready(AgentAccountsSnapshot {
-            accounts: Vec::new(),
+            accounts: vec![AgentAccount {
+                id: "fixture-claude".into(),
+                harness: HarnessId::ClaudeCode,
+                email: Some("sam@example.com".into()),
+                plan_label: Some("Max 5x".into()),
+                active: true,
+                usage_windows: vec![window("Session", 0.44), window("Week", 0.32)],
+                usage_fetched_at: None,
+                usage_error: None,
+                display_name: Some("Sam Rivera".into()),
+                organization: Some("Sam Rivera".into()),
+                auth_kind: None,
+                switchable: true,
+                saved_at: None,
+                provider: None,
+            }],
             warnings: Vec::new(),
         });
         cx.notify();
@@ -651,86 +668,6 @@ impl AccountsPage {
         if self.scroll.set_list_hovered(*hovered) {
             cx.notify();
         }
-    }
-
-    /// The page-header device switcher (zuse device-switcher.tsx): a quiet
-    /// trigger — platform glyph · name · presence dot · sort glyph — opening a
-    /// dropdown of every registered device. Selecting one retargets the page.
-    fn render_device_switcher(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        use crate::icons::{self, icon};
-        let (mut devices, local_id) = {
-            let s = self.state.read(cx);
-            (s.devices.clone(), s.local_device_id.clone())
-        };
-        // Stable row order (registration time, then id) — zuse's switcher
-        // sorts the same way so rows never reshuffle on heartbeats.
-        devices.sort_by(|a, b| {
-            a.created_at
-                .cmp(&b.created_at)
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        let effective = self.target_device.clone().or_else(|| local_id.clone());
-        let platform_glyph = |platform: &str| match platform {
-            "macos" | "darwin" => icons::LAPTOP,
-            "ios" | "android" => icons::SMARTPHONE,
-            _ => icons::MONITOR,
-        };
-        // Local device = no passthrough (calls stay direct).
-        let mut targets: Vec<Option<String>> = Vec::new();
-        let mut options = Vec::new();
-        for device in &devices {
-            let is_local = local_id.as_deref() == Some(device.id.as_str());
-            let glyph = platform_glyph(&device.platform);
-            let muted = theme.text_muted;
-            let option = widgets::SelectOption::new(device.name.clone()).leading(move || {
-                icon(glyph)
-                    .size(px(16.0))
-                    .flex_none()
-                    .text_color(muted)
-                    .into_any_element()
-            });
-            options.push(if is_local {
-                option.detail("You")
-            } else {
-                option
-            });
-            targets.push((!is_local).then(|| device.id.clone()));
-        }
-        let selected = match devices
-            .iter()
-            .position(|d| Some(d.id.as_str()) == effective.as_deref())
-        {
-            Some(ix) => ix,
-            // Not registered (yet): keep the current target reachable.
-            None => {
-                let muted = theme.text_muted;
-                options.push(widgets::SelectOption::new("This device").leading(move || {
-                    icon(icons::LAPTOP)
-                        .size(px(16.0))
-                        .flex_none()
-                        .text_color(muted)
-                        .into_any_element()
-                }));
-                targets.push(self.target_device.clone());
-                options.len() - 1
-            }
-        };
-        widgets::select(
-            "accounts-device-switcher",
-            "Device",
-            theme,
-            |page: &mut Self| &mut page.device_select,
-        )
-        .options(options, selected)
-        .menu_width(260.0)
-        .heading("Devices")
-        .on_select(move |page, ix, _, cx| {
-            if let Some(target) = targets.get(ix) {
-                page.set_target_device(target.clone(), cx);
-            }
-        })
-        .render(&self.device_select, cx)
-        .into_any_element()
     }
 
     /// Stale-while-revalidate: a painted snapshot stays on screen while the
@@ -1262,9 +1199,11 @@ impl AccountsPage {
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_else(|| "?".into())
             .into();
+        // Embedded in a provider's details panel, the row runs compact.
+        let compact = self.embedded;
         let avatar = div()
             .flex_none()
-            .size(px(32.0))
+            .size(px(if compact { 26.0 } else { 32.0 }))
             .rounded_full()
             .border(px(1.5))
             .border_color(if account.active {
@@ -1277,13 +1216,17 @@ impl AccountsPage {
             .justify_center()
             .child(
                 div()
-                    .size(px(25.0))
+                    .size(px(if compact { 20.0 } else { 25.0 }))
                     .rounded_full()
                     .bg(theme.wash(0.09))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_size(crate::typography::ui_rems(11.5))
+                    .text_size(crate::typography::ui_rems(if compact {
+                        10.0
+                    } else {
+                        11.5
+                    }))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(if account.active {
                         theme.text
@@ -1384,13 +1327,13 @@ impl AccountsPage {
             .id(("account-row", ix))
             .mx(px(-10.0))
             .px(px(10.0))
-            .py(px(10.0))
-            .min_h(px(56.0))
-            .rounded(px(10.0))
+            .py(px(if compact { 6.0 } else { 10.0 }))
+            .min_h(px(if compact { 40.0 } else { 56.0 }))
+            .rounded(px(if compact { 7.0 } else { 10.0 }))
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(14.0))
+            .gap(px(if compact { 10.0 } else { 14.0 }))
             .when(can_switch, |row| {
                 let hover_key = format!("account-row-{ix}-hover");
                 row.cursor_pointer()
@@ -1410,9 +1353,19 @@ impl AccountsPage {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(widgets::row_title(theme, email.clone()).truncate())
+                    .child(
+                        widgets::row_title(theme, email.clone())
+                            .truncate()
+                            .when(compact, |title| {
+                                title.text_size(crate::typography::ui_rems(12.0))
+                            }),
+                    )
                     .when(!meta.is_empty(), |el| {
-                        el.child(widgets::meta_line(theme, meta))
+                        el.child(widgets::meta_line(theme, meta).when(compact, |line| {
+                            line.mt(px(1.0))
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .line_height(crate::typography::ui_rems(14.0))
+                        }))
                     }),
             )
             .child(usage)
@@ -1427,7 +1380,7 @@ impl AccountsPage {
             .when(!first, |el| {
                 el.border_t_1().border_color(widgets::row_divider(theme))
             })
-            .py(px(2.0))
+            .py(px(if compact { 0.0 } else { 2.0 }))
             .child(body)
             .into_any_element()
     }
@@ -1447,8 +1400,8 @@ impl AccountsPage {
         };
         let row = |first: bool, dim: bool| {
             div()
-                .min_h(px(56.0))
-                .py(px(10.0))
+                .min_h(px(40.0))
+                .py(px(6.0))
                 .when(!first, |el| {
                     el.border_t_1().border_color(widgets::row_divider(theme))
                 })
@@ -1794,7 +1747,7 @@ impl AccountsPage {
                 // the CLI's own login command as the alternative.
                 let sign_in = empty.then(|| {
                     div()
-                        .py(px(8.0))
+                        .py(px(4.0))
                         .flex()
                         .flex_col()
                         .gap(px(8.0))
@@ -1850,22 +1803,36 @@ impl AccountsPage {
                                 }),
                         )
                 });
+                // A quiet "Add account" link under the list, where the next
+                // account will appear.
                 let add_row = (!empty && !keeps_one_login(harness)).then(|| {
                     div()
-                        .py(px(8.0))
+                        .pt(px(4.0))
+                        .border_t_1()
+                        .border_color(widgets::row_divider(theme))
                         .flex()
                         .flex_row()
                         .flex_wrap()
-                        .gap(px(4.0))
-                        .when(!empty, |el| {
-                            el.border_t_1().border_color(widgets::row_divider(theme))
-                        })
+                        .gap(px(12.0))
                         .children(login_options(harness).into_iter().enumerate().map(
                             |(ix, option)| {
                                 let label = add_option_label(harness, option, empty);
-                                widgets::action_button(theme, widgets::ActionTone::Quiet)
+                                let hover_key = format!("accounts-add-{ix}-hover");
+                                div()
                                     .id(("accounts-add", ix))
-                                    .when(ix == 0, |el| el.ml(px(-10.0)))
+                                    .h(px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .rounded(px(5.0))
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(crate::motion::hover_blend(
+                                        &hover_key,
+                                        theme.text_muted,
+                                        theme.text,
+                                    ))
+                                    .on_hover(crate::motion::hover_listener(hover_key))
+                                    .cursor_pointer()
                                     .role(gpui::Role::Button)
                                     .aria_label(label.clone())
                                     .tab_index(0)
@@ -1875,7 +1842,7 @@ impl AccountsPage {
                                     }))
                                     .child(
                                         crate::icons::icon(crate::icons::PLUS)
-                                            .size(px(14.0))
+                                            .size(px(12.0))
                                             .text_color(theme.text_muted),
                                     )
                                     .child(SharedString::from(label))
@@ -1912,10 +1879,11 @@ impl AccountsPage {
                     .child(
                         widgets::action_button(theme, widgets::ActionTone::Quiet)
                             .id("accounts-refresh")
-                            // Optically align the glyph with the badges'
-                            // right edge below.
-                            .mr(px(-8.0))
-                            .w(px(32.0))
+                            // Optically align the glyph with the rows'
+                            // trailing edge below.
+                            .mr(px(-4.0))
+                            .w(px(24.0))
+                            .h(px(24.0))
                             .px_0()
                             .justify_center()
                             .when(refreshing, |el| el.opacity(0.5))
@@ -1929,7 +1897,7 @@ impl AccountsPage {
                             }))
                             .child(
                                 crate::icons::icon(crate::icons::REFRESH)
-                                    .size(px(14.0))
+                                    .size(px(13.0))
                                     .text_color(theme.text_muted),
                             ),
                     ),
@@ -2279,7 +2247,6 @@ impl Render for AccountsPage {
                                             )
                                             .child(SharedString::from("Refresh")),
                                     )
-                                    .child(self.render_device_switcher(&theme, cx))
                                     .into_any_element(),
                                 ),
                             ))

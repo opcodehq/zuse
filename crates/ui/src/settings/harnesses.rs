@@ -1,10 +1,11 @@
 //! Settings → Providers: install and enable harnesses, one card row per agent.
 //!
 //! The state is PER-DEVICE and lives on the engine (`harness-prefs.json` in
-//! its data dir): CLI installs are per-device, so enablement is too. The
-//! page-header device switcher (the Accounts pattern) retargets both the
-//! `ListHarnesses` probe and the `SetHarnessEnabled` writes at any registered
-//! device over the relay-forwarded RPCs.
+//! its data dir): CLI installs are per-device, so enablement is too. The page
+//! shows this device; the shell's update notice can retarget both the
+//! `ListHarnesses` probe and the `SetHarnessEnabled` writes at another
+//! registered device over the relay-forwarded RPCs (the header then names
+//! it). There is no per-page device switcher.
 //!
 //! Enablement follows DETECTION: every harness whose CLI probe passes is on
 //! unless the user switched it off, so installing an agent is all it takes
@@ -216,9 +217,8 @@ pub struct HarnessesPage {
     harnesses: Loadable<Vec<HarnessDescriptor>>,
     updates: Loadable<Vec<HarnessUpdateStatus>>,
     /// Which device's harnesses are shown/edited; `None` = this device (no
-    /// passthrough). Retargeted by the page-header device switcher.
+    /// passthrough). Retargeted by the shell's harness update notice.
     target_device: Option<String>,
-    device_select: widgets::SelectState,
     policy_selects: std::collections::HashMap<HarnessId, widgets::SelectState>,
     /// Last refused/failed toggle (engine guards), shown in the error strip.
     error: Option<String>,
@@ -251,7 +251,6 @@ impl HarnessesPage {
             harnesses: Loadable::Idle,
             updates: Loadable::Idle,
             target_device: None,
-            device_select: widgets::SelectState::default(),
             policy_selects: Default::default(),
             error: None,
             load_task: None,
@@ -306,16 +305,9 @@ impl HarnessesPage {
             .then(|| self.accounts_page.clone())
             .flatten()
             .map(|page| page.into_any_element());
-        // No box of its own: the details continue the provider row on the
-        // block's fill, indented to the row's title so they read as its
-        // children, with switches and actions on the row's control edge.
-        let content = div()
-            .px(px(12.0))
-            .pt(px(4.0))
-            .pb(px(16.0))
-            .flex()
-            .flex_col()
-            .gap(px(16.0))
+        // One quiet inset panel under the row: small section labels over
+        // compact rows, no air between the groups beyond a short gap.
+        let content = widgets::details_panel(theme)
             .child(self.render_completion_for(harness, theme, cx))
             .children(self.render_updates_for(harness, theme, cx))
             .when_some(accounts, |details, accounts| details.child(accounts));
@@ -356,30 +348,19 @@ impl HarnessesPage {
             selected,
         )
         // Fits the longest label, so switching never resizes the trigger.
-        .width(136.0)
+        .width(128.0)
         .on_select(move |page, selected, _, cx| {
             if let Some((policy, ..)) = UPDATE_POLICIES.get(selected) {
                 page.set_update_policy(harness, *policy, cx);
             }
         })
         .render(self.policy_selects.get(&harness).unwrap_or(&closed), cx);
-        let row = div()
-            .min_h(px(52.0))
-            .py(px(10.0))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(16.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(widgets::row_title(theme, "Update policy"))
-                    .child(widgets::meta_line(
-                        theme,
-                        vec![div().child(UPDATE_POLICIES[selected].2).into_any_element()],
-                    )),
-            )
+        let row = widgets::details_row(theme, true)
+            .child(widgets::details_text(
+                theme,
+                "Update policy",
+                UPDATE_POLICIES[selected].2,
+            ))
             .child(policy_select);
         Some(
             div()
@@ -438,8 +419,6 @@ impl HarnessesPage {
     /// install/enablement world, so drop the rows and reload through it.
 
     pub(crate) fn set_target_device(&mut self, target: Option<String>, cx: &mut Context<Self>) {
-        widgets::close_select(self, |page: &mut Self| &mut page.device_select, cx);
-
         if self.target_device == target {
             cx.notify();
             return;
@@ -776,84 +755,6 @@ impl HarnessesPage {
         }));
     }
 
-    /// The page-header device switcher (the Accounts pattern): platform glyph
-    /// · name · presence dot · sort glyph, opening a dropdown of every
-    /// registered device.
-    fn render_device_switcher(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        use crate::icons::{self, icon};
-        let (mut devices, local_id) = {
-            let s = self.state.read(cx);
-            (s.devices.clone(), s.local_device_id.clone())
-        };
-        devices.sort_by(|a, b| {
-            a.created_at
-                .cmp(&b.created_at)
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        let effective = self.target_device.clone().or_else(|| local_id.clone());
-        let platform_glyph = |platform: &str| match platform {
-            "macos" | "darwin" => icons::LAPTOP,
-            "ios" | "android" => icons::SMARTPHONE,
-            _ => icons::MONITOR,
-        };
-        // Local device = no passthrough (calls stay direct).
-        let mut targets: Vec<Option<String>> = Vec::new();
-        let mut options = Vec::new();
-        for device in &devices {
-            let is_local = local_id.as_deref() == Some(device.id.as_str());
-            let glyph = platform_glyph(&device.platform);
-            let muted = theme.text_muted;
-            let option = widgets::SelectOption::new(device.name.clone()).leading(move || {
-                icon(glyph)
-                    .size(px(16.0))
-                    .flex_none()
-                    .text_color(muted)
-                    .into_any_element()
-            });
-            options.push(if is_local {
-                option.detail("You")
-            } else {
-                option
-            });
-            targets.push((!is_local).then(|| device.id.clone()));
-        }
-        let selected = match devices
-            .iter()
-            .position(|d| Some(d.id.as_str()) == effective.as_deref())
-        {
-            Some(ix) => ix,
-            // Not registered (yet): keep the current target reachable.
-            None => {
-                let muted = theme.text_muted;
-                options.push(widgets::SelectOption::new("This device").leading(move || {
-                    icon(icons::LAPTOP)
-                        .size(px(16.0))
-                        .flex_none()
-                        .text_color(muted)
-                        .into_any_element()
-                }));
-                targets.push(self.target_device.clone());
-                options.len() - 1
-            }
-        };
-        widgets::select(
-            "harnesses-device-switcher",
-            "Device",
-            theme,
-            |page: &mut Self| &mut page.device_select,
-        )
-        .options(options, selected)
-        .menu_width(260.0)
-        .heading("Devices")
-        .on_select(move |page, ix, _, cx| {
-            if let Some(target) = targets.get(ix) {
-                page.set_target_device(target.clone(), cx);
-            }
-        })
-        .render(&self.device_select, cx)
-        .into_any_element()
-    }
-
     fn rows(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let theme = Theme::of(cx).for_settings_surface();
         let Loadable::Ready(list) = &self.harnesses else {
@@ -964,58 +865,72 @@ impl HarnessesPage {
                             }
                             _ => return None,
                         };
-                        Some(
-                            div()
-                                .id((id, ix))
-                                .flex_none()
-                                .size(px(26.0))
-                                .relative()
+                        let tooltip = match (primary, status.latest_version.as_deref()) {
+                            (true, Some(latest)) => format!("Update to v{latest}"),
+                            (true, None) => "Update to the latest version".to_owned(),
+                            (false, _) => "Cancel update".to_owned(),
+                        };
+                        let button = div()
+                            .id((id, ix))
+                            .flex_none()
+                            .h(px(24.0))
+                            .relative()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(4.0))
+                            .role(gpui::Role::Button)
+                            .aria_label(label)
+                            .tooltip(widgets::text_tooltip(tooltip))
+                            .rounded(px(6.0))
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                // Inside the details trigger: act, don't expand.
+                                cx.stop_propagation();
+                                if primary {
+                                    this.apply_harness_update(harness, cx)
+                                } else {
+                                    this.cancel_harness_update(harness, cx)
+                                }
+                            }));
+                        // gpui SVGs don't inherit the parent's text color, so
+                        // every glyph here sets its own ink.
+                        Some(if primary {
+                            // The composer send key's material: an olive
+                            // dither plate with white ink, labeled so it
+                            // reads as "Update" rather than a bare texture.
+                            button
+                                .pl(px(7.0))
+                                .pr(px(9.0))
                                 .overflow_hidden()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .role(gpui::Role::Button)
-                                .aria_label(label)
-                                .tooltip(widgets::text_tooltip(label))
-                                .rounded(px(6.0))
-                                .text_size(crate::typography::ui_rems(11.0))
-                                .cursor_pointer()
-                                .map(|button| {
-                                    if primary {
-                                        button
-                                            .bg(theme.accent_wash)
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(theme.accent)
-                                            .hover(|style| style.bg(theme.accent.opacity(0.16)))
-                                    } else {
-                                        button
-                                            .text_color(theme.text_muted)
-                                            .hover(|style| style.bg(crate::theme::ink(0.05)))
-                                    }
+                                .border_1()
+                                .border_color(theme.accent.opacity(0.4))
+                                .when(theme.appearance == crate::theme::Appearance::Light, |el| {
+                                    el.bg(gpui::hsla(80.0 / 360.0, 0.28, 0.2, 1.0))
                                 })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    // Inside the details trigger: act, don't expand.
-                                    cx.stop_propagation();
-                                    if primary {
-                                        this.apply_harness_update(harness, cx)
-                                    } else {
-                                        this.cancel_harness_update(harness, cx)
-                                    }
-                                }))
-                                .when(primary, |button| {
-                                    button.child(div().absolute().inset_0().opacity(0.3).child(
-                                        zuse_viewport::styling::dither_background(true, true),
-                                    ))
-                                })
+                                .text_color(gpui::white())
+                                .hover(|style| style.opacity(0.88))
+                                .child(zuse_viewport::styling::dither_background(true, true))
                                 .child(
-                                    crate::icons::icon(if primary {
-                                        crate::icons::REFRESH
-                                    } else {
-                                        crate::icons::CLOSE
-                                    })
-                                    .size(px(13.0)),
-                                ),
-                        )
+                                    crate::icons::icon(crate::icons::ARROW_UP)
+                                        .relative()
+                                        .size(px(12.0))
+                                        .text_color(gpui::white()),
+                                )
+                                .child(div().relative().child(SharedString::from(label)))
+                        } else {
+                            button
+                                .size(px(24.0))
+                                .text_color(theme.text_muted)
+                                .hover(|style| style.bg(crate::theme::ink(0.05)))
+                                .child(
+                                    crate::icons::icon(crate::icons::CLOSE)
+                                        .size(px(13.0))
+                                        .text_color(theme.text_muted),
+                                )
+                        })
                     });
                 let header = widgets::card_row(&theme, ix == 0)
                     .py(px(8.))
@@ -1249,6 +1164,7 @@ impl HarnessesPage {
             latest_version: latest.map(str::to_owned),
             checked_at: Some(now - 120_000),
             phase,
+            can_apply: true,
             ..serde_json::from_value(serde_json::json!({"harness": harness, "phase": "current"}))
                 .expect("fixture update status")
         };
@@ -1256,8 +1172,8 @@ impl HarnessesPage {
             status(
                 HarnessId::ClaudeCode,
                 "2.1.14",
-                None,
-                HarnessUpdatePhase::Current,
+                Some("2.1.15"),
+                HarnessUpdatePhase::Available,
             ),
             status(
                 HarnessId::Codex,
@@ -1370,7 +1286,18 @@ impl Render for HarnessesPage {
             ),
             _ => None,
         };
-        let switcher = self.render_device_switcher(&theme, cx);
+        // No device switcher: the page is this device. A remote target (only
+        // reachable from the shell's update notice) is named in the status.
+        let remote_device: Option<SharedString> = self.target_device.as_ref().map(|id| {
+            self.state
+                .read(cx)
+                .devices
+                .iter()
+                .find(|device| &device.id == id)
+                .map(|device| device.name.clone())
+                .unwrap_or_else(|| "Another device".into())
+                .into()
+        });
 
         let checking =
             matches!(self.harnesses, Loadable::Idle | Loadable::Loading) || self.checking_updates;
@@ -1384,6 +1311,10 @@ impl Render for HarnessesPage {
                 _ => None,
             };
             checked_label(checked_at, chrono::Utc::now().timestamp_millis()).into()
+        };
+        let status = match remote_device {
+            Some(device) => format!("{device} · {status}").into(),
+            None => status,
         };
         let check = div()
             .flex()
@@ -1428,7 +1359,11 @@ impl Render for HarnessesPage {
                                 }
                             }))
                     })
-                    .child(crate::icons::icon(crate::icons::REFRESH).size(px(14.))),
+                    .child(
+                        crate::icons::icon(crate::icons::REFRESH)
+                            .size(px(14.))
+                            .text_color(theme.text_muted),
+                    ),
             );
 
         let scrollbar = popover::rail(self, "harnesses-page-scrollbar", &theme, cx);
@@ -1452,7 +1387,7 @@ impl Render for HarnessesPage {
                             widgets::page_column()
                                 .child(widgets::section_title(&theme, "Providers", "Verify what's installed, signed in, and which subscription each provider runs on."))
                                 .child(div().mt(px(20.)).flex().flex_col().gap(px(16.))
-                                    .child(widgets::group_with_action(&theme, "Agent providers", "Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.", Some(div().flex().items_center().gap(px(6.)).child(check).child(switcher).into_any_element()))
+                                    .child(widgets::group_with_action(&theme, "Agent providers", "Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.", Some(div().flex().items_center().gap(px(6.)).child(check).into_any_element()))
                                         .children(update_error).child(body))
                                     .child(self.custom_acp.clone())
 ),

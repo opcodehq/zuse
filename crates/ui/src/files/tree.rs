@@ -42,7 +42,7 @@ pub(super) fn with_indent_guides(
                 // Align with the center of the ancestor's 14px disclosure slot.
                 .left(px(8.0 + 7.0 + level as f32 * TREE_INDENT))
                 .w(px(1.0))
-                .bg(theme.border)
+                .bg(theme.wash(0.07))
         }))
         .child(row)
         .into_any_element()
@@ -336,7 +336,7 @@ impl FilesSurface {
                     .pr(px(8.0))
                     .flex()
                     .items_center()
-                    .gap(px(4.0))
+                    .gap(px(6.0))
                     .cursor_pointer()
                     .when(node.entry.ignored && decoration.is_none(), |element| {
                         element.opacity(0.52)
@@ -410,17 +410,30 @@ impl FilesSurface {
                                 )
                             }),
                     )
-                    .child(
+                    // Folders draw the control set's monochrome folder glyph,
+                    // closed or open; files keep their colored identity icon.
+                    .child(if is_directory {
+                        icon(if expanded {
+                            icons::FOLDER_OPEN
+                        } else {
+                            icons::FOLDER
+                        })
+                        .size(px(14.0))
+                        .flex_none()
+                        .text_color(theme.text_muted.opacity(0.7))
+                        .into_any_element()
+                    } else {
                         file_icons::icon(file_identity, theme.appearance)
                             .size(px(14.0))
-                            .flex_none(),
-                    )
+                            .flex_none()
+                            .into_any_element()
+                    })
                     .child(rename_element.unwrap_or_else(|| {
                         div()
                             .min_w_0()
                             .truncate()
                             .font_family(theme.font_sans.clone())
-                            .text_size(px(11.5))
+                            .text_size(crate::typography::ui_rems(13.0))
                             .text_color(text_color)
                             .child(node.entry.name)
                             .into_any_element()

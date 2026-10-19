@@ -774,8 +774,8 @@ mod tests {
             .update(&mut cx, |shell, _, cx| shell.toggle_session_info(cx))
             .unwrap();
         cx.run_until_parked();
-        let fork = cx.debug_bounds("session-info-fork").unwrap();
-        cx.simulate_click(fork.center(), gpui::Modifiers::none());
+        let side_chat = cx.debug_bounds("session-info-side-chat").unwrap();
+        cx.simulate_click(side_chat.center(), gpui::Modifiers::none());
         cx.run_until_parked();
         assert!(cx.debug_bounds("session-info").is_none());
     }

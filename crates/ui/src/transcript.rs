@@ -686,7 +686,7 @@ fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun
     }
 }
 
-/// A reasoning part as a tool-group chip: "Thought process" header over the
+/// A reasoning part as a tool-group chip: a "Thinking" row over the
 /// thought's markdown flattened into styled detail lines (analytic height —
 /// the group's fold tween needs it; see [`thought_lines`]). Capped like tool
 /// outputs, with the counted tail. `live` = the part is still streaming
@@ -713,7 +713,7 @@ fn thought_item(part_id: &str, tree: &BlockTree, live: bool) -> ToolItem {
     ToolItem {
         part_id: part_id.into(),
         call: ToolCall::Unknown {
-            name: "Thought process".into(),
+            name: "Thinking".into(),
             input: None,
         },
         is_error: false,
@@ -2014,19 +2014,23 @@ pub fn diff_rows(old: &[Row], new: &[Row]) -> Option<(Range<usize>, usize)> {
 // Tool summaries / chips (pure)
 // ---------------------------------------------------------------------------
 
-/// The ToolGroup summary line — "Ran 3 commands · edited 2 files".
+/// The ToolGroup summary line — "3 tool calls", "1 tool call · 1 failed".
 ///
-/// The rule lives in `zuse_protocol::view` so the terminal viewport reports the
-/// same summary; this only adapts the row model's [`ToolItem`] to it.
+/// The group counts its tool calls the way the timeline's activity tree
+/// does; thoughts and notes ride inside it uncounted. A group with no calls
+/// names what it holds instead ("Thinking", "Wrote a note").
 pub fn tool_group_summary(tools: &[ToolItem]) -> String {
     #[cfg(test)]
     FORBID_ROW_PREPARATION
         .with(|forbidden| assert!(!forbidden.get(), "tool summary formatting ran on UI thread"));
-    let pairs: Vec<(ToolCall, bool)> = tools
+    let calls = tools
         .iter()
         .filter(|t| t.kind == ToolItemKind::Call)
-        .map(|t| (t.call.clone(), t.is_error))
-        .collect();
+        .count();
+    let failed = tools
+        .iter()
+        .filter(|t| t.kind == ToolItemKind::Call && t.is_error)
+        .count();
     let thoughts = tools
         .iter()
         .filter(|t| t.kind == ToolItemKind::Thought)
@@ -2035,34 +2039,16 @@ pub fn tool_group_summary(tools: &[ToolItem]) -> String {
         .iter()
         .filter(|t| t.kind == ToolItemKind::Note)
         .count();
-    // The shared summary answers "used 0 tools" for an empty set — a
-    // thought-only group must not inherit that.
-    let base = if pairs.is_empty() {
-        String::new()
-    } else {
-        zuse_protocol::view::tool_group_summary(&pairs)
+    let mut summary = match (calls, thoughts, notes) {
+        (0, 0, 0) => String::new(),
+        (0, 0, 1) => "Wrote a note".into(),
+        (0, 0, n) => format!("Wrote {n} notes"),
+        (0, _, _) => "Thinking".into(),
+        (1, _, _) => "1 tool call".into(),
+        (n, _, _) => format!("{n} tool calls"),
     };
-    // Thought and note chips ride the group (they are UI-synthesized, so the
-    // shared view summary never sees them): name them on the collapsed line.
-    let mut segments: Vec<String> = Vec::new();
-    match thoughts {
-        0 => {}
-        1 => segments.push("thought process".into()),
-        n => segments.push(format!("thought {n} times")),
-    }
-    match notes {
-        0 => {}
-        1 => segments.push("wrote a note".into()),
-        n => segments.push(format!("wrote {n} notes")),
-    }
-    if !base.is_empty() {
-        segments.push(base);
-    }
-    let mut summary = segments.join(" · ");
-    // Same capitalization rule as the shared summary — only the leading
-    // letter lifts.
-    if let Some(first) = summary.get_mut(..1) {
-        first.make_ascii_uppercase();
+    if failed > 0 {
+        summary.push_str(&format!(" · {failed} failed"));
     }
     summary
 }
@@ -3255,6 +3241,12 @@ pub struct Transcript {
     /// Width held free at the column's right for a docked side card; the
     /// reading column centers in what remains.
     right_reserve: f32,
+    /// Room the shell keeps clear at the top right (a docked session card),
+    /// so the outline control steps left of it.
+    outline_inset: f32,
+    /// Review fixture: every work group renders open.
+    #[cfg(feature = "browser-fixture")]
+    fixture_open_groups: bool,
     /// Last global code-fence layout generation applied to this transcript.
     /// Each instance owns separate scroll handles and list measurements, so
     /// every one must reset itself after a global Fit-mode transition.
@@ -3407,6 +3399,10 @@ pub enum TranscriptEvent {
         title: String,
         frozen: bool,
     },
+    /// An assistant message's Fork action: branch `chat_id` into a new side
+    /// chat. The engine copies the conversation through its latest
+    /// completed response (it has no per-message fork point).
+    ForkChat { chat_id: String },
 }
 
 impl gpui::EventEmitter<TranscriptEvent> for Transcript {}
@@ -3619,6 +3615,9 @@ impl Transcript {
             typography_generation: crate::typography::generation(cx),
             content_width: crate::settings::transcript_width(cx),
             right_reserve: 0.0,
+            outline_inset: 0.0,
+            #[cfg(feature = "browser-fixture")]
+            fixture_open_groups: false,
             code_fences_generation: crate::settings::code_fences_generation(cx),
             compact_mode: crate::settings::transcript_compact_mode(cx),
             compact_live_entries: HashSet::new(),
@@ -3692,6 +3691,27 @@ impl Transcript {
             }
             cx.notify();
         }
+    }
+
+    /// Review fixture: show `entry_id`'s hover footer (timestamp, copy,
+    /// fork) as if the pointer rested on it.
+    #[cfg(feature = "browser-fixture")]
+    pub fn fixture_hover_entry(&mut self, entry_id: &str, cx: &mut Context<Self>) {
+        self.hovered_entry = Some((entry_id.to_owned().into(), entry_id.to_owned().into()));
+        self.fixture_open_groups = true;
+        cx.notify();
+    }
+
+    pub fn set_outline_inset(&mut self, inset: f32, cx: &mut Context<Self>) {
+        let inset = inset.max(0.0);
+        if (self.outline_inset - inset).abs() > 0.25 {
+            self.outline_inset = inset;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn outline_inset(&self) -> f32 {
+        self.outline_inset
     }
 
     pub fn set_rail_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -7561,6 +7581,12 @@ impl Transcript {
         let copied_message = self.copied_message.as_ref() == Some(&row.entry_id);
         let copy_text = row.copy_text.clone();
         let copy_entry_id = row.entry_id.clone();
+        // Only a conversation's own transcript forks; a subagent tab's doc
+        // is not a chat the engine can branch.
+        let fork_chat_id = self
+            .chat_id
+            .clone()
+            .filter(|_| self.doc_override.is_none() && row.copy_text.is_some());
         let strip = row.timestamp.map(|ms| {
             let timestamp = div()
                 .text_size(crate::typography::ui_rems(12.0))
@@ -7599,12 +7625,44 @@ impl Transcript {
                         .text_color(theme.text_muted),
                     )
             });
+            // Assistant replies can branch the conversation from here, with
+            // the same split glyph as every other fork action.
+            let fork = fork_chat_id.filter(|_| !is_user_row).map(|chat_id| {
+                let fade_key = format!("fork-message-hover-{copy_entry_id}");
+                div()
+                    .id(SharedString::from(format!("fork-message-{copy_entry_id}")))
+                    .debug_selector(|| "fork-message".into())
+                    .size(px(Theme::SPACE_MD * 2.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(Theme::CONTROL_RADIUS))
+                    .cursor_pointer()
+                    .bg(motion::hover_blend(
+                        &fade_key,
+                        gpui::transparent_black(),
+                        crate::theme::ink(0.08),
+                    ))
+                    .on_hover(motion::hover_listener(fade_key))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.emit(TranscriptEvent::ForkChat {
+                            chat_id: chat_id.clone(),
+                        });
+                    }))
+                    .tooltip(crate::settings::widgets::text_tooltip("Fork chat"))
+                    .child(
+                        crate::icons::icon(crate::icons::FORK)
+                            .size(px(14.0))
+                            .text_color(theme.text_muted),
+                    )
+            });
             let metadata = div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(px(Theme::SPACE_SM));
-            let metadata = metadata.child(timestamp).children(copy);
+            let metadata = metadata.child(timestamp).children(copy).children(fork);
             div()
                 .h(px(Theme::SPACE_SM + Theme::SPACE_MD * 2.0))
                 .pt(px(Theme::SPACE_SM))
@@ -7931,6 +7989,8 @@ impl Transcript {
         // Compact mode never auto-opens — not for the streaming tail, and not
         // to show chips arriving mid-reveal. Collapsed-by-default is the mode.
         let effective_auto_open = auto_open || (arrival_pending && !self.compact_mode);
+        #[cfg(feature = "browser-fixture")]
+        let effective_auto_open = effective_auto_open || self.fixture_open_groups;
         let open = !collapses || fold.open.unwrap_or(effective_auto_open);
         // Compact shells only change `open` through `toggle_fold`, which
         // already seeds `from` with the body's measured height — the
@@ -8239,8 +8299,8 @@ impl Transcript {
             tool_disclosure_progress(open, fold, now)
         };
 
-        // The summary rolls as the group grows ("Thought 2 times" → "Thought
-        // 3 times · Ran 1 command"), like the working indicator's word.
+        // The summary rolls as the group grows ("2 tool calls" → "3 tool
+        // calls"), like the working indicator's word.
         let rolled_summary = crate::roll_text::rolling(
             format!("tool-group-title-{row_id}"),
             summary.clone(),
@@ -8391,6 +8451,7 @@ impl Transcript {
                         tool_chip(
                             tool,
                             collapses,
+                            auto_open,
                             ix > 0,
                             ix + 1 < tools.len(),
                             content_reveal,
@@ -8425,9 +8486,7 @@ impl Transcript {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .when(!collapses, |card| {
-                        card.rounded(px(6.0)).bg(crate::theme::ink(0.02))
-                    })
+                    .when(!collapses, |card| card.rounded(px(4.0)))
                     .child(
                         div()
                             .id(key.clone())
@@ -8450,6 +8509,7 @@ impl Transcript {
                             .child(chip_header(
                                 tool,
                                 open,
+                                auto_open,
                                 file_opener.as_ref(),
                                 theme,
                                 cx.entity_id(),
@@ -9142,19 +9202,24 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
 /// A small glyph standing in for the tool's icon (zuse uses an icon set; a
 /// quiet monochrome character keeps the tile without shipping SVGs).
 /// The glyph for a tool call (zuse tool-chip.tsx `toolIcon`, Solar set).
+/// One glyph per tool kind, the same set the timeline uses everywhere: a
+/// terminal for commands, a page for reads, a pencil for edits and writes, a
+/// magnifier for searches, a globe for the web, a puzzle piece for MCP, a
+/// robot for subagents and a wrench for anything unrecognized.
 fn tool_icon_path(call: &ToolCall) -> &'static str {
     match call {
         ToolCall::Exec { .. } => crate::icons::TERMINAL,
-        ToolCall::ReadFile { .. } | ToolCall::ApplyPatch { .. } => crate::icons::DOCUMENT,
-        ToolCall::WriteFile { .. } => crate::icons::DOCUMENT_ADD,
-        ToolCall::EditFile { .. } => crate::icons::PEN,
-        ToolCall::Search { .. } => crate::icons::MAGNIFER,
-        ToolCall::Glob { .. } => crate::icons::FOLDER_WITH_FILES,
-        ToolCall::WebFetch { .. } | ToolCall::WebSearch { .. } => crate::icons::GLOBAL,
-        ToolCall::Todo { .. } => crate::icons::CHECKLIST,
-        call if is_agent_call(call) => crate::icons::BOT,
-        ToolCall::Unknown { name, .. } if name == "Wait for agents" => crate::icons::BOT,
-        ToolCall::Mcp { .. } | ToolCall::Unknown { .. } => crate::icons::WIDGET,
+        ToolCall::ReadFile { .. } => crate::icons::DOCUMENT,
+        ToolCall::WriteFile { .. } | ToolCall::EditFile { .. } | ToolCall::ApplyPatch { .. } => {
+            crate::icons::TOOL_EDIT
+        }
+        ToolCall::Search { .. } | ToolCall::Glob { .. } => crate::icons::MAGNIFER,
+        ToolCall::WebFetch { .. } | ToolCall::WebSearch { .. } => crate::icons::TOOL_WEB,
+        ToolCall::Todo { .. } => crate::icons::TOOL_TODO,
+        call if is_agent_call(call) => crate::icons::TOOL_AGENT,
+        ToolCall::Unknown { name, .. } if name == "Wait for agents" => crate::icons::TOOL_AGENT,
+        ToolCall::Mcp { .. } => crate::icons::WIDGET,
+        ToolCall::Unknown { .. } => crate::icons::TOOL_GENERIC,
     }
 }
 
@@ -9419,103 +9484,161 @@ impl ToolFileOpener {
     }
 }
 
-/// The chip's content row: icon tile + label + detail line (+ trailing tile
-/// when the chip expands or links out). Shared between the plain chip, the
-/// header of an expandable chip card, and the spawn link chip.
+/// The chip's content row, laid out like the timeline's tool rows: verb,
+/// muted argument, status (+ trailing chevron when the chip expands). The
+/// tool's glyph sits on the activity rail beside it. Shared between the
+/// plain chip and the header of an expandable chip card; subagent spawns
+/// take [`subagent_header_row`] instead.
 ///
-/// Spawn chips carry their subagent's lifecycle VISUALLY, in the chip's own
-/// language: while running the mini working spinner (the sidebar's) pulses
-/// at the right of the ordinary static detail; done is the ordinary quiet
-/// chip; failed takes the danger tint — no status words, no live text (a
-/// header rewriting itself per stream delta read as noise — user report).
+/// `live` = the chip's group is the streaming tail: an unresolved call or a
+/// thought still arriving shimmers its verb until it settles.
 fn chip_header_row(
     tool: &ToolItem,
     trail: Option<ChipTrail>,
+    live: bool,
     file_opener: Option<&ToolFileOpener>,
     theme: &Theme,
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> gpui::Div {
-    let (label, detail) = match tool.kind {
-        ToolItemKind::Thought => ("Thought process", String::new()),
-        ToolItemKind::Note => ("Wrote", note_chip_detail(tool)),
-        ToolItemKind::Call => tool_chip_content(&tool.call),
-    };
-    let activity = !is_agent_tool(tool);
+    if is_agent_tool(tool) {
+        return subagent_header_row(tool, trail, theme, view, cx);
+    }
+    let (label, detail) = chip_label(tool);
     let file_path = match &tool.call {
         ToolCall::ReadFile { path }
         | ToolCall::WriteFile { path, .. }
         | ToolCall::EditFile { path, .. }
         | ToolCall::ApplyPatch { path: Some(path) } => Some(path.as_str()),
         _ => None,
-    };
+    }
+    .filter(|_| tool.kind == ToolItemKind::Call);
     let open_file = file_path
         .zip(file_opener)
         .filter(|(path, opener)| opener.opens(path))
         .map(|(path, opener)| (path.to_owned(), opener.clone()));
-    let running = tool.subagent_ref.is_some()
-        && matches!(tool.subagent_status, Some(SubagentStatus::Running));
-    let failed = tool.is_error
-        || (tool.subagent_ref.is_some()
-            && matches!(tool.subagent_status, Some(SubagentStatus::Failed)));
+    let failed = tool.is_error;
     // Text resolves its color during layout, so group-hover text needs stable
     // child IDs under the keyed, expandable header to retain hover state.
-    let hover_text = activity && trail.is_some() && !failed;
-    let tint = if failed {
-        theme.danger
+    let hover_text = trail.is_some();
+    let shimmer = (live && !tool.resolved && !cx.reduce_motion()).then(|| {
+        motion::pulse_lease(view, cx);
+        tool_title_shimmer_phase(shimmer_epoch(), Instant::now())
+    });
+    let code_detail = tool.kind == ToolItemKind::Call
+        && matches!(tool.call, ToolCall::Exec { .. } | ToolCall::Mcp { .. });
+    let stats = (tool.kind == ToolItemKind::Call)
+        .then(|| chip_diff_stats(tool))
+        .flatten();
+    let detail_el: Option<AnyElement> = if let Some(path) = file_path {
+        // The file's identity glyph and its name, quiet like the argument
+        // text; clicking it opens the file without toggling the chip.
+        let badge = div()
+            .min_w_0()
+            .h(px(22.0))
+            .flex()
+            .items_center()
+            .overflow_hidden()
+            .gap(px(5.0))
+            .rounded(px(4.0))
+            .px(px(3.0))
+            .font_family(theme.font_mono.clone())
+            .text_size(px(TOOL_TEXT_SIZE - 0.5))
+            .text_color(theme.text_muted)
+            .child(
+                crate::file_icons::icon(
+                    crate::file_icons::FileIconIdentity::file(path),
+                    theme.appearance,
+                )
+                .size(px(14.0))
+                .opacity(0.8),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(SharedString::from(file_badge_name(path).to_owned())),
+            );
+        Some(if !hover_text && open_file.is_none() {
+            badge.into_any_element()
+        } else {
+            badge
+                .id("tool-file-badge")
+                .when(hover_text, |badge| {
+                    badge.group_hover("tool-header", |style| style.text_color(theme.text))
+                })
+                .when_some(open_file, |badge, (path, opener)| {
+                    badge
+                        .debug_selector(|| "tool-file-badge".into())
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme.ink(0.06)).text_color(theme.text))
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            opener.open(&path, window, cx);
+                        })
+                })
+                .into_any_element()
+        })
+    } else if detail.is_empty() {
+        None
+    } else if code_detail {
+        // Commands and MCP calls read as code: a mono chip on a faint wash.
+        Some(
+            div()
+                .min_w_0()
+                .h(px(20.0))
+                .flex()
+                .items_center()
+                .px(px(6.0))
+                .rounded(px(4.0))
+                .bg(theme.ink(0.06))
+                .font_family(theme.font_mono.clone())
+                .text_size(px(TOOL_TEXT_SIZE - 1.0))
+                .text_color(theme.text_muted)
+                .child(div().min_w_0().truncate().child(SharedString::from(detail)))
+                .into_any_element(),
+        )
     } else {
-        theme.text_muted
+        Some(
+            div()
+                .min_w_0()
+                .truncate()
+                // A thought's teaser reads as an aside.
+                .when(tool.kind == ToolItemKind::Thought, |text| text.italic())
+                .text_color(theme.text_muted)
+                .child(SharedString::from(detail))
+                .map(|text| {
+                    if hover_text {
+                        text.id("tool-detail")
+                            .group_hover("tool-header", |style| style.text_color(theme.text))
+                            .into_any_element()
+                    } else {
+                        text.into_any_element()
+                    }
+                }),
+        )
     };
     div()
         .group("tool-header")
-        .h(px(if activity {
-            CHIP_CARD_HEIGHT
-        } else {
-            CHIP_HEADER_HEIGHT
-        }))
+        .h(px(CHIP_CARD_HEIGHT))
         .w_full()
         .min_w_0()
         .flex()
         .flex_row()
         .items_center()
         .gap(px(8.0))
-        .px(px(if activity { 0.0 } else { 8.0 }))
         .text_size(px(TOOL_LABEL_SIZE))
         .line_height(px(TOOL_LABEL_LINE_HEIGHT))
-        .when(!activity, |row| {
-            row.child(
-                // Subagent icon tile (`size-[18px] rounded-[5px] bg-white/[0.08]`,
-                // icon size-3).
-                div()
-                    .size(px(18.0))
-                    .flex_none()
-                    .rounded(px(5.0))
-                    .bg(crate::theme::ink(0.08))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        crate::icons::icon(match tool.kind {
-                            ToolItemKind::Thought => crate::icons::CHAT_ROUND_LINE,
-                            ToolItemKind::Note => crate::icons::PEN,
-                            ToolItemKind::Call => tool_icon_path(&tool.call),
-                        })
-                        .size(px(12.0))
-                        .text_color(theme.text_muted),
-                    ),
-            )
-        })
         .child(
             div()
                 .flex_none()
+                .max_w(px(256.0))
                 .h(px(TOOL_LABEL_LINE_HEIGHT))
                 .flex()
                 .items_center()
-                .when(!activity, |label| {
-                    label.font_weight(gpui::FontWeight::MEDIUM)
-                })
-                .text_color(tint)
-                .child(SharedString::from(label))
+                .overflow_hidden()
+                .text_color(theme.text_muted)
+                .child(tool_group_title(SharedString::from(label), shimmer, theme))
                 .map(|label| {
                     if hover_text {
                         label
@@ -9527,189 +9650,278 @@ fn chip_header_row(
                     }
                 }),
         )
-        .child(
-            div()
-                .when(!activity, |detail| detail.flex_1())
-                .min_w_0()
-                .h(px(if file_path.is_some() {
-                    22.0
-                } else {
-                    TOOL_LABEL_LINE_HEIGHT
-                }))
-                .flex()
-                .when(activity && detail.is_empty(), |detail| detail.hidden())
-                .items_center()
-                .truncate()
-                .text_color(if failed {
-                    theme.danger
-                } else if activity {
-                    theme.text_muted
-                } else {
-                    theme.text.opacity(0.85)
-                })
-                .child(if let Some(path) = file_path {
-                    let badge = div()
-                        .min_w_0()
-                        .h(px(22.0))
-                        .flex()
-                        .items_center()
-                        .overflow_hidden()
-                        .gap(px(6.0))
-                        .rounded(px(5.0))
-                        .bg(theme.ink(0.06))
-                        .pl(px(1.0))
-                        .pr(px(6.0))
-                        .text_color(if failed {
-                            theme.danger
-                        } else {
-                            theme.text.opacity(0.85)
-                        })
-                        .child(
-                            div()
-                                .size(px(20.0))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(4.0))
-                                .bg(crate::file_icons::well_bg(theme))
-                                .child(
-                                    crate::file_icons::icon(
-                                        crate::file_icons::FileIconIdentity::file(path),
-                                        theme.appearance,
-                                    )
-                                    .size(px(14.0)),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .child(SharedString::from(file_badge_name(path).to_owned())),
-                        )
-                        .map(|badge| {
-                            if !hover_text && open_file.is_none() {
-                                return badge.into_any_element();
-                            }
-                            badge
-                                .id("tool-file-badge")
-                                .when(hover_text, |badge| {
-                                    badge.group_hover("tool-header", |style| {
-                                        style.text_color(theme.text)
-                                    })
-                                })
-                                // The badge is its own target: opening the
-                                // file must not also toggle the chip's
-                                // accordion underneath it.
-                                .when_some(open_file, |badge, (path, opener)| {
-                                    badge
-                                        .debug_selector(|| "tool-file-badge".into())
-                                        .cursor_pointer()
-                                        .hover(|style| {
-                                            style.bg(theme.ink(0.1)).text_color(theme.text)
-                                        })
-                                        .on_click(move |_, window, cx| {
-                                            cx.stop_propagation();
-                                            opener.open(&path, window, cx);
-                                        })
-                                })
-                                .into_any_element()
-                        });
-                    crate::frost::frosted(5.0, 16.0, badge).into_any_element()
-                } else {
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(SharedString::from(detail))
-                        .into_any_element()
-                })
-                .map(|detail| {
-                    if hover_text {
-                        detail
-                            .id("tool-detail")
-                            .group_hover("tool-header", |style| style.text_color(theme.text))
-                            .into_any_element()
-                    } else {
-                        detail.into_any_element()
-                    }
-                }),
-        )
-        .when_some(tool.call.subagent_model(), |row, model| {
-            // Which model the child runs on, when the spawn named one.
-            //
-            // In the trailing slot rather than suffixed onto the detail: the
-            // detail is the truncating slot, and the model is exactly what a
-            // reader scanning a fan-out of spawns wants left once the
-            // descriptions are cut.
-            //
-            // Bare faint text, NOT a filled pill: the tiles either side of it
-            // are AFFORDANCES (the spinner means running, the arrow opens the
-            // subagent), so giving a passive label the same chrome made the
-            // trailing edge read as three buttons — the loudest thing in the
-            // row was the one thing you cannot click.
+        .when(failed, |row| {
             row.child(
                 div()
                     .flex_none()
-                    .h(px(18.0))
+                    .text_size(px(TOOL_TEXT_SIZE - 1.0))
+                    .text_color(theme.danger)
+                    .child("error"),
+            )
+        })
+        .when_some(detail_el, |row, detail| {
+            row.child(
+                div()
+                    .min_w_0()
                     .flex()
                     .items_center()
+                    .overflow_hidden()
+                    .child(detail),
+            )
+        })
+        .when_some(stats, |row, (added, removed)| {
+            row.child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .text_size(px(TOOL_TEXT_SIZE - 1.0))
+                    .when(added > 0, |stats| {
+                        stats.child(
+                            div()
+                                .text_color(theme.success.opacity(0.85))
+                                .child(SharedString::from(format!("+{added}"))),
+                        )
+                    })
+                    .when(removed > 0, |stats| {
+                        stats.child(
+                            div()
+                                .text_color(theme.danger.opacity(0.85))
+                                .child(SharedString::from(format!("\u{2212}{removed}"))),
+                        )
+                    }),
+            )
+        })
+        .when_some(trail, |row, trail| {
+            // The disclosure chevron surfaces on hover (or stays while open).
+            let open = matches!(trail, ChipTrail::Chevron { open: true });
+            row.child(
+                div()
+                    .size(px(18.0))
+                    .flex_none()
+                    .when(!open, |tile| {
+                        tile.opacity(0.0)
+                            .group_hover("tool-header", |style| style.opacity(1.0))
+                    })
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        crate::icons::icon(if open {
+                            crate::icons::ALT_ARROW_DOWN
+                        } else {
+                            crate::icons::ALT_ARROW_RIGHT
+                        })
+                        .size(px(12.0))
+                        .text_color(theme.text_muted),
+                    ),
+            )
+        })
+}
+
+/// One clock for every live chip's shimmer, so rows arriving mid-sweep fall
+/// in step with the ones above them.
+fn shimmer_epoch() -> Instant {
+    static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    *EPOCH.get_or_init(Instant::now)
+}
+
+/// A chip's verb and argument. Calls share the terminal viewport's naming
+/// (`tool_chip_content`), with the file verbs in the tense of the call
+/// (Reading → Read, Editing → Edited); a thought is "Thinking" over its
+/// opening sentence.
+fn chip_label(tool: &ToolItem) -> (&'static str, String) {
+    match tool.kind {
+        ToolItemKind::Thought => ("Thinking", thought_teaser(&note_chip_detail(tool))),
+        ToolItemKind::Note => ("Wrote", note_chip_detail(tool)),
+        ToolItemKind::Call => {
+            let (label, detail) = tool_chip_content(&tool.call);
+            let pending = !tool.resolved;
+            let label = match &tool.call {
+                ToolCall::ReadFile { .. } if pending => "Reading",
+                ToolCall::WriteFile { .. } if pending => "Writing",
+                ToolCall::WriteFile { .. } => "Wrote",
+                ToolCall::EditFile { .. } | ToolCall::ApplyPatch { .. } if pending => "Editing",
+                ToolCall::EditFile { .. } | ToolCall::ApplyPatch { .. } => "Edited",
+                _ => label,
+            };
+            (label, detail)
+        }
+    }
+}
+
+/// The opening sentence of a thought, for its one-line teaser.
+fn thought_teaser(text: &str) -> String {
+    let text = text.trim();
+    let end = text
+        .char_indices()
+        .find(|&(ix, ch)| {
+            matches!(ch, '.' | '?' | '!')
+                && text[ix + ch.len_utf8()..]
+                    .chars()
+                    .next()
+                    .is_none_or(char::is_whitespace)
+        })
+        .map(|(ix, ch)| ix + ch.len_utf8());
+    match end {
+        Some(end) => text[..end].to_owned(),
+        None => text.to_owned(),
+    }
+}
+
+/// Lines an edit added and removed, from its doc-resident detail.
+fn chip_diff_stats(tool: &ToolItem) -> Option<(u64, u64)> {
+    let (added, removed) = match tool.detail.as_deref()? {
+        ToolDetail::Stats { stats } => stats.iter().fold((0, 0), |(a, r), stat| {
+            (a + stat.additions, r + stat.deletions)
+        }),
+        ToolDetail::Diff { file, .. } => (u64::from(file.additions), u64::from(file.deletions)),
+        _ => return None,
+    };
+    (added > 0 || removed > 0).then_some((added, removed))
+}
+
+/// A subagent's row: lifecycle glyph, robot, the task as its title, the
+/// latest output (or status) muted beside it, the model it runs on, and a
+/// chevron on hover when the row opens the subagent's transcript.
+fn subagent_header_row(
+    tool: &ToolItem,
+    trail: Option<ChipTrail>,
+    theme: &Theme,
+    view: gpui::EntityId,
+    cx: &mut gpui::App,
+) -> gpui::Div {
+    let (_, description) = tool_chip_content(&tool.call);
+    let status = match tool.subagent_status {
+        Some(status) => status,
+        None if tool.is_error => SubagentStatus::Failed,
+        None if tool.resolved => SubagentStatus::Done,
+        None => SubagentStatus::Running,
+    };
+    let running = matches!(status, SubagentStatus::Running);
+    let failed = tool.is_error || matches!(status, SubagentStatus::Failed);
+    let title: SharedString = if description.is_empty() {
+        "Agent".into()
+    } else {
+        description.into()
+    };
+    let detail: SharedString = match tool.subagent_tail.as_deref().map(single_line) {
+        Some(tail) if !tail.is_empty() => tail.into(),
+        _ if failed => "Failed".into(),
+        _ if running => "Running".into(),
+        _ => "Done".into(),
+    };
+    let shimmer = (running && !cx.reduce_motion()).then(|| {
+        motion::pulse_lease(view, cx);
+        tool_title_shimmer_phase(shimmer_epoch(), Instant::now())
+    });
+    let glyph = div()
+        .size(px(12.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .map(|slot| {
+            if failed {
+                slot.child(
+                    crate::icons::icon(crate::icons::CLOSE)
+                        .size(px(12.0))
+                        .text_color(theme.danger),
+                )
+            } else if running {
+                // A live dot in a soft halo.
+                slot.child(
+                    div()
+                        .size(px(9.0))
+                        .rounded_full()
+                        .bg(theme.success.opacity(0.3))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(div().size(px(5.0)).rounded_full().bg(theme.success)),
+                )
+            } else {
+                slot.child(
+                    crate::icons::icon(crate::icons::CHECK)
+                        .size(px(12.0))
+                        .text_color(theme.success),
+                )
+            }
+        });
+    div()
+        .group("tool-header")
+        .h(px(CHIP_HEADER_HEIGHT))
+        .max_w_full()
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .px(px(8.0))
+        .text_size(px(TOOL_LABEL_SIZE))
+        .line_height(px(TOOL_LABEL_LINE_HEIGHT))
+        .child(glyph)
+        .child(
+            crate::icons::icon(crate::icons::TOOL_AGENT)
+                .size(px(14.0))
+                .text_color(theme.text_muted),
+        )
+        .child(
+            div()
+                .flex_none()
+                .max_w(px(224.0))
+                .truncate()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.text.opacity(0.9))
+                .child(title),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .max_w(px(448.0))
+                .h(px(TOOL_LABEL_LINE_HEIGHT))
+                .flex()
+                .items_center()
+                .overflow_hidden()
+                .text_color(if failed {
+                    theme.danger
+                } else {
+                    theme.text_muted
+                })
+                .child(tool_group_title(detail, shimmer, theme)),
+        )
+        .when_some(tool.call.subagent_model(), |row, model| {
+            // Which model the child runs on, when the spawn named one: bare
+            // faint text, so the passive label never reads as a control.
+            row.child(
+                div()
+                    .flex_none()
                     .text_size(px(11.0))
                     .text_color(theme.text_faint)
                     .child(SharedString::from(model.to_owned())),
             )
         })
-        .when(running, |row| {
-            // The sidebar working-row spinner, in the chip's trailing slot —
-            // paint-local (fixed footprint), so it never moves the layout.
-            row.child(div().flex_none().child(crate::loaders::mini_glyph_spinner(
-                format!(
-                    "subagent-chip-{}",
-                    tool.subagent_ref.as_deref().unwrap_or_default()
-                ),
-                2.0,
-                theme.glyph,
-                view,
-                cx,
-            )))
-        })
         .when_some(trail, |row, trail| {
-            // Trailing tile matching the group header's: a chevron for the
-            // output/diff accordion, or the open-arrow for spawn chips.
-            let tile = div()
-                .size(px(18.0))
-                .flex_none()
-                .when(activity, |tile| {
-                    tile.opacity(0.0)
-                        .group_hover("tool-header", |style| style.opacity(1.0))
-                })
-                .when(!activity, |tile| {
-                    tile.rounded(px(5.0)).bg(crate::theme::ink(0.06))
-                })
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(theme.text_muted.opacity(0.8));
-            row.child(match trail {
-                ChipTrail::Chevron { open } => tile.child(
-                    crate::icons::icon(if open {
-                        crate::icons::ALT_ARROW_DOWN
-                    } else {
-                        crate::icons::ALT_ARROW_RIGHT
+            let open = matches!(trail, ChipTrail::Chevron { open: true });
+            row.child(
+                div()
+                    .size(px(14.0))
+                    .flex_none()
+                    .when(!open, |tile| {
+                        tile.opacity(0.0)
+                            .group_hover("tool-header", |style| style.opacity(1.0))
                     })
-                    .size(px(12.0))
-                    .text_color(theme.text_faint)
-                    .when(activity, |caret| {
-                        caret.group_hover("tool-header", |style| {
-                            style.text_color(if failed { theme.danger } else { theme.text })
+                    .child(
+                        crate::icons::icon(if open {
+                            crate::icons::ALT_ARROW_DOWN
+                        } else {
+                            crate::icons::ALT_ARROW_RIGHT
                         })
-                    }),
-                ),
-                ChipTrail::OpenArrow => tile.child(
-                    crate::icons::icon(crate::icons::ARROW_UP_RIGHT)
-                        .size(px(11.0))
-                        .text_color(theme.text_muted.opacity(0.8)),
-                ),
-            })
+                        .size(px(14.0))
+                        .text_color(theme.text_muted),
+                    ),
+            )
         })
 }
 
@@ -9717,6 +9929,7 @@ fn chip_header_row(
 fn chip_header(
     tool: &ToolItem,
     open: bool,
+    live: bool,
     file_opener: Option<&ToolFileOpener>,
     theme: &Theme,
     view: gpui::EntityId,
@@ -9725,6 +9938,7 @@ fn chip_header(
     chip_header_row(
         tool,
         Some(ChipTrail::Chevron { open }),
+        live,
         file_opener,
         theme,
         view,
@@ -9877,7 +10091,7 @@ fn activity_rail(
         )
         .child(
             crate::icons::icon(match tool.kind {
-                ToolItemKind::Thought => crate::icons::CHAT_ROUND_LINE,
+                ToolItemKind::Thought => crate::icons::TOOL_THINKING,
                 ToolItemKind::Note => crate::icons::PEN,
                 ToolItemKind::Call => tool_icon_path(&tool.call),
             })
@@ -9916,6 +10130,7 @@ fn activity_ribbon(path: &mut PathBuilder, points: &[Point<Pixels>]) {
 fn tool_chip(
     tool: &ToolItem,
     rail: bool,
+    live: bool,
     has_predecessor: bool,
     continues: bool,
     content_reveal: f32,
@@ -9958,15 +10173,20 @@ fn tool_chip(
                 .flex()
                 .items_center()
                 .overflow_hidden()
-                .when(!rail, |card| {
-                    card.rounded(px(6.0)).bg(crate::theme::ink(0.02))
-                })
                 .when(rail && content_reveal < 1.0, |card| {
                     card.relative()
                         .top(px(4.0 * (1.0 - content_reveal)))
                         .opacity(content_reveal)
                 })
-                .child(chip_header_row(tool, None, file_opener, theme, view, cx)),
+                .child(chip_header_row(
+                    tool,
+                    None,
+                    live,
+                    file_opener,
+                    theme,
+                    view,
+                    cx,
+                )),
         )
         .into_any_element()
 }
@@ -10008,20 +10228,19 @@ fn subagent_chip(
                 .when(rail, |el| el.ml(px(12.0)))
                 .h(px(CHIP_CARD_HEIGHT))
                 .min_w_0()
-                .flex_1()
+                .max_w_full()
                 .flex()
                 .items_center()
                 .overflow_hidden()
-                .rounded(px(9.0))
-                .border_1()
-                .border_color(crate::theme::hairline(0.07))
-                .bg(crate::theme::ink(0.03))
+                // A flat content-width line; only hover gives it a wash.
+                .rounded(px(4.0))
                 .cursor_pointer()
                 .hover(|s| s.bg(crate::theme::ink(0.05)))
                 .on_click(on_open)
                 .child(chip_header_row(
                     tool,
                     Some(ChipTrail::OpenArrow),
+                    false,
                     None,
                     theme,
                     view,
@@ -12103,8 +12322,8 @@ mod tests {
             Some(ToolDetail::Thought { lines, .. }) if !lines.is_empty()
         ));
         let summary = tool_group_summary(&tools);
-        assert!(summary.starts_with("Thought 2 times"), "{summary}");
-        assert!(summary.contains("2 commands"), "{summary}");
+        // Thoughts ride inside the group uncounted; the calls are counted.
+        assert_eq!(summary, "2 tool calls");
 
         // A lone thought is still an accordion (with the group tween), named
         // plainly.
@@ -12118,7 +12337,7 @@ mod tests {
         let RowKind::ToolGroup { tools, .. } = &rows[0].kind else {
             panic!("expected a tool group");
         };
-        assert_eq!(tool_group_summary(&tools), "Thought process");
+        assert_eq!(tool_group_summary(&tools), "Thinking");
 
         // Empty reasoning renders nothing.
         let entry = assistant(
@@ -12206,9 +12425,7 @@ mod tests {
         assert_eq!(tools[3].kind, ToolItemKind::Call);
         assert!(matches!(visible[1].kind, RowKind::Markdown { .. }));
         let summary = tool_group_summary(tools);
-        assert!(summary.contains("wrote a note"), "{summary}");
-        assert!(summary.contains("Ran 2 commands"), "{summary}");
-        assert!(summary.contains("Thought process"), "{summary}");
+        assert_eq!(summary, "2 tool calls");
 
         assert!(rows.iter().any(|row| {
             row.compact_fold.is_some() && matches!(row.kind, RowKind::Markdown { .. })
@@ -15502,17 +15719,14 @@ mod tests {
             edit("a.rs"),
             edit("b.rs"),
         ];
-        assert_eq!(
-            tool_group_summary(&tools),
-            "Ran 3 commands · edited 2 files"
-        );
-        // Distinct-path dedupe: editing one file twice counts once.
+        assert_eq!(tool_group_summary(&tools), "5 tool calls");
+        // Every call counts, repeated edits included.
         let tools = vec![edit("a.rs"), edit("a.rs")];
-        assert_eq!(tool_group_summary(&tools), "Edited 1 file");
+        assert_eq!(tool_group_summary(&tools), "2 tool calls");
         // Failures append.
         let mut failing = exec("boom");
         failing.is_error = true;
-        assert_eq!(tool_group_summary(&[failing]), "Ran 1 command · 1 failed");
+        assert_eq!(tool_group_summary(&[failing]), "1 tool call · 1 failed");
         // Reads / searches / misc.
         let tools = vec![
             ToolItem {
@@ -15566,7 +15780,7 @@ mod tests {
                 images: Arc::new([]),
             },
         ];
-        assert_eq!(tool_group_summary(&tools), "Read 1 file · searched 2 times");
+        assert_eq!(tool_group_summary(&tools), "3 tool calls");
     }
 
     #[test]
@@ -15738,6 +15952,7 @@ mod tests {
                         .on_click(move |_, _, _| toggles.set(toggles.get() + 1))
                         .child(chip_header(
                             &self.tool,
+                            false,
                             false,
                             Some(&self.opener),
                             &theme,

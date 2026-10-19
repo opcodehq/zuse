@@ -14,7 +14,6 @@ use zuse_protocol::device_paths::{child_folder as child_path, parent_folder as f
 pub(super) struct WorktreeSettingsCard {
     state: Entity<AppState>,
     target: Option<String>,
-    device_select: widgets::SelectState,
     settings: Loadable<WorktreeSettingsStatus>,
     /// The switch, ahead of the saved settings while a folder is still to be
     /// chosen.
@@ -32,7 +31,6 @@ impl WorktreeSettingsCard {
         let mut card = Self {
             state,
             target: None,
-            device_select: widgets::SelectState::default(),
             settings: Loadable::Idle,
             enabled: false,
             error: None,
@@ -44,85 +42,6 @@ impl WorktreeSettingsCard {
         };
         card.load(None, cx);
         card
-    }
-
-    fn render_device_switcher(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        use crate::icons::{self, icon};
-        let (mut devices, local_id) = {
-            let s = self.state.read(cx);
-            (s.devices.clone(), s.local_device_id.clone())
-        };
-        devices.sort_by(|a, b| {
-            a.created_at
-                .cmp(&b.created_at)
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        let effective = self.target.clone().or_else(|| local_id.clone());
-        let platform_glyph = |platform: &str| match platform {
-            "macos" | "darwin" => icons::LAPTOP,
-            "ios" | "android" => icons::SMARTPHONE,
-            _ => icons::MONITOR,
-        };
-        // Local device = no passthrough (calls stay direct).
-        let mut targets: Vec<Option<String>> = Vec::new();
-        let mut options = Vec::new();
-        for device in &devices {
-            let is_local = local_id.as_deref() == Some(device.id.as_str());
-            let glyph = platform_glyph(&device.platform);
-            let muted = theme.text_muted;
-            let option = widgets::SelectOption::new(device.name.clone()).leading(move || {
-                icon(glyph)
-                    .size(px(16.0))
-                    .flex_none()
-                    .text_color(muted)
-                    .into_any_element()
-            });
-            options.push(if is_local {
-                option.detail("You")
-            } else {
-                option
-            });
-            targets.push((!is_local).then(|| device.id.clone()));
-        }
-        let selected = match devices
-            .iter()
-            .position(|d| Some(d.id.as_str()) == effective.as_deref())
-        {
-            Some(ix) => ix,
-            // Not registered (yet): keep the current target reachable.
-            None => {
-                let muted = theme.text_muted;
-                options.push(widgets::SelectOption::new("This device").leading(move || {
-                    icon(icons::LAPTOP)
-                        .size(px(16.0))
-                        .flex_none()
-                        .text_color(muted)
-                        .into_any_element()
-                }));
-                targets.push(self.target.clone());
-                options.len() - 1
-            }
-        };
-        widgets::select(
-            "worktrees-device-switcher",
-            "Device",
-            theme,
-            |page: &mut Self| &mut page.device_select,
-        )
-        .options(options, selected)
-        .menu_width(260.0)
-        .heading("Devices")
-        .open_rightward()
-        .on_select(move |page, ix, _, cx| {
-            if let Some(target) = targets.get(ix) {
-                widgets::close_select(page, |card: &mut Self| &mut card.device_select, cx);
-                if page.target != *target {
-                    page.load(target.clone(), cx);
-                }
-            }
-        })
-        .render(&self.device_select, cx)
-        .into_any_element()
     }
 
     fn load(&mut self, target: Option<String>, cx: &mut Context<Self>) {
@@ -490,7 +409,6 @@ impl WorktreeSettingsCard {
 impl Render for WorktreeSettingsCard {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
-        let switcher = self.render_device_switcher(&theme, cx);
         let status = self.settings.ready();
         let overridden = status.is_some_and(|s| s.environment_override.is_some());
         let interactive = status.is_some() && !self.saving && !overridden;
@@ -554,7 +472,6 @@ impl Render for WorktreeSettingsCard {
                         .on_click(cx.listener(|card, _, _, cx| card.load(card.target.clone(), cx))),
                 )
             })
-            .child(switcher)
             .when(enabled && !overridden, |row| {
                 row.child(
                     widgets::action_button(&theme, widgets::ActionTone::Filled)

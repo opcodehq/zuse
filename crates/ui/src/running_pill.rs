@@ -249,8 +249,8 @@ fn paint_pill(
     let _ = line.paint(text_origin, height, TextAlign::Left, None, window, cx);
 }
 
-/// Marks the titlebar's explorer button while subagents run, so they can be
-/// found with the panel closed: the button's face breathes in the activity
+/// Marks the titlebar's right-pane toggle while subagents run, so they can
+/// be found with the pane closed: the button's face breathes in the activity
 /// tone, and a small count badge sits on its corner. Both are drawn over the
 /// button, so it keeps its size and position among the titlebar controls.
 pub fn mark_files_button(

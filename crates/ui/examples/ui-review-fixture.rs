@@ -88,7 +88,7 @@ fn main() -> anyhow::Result<()> {
                 let stat = state::CheckoutDiffStat { checkout_id: format!("fixture-checkout-{ix}"), device_id: chat.device_id.clone(), cwd: "/tmp/fieldnotes".into(), additions, deletions };
                 s.checkout_diff_stats.push(stat);
             }
-            for (ix, pr_state) in [(1, zuse_protocol::ChangeRequestState::Open), (2, zuse_protocol::ChangeRequestState::Merged), (4, zuse_protocol::ChangeRequestState::Open), (6, zuse_protocol::ChangeRequestState::Merged), (7, zuse_protocol::ChangeRequestState::Open), (8, zuse_protocol::ChangeRequestState::Closed)] {
+            for (ix, pr_state) in [(1, zuse_protocol::ChangeRequestState::Open), (2, zuse_protocol::ChangeRequestState::Merged), (3, zuse_protocol::ChangeRequestState::Closed), (4, zuse_protocol::ChangeRequestState::Open), (6, zuse_protocol::ChangeRequestState::Merged), (7, zuse_protocol::ChangeRequestState::Open), (8, zuse_protocol::ChangeRequestState::Closed)] {
                 let chat = s.chats[ix].clone();
                 let source = chat.source_context.as_ref().unwrap();
                 s.fixture_sidebar_change_request(zuse_protocol::CheckoutChangeRequestStatus {
@@ -126,7 +126,15 @@ fn main() -> anyhow::Result<()> {
                 }
                 s.chats.push(chat);
             }
-            s.apply_sessions(vec![zuse_protocol::Session { last_completed_turn: None, running_subagents: 0, chat_id: "zuse-publish".into(), device_id: "local".into(), status: zuse_protocol::SessionStatus::Working, started_at: Some(chrono::Utc::now()), updated_at: chrono::Utc::now() }]);
+            // Every Threads row state: running, waiting on input, failed
+            // unseen and finished unseen (chat-3, bold).
+            s.chats[7].last_message_at = Some(chrono::Utc::now());
+            let session = |chat_id: &str, device_id: &str, status| zuse_protocol::Session { last_completed_turn: None, running_subagents: 0, chat_id: chat_id.into(), device_id: device_id.into(), status, started_at: Some(chrono::Utc::now()), updated_at: chrono::Utc::now() };
+            s.apply_sessions(vec![
+                session("zuse-publish", "local", zuse_protocol::SessionStatus::Working),
+                session("chat-5", "local", zuse_protocol::SessionStatus::AwaitingInput),
+                session("chat-6", "remote", zuse_protocol::SessionStatus::Errored),
+            ]);
             s
         });
         let boot = EngineBootConfig { target: None,  data_dir: data, ipc_port: 0, edge_url: String::new(), edge_token: None, org_id: None, workos_client_id: None, default_harness: HarnessId::ClaudeCode };
@@ -152,7 +160,7 @@ fn main() -> anyhow::Result<()> {
             for route in routes {
                 let _ = window.update(cx, |shell, window, cx| {
                     shell.fixture_review_route(&route, cx);
-                    if route.ends_with("model-picker") { shell.fixture_open_model_picker(window, cx); } else if route.ends_with("-menu") { shell.fixture_open_menu(&route, window, cx); }
+                    if route.ends_with("model-picker") { shell.fixture_open_model_picker(window, cx); } else if route.ends_with("-menu") { shell.fixture_open_menu(&route, window, cx); } else if route.starts_with("panel/") || route.starts_with("main/") { shell.fixture_open_panel(&route, window, cx); }
                 });
                 pause(cx, 700).await;
                 let name = route.replace('/', "-");

@@ -2,7 +2,7 @@
 
 use super::HarnessesPage;
 use crate::{settings, settings::widgets, theme::Theme};
-use gpui::{AnyElement, Context, div, prelude::*, px};
+use gpui::{AnyElement, Context, div, prelude::*};
 use zuse_protocol::HarnessId;
 
 impl HarnessesPage {
@@ -46,17 +46,8 @@ impl HarnessesPage {
         .into_iter()
         .enumerate()
         .map(|(ix, (dollar, label, description, enabled))| {
-            div()
+            widgets::details_row(theme, ix == 0)
                 .id(format!("completion-{harness:?}-{dollar}"))
-                .min_h(px(52.0))
-                .py(px(10.0))
-                .when(ix > 0, |row| {
-                    row.border_t_1().border_color(widgets::row_divider(theme))
-                })
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(16.0))
                 .role(gpui::Role::Switch)
                 .aria_label(format!("{harness:?}: {label}"))
                 .aria_toggled(if enabled {
@@ -76,16 +67,7 @@ impl HarnessesPage {
                         cx.stop_propagation();
                     }
                 }))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(widgets::row_title(theme, label))
-                        .child(widgets::meta_line(
-                            theme,
-                            vec![div().child(description).into_any_element()],
-                        )),
-                )
+                .child(widgets::details_text(theme, label, description))
                 .child(widgets::toggle_switch(
                     theme,
                     enabled,

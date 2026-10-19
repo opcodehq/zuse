@@ -2081,7 +2081,7 @@ impl Render for SidebarViewOptionsTooltip {
             .shadow_md()
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text)
-            .child("Sidebar view options")
+            .child("View options")
     }
 }
 
@@ -2105,20 +2105,33 @@ impl SidebarViewRow {
     /// Radio choices dismiss their submenu after selection. Show toggles
     /// stay open for batch changes.
     fn closes_submenu(self) -> bool {
-        matches!(
-            self,
-            Self::ByProject | Self::ByDevice | Self::InOneList | Self::LastUpdated | Self::Created
-        )
+        matches!(self, Self::LastUpdated | Self::Created)
     }
 }
 
-const SIDEBAR_VIEW_GROUPS: [(&str, std::ops::Range<usize>); 3] =
-    [("Organize", 0..3), ("Sort", 3..5), ("Show", 5..11)];
+/// One top-level row of the view options card, in keyboard order.
+#[derive(Clone, Copy)]
+enum SidebarViewItem {
+    /// A direct choice: a View radio or a secondary toggle.
+    Row(SidebarViewRow),
+    /// A submenu trigger: an index into [`SIDEBAR_VIEW_GROUPS`].
+    Group(usize),
+    CreateSection,
+}
 
-const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 11] = [
-    SidebarViewRow::ByDevice,
-    SidebarViewRow::ByProject,
-    SidebarViewRow::InOneList,
+const SIDEBAR_VIEW_ITEMS: [SidebarViewItem; 7] = [
+    SidebarViewItem::Row(SidebarViewRow::ByProject),
+    SidebarViewItem::Row(SidebarViewRow::InOneList),
+    SidebarViewItem::Group(0),
+    SidebarViewItem::Group(1),
+    SidebarViewItem::Row(SidebarViewRow::ByDevice),
+    SidebarViewItem::Row(SidebarViewRow::Compact),
+    SidebarViewItem::CreateSection,
+];
+
+const SIDEBAR_VIEW_GROUPS: [(&str, std::ops::Range<usize>); 2] = [("Sort", 0..2), ("Show", 2..8)];
+
+const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 8] = [
     SidebarViewRow::LastUpdated,
     SidebarViewRow::Created,
     SidebarViewRow::ShowBranch,
@@ -2128,6 +2141,14 @@ const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 11] = [
     SidebarViewRow::ShowProjectLabel,
     SidebarViewRow::ShowProjectFilter,
 ];
+
+/// The submenu a top-level view options row opens, if it is a trigger.
+fn sidebar_view_group(item: usize) -> Option<&'static (&'static str, std::ops::Range<usize>)> {
+    match SIDEBAR_VIEW_ITEMS.get(item) {
+        Some(SidebarViewItem::Group(group)) => SIDEBAR_VIEW_GROUPS.get(*group),
+        _ => None,
+    }
+}
 
 // list items stay tightly related at 2px, while section boundaries use 12px
 // (well over 2x the intra-list gap). Disclosure content gets a small 4px
@@ -2140,7 +2161,7 @@ const SIDEBAR_PROJECT_GAP: f32 = 2.0;
 pub(super) const SIDEBAR_PROJECT_AVATAR_SIZE: f32 = 20.0;
 pub(super) const SIDEBAR_DISCLOSURE_BODY_INSET: f32 = 4.0;
 
-/// The organization a view switch segment selects.
+/// The organization a View choice selects.
 fn organization_for(row: SidebarViewRow) -> SidebarOrganization {
     match row {
         SidebarViewRow::ByDevice => SidebarOrganization::ByDevice,
@@ -3903,7 +3924,7 @@ impl Shell {
         }
     }
 
-    fn open_sidebar_view_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_sidebar_view_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_spaces_menu(cx);
         let focus = cx.focus_handle();
         self.sidebar_view_menu.open(SidebarViewMenu {
@@ -3938,8 +3959,14 @@ impl Shell {
             SidebarViewRow::ShowProjectIcon => {
                 self.settings.sidebar_show_project_icon = !self.settings.sidebar_show_project_icon
             }
+            // A secondary toggle: off returns to the Projects view.
             SidebarViewRow::ByDevice => {
-                self.settings.sidebar_organization = SidebarOrganization::ByDevice
+                self.settings.sidebar_organization =
+                    if self.settings.sidebar_organization == SidebarOrganization::ByDevice {
+                        SidebarOrganization::ByProject
+                    } else {
+                        SidebarOrganization::ByDevice
+                    }
             }
             SidebarViewRow::InOneList => {
                 self.settings.sidebar_organization = SidebarOrganization::InOneList
@@ -3980,11 +4007,11 @@ impl Shell {
         cx.notify();
     }
 
-    fn open_sidebar_view_submenu(&mut self, group: usize, keyboard: bool, cx: &mut Context<Self>) {
+    fn open_sidebar_view_submenu(&mut self, item: usize, keyboard: bool, cx: &mut Context<Self>) {
         if let Some(menu) = self.sidebar_view_menu.open_mut() {
             menu.hover_intent.reset();
-            menu.active = Some(group);
-            menu.submenu = (group < SIDEBAR_VIEW_GROUPS.len()).then_some(group);
+            menu.active = Some(item);
+            menu.submenu = sidebar_view_group(item).is_some().then_some(item);
             menu.submenu_active = keyboard.then_some(0);
             menu.submenu_bounds = None;
             cx.notify();
@@ -4068,39 +4095,41 @@ impl Shell {
             }
             "up" | "down" => {
                 let delta = if key == "up" { -1 } else { 1 };
-                if let Some(group) = menu.submenu {
-                    menu.submenu_active = popover::menu_step(
-                        menu.submenu_active,
-                        SIDEBAR_VIEW_GROUPS[group].1.len(),
-                        delta,
-                    );
+                if let Some((_, range)) = menu.submenu.and_then(sidebar_view_group) {
+                    menu.submenu_active =
+                        popover::menu_step(menu.submenu_active, range.len(), delta);
                 } else {
-                    menu.active =
-                        popover::menu_step(menu.active, SIDEBAR_VIEW_GROUPS.len() + 2, delta);
+                    menu.active = popover::menu_step(menu.active, SIDEBAR_VIEW_ITEMS.len(), delta);
                 }
                 cx.notify();
             }
             "right" | "enter" | "space" => {
-                if let Some(group) = menu.submenu {
-                    if key == "enter" {
-                        if let Some(choice) = menu.submenu_active {
-                            let row =
-                                SIDEBAR_VIEW_ROWS[SIDEBAR_VIEW_GROUPS[group].1.start + choice];
-                            self.activate_sidebar_view_row(row, cx);
-                        }
+                if let Some((_, range)) = menu.submenu.and_then(sidebar_view_group) {
+                    if key == "enter"
+                        && let Some(choice) = menu.submenu_active
+                    {
+                        let row = SIDEBAR_VIEW_ROWS[range.start + choice];
+                        self.activate_sidebar_view_row(row, cx);
                     }
                 } else {
-                    let group = menu.active.unwrap_or(0);
-                    if group == SIDEBAR_VIEW_GROUPS.len() + 1 {
-                        if key != "right" && !event.is_held {
-                            self.open_section_dialog(None, cx);
+                    let item = menu.active.unwrap_or(0);
+                    let pressed = key != "right" && !event.is_held;
+                    match SIDEBAR_VIEW_ITEMS[item] {
+                        SidebarViewItem::Group(_) => {
+                            if key != "space" {
+                                self.open_sidebar_view_submenu(item, true, cx);
+                            }
                         }
-                    } else if group == SIDEBAR_VIEW_GROUPS.len() {
-                        if key != "right" && !event.is_held {
-                            self.activate_sidebar_view_row(SidebarViewRow::Compact, cx);
+                        SidebarViewItem::Row(row) => {
+                            if pressed {
+                                self.activate_sidebar_view_row(row, cx);
+                            }
                         }
-                    } else if key != "space" {
-                        self.open_sidebar_view_submenu(group, true, cx);
+                        SidebarViewItem::CreateSection => {
+                            if pressed {
+                                self.open_section_dialog(None, cx);
+                            }
+                        }
                     }
                 }
             }
@@ -4109,6 +4138,9 @@ impl Shell {
         cx.stop_propagation();
     }
 
+    /// The view options card: the View choice (Projects / Threads) leads,
+    /// then the Sort and Show submenus, the device grouping and Compact
+    /// toggles, and Create Section.
     fn render_sidebar_view_menu(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let theme = &theme.for_popup();
         let Some(menu_state) = self.sidebar_view_menu.get() else {
@@ -4121,14 +4153,9 @@ impl Shell {
         let focus = menu_state.focus.clone();
         let organization = self.settings.sidebar_organization;
         let sort = self.settings.sidebar_sort;
-        let show_harness = self.settings.sidebar_show_harness;
-        let show_branch = self.settings.sidebar_show_branch;
-        let show_pr = self.settings.sidebar_show_pull_request;
 
+        // Indexed like `SIDEBAR_VIEW_ROWS`.
         let labels = [
-            "By device",
-            "Projects",
-            "Threads",
             "Last updated",
             "Created",
             "Branch",
@@ -4139,9 +4166,6 @@ impl Shell {
             "Project filter",
         ];
         let icons = [
-            icons::LAPTOP,
-            icons::FOLDER,
-            icons::LIST,
             icons::CLOCK_CIRCLE,
             icons::CALENDAR,
             icons::GIT_BRANCH,
@@ -4153,288 +4177,297 @@ impl Shell {
             icons::FOLDER,
         ];
         let selected = [
-            organization == SidebarOrganization::ByDevice,
-            organization == SidebarOrganization::ByProject,
-            organization == SidebarOrganization::InOneList,
             sort == SidebarSort::LastUpdated,
             sort == SidebarSort::Created,
-            show_branch,
-            show_pr,
-            show_harness,
+            self.settings.sidebar_show_branch,
+            self.settings.sidebar_show_pull_request,
+            self.settings.sidebar_show_harness,
             self.settings.sidebar_show_project_icon,
             self.settings.sidebar_show_project_label,
             self.settings.sidebar_show_project_filter,
         ];
-        let values = [
-            labels[selected[..3].iter().position(|v| *v).unwrap_or(0)].to_string(),
-            labels[3 + selected[3..5].iter().position(|v| *v).unwrap_or(0)].to_string(),
-        ];
-        let mut groups: Vec<AnyElement> = Vec::new();
-        for (group, (label, range)) in SIDEBAR_VIEW_GROUPS.iter().enumerate() {
-            if group == 2 {
-                groups.push(popover::menu_separator().into_any_element());
+        let sort_value = labels[selected[..2].iter().position(|v| *v).unwrap_or(0)];
+
+        let mut items: Vec<AnyElement> = Vec::new();
+        items.push(popover::menu_heading(theme, "View").into_any_element());
+        for (item, entry) in SIDEBAR_VIEW_ITEMS.iter().copied().enumerate() {
+            if matches!(
+                entry,
+                SidebarViewItem::Group(0)
+                    | SidebarViewItem::Row(SidebarViewRow::ByDevice)
+                    | SidebarViewItem::CreateSection
+            ) {
+                items.push(popover::menu_separator().into_any_element());
             }
-            let open = submenu == Some(group);
-            let entity = cx.entity().downgrade();
-            let exit_entity = cx.entity().downgrade();
-            let mut trigger = popover::menu_row_nav(
-                theme,
-                open,
-                active == Some(group),
-                format!("sidebar-view-group-{group}"),
-            )
-            .id(("sidebar-view-group", group))
-            .relative()
-            .h(px(30.0))
-            .py(px(0.0))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                // Match model settings: hover opens; clicking dismisses, including
-                // a sibling crossed during hover grace, without delayed reopening.
-                if let Some(menu) = this.sidebar_view_menu.open_mut() {
-                    menu.active = Some(group);
-                    menu.submenu = None;
-                    menu.submenu_active = None;
-                    menu.submenu_bounds = None;
-                    menu.hover_intent.reset();
-                }
-                cx.notify();
-                cx.stop_propagation();
-            }))
-            .child(div().flex_1().child(*label))
-            .when(group < values.len(), |el| {
-                el.child(
-                    div()
-                        .text_color(theme.text_muted)
-                        .child(values[group].clone()),
-                )
-            })
-            .child(
-                icon(icons::ALT_ARROW_RIGHT)
-                    .size(px(12.0))
-                    .text_color(theme.text_muted),
-            )
-            .child(
-                gpui::canvas(
-                    move |bounds, window, cx| {
-                        let left = bounds.right() + px(244.0) > window.viewport_size().width;
-                        let _ = entity.update(cx, |this, cx| {
-                            if let Some(menu) = this.sidebar_view_menu.open_mut() {
-                                if menu.submenu_on_left != left {
-                                    menu.submenu_on_left = left;
-                                    cx.notify();
-                                }
-                            }
-                        });
-                    },
-                    move |trigger, _, window, _| {
-                        if !open {
-                            return;
+            let highlighted = active == Some(item);
+            let element: AnyElement = match entry {
+                SidebarViewItem::Row(
+                    row @ (SidebarViewRow::ByProject | SidebarViewRow::InOneList),
+                ) => {
+                    let (label, glyph) = if matches!(row, SidebarViewRow::ByProject) {
+                        ("Projects", icons::FOLDER)
+                    } else {
+                        ("Threads", icons::LIST)
+                    };
+                    let current = organization == organization_for(row);
+                    popover::menu_row_nav(
+                        theme,
+                        current,
+                        highlighted,
+                        format!("sidebar-view-item-{item}"),
+                    )
+                    .id(("sidebar-view-item", item))
+                    .debug_selector(move || format!("sidebar-view-{}", label.to_lowercase()))
+                    .role(gpui::Role::MenuItemRadio)
+                    .aria_label(label)
+                    .aria_selected(current)
+                    .h(px(30.0))
+                    .py(px(0.0))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.open_sidebar_view_submenu(item, false, cx);
+                        if this.settings.sidebar_organization != organization_for(row) {
+                            this.activate_sidebar_view_row(row, cx);
                         }
-                        window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, _, cx| {
-                            if phase != gpui::DispatchPhase::Bubble {
-                                return;
-                            }
-                            let _ = exit_entity.update(cx, |this, cx| {
-                                let Some(menu) = this.sidebar_view_menu.open_mut() else {
-                                    return;
-                                };
-                                if menu.submenu != Some(group)
-                                    || menu.hover_intent.contains_pointer(
-                                        trigger,
-                                        menu.submenu_bounds,
-                                        event.position,
-                                        menu.submenu_on_left,
-                                    )
-                                {
-                                    return;
-                                }
-                                menu.hover_intent.reset();
-                                menu.submenu = None;
-                                menu.submenu_bounds = None;
-                                menu.submenu_active = None;
-                                menu.active = None;
-                                cx.notify();
-                            });
-                        });
-                    },
-                )
-                .absolute()
-                .inset_0(),
-            );
-            if open {
-                let mut choices = Vec::new();
-                for (choice, ix) in range.clone().enumerate() {
-                    let row = SIDEBAR_VIEW_ROWS[ix];
-                    choices.push(
-                        popover::menu_row_nav(
-                            theme,
-                            selected[ix],
-                            submenu_active == Some(choice),
-                            format!("sidebar-view-row-{ix}"),
+                        this.close_sidebar_view_menu(cx);
+                        cx.stop_propagation();
+                    }))
+                    .child(
+                        icon(glyph)
+                            .size(px(15.0))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    )
+                    .child(div().flex_1().child(label))
+                    .child(div().w(px(14.0)).flex_none().when(current, |el| {
+                        el.child(
+                            icon(icons::CHECK)
+                                .size(px(14.0))
+                                .text_color(theme.text_muted),
                         )
-                        .id(("sidebar-view-row", ix))
+                    }))
+                    .into_any_element()
+                }
+                SidebarViewItem::Row(row) => {
+                    // The secondary switches: device grouping and Compact.
+                    let (label, on) = if matches!(row, SidebarViewRow::ByDevice) {
+                        (
+                            "Group by device",
+                            organization == SidebarOrganization::ByDevice,
+                        )
+                    } else {
+                        ("Compact", self.settings.sidebar_compact)
+                    };
+                    let toggle_id = if matches!(row, SidebarViewRow::ByDevice) {
+                        "sidebar-view-by-device"
+                    } else {
+                        "sidebar-view-compact"
+                    };
+                    popover::menu_row_nav(theme, false, highlighted, toggle_id)
+                        .id(toggle_id)
+                        .h(px(30.0))
+                        .py(px(0.0))
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            this.open_sidebar_view_submenu(item, false, cx);
                             this.activate_sidebar_view_row(row, cx);
                             cx.stop_propagation();
                         }))
+                        .child(div().flex_1().child(label))
+                        .child(crate::settings::widgets::toggle_switch(
+                            theme, on, toggle_id,
+                        ))
+                        .into_any_element()
+                }
+                SidebarViewItem::CreateSection => {
+                    popover::menu_row_nav(theme, false, highlighted, "sidebar-create-section")
+                        .id("sidebar-create-section")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_section_dialog(None, cx);
+                            cx.stop_propagation();
+                        }))
                         .child(
-                            icon(icons[ix])
-                                .size(px(15.0))
-                                .flex_none()
+                            icon(icons::PLUS)
+                                .size(px(14.0))
                                 .text_color(theme.text_muted),
                         )
-                        .child(div().flex_1().child(labels[ix]))
-                        .child(div().w(px(14.0)).flex_none().when(selected[ix], |el| {
-                            el.child(
-                                icon(icons::CHECK)
-                                    .size(px(14.0))
-                                    .text_color(theme.text_muted),
-                            )
-                        })),
-                    );
+                        .child("Create Section")
+                        .into_any_element()
                 }
-                let entity = cx.entity().downgrade();
-                let child = popover::popover_card(theme)
-                    .w(px(232.0))
+                SidebarViewItem::Group(group) => {
+                    let (label, range) = &SIDEBAR_VIEW_GROUPS[group];
+                    let open = submenu == Some(item);
+                    let entity = cx.entity().downgrade();
+                    let exit_entity = cx.entity().downgrade();
+                    let mut trigger = popover::menu_row_nav(
+                        theme,
+                        open,
+                        highlighted,
+                        format!("sidebar-view-group-{group}"),
+                    )
+                    .id(("sidebar-view-group", group))
                     .relative()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .child(popover::menu_heading(theme, label))
-                    .children(choices)
+                    .h(px(30.0))
+                    .py(px(0.0))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        // Match model settings: hover opens; clicking dismisses, including
+                        // a sibling crossed during hover grace, without delayed reopening.
+                        if let Some(menu) = this.sidebar_view_menu.open_mut() {
+                            menu.active = Some(item);
+                            menu.submenu = None;
+                            menu.submenu_active = None;
+                            menu.submenu_bounds = None;
+                            menu.hover_intent.reset();
+                        }
+                        cx.notify();
+                        cx.stop_propagation();
+                    }))
+                    .child(div().flex_1().child(*label))
+                    .when(group == 0, |el| {
+                        el.child(div().text_color(theme.text_muted).child(sort_value))
+                    })
+                    .child(
+                        icon(icons::ALT_ARROW_RIGHT)
+                            .size(px(12.0))
+                            .text_color(theme.text_muted),
+                    )
                     .child(
                         gpui::canvas(
-                            move |bounds, _, cx| {
-                                let _ = entity.update(cx, |this, _| {
+                            move |bounds, window, cx| {
+                                let left =
+                                    bounds.right() + px(244.0) > window.viewport_size().width;
+                                let _ = entity.update(cx, |this, cx| {
                                     if let Some(menu) = this.sidebar_view_menu.open_mut() {
-                                        menu.submenu_bounds = Some(bounds);
+                                        if menu.submenu_on_left != left {
+                                            menu.submenu_on_left = left;
+                                            cx.notify();
+                                        }
                                     }
                                 });
                             },
-                            |_, _, _, _| {},
+                            move |trigger, _, window, _| {
+                                if !open {
+                                    return;
+                                }
+                                window.on_mouse_event(
+                                    move |event: &gpui::MouseMoveEvent, phase, _, cx| {
+                                        if phase != gpui::DispatchPhase::Bubble {
+                                            return;
+                                        }
+                                        let _ = exit_entity.update(cx, |this, cx| {
+                                            let Some(menu) = this.sidebar_view_menu.open_mut()
+                                            else {
+                                                return;
+                                            };
+                                            if menu.submenu != Some(item)
+                                                || menu.hover_intent.contains_pointer(
+                                                    trigger,
+                                                    menu.submenu_bounds,
+                                                    event.position,
+                                                    menu.submenu_on_left,
+                                                )
+                                            {
+                                                return;
+                                            }
+                                            menu.hover_intent.reset();
+                                            menu.submenu = None;
+                                            menu.submenu_bounds = None;
+                                            menu.submenu_active = None;
+                                            menu.active = None;
+                                            cx.notify();
+                                        });
+                                    },
+                                );
+                            },
                         )
                         .absolute()
                         .inset_0(),
                     );
-                trigger = trigger.child(popover::nested_menu(
-                    format!("sidebar-view-child-{group}"),
-                    child.into_any_element(),
-                    on_left,
-                ));
-            }
-            groups.push(
+                    if open {
+                        let mut choices = Vec::new();
+                        for (choice, ix) in range.clone().enumerate() {
+                            let row = SIDEBAR_VIEW_ROWS[ix];
+                            choices.push(
+                                popover::menu_row_nav(
+                                    theme,
+                                    selected[ix],
+                                    submenu_active == Some(choice),
+                                    format!("sidebar-view-row-{ix}"),
+                                )
+                                .id(("sidebar-view-row", ix))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.activate_sidebar_view_row(row, cx);
+                                    cx.stop_propagation();
+                                }))
+                                .child(
+                                    icon(icons[ix])
+                                        .size(px(15.0))
+                                        .flex_none()
+                                        .text_color(theme.text_muted),
+                                )
+                                .child(div().flex_1().child(labels[ix]))
+                                .child(
+                                    div().w(px(14.0)).flex_none().when(selected[ix], |el| {
+                                        el.child(
+                                            icon(icons::CHECK)
+                                                .size(px(14.0))
+                                                .text_color(theme.text_muted),
+                                        )
+                                    }),
+                                ),
+                            );
+                        }
+                        let entity = cx.entity().downgrade();
+                        let child = popover::popover_card(theme)
+                            .w(px(232.0))
+                            .relative()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(popover::menu_heading(theme, label))
+                            .children(choices)
+                            .child(
+                                gpui::canvas(
+                                    move |bounds, _, cx| {
+                                        let _ = entity.update(cx, |this, _| {
+                                            if let Some(menu) = this.sidebar_view_menu.open_mut() {
+                                                menu.submenu_bounds = Some(bounds);
+                                            }
+                                        });
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .inset_0(),
+                            );
+                        trigger = trigger.child(popover::nested_menu(
+                            format!("sidebar-view-child-{group}"),
+                            child.into_any_element(),
+                            on_left,
+                        ));
+                    }
+                    trigger.into_any_element()
+                }
+            };
+            // Every top-level row takes part in the submenu hover intent, so
+            // moving onto a sibling closes an open submenu.
+            items.push(
                 div()
-                    .id(("sidebar-view-hover", group))
+                    .id(("sidebar-view-hover", item))
                     .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
                         if *hovered {
-                            this.hover_sidebar_view_group(
-                                group,
-                                window.mouse_position(),
-                                false,
-                                cx,
-                            );
+                            this.hover_sidebar_view_group(item, window.mouse_position(), false, cx);
                         } else if let Some(menu) = this.sidebar_view_menu.open_mut() {
-                            menu.hover_intent.leave(&group);
+                            menu.hover_intent.leave(&item);
                         }
                     }))
                     .on_mouse_move(
                         cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
-                            this.hover_sidebar_view_group(group, event.position, true, cx);
+                            this.hover_sidebar_view_group(item, event.position, true, cx);
                         }),
                     )
-                    .child(trigger)
+                    .child(element)
                     .into_any_element(),
             );
         }
-        groups.push(popover::menu_separator().into_any_element());
-        groups.push(
-            div()
-                .id("sidebar-view-compact-hover")
-                .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
-                    if *hovered {
-                        this.hover_sidebar_view_group(
-                            SIDEBAR_VIEW_GROUPS.len(),
-                            window.mouse_position(),
-                            false,
-                            cx,
-                        );
-                    } else if let Some(menu) = this.sidebar_view_menu.open_mut() {
-                        menu.hover_intent.leave(&SIDEBAR_VIEW_GROUPS.len());
-                    }
-                }))
-                .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
-                    this.hover_sidebar_view_group(
-                        SIDEBAR_VIEW_GROUPS.len(),
-                        event.position,
-                        true,
-                        cx,
-                    );
-                }))
-                .child(
-                    popover::menu_row_nav(
-                        theme,
-                        false,
-                        active == Some(SIDEBAR_VIEW_GROUPS.len()),
-                        "sidebar-view-compact",
-                    )
-                    .id("sidebar-view-compact")
-                    .h(px(30.0))
-                    .py(px(0.0))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.open_sidebar_view_submenu(SIDEBAR_VIEW_GROUPS.len(), false, cx);
-                        this.activate_sidebar_view_row(SidebarViewRow::Compact, cx);
-                        cx.stop_propagation();
-                    }))
-                    .child(div().flex_1().child("Compact"))
-                    .child(crate::settings::widgets::toggle_switch(
-                        theme,
-                        self.settings.sidebar_compact,
-                        "sidebar-view-compact",
-                    )),
-                )
-                .into_any_element(),
-        );
-        groups.push(popover::menu_separator().into_any_element());
-        groups.push(
-            div()
-                .id("sidebar-create-section-hover")
-                .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
-                    let target = SIDEBAR_VIEW_GROUPS.len() + 1;
-                    if *hovered {
-                        this.hover_sidebar_view_group(target, window.mouse_position(), false, cx);
-                    } else if let Some(menu) = this.sidebar_view_menu.open_mut() {
-                        menu.hover_intent.leave(&target);
-                    }
-                }))
-                .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
-                    this.hover_sidebar_view_group(
-                        SIDEBAR_VIEW_GROUPS.len() + 1,
-                        event.position,
-                        true,
-                        cx,
-                    );
-                }))
-                .child(
-                    popover::menu_row_nav(
-                        theme,
-                        false,
-                        active == Some(SIDEBAR_VIEW_GROUPS.len() + 1),
-                        "sidebar-create-section",
-                    )
-                    .id("sidebar-create-section")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.open_section_dialog(None, cx);
-                        cx.stop_propagation();
-                    }))
-                    .child(
-                        icon(icons::PLUS)
-                            .size(px(14.0))
-                            .text_color(theme.text_muted),
-                    )
-                    .child("Create Section"),
-                )
-                .into_any_element(),
-        );
         popover::popover_card(theme)
             .w(px(self.sidebar_content_width() - 2.0 * Theme::SPACE_SM))
             .track_focus(&focus)
@@ -4454,7 +4487,7 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .children(groups)
+            .children(items)
             .into_any_element()
     }
 
@@ -4625,9 +4658,9 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The list's section heading: the Projects / Threads view switch, then
-    /// the list's controls — the project filter (Threads), view options,
-    /// New project (Projects) and New chat.
+    /// The list's section heading: the current view's name, then the
+    /// list's quiet controls — the project filter (Threads), view options
+    /// (where the View choice lives), New project (Projects) and New chat.
     pub(super) fn render_sidebar_modes(
         &mut self,
         theme: &Theme,
@@ -4635,6 +4668,11 @@ impl Shell {
     ) -> AnyElement {
         let organization = self.settings.sidebar_organization;
         let projects = organization == SidebarOrganization::ByProject;
+        let label = match organization {
+            SidebarOrganization::ByProject => "Projects",
+            SidebarOrganization::InOneList => "Threads",
+            SidebarOrganization::ByDevice => "Devices",
+        };
         let filter_button = (organization == SidebarOrganization::InOneList
             && self.settings.sidebar_show_project_filter)
             .then(|| self.render_spaces_filter_button(theme, cx));
@@ -4644,12 +4682,20 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(2.))
-            .pl(px(Theme::SPACE_SM))
+            .pl(px(Theme::SPACE_SM + 2.))
             .pr(px(Theme::SPACE_SM))
             .pt(px(10.))
             .pb(px(4.))
-            .child(self.render_sidebar_view_switch(theme, cx))
-            .child(div().flex_1())
+            .child(
+                div()
+                    .id("sidebar-view-label")
+                    .debug_selector(|| "sidebar-view-label".into())
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(crate::typography::ui_rems(12.))
+                    .text_color(theme.text_muted)
+                    .child(label),
+            )
             .children(filter_button)
             .child(view_trigger)
             .when(projects, |el| {
@@ -4668,73 +4714,6 @@ impl Shell {
                     ))
                     .on_click(cx.listener(|this, _, _, cx| this.open_new_session(None, cx))),
             )
-            .into_any_element()
-    }
-
-    /// The sidebar's two views as a segmented switch: Projects (threads
-    /// nested under every project) and Threads (one chronological list).
-    /// The device grouping stays in the view options menu, where neither
-    /// segment reads as current.
-    fn render_sidebar_view_switch(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let organization = self.settings.sidebar_organization;
-        let segment = |id: &'static str,
-                       label: &'static str,
-                       row: SidebarViewRow,
-                       selected: bool,
-                       cx: &mut Context<Self>| {
-            div()
-                .id(id)
-                .debug_selector(move || id.into())
-                .role(gpui::Role::Tab)
-                .aria_label(label)
-                .aria_selected(selected)
-                .tab_index(0)
-                .h(px(20.))
-                .px(px(8.))
-                .flex()
-                .items_center()
-                .rounded(px(5.))
-                .text_size(crate::typography::ui_rems(12.))
-                .when(selected, |el| {
-                    el.bg(theme.glass_hover())
-                        .text_color(theme.text)
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                })
-                .when(!selected, |el| {
-                    el.cursor_pointer()
-                        .text_color(theme.text_muted)
-                        .hover(|el| el.text_color(theme.text))
-                })
-                .focus_visible(|el| el.border_1().border_color(theme.border_strong))
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if this.settings.sidebar_organization != organization_for(row) {
-                        this.activate_sidebar_view_row(row, cx);
-                    }
-                }))
-        };
-        div()
-            .id("sidebar-view-switch")
-            .debug_selector(|| "sidebar-view-switch".into())
-            .role(gpui::Role::TabList)
-            .aria_label("Sidebar view")
-            .flex()
-            .items_center()
-            .gap(px(2.))
-            .child(segment(
-                "sidebar-view-projects",
-                "Projects",
-                SidebarViewRow::ByProject,
-                organization == SidebarOrganization::ByProject,
-                cx,
-            ))
-            .child(segment(
-                "sidebar-view-threads",
-                "Threads",
-                SidebarViewRow::InOneList,
-                organization == SidebarOrganization::InOneList,
-                cx,
-            ))
             .into_any_element()
     }
 
@@ -4791,7 +4770,7 @@ impl Shell {
         let view_trigger = div()
             .id("sidebar-view-options")
             .role(gpui::Role::Button)
-            .aria_label("Sidebar view options")
+            .aria_label("View options")
             .aria_expanded(view_open)
             .track_focus(&view_focus)
             .size(px(22.0))

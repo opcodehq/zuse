@@ -535,18 +535,83 @@ pub fn section_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div
 }
 
 /// A [`section_label`] for a group nested inside a block row (an expanded
-/// provider's "Completion", "Accounts"): flush with the row text it sits
-/// under, and as tall as a small button so a trailing action never shifts it.
+/// provider's "Completion", "Accounts"): a small 11px label, as tall as a
+/// compact icon button so a trailing action never shifts it.
 pub fn details_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
     div()
-        .min_h(px(32.0))
+        .min_h(px(24.0))
         .flex()
         .flex_row()
         .items_center()
-        .text_size(crate::typography::ui_rems(13.0))
-        .line_height(crate::typography::ui_rems(17.0))
+        .text_size(crate::typography::ui_rems(11.0))
+        .line_height(crate::typography::ui_rems(14.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.text_muted)
         .child(label.into())
+}
+
+/// The inset panel an expanded block row opens into: one quiet rounded
+/// surface under the row, holding its [`details_label`] groups.
+pub fn details_panel(theme: &Theme) -> gpui::Div {
+    div()
+        .mx(px(zuse_viewport::settings_style::ROW_PAD_X))
+        .mb(px(10.0))
+        .px(px(12.0))
+        .pt(px(6.0))
+        .pb(px(8.0))
+        .rounded(px(8.0))
+        .bg(theme.wash(0.03))
+        .border_1()
+        .border_color(row_divider(theme).opacity(0.6))
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+}
+
+/// A compact row inside a [`details_panel`]: 12px title, 11px description,
+/// a trailing control, hairlines between rows.
+pub fn details_row(theme: &Theme, first: bool) -> gpui::Div {
+    div()
+        .min_h(px(36.0))
+        .py(px(5.0))
+        .when(!first, |row| {
+            row.border_t_1().border_color(row_divider(theme))
+        })
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(12.0))
+}
+
+/// Title + description stack for a [`details_row`].
+pub fn details_text(
+    theme: &Theme,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(1.0))
+        .child(
+            div()
+                .truncate()
+                .text_size(crate::typography::ui_rems(12.0))
+                .line_height(crate::typography::ui_rems(16.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.text)
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .truncate()
+                .text_size(crate::typography::ui_rems(11.0))
+                .line_height(crate::typography::ui_rems(14.0))
+                .text_color(theme.text_muted)
+                .child(description.into()),
+        )
 }
 
 /// A framed section with a compact header and its bordered settings card.
@@ -839,8 +904,12 @@ impl RenderOnce for SwitchVisual {
         if (position - target).abs() > 0.001 {
             window.request_animation_frame();
         }
+        // The raised surface vanishes on dark cards; an ink wash keeps the
+        // off track visible in both appearances.
         let track = if self.on {
             self.theme.accent
+        } else if self.theme.appearance.is_dark() {
+            self.theme.text.opacity(0.16)
         } else {
             self.theme.surface_raised
         };

@@ -74,6 +74,7 @@ mod command_palette;
 mod file_mutations;
 mod files_panel;
 mod harness_updates;
+mod main_tabs;
 mod navigation_focus;
 #[cfg(test)]
 mod navigation_tests;
@@ -1522,11 +1523,11 @@ enum SplashPhase {
 const CHAT_RENAME_REVEAL_GRACE: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Which list draws a chat's inline title editor: the sidebar's session row,
-/// or the side-chat row in the explorer's Chats footer.
+/// or a side chat's conversation tab in the titlebar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChatRenameSurface {
     Sidebar,
-    Explorer,
+    Tab,
 }
 
 /// A chat title edited in place on its row (double-click, or Rename in the
@@ -2078,6 +2079,8 @@ pub struct Shell {
     /// Event hookups for [`Self::diffs`] (History rows opening commit tabs).
     diff_subs: std::collections::HashMap<u64, Subscription>,
     diff_seq: u64,
+    /// Review and commit-diff tabs in the main area, per chat panel key.
+    main_tabs: std::collections::HashMap<String, main_tabs::MainTabs>,
     /// Subagent transcript surfaces by id — each tab a read-only
     /// [`Transcript`] pinned to its subagent doc.
     subagent_tabs: std::collections::HashMap<u64, SubagentTab>,
@@ -2606,6 +2609,7 @@ impl Shell {
             pending_exit: None,
             diff_subs: std::collections::HashMap::new(),
             diff_seq: 0,
+            main_tabs: std::collections::HashMap::new(),
             subagent_tabs: std::collections::HashMap::new(),
             subagent_seq: 0,
             side_chats: std::collections::HashMap::new(),
@@ -4010,9 +4014,10 @@ impl Shell {
         });
     }
 
-    /// The picker's Diffs card / the `+` menu's Diff row: every click opens a
-    /// FRESH diff tab with its own scope/base selection (multiple diff
-    /// panels, user request).
+    /// A right-pane diff tab with its own scope/base selection. The picker's
+    /// Diffs card and the `+` menu open the main-area review instead (see
+    /// [`Self::open_review_tab`]); tests still drive the pane's diff tabs.
+    #[cfg(test)]
     fn add_diff_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let changes = cx.new(|cx| Changes::new(self.state.clone(), cx));
         self.register_diff_surface(changes, window, cx);
@@ -4156,14 +4161,6 @@ impl Shell {
                     FilesEvent::CloseReady => {
                         this.on_file_close_ready(RightSurface::File(id), &event_panel_key, cx)
                     }
-                    // Footer rows exist on the explorer only; an editor
-                    // surface never emits them.
-                    FilesEvent::OpenSubagent { .. }
-                    | FilesEvent::OpenChildChat(_)
-                    | FilesEvent::RenameChildChat(_)
-                    | FilesEvent::ChildChatContextMenu { .. }
-                    | FilesEvent::NewChildChat
-                    | FilesEvent::ForkChat => {}
                     FilesEvent::CloseCancelled => {
                         this.cancel_file_close(RightSurface::File(id), cx)
                     }
@@ -4286,24 +4283,29 @@ impl Shell {
         self.register_diff_surface(history, window, cx);
     }
 
-    /// A History row click: the commit opens as its own pinned diff tab
-    /// (user request).
-    fn add_commit_diff_surface(
-        &mut self,
-        commit: zuse_protocol::GitHistoryCommit,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let changes = cx.new(|cx| Changes::for_commit(self.state.clone(), commit, cx));
-        self.register_diff_surface(changes, window, cx);
-    }
-
     fn register_diff_surface(
         &mut self,
         changes: Entity<Changes>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let id = self.subscribe_diff(changes, window, cx);
+        let key = self.panel_key(cx);
+        self.right_tabs
+            .entry(key)
+            .or_default()
+            .push(RightSurface::Diff(id));
+        self.set_right_active(RightSurface::Diff(id), cx);
+    }
+
+    /// Keep `changes` under a fresh diff handle (a key of [`Self::diffs`]),
+    /// wired to the shell. Right-pane tabs and main-area tabs share this.
+    fn subscribe_diff(
+        &mut self,
+        changes: Entity<Changes>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> u64 {
         self.diff_seq += 1;
         let id = self.diff_seq;
         let sub =
@@ -4311,8 +4313,10 @@ impl Shell {
                 &changes,
                 window,
                 |this: &mut Self, _, event, window, cx| match event {
+                    // A commit's diff reads like a review: it opens beside
+                    // the conversation in the main area.
                     ChangesEvent::OpenCommit(commit) => {
-                        this.add_commit_diff_surface(commit.clone(), window, cx);
+                        this.open_commit_diff_tab(commit.clone(), window, cx);
                     }
                     ChangesEvent::OpenFile(path) => {
                         this.add_file_surface(path.clone(), window, cx);
@@ -4328,12 +4332,7 @@ impl Shell {
             );
         self.diffs.insert(id, changes);
         self.diff_subs.insert(id, sub);
-        let key = self.panel_key(cx);
-        self.right_tabs
-            .entry(key)
-            .or_default()
-            .push(RightSurface::Diff(id));
-        self.set_right_active(RightSurface::Diff(id), cx);
+        id
     }
 
     /// The picker's Terminal card / the `+` menu's Terminal row: every click
@@ -4376,6 +4375,24 @@ impl Shell {
                     *frozen,
                     cx,
                 );
+            }
+            // A message's Fork: the same side-chat fork as the conversation's
+            // own; a side chat's copy lists as its sibling.
+            TranscriptEvent::ForkChat { chat_id } => {
+                let source = self
+                    .state
+                    .read(cx)
+                    .chats
+                    .iter()
+                    .find(|chat| &chat.id == chat_id)
+                    .cloned();
+                if let Some(source) = source {
+                    let parent = source
+                        .parent_chat_id
+                        .clone()
+                        .unwrap_or_else(|| source.id.clone());
+                    self.fork_chat(source, parent, cx);
+                }
             }
         }
     }
@@ -5981,7 +5998,7 @@ impl Shell {
     }
 
     /// Start editing `chat_id`'s title in place on its row: the sidebar's
-    /// session row, or — for a side chat — its row under the file tree.
+    /// session row, or — for a side chat — its conversation tab.
     fn open_rename_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
         self.close_chat_menu(cx);
         if self.chat_rename.is_some() {
@@ -6003,28 +6020,26 @@ impl Shell {
         else {
             return;
         };
-        // The sidebar lists only top-level chats; side chats live in the
-        // explorer's Chats footer. Either way the row must be on screen
-        // first: a field on a hidden row would take keystrokes unseen.
+        // The sidebar lists only top-level chats; side chats list as tabs
+        // beside their parent's conversation tabs. Either way the row must be
+        // on screen first: a field on a hidden row would take keystrokes unseen.
         let surface = if parent.is_some() {
-            ChatRenameSurface::Explorer
+            ChatRenameSurface::Tab
         } else {
             ChatRenameSurface::Sidebar
         };
         let revealed = match surface {
             ChatRenameSurface::Sidebar => self.reveal_sidebar_chat(&chat_id, cx),
-            // The footer lists the open chat's live side chats; it reveals
-            // the row itself once handed the rename.
-            ChatRenameSurface::Explorer => {
+            // The titlebar lists the open chat's live side chats as tabs.
+            ChatRenameSurface::Tab => {
                 !archived
+                    && matches!(self.route, Route::Chat)
                     && parent.as_deref() == Some(self.active_chat.as_str())
-                    && self.files_panel_open(cx)
-                    && self.files.contains_key(&self.panel_key(cx))
             }
         };
         if !revealed {
             // The sidebar explains its own refusals.
-            if surface == ChatRenameSurface::Explorer {
+            if surface == ChatRenameSurface::Tab {
                 self.show_notice(
                     crate::toast::ToastKind::Error,
                     "Open this side chat's parent to rename it",
@@ -6068,7 +6083,6 @@ impl Shell {
             _events: events,
             _blur: None,
         });
-        self.sync_explorer_chat_rename(cx);
         cx.notify();
     }
 
@@ -6093,7 +6107,6 @@ impl Shell {
         let Some(rename) = self.chat_rename.take() else {
             return;
         };
-        self.sync_explorer_chat_rename(cx);
         let title = rename.input.read(cx).text().trim().to_string();
         let unchanged = self
             .state
@@ -6109,18 +6122,6 @@ impl Shell {
             );
         }
         cx.notify();
-    }
-
-    /// Hand the explorer footers the side-chat rename to draw (or clear it).
-    fn sync_explorer_chat_rename(&mut self, cx: &mut Context<Self>) {
-        let rename = self
-            .chat_rename
-            .as_ref()
-            .filter(|rename| rename.surface == ChatRenameSurface::Explorer)
-            .map(|rename| (rename.chat_id.clone(), rename.input.clone()));
-        for files in self.files.values() {
-            files.update(cx, |files, cx| files.set_chat_rename(rename.clone(), cx));
-        }
     }
 
     /// Scroll the sidebar so the renamed row (painted at `row`) clears the
@@ -8755,6 +8756,29 @@ impl Shell {
             // project + size). The trailing slot swaps to the archive control
             // on hover and to the jump legend while the modifier is held.
             let two_line = !(compact || nested || !show_label);
+            // Threads view cards also badge attention (input, failure,
+            // queued) on the avatar and set an unseen finish in bold, as the
+            // reference thread list does.
+            let avatar_badge = !nested && working && project_icon.is_some();
+            let finished_unseen = status == zuse_protocol::ChatIndicator::Completed
+                && !queued
+                && !undelivered;
+            let unread = two_line && finished_unseen;
+            let attention_badge = two_line
+                && !working
+                && !finished_unseen
+                && status_label.is_some()
+                && project_icon.is_some();
+            // Waiting on the user reads amber on the card, apart from the
+            // routine activity tones.
+            let attention_color = if status == zuse_protocol::ChatIndicator::AwaitingInput
+                && !queued
+                && !undelivered
+            {
+                theme.warning
+            } else {
+                status_color
+            };
             let faint = theme.text_muted.opacity(0.6);
             let show_legend = compact_jump_label.is_some();
             let show_archive = corner_hovered && !show_legend && !preview;
@@ -8781,6 +8805,17 @@ impl Shell {
                 (show_legend, two_line, diff_stat)
             {
                 sidebar_diff_stat(additions, deletions, 1.0, theme).into_any_element()
+            } else if let (false, true, true, Some(label)) =
+                (show_legend, two_line, attention_badge, status_label)
+            {
+                // A card waiting on the user names why in place of its age.
+                div()
+                    .whitespace_nowrap()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(attention_color)
+                    .child(if label == "Input" { "Needs input" } else { label })
+                    .into_any_element()
             } else {
                 let label: SharedString = match compact_jump_label.clone() {
                     Some(label) => label,
@@ -8842,10 +8877,9 @@ impl Shell {
             // the pull request's state.
             // A working card wears its spinner as a badge on the avatar (the
             // title stays clean); other activity leads the title.
-            let avatar_badge = !nested && working && project_icon.is_some();
             let (status_glyph, title_glyph) = if nested {
                 (status_label.and(compact_status), None)
-            } else if avatar_badge {
+            } else if avatar_badge || attention_badge || unread {
                 (None, None)
             } else {
                 (None, status_label.and(compact_status))
@@ -8887,6 +8921,32 @@ impl Shell {
                 None
             };
             let project_icon = project_icon.map(|icon| {
+                if attention_badge {
+                    return div()
+                        .relative()
+                        .flex_none()
+                        .child(icon)
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("{row_id}-attention-badge")))
+                                .debug_selector({
+                                    let id = id.clone();
+                                    move || format!("chat-status-{id}")
+                                })
+                                .aria_label(status_label.unwrap_or("Idle"))
+                                .absolute()
+                                .right(px(-4.0))
+                                .bottom(px(-4.0))
+                                .size(px(13.0))
+                                .rounded_full()
+                                .bg(theme.bg)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(div().size(px(7.0)).rounded_full().bg(attention_color)),
+                        )
+                        .into_any_element();
+                }
                 if !avatar_badge {
                     return icon;
                 }
@@ -8959,6 +9019,10 @@ impl Shell {
                             12.0
                         }))
                         .line_height(px(17.0))
+                        .when(unread, |el| {
+                            el.font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(theme.text)
+                        })
                         .child(title),
                 )
                 .into_any_element(),
@@ -8974,42 +9038,38 @@ impl Shell {
                 .child(title_el)
                 .child(trailing);
             let body = if two_line {
+                // Line 2: project, then the pull request (state glyph,
+                // number, state word), then the diff stat at the far right.
                 let meta = div()
                     .w_full()
                     .min_w_0()
+                    .h(px(14.0))
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap(px(6.0))
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .line_height(px(14.0))
+                    .text_color(faint)
                     .child(sidebar_faded_label(
                         format!("chat-device-{content_id}").into(),
-                        true,
-                        div()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .line_height(px(14.0))
-                            .text_color(faint)
-                            .child(space_name),
+                        false,
+                        div().child(space_name),
                     ))
+                    .children(change_request.clone().map(|summary| {
+                        crate::change_requests::pull_request_state_inline(
+                            format!("{row_id}-pr").into(),
+                            summary,
+                            !preview,
+                            pr_device.clone(),
+                            faint,
+                            theme,
+                        )
+                    }))
+                    .child(div().flex_1())
                     .children(diff_stat.map(|(additions, deletions)| {
                         sidebar_diff_stat(additions, deletions, 0.75, theme)
-                    }))
-                    .children(change_request.clone().map(|summary| {
-                        if preview {
-                            crate::change_requests::pull_request_badge_preview(
-                                format!("{row_id}-pr").into(),
-                                summary,
-                                crate::change_requests::ChangeRequestBadgeSurface::SidebarInline,
-                                theme,
-                            )
-                        } else {
-                            crate::change_requests::pull_request_badge(
-                                format!("{row_id}-pr").into(),
-                                summary,
-                                crate::change_requests::ChangeRequestBadgeSurface::SidebarInline,
-                                pr_device.clone(),
-                                theme,
-                            )
-                        }
+                            .text_size(crate::typography::ui_rems(11.0))
                     }));
                 div()
                     .flex_1()
@@ -11780,8 +11840,16 @@ impl Shell {
         // over a column too tight for that, it floats once opened.
         let (session_docked, session_reveal, session_reserve) =
             self.session_info_frame(has_selection, cx);
+        // The transcript's outline control sits top-right; a docked card
+        // takes that corner, so the outline steps left of it.
+        let outline_inset = if session_docked {
+            (session_info::SESSION_CARD_WIDTH + 8.0) * session_reveal.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         self.transcript.update(cx, |transcript, cx| {
-            transcript.set_right_reserve(session_reserve, cx)
+            transcript.set_right_reserve(session_reserve, cx);
+            transcript.set_outline_inset(outline_inset, cx);
         });
         // Panel open/close glides the composer width; a window resize or a
         // seam drag is direct manipulation, so the width tracks the pointer.
@@ -12693,12 +12761,22 @@ impl Shell {
                             }),
                         ),
                     )
+                    // The explorer docks as its own column beside this pane.
+                    .child(
+                        row("surface-card-files", icons::FOLDER, "Files").on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.add_files_surface(window, cx);
+                            }),
+                        ),
+                    )
                     // Git surfaces only where there IS git — the pane itself
                     // no longer gates on it (terminals work anywhere).
                     .when(self.space_git_detected(cx), |el| {
+                        // The review opens beside the conversation, in the
+                        // main area, rather than in this pane.
                         el.child(row("surface-card-diffs", icons::LIST, "Diffs").on_click(
                             cx.listener(|this, _, window, cx| {
-                                this.add_diff_surface(window, cx);
+                                this.open_review_tab(window, cx);
                             }),
                         ))
                         .child(
@@ -13192,13 +13270,27 @@ impl Shell {
                                 )
                                 .child(SharedString::from("Terminal")),
                         )
+                        .child(
+                            popover::menu_row(&theme, false, "right-plus-files")
+                                .id("right-plus-files-row")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.close_right_plus(cx);
+                                    this.add_files_surface(window, cx);
+                                }))
+                                .child(
+                                    icon(icons::FOLDER)
+                                        .size(px(13.0))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child(SharedString::from("Files")),
+                        )
                         .when(self.space_git_detected(cx), |menu| {
                             menu.child(
                                 popover::menu_row(&theme, false, "right-plus-diff")
                                     .id("right-plus-diff-row")
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        this.add_diff_surface(window, cx);
                                         this.close_right_plus(cx);
+                                        this.open_review_tab(window, cx);
                                     }))
                                     .child(
                                         icon(icons::LIST)
@@ -13998,7 +14090,7 @@ impl Render for Shell {
                 WorkspaceCommand::Settings => self.open_last_settings(cx),
                 WorkspaceCommand::Plugins => self.open_plugins_page(cx),
                 WorkspaceCommand::Diff if !self.active_chat.is_empty() => {
-                    self.add_diff_surface(window, cx)
+                    self.open_review_tab(window, cx)
                 }
                 WorkspaceCommand::Files if !self.active_chat.is_empty() => {
                     self.add_files_surface(window, cx)
@@ -14600,7 +14692,11 @@ impl Render for Shell {
                         cx,
                     )
                 });
-                let main = self.render_main(window, main_content_width, transcript_width, cx);
+                // A review or commit-diff tab stands in for the conversation.
+                let main = match self.active_main_diff(cx) {
+                    Some(id) => self.render_main_diff(id, cx),
+                    None => self.render_main(window, main_content_width, transcript_width, cx),
+                };
                 // The Changes pane is chat-scoped chrome: the Settings route
                 // never renders it (zuse __root.tsx `!isSettings && activeChat`
                 // around the diff column) — the per-session open flags stay
@@ -18925,6 +19021,86 @@ impl Shell {
             });
         } else if route.ends_with("palette-menu") {
             self.toggle_command_palette(window, cx);
+        } else if route.ends_with("sidebar-view-menu") {
+            self.open_sidebar_view_menu(window, cx);
+        }
+    }
+    /// Right-pane and main-area tab states for review captures:
+    /// `panel/launcher` (the empty pane's surface list), `panel/files` (the
+    /// explorer over a synthetic tree) and `main/review` (the review tab in
+    /// the main area, beside a side chat's tab).
+    pub fn fixture_open_panel(&mut self, route: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            if let Some(space) = state.spaces.iter_mut().find(|space| space.id == "project") {
+                space.git_detected = true;
+            }
+            let selected = state.selected_chat.clone();
+            if let Some(chat) = state
+                .chats
+                .iter_mut()
+                .find(|chat| Some(&chat.id) == selected.as_ref())
+            {
+                chat.checkout_id = Some("fixture-checkout".into());
+                chat.cwd = Some("/tmp/fieldnotes".into());
+            }
+            cx.notify();
+        });
+        match route {
+            "panel/launcher" => self.set_surfaces_open(true, cx),
+            "panel/files" => {
+                self.add_files_surface(window, cx);
+                if let Some(files) = self.files.get(&self.panel_key(cx)).cloned() {
+                    files.update(cx, |files, cx| {
+                        files.fixture_seed_tree(
+                            &[
+                                (
+                                    "",
+                                    &[
+                                        ".github/", "apps/", "crates/", "docs/", ".gitignore",
+                                        "Cargo.toml", "README.md", "package.json", "tsconfig.json",
+                                    ],
+                                ),
+                                ("apps", &["desktop/", "web/"]),
+                                (
+                                    "apps/desktop",
+                                    &[
+                                        "src/", "electron-builder.yml", "index.html",
+                                        "main.ts", "vite.config.ts", "styles.css",
+                                    ],
+                                ),
+                                ("apps/desktop/src", &["App.tsx", "main.rs", "logo.svg"]),
+                            ],
+                            cx,
+                        )
+                    });
+                }
+            }
+            "main/review" => {
+                self.state.update(cx, |state, cx| {
+                    let Some(mut side) = state.selected_chat_row().cloned() else {
+                        return;
+                    };
+                    side.parent_chat_id = Some(side.id.clone());
+                    side.id = "fixture-side-chat".into();
+                    side.title = Some("Explore caching options".into());
+                    if !state.chats.iter().any(|chat| chat.id == side.id) {
+                        state.chats.push(side);
+                    }
+                    cx.notify();
+                });
+                // The review needs the room: fold the pane and the explorer.
+                self.close_files_panel(cx);
+                self.set_surfaces_open(false, cx);
+                self.open_review_tab(window, cx);
+                if let Some(id) = self.active_main_diff(cx)
+                    && let Some(changes) = self.diffs.get(&id).cloned()
+                {
+                    changes.update(cx, |changes, cx| {
+                        changes.fixture_seed_diff(FIXTURE_REVIEW_PATCH, cx)
+                    });
+                }
+            }
+            _ => {}
         }
     }
     /// Collapse the Projects view groups of these space ids, so a review
@@ -18979,6 +19155,66 @@ impl Shell {
                 composer.fixture_set_draft("Tidy the onboarding copy and add a test", cx)
             });
         }
+        // `main:transcript` seeds a worked conversation (tool calls, thinking,
+        // subagents, a hovered reply footer); `:transcript-card` also opens
+        // the session card over it; `:transcript-outline` adds a second
+        // prompt so the outline control shows.
+        if variant.starts_with("transcript") {
+            self.fixture_seed_transcript(variant == "transcript-outline", cx);
+            if variant == "transcript-card" {
+                self.settings.session_info_hidden = false;
+                self.session_info_overlay = true;
+            }
+            cx.notify();
+        }
+    }
+
+    fn fixture_seed_transcript(&mut self, follow_up: bool, cx: &mut Context<Self>) {
+        let now = Utc::now().timestamp_millis();
+        let tool = |id: &str, call: serde_json::Value, extra: serde_json::Value| {
+            let mut part = serde_json::json!({"kind":"tool","id":id,"call":call,"resolved":true});
+            part.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            part
+        };
+        let entry = |id: &str, role: &str, parts: Vec<serde_json::Value>, ago_ms: i64| {
+            serde_json::from_value::<zuse_doc::SessionMessageEntry>(serde_json::json!({
+                "id": id, "role": role, "parts": parts, "createdAt": now - ago_ms,
+                "deviceId": "local", "status": "complete", "durationMs": 42_000,
+            }))
+            .unwrap()
+        };
+        let none = serde_json::json!({});
+        let entries = vec![
+            entry("u1", "user", vec![serde_json::json!({"kind":"text","id":"t","text":"Give me an overview of this repo and fix the login redirect."})], 600_000),
+            entry("a1", "assistant", vec![
+                serde_json::json!({"kind":"reasoning","id":"r1","text":"Let me look at the layout of the workspace first. Then the auth crate."}),
+                tool("x1", serde_json::json!({"kind":"exec","command":"ls && cat package.json | head -60 && ls apps packages"}), none.clone()),
+                tool("x2", serde_json::json!({"kind":"readFile","path":"crates/auth/src/redirect.rs"}), none.clone()),
+                tool("x3", serde_json::json!({"kind":"search","pattern":"fn redirect_target","path":"crates"}), none.clone()),
+                serde_json::json!({"kind":"reasoning","id":"r2","text":"The redirect keeps the original query string. It should drop the token."}),
+                tool("x4", serde_json::json!({"kind":"editFile","path":"crates/auth/src/redirect.rs"}), serde_json::json!({"diffStats":[{"path":"crates/auth/src/redirect.rs","additions":12,"deletions":3}]})),
+                tool("x5", serde_json::json!({"kind":"exec","command":"cargo test -p auth redirect"}), serde_json::json!({"isError":true,"output":"1 failed"})),
+                tool("x6", serde_json::json!({"kind":"webSearch","query":"oauth redirect uri token leak"}), none.clone()),
+                tool("x7", serde_json::json!({"kind":"mcp","server":"github","tool":"list_pull_requests"}), none.clone()),
+                serde_json::json!({"kind":"text","id":"t1","text":"Here's the overview. The redirect now drops the token before returning to the app."}),
+            ], 540_000),
+            entry("a2", "assistant", vec![
+                tool("s1", serde_json::json!({"kind":"unknown","name":"Agent: audit session expiry"}), serde_json::json!({"subagentRef":"chat--sub--s1","subagentStatus":"running","subagentTail":"Reading crates/auth/src/session.rs"})),
+                tool("s2", serde_json::json!({"kind":"unknown","name":"Agent: check cookie flags"}), serde_json::json!({"subagentRef":"chat--sub--s2","subagentStatus":"done"})),
+                serde_json::json!({"kind":"text","id":"t2","text":"Two audits are under way."}),
+            ], 240_000),
+        ];
+        let mut entries = entries;
+        if follow_up {
+            entries.push(entry("u2", "user", vec![serde_json::json!({"kind":"text","id":"t","text":"Now add a regression test."})], 60_000));
+        }
+        self.state.update(cx, |state, cx| {
+            state.apply_transcript(entries);
+            cx.notify();
+        });
+        self.transcript.update(cx, |transcript, cx| {
+            transcript.fixture_hover_entry("a1", cx);
+        });
     }
 }
 
@@ -20006,3 +20242,38 @@ impl Shell {
         }
     }
 }
+
+#[cfg(feature = "browser-fixture")]
+const FIXTURE_REVIEW_PATCH: &str = "diff --git a/src/cache.rs b/src/cache.rs
+index 1111111..2222222 100644
+--- a/src/cache.rs
++++ b/src/cache.rs
+@@ -1,9 +1,14 @@
+ use std::collections::HashMap;
++use std::time::{Duration, Instant};
+ 
+ pub struct Cache {
+-    entries: HashMap<String, String>,
++    entries: HashMap<String, (String, Instant)>,
++    ttl: Duration,
+ }
+ 
+ impl Cache {
+-    pub fn get(&self, key: &str) -> Option<&String> {
+-        self.entries.get(key)
++    pub fn get(&self, key: &str) -> Option<&str> {
++        let (value, stored) = self.entries.get(key)?;
++        (stored.elapsed() < self.ttl).then_some(value.as_str())
+     }
++}
+diff --git a/README.md b/README.md
+index 3333333..4444444 100644
+--- a/README.md
++++ b/README.md
+@@ -3,4 +3,5 @@
+ Fieldnotes keeps project notes beside the code.
+ 
+-Run `cargo run` to start.
++Run `cargo run` to start. Cached pages expire after
++the configured time to live.
+";

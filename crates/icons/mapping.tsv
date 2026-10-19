@@ -50,11 +50,13 @@ file-tree	HierarchySquare03Icon
 floppy-disk	FloppyDiskIcon
 fold-vertical	UnfoldLessIcon
 folder	Folder01Icon
+folder-open	FolderOpenIcon
 folder-tree	FolderLibraryIcon
 folder-with-files	FolderDetailsIcon
 fork	GitForkIcon
 gallery	Image02Icon
 git-branch	GitBranchIcon
+git-compare	GitCompareIcon
 global	Globe02Icon
 globe	Globe02Icon
 hard-drive	HardDriveIcon
