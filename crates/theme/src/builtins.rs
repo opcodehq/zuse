@@ -253,9 +253,13 @@ fn zuse_dark() -> ThemeVariant {
         success: "#34d399",
         terminal_background: "#090909",
         ansi: ANSI_DARK,
+        // The reference renderer's code palette (comment, keyword, string,
+        // number, type, function, property, variable, punctuation, tag,
+        // attribute, invalid): cyan types and sky functions over the
+        // green-black neutrals, plain text in the foreground tone.
         syntax: [
-            "#92929a", "#8b7cf6", "#34d399", "#facc15", "#c084fc", "#60a5fa", "#f472b6", "#e8e8ea",
-            "#a1a1aa", "#f472b6", "#22d3ee", "#f87171",
+            "#a4a8a3", "#c084fc", "#86efac", "#fbbf24", "#67e8f9", "#7dd3fc", "#e8e9e7", "#e8e9e7",
+            "#a4a8a3", "#f87171", "#fda4af", "#f87171",
         ],
         source: source(
             "zuse-dark",
@@ -265,6 +269,9 @@ fn zuse_dark() -> ThemeVariant {
             "MIT",
         ),
     });
+    zuse_code_roles(&mut palette);
+    palette.colors.solid = c("#e8e9e7");
+    palette.colors.on_solid = palette.colors.solid.best_on_color();
     palette.colors.border = c("#1f211f");
     palette.colors.border_strong = c("#292e2a");
     palette.colors.input = c("#292e2a");
@@ -272,6 +279,18 @@ fn zuse_dark() -> ThemeVariant {
     palette.accent.strong = c("#89ca21");
     palette.accent.on = c("#0c170f");
     palette
+}
+
+/// Zuse code follows the reference renderer's token roles: operators read
+/// as punctuation (muted), parameters as attributes, and `self`-style
+/// variables as plain text rather than keyword-tinted.
+fn zuse_code_roles(palette: &mut ThemeVariant) {
+    let punctuation = palette.syntax["punctuation"];
+    let attribute = palette.syntax["attribute"];
+    let variable = palette.syntax["variable"];
+    palette.syntax.insert("operator".into(), punctuation);
+    palette.syntax.insert("parameter".into(), attribute);
+    palette.syntax.insert("variableSpecial".into(), variable);
 }
 
 fn zuse_light() -> ThemeVariant {
@@ -294,9 +313,11 @@ fn zuse_light() -> ThemeVariant {
         success: "#15803d",
         terminal_background: "#fafafa",
         ansi: ANSI_LIGHT,
+        // The reference renderer's light code palette, with string, number
+        // and type deepened a step to hold 4.5:1 on white and diff rows.
         syntax: [
-            "#6b7280", "#5b43e8", "#15803d", "#a16207", "#7e22ce", "#2563eb", "#be185d", "#303035",
-            "#52525b", "#be185d", "#0e7490", "#b91c1c",
+            "#7f7f7f", "#7924b2", "#297537", "#90600e", "#186f81", "#2256bf", "#292929", "#292929",
+            "#7f7f7f", "#c32222", "#ba2157", "#b91c1c",
         ],
         source: source(
             "zuse-light",
@@ -310,6 +331,9 @@ fn zuse_light() -> ThemeVariant {
     // labels, default #5d5d5d for body copy, subtle #7f7f7f for metadata,
     // #f5f5f5 selected rows and #f2f2f2 hairlines on a white canvas. The
     // subtle tone is authored, so undo the seed's 4.5:1 hardening of it.
+    zuse_code_roles(&mut palette);
+    palette.colors.solid = c("#292929");
+    palette.colors.on_solid = palette.colors.solid.best_on_color();
     palette.colors.text_strong = c("#292929");
     palette.colors.text_muted = c("#7f7f7f");
     palette.colors.selected = c("#f5f5f5");

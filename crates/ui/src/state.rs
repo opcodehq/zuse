@@ -2428,8 +2428,19 @@ impl AppState {
     /// like the Changes pane: checkout id first, then device + cwd, then cwd.
     /// `None` until a diff for its checkout has been watched, or when clean.
     pub fn diff_stat_for_chat(&self, chat: &Chat) -> Option<(u32, u32)> {
+        let found = self.checkout_diff_stat(chat)?;
+        (found.additions > 0 || found.deletions > 0).then_some((found.additions, found.deletions))
+    }
+
+    /// How many files a chat's checkout has changed (the top bar's "· N"),
+    /// from the same watched diff as [`Self::diff_stat_for_chat`].
+    pub fn dirty_files_for_chat(&self, chat: &Chat) -> u32 {
+        self.checkout_diff_stat(chat).map_or(0, |stat| stat.files)
+    }
+
+    fn checkout_diff_stat(&self, chat: &Chat) -> Option<&CheckoutDiffStat> {
         let stats = &self.checkout_diff_stats;
-        let found = chat
+        chat
             .checkout_id
             .as_deref()
             .and_then(|id| stats.iter().find(|stat| stat.checkout_id == id))
@@ -2439,8 +2450,7 @@ impl AppState {
                     .iter()
                     .find(|stat| stat.device_id == chat.device_id && stat.cwd == cwd)
                     .or_else(|| stats.iter().find(|stat| stat.cwd == cwd))
-            })?;
-        (found.additions > 0 || found.deletions > 0).then_some((found.additions, found.deletions))
+            })
     }
 
     /// Fold watched checkout diffs into [`Self::checkout_diff_stats`]. Entries
@@ -2455,6 +2465,7 @@ impl AppState {
                 cwd: diff.cwd.clone(),
                 additions: diff.additions,
                 deletions: diff.deletions,
+                files: diff.files.len() as u32,
             };
             match self
                 .checkout_diff_stats
@@ -6269,6 +6280,8 @@ pub struct CheckoutDiffStat {
     pub cwd: String,
     pub additions: u32,
     pub deletions: u32,
+    /// Changed files in the diff.
+    pub files: u32,
 }
 
 #[cfg(feature = "project-palette-fixture")]

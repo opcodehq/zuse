@@ -95,6 +95,7 @@ pub(crate) mod spaces;
 mod thread_search;
 use side_chats::SideChatTab;
 mod tabs;
+mod top_bar;
 mod voice_stage;
 use voice_stage::VOICE_STAGE_ORB_SCALE;
 
@@ -2075,6 +2076,7 @@ pub struct Shell {
     right_plus: popover::Popup<()>,
     /// The titlebar's "Open in" menu and the apps it found.
     open_in: open_in::OpenIn,
+    branch_menu: top_bar::BranchMenu,
     /// Host-owned project Actions cached per (device, space).
     project_actions: crate::project_actions::ProjectActionsController,
     /// Diff surfaces by id — each tab its own [`Changes`] viewer with its own
@@ -2626,6 +2628,7 @@ impl Shell {
             right_terminal: None,
             right_plus: popover::Popup::default(),
             open_in: open_in::OpenIn::default(),
+            branch_menu: top_bar::BranchMenu::default(),
             project_actions: crate::project_actions::ProjectActionsController::default(),
             diffs: std::collections::HashMap::new(),
             files: std::collections::HashMap::new(),
@@ -11286,6 +11289,10 @@ impl Shell {
             self.close_open_in(cx);
             return true;
         }
+        if self.branch_menu.menu.is_open() {
+            self.close_branch_menu(cx);
+            return true;
+        }
         if self.right_plus.get().is_some() {
             return true;
         }
@@ -14630,16 +14637,27 @@ impl Render for Shell {
                 } else {
                     main
                 };
+                // The conversation tabs sit on their own row below the top
+                // bar: the column's content moves down by the row's height
+                // (its own titlebar clearance then fades the transcript out
+                // beneath the row), and the row overlays that band.
+                let tab_row = (on_chat && self.conversation_tab_row_visible(cx))
+                    .then(|| self.render_conversation_tab_row(cx));
                 let card: AnyElement = div()
                     .id("conversation-column")
                     .debug_selector(|| "conversation-column".into())
                     .flex_1()
                     .min_w_0()
+                    .relative()
                     .flex()
                     .flex_row()
                     .overflow_hidden()
                     .opacity(under_stage)
+                    .when(tab_row.is_some(), |column| {
+                        column.pt(px(top_bar::CONVERSATION_TAB_ROW_HEIGHT))
+                    })
                     .child(main)
+                    .children(tab_row)
                     .into_any_element();
                 // The whole app page is one keyed `animate-in` entrance (zuse
                 // App.tsx `<div key={phase} className="animate-in h-full">`):
@@ -18907,6 +18925,8 @@ impl Shell {
             self.toggle_command_palette(window, cx);
         } else if route.ends_with("sidebar-view-menu") {
             self.open_sidebar_view_menu(window, cx);
+        } else if route.ends_with("branch-menu") {
+            self.fixture_open_branch_menu(cx);
         } else if route.ends_with("tabs-history-menu") {
             self.conversation_history.open(());
             cx.notify();
@@ -18934,6 +18954,7 @@ impl Shell {
     fn fixture_reset_panels(&mut self, cx: &mut Context<Self>) {
         self.right_plus = popover::Popup::default();
         self.open_in.menu = popover::Popup::default();
+        self.branch_menu.menu = popover::Popup::default();
         self.activate_main_tab(None, cx);
         cx.notify();
     }
