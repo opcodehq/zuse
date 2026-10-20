@@ -16,6 +16,38 @@ installer: the current distribution packager also includes helper executables,
 browser assets and legal notices. Build cache size is unrelated to installed
 executable size.
 
+An additional XZ level 6 measurement compresses the same executable to
+**31.49 MiB**, taking 33.3 seconds on the same Mac. It still expands to
+149.7 MiB. The file is `.context/native-release-size.xz` on the Mac; this is a
+compressed executable measurement, not an installer or a complete package.
+
+Mach-O section inspection (`size -m target/release/zuse`) finds approximately
+89.1 MiB of machine instructions (`__text`), 36.6 MiB of constant data
+(`__TEXT,__const`), and 16.3 MiB across exception/unwind sections. These sections
+are part of the 149.7 MiB total, not additional files. The very large
+`__PAGEZERO` virtual reservation is zero-fill and occupies no corresponding
+disk storage. UI fonts total only 2.15 MiB, file icons 1.35 MiB and sounds
+0.77 MiB on disk; asset directory sizes do not establish their exact linked
+contribution.
+
+Size-reduction candidates, not yet benchmarked:
+
+- Compare `opt-level = "s"` and `codegen-units = 1` against the current
+  speed-oriented release settings, preserving the original benchmark binary.
+- Audit enabled dependency features, native shader stacks, image formats and
+  bundled syntax grammars. Obtain a linker map before assigning per-library
+  savings; section totals alone do not identify the contributing libraries.
+- Separate optional large components only where product installation and
+  offline behavior remain acceptable. Loading later only reduces initial
+  installation size if the component is also distributed separately.
+- Do not blindly switch to `panic = "abort"`: existing provider, visual,
+  diagram and worker isolation uses unwind-catching. Such a change affects
+  failure recovery and needs an explicit design decision.
+
+The compressed single-executable result establishes that a download under
+50 MB is possible for that file. It does not establish a complete installer
+under 50 MB, or an installed application under 50 MB.
+
 An initial ten-second-warmup measurement caught a headless process-tree RSS
 spike of 521.1 MiB and a desktop spike of 383.5 MiB while startup children were
 still active. The engine later settled near 41 MiB. These transient children
