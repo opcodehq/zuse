@@ -114,7 +114,7 @@ pub(crate) fn section(theme: &Theme) -> gpui::Div {
         .flex_col()
         .gap(px(SECTION_GAP))
         .p(px(SECTION_PAD))
-        .text_size(crate::typography::ui_rems(13.0))
+        .text_size(crate::typography::text_sm())
         .text_color(theme.text)
 }
 

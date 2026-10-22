@@ -2901,7 +2901,7 @@ mod tests {
         assert!(json.contains(r#""pauseAnimationsInBackground": true"#));
         assert!(json.contains(r#""terminalFontFamily": "installed:Menlo""#));
         assert!(json.contains(r#""terminalFontSize": 15.0"#));
-        assert!(json.contains(r#""codeFontFamily": "geist""#));
+        assert!(json.contains(r#""codeFontFamily": "geistSans""#));
         assert!(json.contains(r#""codeFontSize": 11.0"#));
     }
 
@@ -3133,7 +3133,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_without_ui_font_default_to_geist() {
+    fn settings_without_ui_font_use_the_platform_default() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             UiSettings::path(dir.path()),
@@ -3143,7 +3143,7 @@ mod tests {
         let loaded = UiSettings::load(dir.path());
         assert_eq!(
             loaded.ui_font_family,
-            crate::typography::UiFontFamily::Geist
+            crate::typography::UiFontFamily::default()
         );
         assert_eq!(loaded.sidebar_width, 300.0);
         assert!(!loaded.sound_enabled);
@@ -3178,7 +3178,7 @@ mod tests {
         let loaded = UiSettings::load(dir.path());
         assert_eq!(
             loaded.ui_font_family,
-            crate::typography::UiFontFamily::Geist
+            crate::typography::UiFontFamily::default()
         );
         assert_eq!(loaded.sidebar_width, 300.0);
     }

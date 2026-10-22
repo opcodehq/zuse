@@ -82,6 +82,9 @@ impl DockFrame {
     pub fn selectors(self) -> f32 {
         self.visuals.selectors
     }
+    /// The session chrome's fade under the card. Sessions draw nothing
+    /// there now; the timeline keeps the channel for its ordering tests.
+    #[cfg(test)]
     pub fn footer(self) -> f32 {
         self.visuals.footer
     }

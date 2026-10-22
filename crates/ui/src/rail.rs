@@ -596,11 +596,11 @@ impl Transcript {
                     .items_center()
                     .gap(px(8.0))
                     .cursor_pointer()
-                    .text_size(crate::typography::ui_rems(13.0))
+                    .text_size(crate::typography::text_sm())
                     .text_color(if is_active || is_highlighted {
-                        popup.text
+                        popup.text_strong
                     } else {
-                        popup.text.opacity(0.85)
+                        popup.text
                     })
                     .when(is_active, |el| el.bg(popup.muted_fill().opacity(0.45)))
                     .when(is_highlighted, |el| el.bg(popup.muted_fill().opacity(0.7)))

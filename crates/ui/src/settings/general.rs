@@ -35,7 +35,7 @@ impl ShortcutsPage {
                             .flex()
                             .items_center()
                             .rounded(px(7.))
-                            .text_size(crate::typography::ui_rems(12.))
+                            .text_size(crate::typography::text_xs())
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(if mode == choice {
                                 theme.text
@@ -160,7 +160,7 @@ fn general_details(theme: &Theme, title: &str, description: &str) -> gpui::Div {
         .child(widgets::row_title(theme, title.to_owned()))
         .child(
             div()
-                .text_size(crate::typography::ui_rems(11.))
+                .text_size(crate::typography::text_xs())
                 .line_height(crate::typography::ui_rems(16.))
                 .text_color(theme.text_muted)
                 .child(description.to_owned()),

@@ -535,7 +535,7 @@ impl Render for ShortcutField {
             ))
             .children(helper.map(|helper| {
                 div()
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(helper)
             }))
@@ -576,7 +576,7 @@ fn binding_control(
                     .min_h(px(24.0))
                     .tab_index(0)
                     .focus_visible(move |style| style.border_2().border_color(accent))
-                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .cursor_pointer()
                     .hover(|s| s.text_color(theme.text))
@@ -607,7 +607,7 @@ fn binding_control(
                 .items_center()
                 .justify_center()
                 .font_family(theme.font_mono.clone())
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .cursor_pointer()
                 .map(|el| {
                     if is_recording {
@@ -1073,7 +1073,7 @@ impl Render for ShortcutsPage {
                                         .min_h(px(20.0))
                                         .flex()
                                         .justify_center()
-                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .text_size(crate::typography::text_xs())
                                         .text_color(theme.text_muted)
                                         .child(helper),
                                 ),

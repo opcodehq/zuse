@@ -536,7 +536,7 @@ impl Render for VisualFrame {
 
 fn status_line(message: SharedString, color: Hsla) -> AnyElement {
     div()
-        .text_size(crate::typography::ui_rems(12.0))
+        .text_size(crate::typography::text_xs())
         .line_height(crate::typography::ui_rems(18.0))
         .text_color(color)
         .child(message)
@@ -742,7 +742,7 @@ impl VisualFrame {
                     ))
                     .child(
                         div()
-                            .text_size(crate::typography::ui_rems(14.0))
+                            .text_size(crate::typography::text_md())
                             .line_height(crate::typography::ui_rems(22.0))
                             .text_color(theme.text)
                             .child(label.clone()),
@@ -779,7 +779,7 @@ impl VisualFrame {
                 let url = url.clone();
                 div()
                     .id(self.element_id(path))
-                    .text_size(crate::typography::ui_rems(14.0))
+                    .text_size(crate::typography::text_md())
                     .line_height(crate::typography::ui_rems(22.0))
                     .text_color(theme.accent)
                     .cursor_pointer()
@@ -914,7 +914,7 @@ impl VisualFrame {
                 header = header.child(
                     cell(column.align, column.width).child(
                         div()
-                            .text_size(crate::typography::ui_rems(14.0))
+                            .text_size(crate::typography::text_md())
                             .line_height(crate::typography::ui_rems(22.0))
                             .font_weight(TABLE_HEADER_WEIGHT)
                             .text_color(theme.text)
@@ -1022,7 +1022,7 @@ fn stat(
                         .text_color(value_color)
                         .child(StyledText::new(value.to_owned()).with_runs(vec![TextRun {
                             len: value.len(),
-                            font: ui_font(theme, false, FontWeight::SEMIBOLD, false),
+                            font: ui_font(theme, false, FontWeight::MEDIUM, false),
                             color: value_color,
                             background_color: None,
                             underline: None,
@@ -1032,7 +1032,7 @@ fn stat(
                 .when_some(delta.filter(|d| !d.is_empty()), |el, delta| {
                     el.child(
                         div()
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .line_height(crate::typography::ui_rems(18.0))
                             .text_color(tone.unwrap_or(theme.text_muted))
                             .child(delta.to_owned()),
@@ -1042,7 +1042,7 @@ fn stat(
         .when(!label.is_empty(), |el| {
             el.child(
                 div()
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .line_height(crate::typography::ui_rems(18.0))
                     .text_color(theme.text_muted)
                     .child(label.to_owned()),
@@ -1129,7 +1129,7 @@ impl VisualFrame {
                     .flex_row()
                     .justify_between()
                     .gap(px(12.0))
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .line_height(crate::typography::ui_rems(18.0))
                     .child(
                         div()
@@ -2268,14 +2268,14 @@ impl VisualFrame {
             .items_center()
             .gap_x(px(14.0))
             .gap_y(px(2.0))
-            .text_size(crate::typography::ui_rems(12.0))
+            .text_size(crate::typography::text_xs())
             .line_height(crate::typography::ui_rems(18.0))
             .text_color(theme.text_muted)
             .min_h(crate::typography::ui_rems(18.0));
         if let Some(label) = &readout_label {
             legend = legend.child(
                 div()
-                    .text_color(theme.text)
+                    .text_color(theme.text_strong)
                     .font_weight(FontWeight::MEDIUM)
                     .child(label.clone()),
             );

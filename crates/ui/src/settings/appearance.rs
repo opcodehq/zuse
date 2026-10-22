@@ -495,7 +495,7 @@ impl AppearancePage {
                             .when(!show_details, |el| el.invisible())
                             .flex()
                             .justify_between()
-                            .text_size(typography::ui_rems(12.0))
+                            .text_size(typography::text_xs())
                             .line_height(px(16.0))
                             .child(format!("{width:.0} px"))
                             .child(
@@ -521,7 +521,7 @@ impl AppearancePage {
                             .when(!show_details, |el| el.invisible())
                             .flex()
                             .justify_between()
-                            .text_size(typography::ui_rems(11.0))
+                            .text_size(typography::text_xs())
                             .line_height(px(14.0))
                             .text_color(theme.text_muted)
                             .child("560 px")
@@ -1587,7 +1587,7 @@ fn import_scene_preview(variant: &zuse_theme::ThemeVariant) -> AnyElement {
                 .gap(px(6.0))
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::text_xs())
                         .font_family(theme.font_mono.clone())
                         .child(
                             div()
@@ -1599,7 +1599,7 @@ fn import_scene_preview(variant: &zuse_theme::ThemeVariant) -> AnyElement {
                 )
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::text_xs())
                         .font_family(theme.font_mono.clone())
                         .text_color(theme.syntax.string)
                         .child("  \"Theme mapping\""),
@@ -1676,7 +1676,7 @@ fn report_panel(theme: &Theme, report: &ImportReport) -> impl IntoElement {
             .border_color(theme.border)
             .bg(theme.surface_raised.opacity(0.35))
             .p(px(10.0))
-            .text_size(crate::typography::ui_rems(11.0))
+            .text_size(crate::typography::text_xs())
             .line_height(px(16.0))
             .text_color(theme.text_muted)
             .child(div().text_color(theme.text).child(summary))
@@ -2120,9 +2120,13 @@ impl AppearancePage {
                         )
                         .child(
                             div()
-                                .text_size(crate::typography::ui_rems(12.0))
+                                .text_size(crate::typography::text_xs())
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(if active { theme.text } else { theme.text_muted })
+                                .text_color(if active {
+                                    theme.text_strong
+                                } else {
+                                    theme.text_muted
+                                })
                                 .child(label),
                         ),
                 )
@@ -2130,7 +2134,7 @@ impl AppearancePage {
                     div()
                         .mt(px(4.0))
                         .ml(px(23.0))
-                        .text_size(crate::typography::ui_rems(10.5))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child(description),
                 )
@@ -2139,8 +2143,8 @@ impl AppearancePage {
         let section_label = |label: &'static str| {
             div()
                 .mb(px(7.0))
-                .text_size(crate::typography::ui_rems(11.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_size(crate::typography::text_xs())
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.text_muted)
                 .child(label)
         };
@@ -2213,7 +2217,7 @@ impl AppearancePage {
                     .child(section_label("Detected themes").mb(px(0.0)))
                     .child(
                         div()
-                            .text_size(crate::typography::ui_rems(10.5))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
                             .child(SharedString::from(format!(
                                 "{} variant{}",
@@ -2314,14 +2318,14 @@ impl AppearancePage {
                                         .min_w_0()
                                         .child(
                                             div()
-                                                .text_size(crate::typography::ui_rems(12.5))
+                                                .text_size(crate::typography::text_sm())
                                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                                .text_color(theme.text)
+                                                .text_color(theme.text_strong)
                                                 .child(SharedString::from(variant.name.clone())),
                                         )
                                         .child(
                                             div()
-                                                .text_size(crate::typography::ui_rems(11.0))
+                                                .text_size(crate::typography::text_xs())
                                                 .text_color(theme.text_muted)
                                                 .child(appearance),
                                         ),
@@ -2379,7 +2383,7 @@ impl AppearancePage {
                         .p(px(10.0))
                         .rounded(px(8.0))
                         .bg(theme.warning.opacity(0.08))
-                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.warning)
                         .child(SharedString::from(format!(
                             "{} could not be compiled · {}",
@@ -2394,7 +2398,7 @@ impl AppearancePage {
                     .flex()
                     .items_start()
                     .gap(px(7.0))
-                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_size(crate::typography::text_xs())
                     .line_height(px(16.0))
                     .text_color(theme.text_muted)
                     .child(
@@ -2417,7 +2421,7 @@ impl AppearancePage {
                     .flex()
                     .items_start()
                     .gap(px(7.0))
-                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_size(crate::typography::text_xs())
                     .line_height(px(16.0))
                     .text_color(theme.danger)
                     .child(
@@ -2721,7 +2725,7 @@ impl AppearancePage {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_size(typography::ui_rems(11.5))
+                        .text_size(typography::text_xs())
                         .text_color(theme.text_muted)
                         .child(if !same_image {
                             "Background changed. Close and adjust the new image."
@@ -2903,7 +2907,7 @@ impl AppearancePage {
                         div()
                             .w(px(52.0))
                             .text_center()
-                            .text_size(typography::ui_rems(11.5))
+                            .text_size(typography::text_xs())
                             .text_color(theme.text_muted)
                             .child(format!("{:.0}%", draft.zoom * 100.0)),
                     )
@@ -3122,7 +3126,7 @@ impl AppearancePage {
                 .child(
                     div()
                         .mt(px(14.0))
-                        .text_size(crate::typography::ui_rems(12.5))
+                        .text_size(crate::typography::text_sm())
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .child(SharedString::from(variant.name.clone())),
                 )
@@ -3189,7 +3193,7 @@ impl AppearancePage {
                     .child(
                         div()
                             .truncate()
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(
                                 if matches!(entry.status, CustomThemeStatus::Warning { .. }) {
                                     theme.warning
@@ -3349,7 +3353,7 @@ impl AppearancePage {
                     .pb(px(4.0))
                     .border_t_1()
                     .border_color(widgets::row_divider(theme))
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child("Imported")
                     .into_any_element(),
@@ -3368,7 +3372,7 @@ impl AppearancePage {
                     .pb(px(4.0))
                     .border_t_1()
                     .border_color(widgets::row_divider(theme))
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child("Linked")
                     .into_any_element(),
@@ -4077,7 +4081,7 @@ impl Render for AppearancePage {
                                     page.child(
                                         div()
                                             .mt(px(8.0))
-                                            .text_size(crate::typography::ui_rems(11.5))
+                                            .text_size(crate::typography::text_xs())
                                             .text_color(theme.warning)
                                             .child(warning),
                                     )

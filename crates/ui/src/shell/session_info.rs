@@ -1,5 +1,6 @@
-//! The session card: where this chat runs (device, project, branch), a new
-//! side chat, and the project's run actions, in one toggleable card. Its
+//! The session card: where this chat runs (device, project, checkout,
+//! branch, and the branch's pull request), a new side chat, and the
+//! project's run actions, in one toggleable card. Its
 //! rows follow the environment summary's idiom: 28px icon rows, 12px text,
 //! a glass card with no dividers.
 //! While the column has room, the card shows at its right on its own (until
@@ -50,7 +51,7 @@ fn summary_row(theme: &Theme) -> gpui::Div {
         .min_h(px(SUMMARY_ROW_HEIGHT))
         .px(px(10.0))
         .rounded(px(6.0))
-        .text_size(crate::typography::ui_rems(12.0))
+        .text_size(crate::typography::text_xs())
         .text_color(theme.text)
 }
 
@@ -78,7 +79,7 @@ fn sub_row(theme: &Theme) -> gpui::Div {
         .min_h(px(24.0))
         .pl(px(SUMMARY_LABEL_INSET))
         .pr(px(10.0))
-        .text_size(crate::typography::ui_rems(11.0))
+        .text_size(crate::typography::text_xs())
         .text_color(theme.text_muted)
 }
 
@@ -196,7 +197,7 @@ impl Shell {
         }
         let theme = Theme::of(cx).for_popup();
         let now = Utc::now();
-        let (chat, device, local, online, project, branch) = {
+        let (chat, device, local, online, project, checkout, branch, change_request) = {
             let state = self.state.read(cx);
             let chat = state.selected_chat_row()?.clone();
             let device: SharedString = state
@@ -220,7 +221,28 @@ impl Shell {
                 .map(str::trim)
                 .filter(|branch| !branch.is_empty())
                 .map(|branch| SharedString::from(branch.to_owned()));
-            (chat, device, local, online, project, branch)
+            // Git projects name the checkout kind: the project folder itself,
+            // or a worktree of it.
+            let checkout = chat
+                .space_id
+                .as_deref()
+                .and_then(|id| state.space_row(id))
+                .filter(|space| space.git_detected)
+                .map(|space| {
+                    let cwd = chat.cwd.clone().unwrap_or_else(|| space.path.clone());
+                    (cwd != space.path, SharedString::from(cwd))
+                });
+            let change_request = state.change_request_for_chat(&chat).cloned();
+            (
+                chat,
+                device,
+                local,
+                online,
+                project,
+                checkout,
+                branch,
+                change_request,
+            )
         };
 
         // ── Where it runs.
@@ -249,10 +271,65 @@ impl Shell {
             None => info_row(&theme, row_glyph(icons::HOME, &theme), "No project".into())
                 .into_any_element(),
         };
+        let checkout_row = checkout.map(|(worktree, path)| {
+            let (glyph, label) = if worktree {
+                (icons::WORKTREE, "Worktree")
+            } else {
+                (icons::FOLDER, "Local checkout")
+            };
+            info_row(&theme, row_glyph(glyph, &theme), label.into())
+                .id("session-info-checkout")
+                .debug_selector(|| "session-info-checkout".into())
+                .tooltip(crate::settings::widgets::text_tooltip(path))
+        });
         let branch_row = branch.map(|branch| {
             info_row(&theme, row_glyph(icons::GIT_BRANCH, &theme), branch.clone())
                 .id("session-info-branch")
                 .tooltip(crate::settings::widgets::text_tooltip(branch))
+        });
+        // The branch's pull request: its title, and the state-toned number
+        // badge. The row (or the badge) opens it.
+        let pull_request_row = change_request.map(|summary| {
+            let model = crate::change_requests::ChangeRequestBadgeModel::from_summary(&summary);
+            let url = summary.url.clone();
+            let device = Some(chat.device_id.clone());
+            let open_device = device.clone();
+            action_row(&theme, "session-info-pull-request")
+                .debug_selector(|| "session-info-pull-request".into())
+                .role(gpui::Role::Link)
+                .aria_label(SharedString::from(format!(
+                    "Open pull request {}: {}",
+                    model.number, model.title
+                )))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.close_session_info_overlay(cx);
+                    crate::pull_request_detail::open_on_device(
+                        &url,
+                        open_device.clone(),
+                        window,
+                        cx,
+                    );
+                }))
+                .child(popover::picker_icon_slot(
+                    icon(model.tone.glyph())
+                        .size(px(16.0))
+                        .text_color(model.tone.color(&theme))
+                        .into_any_element(),
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(model.title.clone()),
+                )
+                .child(crate::change_requests::pull_request_badge(
+                    "session-info-pull-request-badge".into(),
+                    summary,
+                    crate::change_requests::ChangeRequestBadgeSurface::Composer,
+                    device,
+                    &theme,
+                ))
         });
 
         // ── This conversation. Forking lives on each reply's footer.
@@ -279,7 +356,9 @@ impl Shell {
             .flex_col()
             .child(device_row)
             .child(project_row)
+            .children(checkout_row)
             .children(branch_row)
+            .children(pull_request_row)
             .child(side_chat)
             .children(actions)
             .child(
@@ -362,7 +441,7 @@ impl Shell {
             .child(
                 div()
                     .flex_none()
-                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .when(count > 0, |meta| {
                         meta.child(SharedString::from(count.to_string()))
@@ -476,7 +555,7 @@ impl Shell {
                     .child(
                         div()
                             .flex_none()
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
                             .child("Import"),
                     )

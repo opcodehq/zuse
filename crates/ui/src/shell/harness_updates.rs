@@ -302,7 +302,7 @@ impl Shell {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(crate::typography::ui_rems(11.5))
+                .text_size(crate::typography::text_xs())
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .bg(if primary {
                     theme.text
@@ -481,14 +481,16 @@ impl Shell {
             24.0 + 8.0
         } else {
             action_label
-                .map(|label| text_width(label, 11.5, window, &theme) + 20.0 + 8.0)
+                .map(|label| {
+                    text_width(label, crate::typography::TEXT_XS, window, &theme) + 20.0 + 8.0
+                })
                 .unwrap_or(0.0)
         };
         let max_width = (main_width - 32.0).max(0.0);
         let compact_width = (12.0
             + marks_width
             + 8.0
-            + text_width(&title, 12.0, window, &theme)
+            + text_width(&title, crate::typography::TEXT_XS, window, &theme)
             + if has_activity { 22.0 } else { 0.0 }
             + controls_width
             + trailing
@@ -563,7 +565,7 @@ impl Shell {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .child(title),
             )
@@ -661,7 +663,7 @@ impl Shell {
                                 .gap(px(1.0))
                                 .child(
                                     div()
-                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .text_size(crate::typography::text_xs())
                                         .line_height(crate::typography::ui_rems(16.0))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .truncate()
@@ -670,7 +672,7 @@ impl Shell {
                                 .when(device_count > 1, |el| {
                                     el.child(
                                         div()
-                                            .text_size(crate::typography::ui_rems(11.0))
+                                            .text_size(crate::typography::text_xs())
                                             .line_height(crate::typography::ui_rems(14.0))
                                             .text_color(theme.text_muted)
                                             .truncate()
@@ -679,7 +681,7 @@ impl Shell {
                                 })
                                 .child(
                                     div()
-                                        .text_size(crate::typography::ui_rems(11.0))
+                                        .text_size(crate::typography::text_xs())
                                         .line_height(crate::typography::ui_rems(14.0))
                                         .text_color(if status.phase == Phase::Failed {
                                             theme.danger

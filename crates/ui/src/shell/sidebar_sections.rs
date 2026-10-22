@@ -348,7 +348,7 @@ impl Shell {
                         .px(px(Theme::SPACE_SM))
                         .flex()
                         .items_center()
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted.opacity(0.5))
                         .child("Drop sessions here"),
                 )

@@ -3387,6 +3387,9 @@ pub struct Transcript {
     /// Right-click menu over any transcript image (Copy path / Copy image).
     image_menu: crate::popover::Popup<ImageMenu>,
     image_menu_focus: gpui::FocusHandle,
+    /// A reply's Fork menu, anchored to its footer button.
+    fork_menu: crate::popover::Popup<ForkMenu>,
+    fork_menu_focus: gpui::FocusHandle,
     image_copy: Option<Task<()>>,
     /// In-flight ReadAttachmentChunk loads, keyed by device, path and validation
     /// policy; results land in the global attachment cache.
@@ -3431,10 +3434,42 @@ pub enum TranscriptEvent {
         title: String,
         frozen: bool,
     },
-    /// An assistant message's Fork action: branch `chat_id` into a new side
-    /// chat. The engine copies the conversation through its latest
-    /// completed response (it has no per-message fork point).
-    ForkChat { chat_id: String },
+    /// An assistant message's Fork menu: branch `chat_id` into `target`.
+    /// The engine copies the conversation through its latest completed
+    /// response (it has no per-message fork point).
+    ForkChat { chat_id: String, target: ForkTarget },
+}
+
+/// Where a reply's Fork menu sends the copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkTarget {
+    /// A new conversation tab in this thread, in the same checkout.
+    Conversation,
+    /// A thread of its own, in a fresh worktree where the project has git.
+    Thread,
+}
+
+impl ForkTarget {
+    /// The menu's rows, in order: label and tooltip.
+    pub(crate) const MENU: [(ForkTarget, &'static str, &'static str); 2] = [
+        (
+            ForkTarget::Conversation,
+            "Fork in new tab",
+            "Continue from here in a new tab of this thread, in the same checkout",
+        ),
+        (
+            ForkTarget::Thread,
+            "Fork into new thread",
+            "Continue from here in a new thread with its own worktree",
+        ),
+    ];
+}
+
+/// The open Fork menu: the reply it hangs off and the keyboard highlight.
+struct ForkMenu {
+    entry_id: SharedString,
+    chat_id: String,
+    active: Option<usize>,
 }
 
 impl gpui::EventEmitter<TranscriptEvent> for Transcript {}
@@ -3693,6 +3728,8 @@ impl Transcript {
             tool_images: Default::default(),
             image_menu: Default::default(),
             image_menu_focus: cx.focus_handle(),
+            fork_menu: Default::default(),
+            fork_menu_focus: cx.focus_handle(),
             image_copy: None,
             attachment_loads: HashMap::new(),
             visuals: HashMap::new(),
@@ -3731,6 +3768,21 @@ impl Transcript {
     pub fn fixture_hover_entry(&mut self, entry_id: &str, cx: &mut Context<Self>) {
         self.hovered_entry = Some((entry_id.to_owned().into(), entry_id.to_owned().into()));
         self.fixture_open_groups = true;
+        cx.notify();
+    }
+
+    /// Open the Fork menu on `entry_id`'s footer (it shows while hovered).
+    #[cfg(feature = "browser-fixture")]
+    pub fn fixture_fork_menu(&mut self, entry_id: &str, cx: &mut Context<Self>) {
+        let Some(chat_id) = self.chat_id.clone() else {
+            return;
+        };
+        self.fixture_hover_entry(entry_id, cx);
+        self.fork_menu.open(ForkMenu {
+            entry_id: entry_id.to_owned().into(),
+            chat_id,
+            active: Some(0),
+        });
         cx.notify();
     }
 
@@ -4823,6 +4875,7 @@ impl Transcript {
             self.highlights.entries.clear();
             self.copied_message = None;
             self.copied_message_clear = None;
+            self.fork_menu = Default::default();
             self.list.reset(0);
             self.pending_viewport = None;
             self.viewport_generation = self.viewport_generation.wrapping_add(1);
@@ -6280,6 +6333,119 @@ impl Transcript {
         }));
     }
 
+    /// Open the Fork menu under a reply's button, or close it when that
+    /// press found it open. The first row starts highlighted so Enter forks
+    /// into a new tab.
+    fn toggle_fork_menu(
+        &mut self,
+        entry_id: SharedString,
+        chat_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.fork_menu.take_press_was_open() {
+            self.close_fork_menu(cx);
+            return;
+        }
+        self.fork_menu.open(ForkMenu {
+            entry_id,
+            chat_id,
+            active: Some(0),
+        });
+        window.focus(&self.fork_menu_focus, cx);
+        cx.notify();
+    }
+
+    fn close_fork_menu(&mut self, cx: &mut Context<Self>) {
+        if self.fork_menu.begin_close() {
+            crate::popover::reap_popup(cx, |this: &mut Self| &mut this.fork_menu);
+            cx.notify();
+        }
+    }
+
+    fn fork_menu_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        use crate::popover::MenuKey;
+        let Some(menu) = self.fork_menu.open_mut() else {
+            return;
+        };
+        let count = ForkTarget::MENU.len();
+        match crate::popover::classify_key(
+            &event.keystroke.key,
+            event.keystroke.modifiers.platform,
+            event.keystroke.modifiers.control,
+        ) {
+            MenuKey::Escape => self.close_fork_menu(cx),
+            MenuKey::Up => menu.active = crate::popover::menu_step(menu.active, count, -1),
+            MenuKey::Down => menu.active = crate::popover::menu_step(menu.active, count, 1),
+            MenuKey::Enter => {
+                if let Some(index) = menu.active {
+                    self.dispatch_fork_menu(index, cx);
+                }
+            }
+            _ => return,
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn dispatch_fork_menu(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(menu) = self.fork_menu.as_open() else {
+            return;
+        };
+        let Some((target, ..)) = ForkTarget::MENU.get(index).copied() else {
+            return;
+        };
+        let chat_id = menu.chat_id.clone();
+        self.close_fork_menu(cx);
+        cx.emit(TranscriptEvent::ForkChat { chat_id, target });
+    }
+
+    /// The Fork menu's glass card, opening upward from the button: most
+    /// forks start at the latest reply, just above the composer.
+    fn render_fork_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let menu = self.fork_menu.get()?;
+        let theme = Theme::of(cx).for_popup();
+        let mut card = crate::popover::popover_card(&theme)
+            .id("transcript-fork-menu-card")
+            .debug_selector(|| "transcript-fork-menu".into())
+            .track_focus(&self.fork_menu_focus)
+            .role(gpui::Role::Menu)
+            .aria_label("Fork chat")
+            .w(px(212.0))
+            .flex()
+            .flex_col()
+            .on_key_down(cx.listener(|this, event, _, cx| this.fork_menu_key(event, cx)))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_fork_menu(cx)))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        for (index, (_, label, tooltip)) in ForkTarget::MENU.into_iter().enumerate() {
+            let id = SharedString::from(format!("transcript-fork-menu-{index}"));
+            card = card.child(
+                crate::popover::menu_row(&theme, menu.active == Some(index), id.clone())
+                    .id(id)
+                    .role(gpui::Role::MenuItem)
+                    .aria_label(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.dispatch_fork_menu(index, cx)
+                    }))
+                    .tooltip(crate::settings::widgets::text_tooltip(tooltip))
+                    .tooltip_show_delay(std::time::Duration::from_millis(500))
+                    .child(
+                        crate::icons::icon(crate::icons::FORK)
+                            .size(px(16.0))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    )
+                    .child(label),
+            );
+        }
+        Some(crate::popover::anchored_menu_above(
+            "transcript-fork-menu",
+            card.into_any_element(),
+            self.fork_menu.closing_since(),
+        ))
+    }
+
     fn render_image_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.image_menu.get()?;
         let theme = Theme::of(cx).for_popup();
@@ -6506,7 +6672,7 @@ impl Transcript {
             .flex()
             .items_center()
             .gap(px(5.0))
-            .text_size(crate::typography::ui_rems(14.0))
+            .text_size(crate::typography::text_md())
             .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
             .text_color(theme.text_muted)
             .cursor_pointer()
@@ -7209,7 +7375,7 @@ impl Transcript {
                         .items_center()
                         .gap(px(Theme::SPACE_SM))
                         .pt(px(Theme::SPACE_LG))
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.danger)
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, _, cx| this.retry_send(cx)))
@@ -7283,7 +7449,7 @@ impl Transcript {
                 .items_center()
                 .gap(px(Theme::SPACE_SM))
                 .pt(px(Theme::SPACE_LG))
-                .text_size(crate::typography::ui_rems(11.0))
+                .text_size(crate::typography::text_xs())
                 .child(crate::loaders::gradient_spinner(
                     "working-indicator",
                     &theme,
@@ -7294,7 +7460,7 @@ impl Transcript {
                 .child(
                     // The flavour word rotates every 7s; roll it as it turns.
                     div()
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(if queued {
                             theme.warning
                         } else {
@@ -7437,7 +7603,7 @@ impl Transcript {
                                 .rounded_tr(px(4.0))
                                 .px(px(14.0))
                                 .py(px(8.0))
-                                .text_size(crate::typography::ui_rems(14.0))
+                                .text_size(crate::typography::text_md())
                                 .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
                                 .text_color(theme.text)
                                 .when(pending, |el| el.opacity(0.65))
@@ -7646,9 +7812,15 @@ impl Transcript {
             .chat_id
             .clone()
             .filter(|_| self.doc_override.is_none() && row.copy_text.is_some());
+        // An open Fork menu keeps its reply's footer up while the pointer
+        // moves into the menu.
+        let fork_menu_here = self
+            .fork_menu
+            .get()
+            .is_some_and(|menu| menu.entry_id == row.entry_id);
         let strip = row.timestamp.map(|ms| {
             let timestamp = div()
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted.opacity(0.55))
                 .child(SharedString::from(format_timestamp(ms, &chrono::Local)));
             let copy = copy_text.map(|text| {
@@ -7685,10 +7857,12 @@ impl Transcript {
                     )
             });
             // Assistant replies can branch the conversation from here, with
-            // the same split glyph as every other fork action.
+            // the same split glyph as every other fork action: a small menu
+            // picks a new tab in this thread or a new thread.
             let fork = fork_chat_id.filter(|_| !is_user_row).map(|chat_id| {
                 let fade_key = format!("fork-message-hover-{copy_entry_id}");
-                div()
+                let entry_id = copy_entry_id.clone();
+                let button = div()
                     .id(SharedString::from(format!("fork-message-{copy_entry_id}")))
                     .debug_selector(|| "fork-message".into())
                     .size(px(Theme::SPACE_MD * 2.0))
@@ -7697,24 +7871,42 @@ impl Transcript {
                     .justify_center()
                     .rounded(px(Theme::CONTROL_RADIUS))
                     .cursor_pointer()
-                    .bg(motion::hover_blend(
-                        &fade_key,
-                        gpui::transparent_black(),
-                        crate::theme::ink(0.08),
-                    ))
+                    .role(gpui::Role::Button)
+                    .aria_label("Fork chat")
+                    .bg(if fork_menu_here {
+                        crate::theme::ink(0.08)
+                    } else {
+                        motion::hover_blend(
+                            &fade_key,
+                            gpui::transparent_black(),
+                            crate::theme::ink(0.08),
+                        )
+                    })
                     .on_hover(motion::hover_listener(fade_key))
-                    .on_click(cx.listener(move |_, _, _, cx| {
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, _, _| this.fork_menu.note_trigger_press()),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
-                        cx.emit(TranscriptEvent::ForkChat {
-                            chat_id: chat_id.clone(),
-                        });
+                        this.toggle_fork_menu(entry_id.clone(), chat_id.clone(), window, cx);
                     }))
-                    .tooltip(crate::settings::widgets::text_tooltip("Fork chat"))
+                    .when(!fork_menu_here, |button| {
+                        button.tooltip(crate::settings::widgets::text_tooltip("Fork chat"))
+                    })
                     .child(
                         crate::icons::icon(crate::icons::FORK)
                             .size(px(14.0))
-                            .text_color(theme.text_muted),
-                    )
+                            .text_color(if fork_menu_here {
+                                theme.text
+                            } else {
+                                theme.text_muted
+                            }),
+                    );
+                div()
+                    .relative()
+                    .child(button)
+                    .children(fork_menu_here.then(|| self.render_fork_menu(cx)).flatten())
             });
             let metadata = div()
                 .flex()
@@ -7736,7 +7928,7 @@ impl Transcript {
                 // text's first-character x, user label's right edge on the
                 // bubble's right edge (user-reported 4px drift).
                 .when(is_user_row, |el| el.justify_end())
-                .when(hovered, |el| {
+                .when(hovered || fork_menu_here, |el| {
                     el.child(motion::fade_quick(
                         SharedString::from(format!("meta-{}", row.id)),
                         metadata,
@@ -8848,7 +9040,7 @@ fn user_bubble_runs(
                     let mut piece = run.clone();
                     piece.len = next - offset;
                     if in_name {
-                        piece.font.weight = gpui::FontWeight::BOLD;
+                        piece.font.weight = gpui::FontWeight::MEDIUM;
                     }
                     pieces.push(piece);
                     offset = next;
@@ -9125,7 +9317,7 @@ fn user_file_pill(name: &str, theme: &Theme) -> AnyElement {
         .pl(px(2.0))
         .pr(px(10.0))
         .text_size(px(13.0))
-        .text_color(theme.text.opacity(0.85))
+        .text_color(theme.text)
         .child(
             div()
                 .size(px(24.0))
@@ -9194,7 +9386,7 @@ fn fork_marker(source_title: SharedString, theme: &Theme) -> AnyElement {
                 .child(
                     div()
                         .flex_none()
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted.opacity(0.7))
                         .child("Forked from"),
                 )
@@ -9206,7 +9398,7 @@ fn fork_marker(source_title: SharedString, theme: &Theme) -> AnyElement {
                 .min_w_0()
                 .truncate()
                 .text_center()
-                .text_size(crate::typography::ui_rems(13.0))
+                .text_size(crate::typography::text_sm())
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.text_muted)
                 .child(source_title),
@@ -9271,7 +9463,7 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
                         .min_w_0()
                         .flex_1()
                         .truncate()
-                        .text_color(theme.text.opacity(0.9))
+                        .text_color(theme.text)
                         .child(value),
                 ),
         )
@@ -9952,7 +10144,7 @@ fn subagent_header_row(
                 .max_w(px(224.0))
                 .truncate()
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text.opacity(0.9))
+                .text_color(theme.text)
                 .child(title),
         )
         .child(
@@ -12191,6 +12383,69 @@ mod tests {
             Some(command)
         );
         crate::markdown::selection::clear_if_owner("probe-0");
+    }
+
+    /// A reply's Fork opens a two-row menu: Enter takes the highlighted row
+    /// (a new tab first), arrows move it, Escape closes without forking.
+    #[gpui::test]
+    fn fork_menu_offers_a_tab_or_a_thread_from_the_keyboard(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        let state = cx.new(|_| AppState::new());
+        let window = cx.add_window(|_, cx| Transcript::new(state, cx));
+        let transcript = window.root(cx).unwrap();
+        let forks = Rc::new(RefCell::new(Vec::new()));
+        let _subscription = cx.update({
+            let forks = forks.clone();
+            |cx| {
+                cx.subscribe(&transcript, move |_, event: &TranscriptEvent, _| {
+                    if let TranscriptEvent::ForkChat { chat_id, target } = event {
+                        forks.borrow_mut().push((chat_id.clone(), *target));
+                    }
+                })
+            }
+        });
+        let key = |name: &str| gpui::KeyDownEvent {
+            keystroke: gpui::Keystroke::parse(name).unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        };
+        window
+            .update(cx, |this, window, cx| {
+                this.toggle_fork_menu("a1".into(), "main".into(), window, cx);
+                assert!(this.fork_menu_focus.is_focused(window));
+                assert_eq!(this.fork_menu.as_open().unwrap().active, Some(0));
+                this.fork_menu_key(&key("enter"), cx);
+                assert!(!this.fork_menu.is_open());
+            })
+            .unwrap();
+        assert_eq!(
+            forks.borrow().as_slice(),
+            [("main".to_string(), ForkTarget::Conversation)]
+        );
+        window
+            .update(cx, |this, window, cx| {
+                this.fork_menu = Default::default();
+                this.toggle_fork_menu("a1".into(), "main".into(), window, cx);
+                this.fork_menu_key(&key("down"), cx);
+                this.fork_menu_key(&key("enter"), cx);
+                this.fork_menu = Default::default();
+                this.toggle_fork_menu("a1".into(), "main".into(), window, cx);
+                this.fork_menu_key(&key("escape"), cx);
+                assert!(!this.fork_menu.is_open());
+            })
+            .unwrap();
+        assert_eq!(
+            forks.borrow().as_slice(),
+            [
+                ("main".to_string(), ForkTarget::Conversation),
+                ("main".to_string(), ForkTarget::Thread),
+            ]
+        );
     }
 
     #[gpui::test]

@@ -311,7 +311,7 @@ impl ShortcutsPage {
                                         div()
                                             .mt(px(12.0))
                                             .px(px(10.0))
-                                            .text_size(crate::typography::ui_rems(12.0))
+                                            .text_size(crate::typography::text_xs())
                                             .text_color(theme.text_muted)
                                             .child(helper),
                                     )

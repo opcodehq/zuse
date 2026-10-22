@@ -248,7 +248,7 @@ pub(crate) fn summary(gap: f32, view: EntityId, theme: &Theme, cx: &mut App) -> 
                                 .child(widgets::row_title(theme, "Hand off to an agent"))
                                 .child(
                                     div()
-                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .text_size(crate::typography::text_xs())
                                         .text_color(theme.text_muted)
                                         .child(
                                             "Opens a new session with the prompt ready to send.",

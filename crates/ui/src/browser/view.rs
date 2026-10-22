@@ -120,7 +120,7 @@ impl BrowserSurface {
             .child(
                 div()
                     .mb(px(4.0))
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(subtitle),
             );
@@ -169,15 +169,15 @@ impl BrowserSurface {
                             .gap(px(2.0))
                             .child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(13.0))
+                                    .text_size(crate::typography::text_sm())
                                     .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(theme.text)
+                                    .text_color(theme.text_strong)
                                     .truncate()
                                     .child(service.name.clone()),
                             )
                             .child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_size(crate::typography::text_xs())
                                     .text_color(theme.text_muted)
                                     .truncate()
                                     .child(label),
@@ -210,7 +210,7 @@ impl BrowserSurface {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
                             .role(gpui::Role::Button)
                             .aria_label(format!("Open {} preview", service.name))
@@ -241,7 +241,7 @@ impl BrowserSurface {
                     .rounded(px(8.0))
                     .border_1()
                     .border_color(theme.border)
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .line_height(px(19.0))
                     .text_color(theme.text_muted)
                     .child(message),
@@ -250,7 +250,7 @@ impl BrowserSurface {
         if let Some(error) = &snapshot.error {
             content = content.child(
                 div()
-                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_size(crate::typography::text_xs())
                     .line_height(px(17.0))
                     .text_color(theme.text_muted)
                     .child(error.clone()),
@@ -260,7 +260,7 @@ impl BrowserSurface {
             div()
                 .id("preview-enter-address")
                 .mt(px(8.0))
-                .text_size(crate::typography::ui_rems(11.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted)
                 .cursor_pointer()
                 .role(gpui::Role::Button)
@@ -341,15 +341,15 @@ impl BrowserSurface {
                     .child(
                         div()
                             .mt(px(4.0))
-                            .text_size(crate::typography::ui_rems(14.0))
+                            .text_size(crate::typography::text_md())
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_strong)
                             .child(title),
                     )
                     .child(
                         div()
                             .text_center()
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .line_height(px(19.0))
                             .text_color(theme.text_muted)
                             .child(description),
@@ -375,7 +375,7 @@ impl BrowserSurface {
                             .flex()
                             .items_center()
                             .gap(px(8.0))
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if has_error {
@@ -392,7 +392,7 @@ impl BrowserSurface {
                             .when(!has_error, |el| {
                                 el.child(
                                     div()
-                                        .text_size(crate::typography::ui_rems(10.0))
+                                        .text_size(crate::typography::text_xs())
                                         .text_color(theme.text_faint)
                                         .child(if cfg!(target_os = "macos") {
                                             "⌘L"
@@ -802,14 +802,14 @@ impl Render for BrowserSurface {
             .on_mouse_down(MouseButton::Navigate(gpui::NavigationDirection::Forward), |_, _, cx| cx.stop_propagation())
             .child(toolbar)
             .when_some(persistence_notice, |el, message| el.child(div().px(px(12.0)).py(px(8.0))
-                .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted).child(message.to_owned())))
-            .when_some(self.validation.clone(), |el, message| el.child(div().px(px(12.0)).py(px(8.0)).text_size(crate::typography::ui_rems(11.0)).text_color(theme.danger).child(message)))
+                .text_size(crate::typography::text_xs()).text_color(theme.text_muted).child(message.to_owned())))
+            .when_some(self.validation.clone(), |el, message| el.child(div().px(px(12.0)).py(px(8.0)).text_size(crate::typography::text_xs()).text_color(theme.danger).child(message)))
             .when(remote_loopback, |el| el.child(div().px(px(12.0)).py(px(8.0)).border_b_1().border_color(theme.border)
-                .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted)
+                .text_size(crate::typography::text_xs()).text_color(theme.text_muted)
                 .child("Localhost opens on this device. Open a detected preview from a new tab to reach your other device.")))
             .child(body)
             .when(external, |el| el.child(div().h(px(26.0)).px(px(10.0)).flex().items_center().gap(px(5.0)).border_t_1().border_color(theme.border)
-                .text_size(crate::typography::ui_rems(10.0)).text_color(theme.text_faint)
+                .text_size(crate::typography::text_xs()).text_color(theme.text_faint)
                 .child(icons::icon(icons::ARROW_UP_RIGHT).size(px(11.0))).child("Opens in your default browser")))
     }
 }

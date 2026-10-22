@@ -240,7 +240,7 @@ impl Render for ProjectIconTooltip {
                     .whitespace_nowrap()
                     .text_size(px(11.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_strong)
                     .child(self.name.clone()),
             )
             .child(

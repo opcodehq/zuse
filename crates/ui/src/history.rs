@@ -1239,7 +1239,8 @@ pub struct GitHistorySearchControl {
 impl GitHistorySearchControl {
     pub fn new(history: Entity<GitHistory>, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
-            ComposerInput::with_context("Search", "PaletteSearch", cx).with_text_metrics(11.0, 14.0)
+            ComposerInput::with_context("Search", "PaletteSearch", cx)
+                .with_text_metrics(crate::typography::TEXT_XS, 14.0)
         });
         let observe = cx.observe(&history, |this, history, cx| {
             let query = history.read(cx).search_query.clone();

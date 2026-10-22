@@ -2940,6 +2940,20 @@ fn access_mode_selection(
             "danger-full-access",
             "full-access",
         ]
+    } else if request.sandbox.automatic_review() {
+        // "Approve for me" uses the agent's own automatic approver when it
+        // advertises one; otherwise it falls back to the ask-first modes.
+        &[
+            "auto",
+            "auto-review",
+            "auto_review",
+            "default",
+            "ask",
+            "approval-required",
+            "manual",
+            "normal",
+            "agent",
+        ]
     } else {
         &[
             "default",
@@ -6320,6 +6334,28 @@ mod tests {
         request.model_options.clear();
         request.auto_approve = false;
         assert!(access_mode_selection(&["bypass"], Some("bypass"), &request).is_err());
+    }
+
+    #[test]
+    fn auto_access_prefers_the_agents_automatic_mode_then_asks() {
+        let request: RunRequest =
+            serde_json::from_value(json!({"prompt":"","cwd":"/tmp","sandbox":"auto"})).unwrap();
+        assert_eq!(
+            access_mode_selection(&["default", "auto", "bypassPermissions"], None, &request)
+                .unwrap()
+                .as_deref(),
+            Some("auto")
+        );
+        assert_eq!(
+            access_mode_selection(&["default", "bypassPermissions"], None, &request)
+                .unwrap()
+                .as_deref(),
+            Some("default")
+        );
+        assert!(
+            access_mode_selection(&["bypassPermissions"], Some("bypassPermissions"), &request)
+                .is_err()
+        );
     }
 
     #[test]

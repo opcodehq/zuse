@@ -621,7 +621,7 @@ impl FilesSurface {
             ComposerInput::new("Search files", cx)
                 .with_single_line()
                 .with_accessibility_role(gpui::Role::SearchInput)
-                .with_text_metrics(11.0, 16.0)
+                .with_text_metrics(crate::typography::TEXT_XS, 16.0)
         });
         let search_events = cx.subscribe(&search, |this: &mut Self, _, event, cx| match event {
             ComposerInputEvent::Edited => this.on_search_edited(cx),
@@ -1353,7 +1353,7 @@ impl FilesSurface {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_size(crate::typography::text_xs())
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text_muted)
                     .child(SharedString::from(crate::popover::tracked_upper(label))),

@@ -9,6 +9,26 @@ fn label(level: SandboxLevel) -> &'static str {
 fn description(level: SandboxLevel) -> &'static str {
     access_details(level).description
 }
+/// Why `level` cannot be picked for `harness`, if it cannot. Only "Approve
+/// for me" depends on the agent: it needs a native automatic approver.
+fn unavailable(level: SandboxLevel, harness: Option<&HarnessId>) -> Option<&'static str> {
+    match harness {
+        Some(harness) if level.automatic_review() => {
+            SandboxLevel::automatic_review_support(harness).err()
+        }
+        _ => None,
+    }
+}
+/// The level the agent actually runs with: "Approve for me" on an agent
+/// without an automatic approver falls back to asking (the provider adapters
+/// map it the same way), so the chip and menu show that instead.
+fn effective(level: SandboxLevel, harness: Option<&HarnessId>) -> SandboxLevel {
+    if unavailable(level, harness).is_some() {
+        SandboxLevel::WorkspaceWrite
+    } else {
+        level
+    }
+}
 impl Composer {
     fn choose_permission(
         &mut self,
@@ -16,6 +36,9 @@ impl Composer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if unavailable(level, self.pickers.read(cx).resolved(cx).harness.as_ref()).is_some() {
+            return;
+        }
         self.permission_open = false;
         window.focus(&self.input.focus_handle(cx), cx);
         let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
@@ -82,9 +105,11 @@ impl Composer {
                     self.choose_permission(LEVELS[self.permission_active], window, cx);
                 } else {
                     self.permission_open = true;
+                    let resolved = self.pickers.read(cx).resolved(cx);
+                    let current = effective(resolved.sandbox, resolved.harness.as_ref());
                     self.permission_active = LEVELS
                         .iter()
-                        .position(|level| *level == self.pickers.read(cx).resolved(cx).sandbox)
+                        .position(|level| *level == current)
                         .unwrap_or(0);
                 }
             }
@@ -109,7 +134,9 @@ impl Composer {
         icon_only: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let selected = self.pickers.read(cx).resolved(cx).sandbox;
+        let resolved = self.pickers.read(cx).resolved(cx);
+        let harness = resolved.harness;
+        let selected = effective(resolved.sandbox, harness.as_ref());
         let pending = self.state.read(cx).configuration_saving();
         let unconfirmed = !pending && self.state.read(cx).configuration_blocked();
         // Safe modes rest muted and brighten on hover; full access stays in
@@ -141,7 +168,7 @@ impl Composer {
                     .items_center()
                     .gap(px(6.))
                     .rounded(px(7.))
-                    .text_size(crate::typography::ui_rems(12.))
+                    .text_size(crate::typography::text_xs())
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(tint)
                     .cursor_pointer()
@@ -192,72 +219,94 @@ impl Composer {
             )
             .when(self.permission_open, |view| {
                 let popup_theme = theme.for_popup();
-                // The shared popover card: without it the rows painted
-                // straight over the composer with no fill of their own.
+                let row = |index: usize, level: SandboxLevel| {
+                    let blocked = unavailable(level, harness.as_ref());
+                    let checked = level == selected;
+                    popover::menu_row_nav(
+                        &popup_theme,
+                        checked,
+                        index == self.permission_active && blocked.is_none(),
+                        format!("permission-row-{index}"),
+                    )
+                    .id(("permission-level", index))
+                    .role(Role::ListBoxOption)
+                    .aria_label(label(level))
+                    .aria_selected(checked)
+                    .when_some(blocked, |row, reason| row.aria_description(reason))
+                    .h(px(44.))
+                    .py(px(0.))
+                    .gap(px(10.))
+                    .when(blocked.is_some(), |row| row.opacity(0.45).cursor_default())
+                    .child(
+                        icons::icon(access_details(level).icon)
+                            .flex_none()
+                            .size(px(16.))
+                            .text_color(if checked {
+                                popup_theme.text
+                            } else {
+                                popup_theme.text_muted
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .line_height(px(17.))
+                                    .text_size(crate::typography::text_sm())
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(popup_theme.text)
+                                    .child(label(level)),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .line_height(px(15.))
+                                    .text_size(crate::typography::text_xs())
+                                    .text_color(popup_theme.text_muted)
+                                    .child(blocked.unwrap_or(description(level))),
+                            ),
+                    )
+                    .child(div().flex_none().size(px(14.)).when(checked, |slot| {
+                        slot.child(
+                            icons::icon(icons::CHECK)
+                                .size(px(14.))
+                                .text_color(popup_theme.accent),
+                        )
+                    }))
+                    .when(blocked.is_none(), |row| {
+                        row.on_click(cx.listener(move |this, _, window, cx| {
+                            this.choose_permission(level, window, cx)
+                        }))
+                    })
+                };
+                // The three postures, then read only below a hairline: it
+                // restricts rather than grants, so it sits apart.
+                let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(LEVELS.len() + 1);
+                for (index, level) in LEVELS.into_iter().enumerate() {
+                    if level == SandboxLevel::ReadOnly {
+                        rows.push(popover::menu_separator().into_any_element());
+                    }
+                    rows.push(row(index, level).into_any_element());
+                }
                 let menu = popover::popover_card(&popup_theme)
                     .id("composer-permission-menu")
                     .role(Role::ListBox)
-                    .w(px(256.))
+                    .w(px(260.))
                     .flex()
                     .flex_col()
-                    .gap(px(0.))
+                    .gap(px(2.))
                     .child(popover::menu_heading(&popup_theme, "Agent access"))
                     .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                         this.permission_open = false;
                         cx.notify();
                     }))
-                    .children(LEVELS.into_iter().enumerate().map(|(index, level)| {
-                        popover::menu_row_nav(
-                            &popup_theme,
-                            level == selected,
-                            index == self.permission_active,
-                            format!("permission-row-{index}"),
-                        )
-                        .id(("permission-level", index))
-                        .role(Role::ListBoxOption)
-                        .aria_label(label(level))
-                        .aria_selected(level == selected)
-                        .h_auto()
-                        .py(px(8.))
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(8.))
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_size(crate::typography::ui_rems(12.))
-                                        .child(
-                                            icons::icon(access_details(level).icon)
-                                                .size(px(14.))
-                                                .text_color(popup_theme.text),
-                                        )
-                                        .child(label(level)),
-                                )
-                                .child(
-                                    div()
-                                        .mt(px(4.))
-                                        .line_height(px(16.))
-                                        .text_size(crate::typography::ui_rems(11.))
-                                        .text_color(popup_theme.text_muted)
-                                        .child(description(level)),
-                                ),
-                        )
-                        .when(level == selected, |view| {
-                            view.child(
-                                icons::icon(icons::CHECK)
-                                    .size(px(14.))
-                                    .text_color(popup_theme.accent),
-                            )
-                        })
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| this.choose_permission(level, window, cx),
-                        ))
-                    }));
+                    .children(rows);
                 let menu = menu.when(unconfirmed, |view| {
                     view.child(
                         div()
@@ -267,7 +316,7 @@ impl Composer {
                             .cursor_pointer()
                             .px(px(8.))
                             .py(px(8.))
-                            .text_size(crate::typography::ui_rems(12.))
+                            .text_size(crate::typography::text_xs())
                             .text_color(popup_theme.accent)
                             .child(if pending {
                                 "Reading saved chat choices…"
@@ -290,7 +339,30 @@ impl Composer {
 impl Composer {
     /// Review fixture: open the agent access menu.
     pub fn fixture_open_permissions(&mut self, cx: &mut Context<Self>) {
+        let resolved = self.pickers.read(cx).resolved(cx);
+        let current = effective(resolved.sandbox, resolved.harness.as_ref());
+        self.permission_active = LEVELS
+            .iter()
+            .position(|level| *level == current)
+            .unwrap_or(0);
         self.permission_open = true;
+        cx.notify();
+    }
+    /// Review fixture: store `level` on the selected chat (or the draft).
+    pub fn fixture_set_permission(&mut self, level: SandboxLevel, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            let selected = state.selected_chat.clone();
+            for chat in &mut state.chats {
+                if Some(&chat.id) == selected.as_ref()
+                    && let Some(config) = chat.config.as_mut()
+                {
+                    config.sandbox = level;
+                }
+            }
+            cx.notify();
+        });
+        self.pickers
+            .update(cx, |pickers, cx| pickers.set_draft_sandbox(level, cx));
         cx.notify();
     }
 }
@@ -299,6 +371,37 @@ impl Composer {
 mod tests {
     use super::*;
     use crate::composer::tests::composer_focus_window;
+
+    #[test]
+    fn approve_for_me_needs_an_automatic_approver() {
+        assert_eq!(
+            LEVELS.map(label),
+            [
+                "Ask for approval",
+                "Approve for me",
+                "Full access",
+                "Read only"
+            ]
+        );
+        for harness in [HarnessId::Codex, HarnessId::ClaudeCode] {
+            assert_eq!(unavailable(SandboxLevel::Auto, Some(&harness)), None);
+            assert_eq!(
+                effective(SandboxLevel::Auto, Some(&harness)),
+                SandboxLevel::Auto
+            );
+        }
+        assert!(unavailable(SandboxLevel::Auto, Some(&HarnessId::Cursor)).is_some());
+        assert_eq!(
+            effective(SandboxLevel::Auto, Some(&HarnessId::Cursor)),
+            SandboxLevel::WorkspaceWrite
+        );
+        assert_eq!(effective(SandboxLevel::Auto, None), SandboxLevel::Auto);
+        for level in LEVELS {
+            if level != SandboxLevel::Auto {
+                assert_eq!(unavailable(level, Some(&HarnessId::Cursor)), None);
+            }
+        }
+    }
 
     #[gpui::test]
     fn draft_permission_is_local_and_existing_chat_is_preserved_offline(

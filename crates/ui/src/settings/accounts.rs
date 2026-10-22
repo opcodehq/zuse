@@ -390,7 +390,7 @@ pub(crate) fn render_usage_meter(
         .flex_row()
         .items_center()
         .gap(px(8.0))
-        .text_size(crate::typography::ui_rems(11.5))
+        .text_size(crate::typography::text_xs())
         .child(
             div()
                 .w(px(USAGE_LABEL_WIDTH))
@@ -1222,11 +1222,7 @@ impl AccountsPage {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_size(crate::typography::ui_rems(if compact {
-                        10.0
-                    } else {
-                        11.5
-                    }))
+                    .text_size(crate::typography::text_xs())
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(if account.active {
                         theme.text
@@ -1357,13 +1353,13 @@ impl AccountsPage {
                         widgets::row_title(theme, email.clone())
                             .truncate()
                             .when(compact, |title| {
-                                title.text_size(crate::typography::ui_rems(12.0))
+                                title.text_size(crate::typography::text_xs())
                             }),
                     )
                     .when(!meta.is_empty(), |el| {
                         el.child(widgets::meta_line(theme, meta).when(compact, |line| {
                             line.mt(px(1.0))
-                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_size(crate::typography::text_xs())
                                 .line_height(crate::typography::ui_rems(14.0))
                         }))
                     }),
@@ -1487,7 +1483,7 @@ impl AccountsPage {
             div()
                 .id("login-open-url")
                 .mt(px(6.0))
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted)
                 .truncate()
                 .cursor_pointer()
@@ -1500,7 +1496,7 @@ impl AccountsPage {
         });
         let error_line = |message: SharedString| {
             div()
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(red_text)
                 .child(message)
         };
@@ -1520,7 +1516,7 @@ impl AccountsPage {
                 ))
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(12.5))
+                        .text_size(crate::typography::text_sm())
                         .text_color(theme.text_muted)
                         .child(login.status()),
                 )
@@ -1533,7 +1529,7 @@ impl AccountsPage {
                 .child(
                     popover::dialog_field(self.code_input.clone().into_any_element())
                         .font_family(theme.font_mono.clone())
-                        .text_size(crate::typography::ui_rems(13.0)),
+                        .text_size(crate::typography::text_sm()),
                 )
                 .when_some(error.clone(), |el, message| el.child(error_line(message)))
                 .into_any_element(),
@@ -1753,9 +1749,9 @@ impl AccountsPage {
                         .gap(px(8.0))
                         .child(
                             div()
-                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_size(crate::typography::text_xs())
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(theme.text)
+                                .text_color(theme.text_strong)
                                 .child("Sign in"),
                         )
                         .child(
@@ -1775,7 +1771,7 @@ impl AccountsPage {
                                             theme,
                                             ("accounts-sign-in", ix),
                                         )
-                                        .text_size(crate::typography::ui_rems(11.0))
+                                        .text_size(crate::typography::text_xs())
                                         .aria_label(label.clone())
                                         .focus_visible(|s| s.border_2().border_color(theme.accent))
                                         .on_click(cx.listener(move |page, _, _, cx| {
@@ -1790,7 +1786,7 @@ impl AccountsPage {
                                             .flex()
                                             .items_center()
                                             .gap(px(4.0))
-                                            .text_size(crate::typography::ui_rems(10.0))
+                                            .text_size(crate::typography::text_xs())
                                             .text_color(theme.text_muted)
                                             .child("or run")
                                             .child(
@@ -1825,7 +1821,7 @@ impl AccountsPage {
                                     .items_center()
                                     .gap(px(6.0))
                                     .rounded(px(5.0))
-                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_size(crate::typography::text_xs())
                                     .text_color(crate::motion::hover_blend(
                                         &hover_key,
                                         theme.text_muted,
@@ -1917,7 +1913,7 @@ impl AccountsPage {
                 el.child(
                     div()
                         .mt(px(4.0))
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child(SharedString::from(note)),
                 )
@@ -2013,7 +2009,7 @@ impl Render for AccountsPage {
                                             widgets::ROW_TITLE_SIZE,
                                         ))
                                         .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(theme.text)
+                                        .text_color(theme.text_strong)
                                         .child(SharedString::from(name)),
                                 ),
                         )
@@ -2056,7 +2052,7 @@ impl Render for AccountsPage {
                         .child(
                             div()
                                 .mt(px(4.0))
-                                .text_size(crate::typography::ui_rems(11.5))
+                                .text_size(crate::typography::text_xs())
                                 .text_color(theme.text_muted)
                                 .child(SharedString::from("Click to retry")),
                         )
@@ -2106,7 +2102,7 @@ impl Render for AccountsPage {
                                 div()
                                     .px(px(12.0))
                                     .py(px(10.0))
-                                    .text_size(crate::typography::ui_rems(12.0))
+                                    .text_size(crate::typography::text_xs())
                                     .text_color(theme.text_muted)
                                     .child(SharedString::from(empty_copy)),
                             )
@@ -2135,7 +2131,7 @@ impl Render for AccountsPage {
                                                 widgets::ROW_TITLE_SIZE,
                                             ))
                                             .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(theme.text)
+                                            .text_color(theme.text_strong)
                                             .child(SharedString::from(name)),
                                     )
                                     .child(div().flex_1())
@@ -2260,7 +2256,7 @@ impl Render for AccountsPage {
                             .child(
                                 div()
                                     .mt(px(24.0))
-                                    .text_size(crate::typography::ui_rems(12.0))
+                                    .text_size(crate::typography::text_xs())
                                     .line_height(px(19.0))
                                     .text_color(theme.text_muted)
                                     .child(SharedString::from(

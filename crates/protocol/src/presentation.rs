@@ -49,22 +49,26 @@ impl AppearanceMode {
     }
 }
 
-/// Permission postures currently supported by the canonical run contract.
+/// Permission postures a new conversation can start with. The order is the
+/// order the settings select lists them in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PermissionMode {
     #[default]
     ApprovalRequired,
+    /// "Approve for me": the agent's automatic approver decides.
+    Auto,
     FullAccess,
 }
 impl PermissionMode {
-    pub const ALL: [Self; 2] = [Self::ApprovalRequired, Self::FullAccess];
+    pub const ALL: [Self; 3] = [Self::ApprovalRequired, Self::Auto, Self::FullAccess];
     pub fn label(self) -> &'static str {
         access_details(self.sandbox()).label
     }
     pub fn sandbox(self) -> crate::SandboxLevel {
         match self {
             Self::ApprovalRequired => crate::SandboxLevel::WorkspaceWrite,
+            Self::Auto => crate::SandboxLevel::Auto,
             Self::FullAccess => crate::SandboxLevel::DangerFullAccess,
         }
     }
@@ -88,26 +92,34 @@ pub struct AccessDetails {
     pub description: &'static str,
     pub icon: &'static str,
 }
-pub const ACCESS_LEVELS: [crate::SandboxLevel; 3] = [
+/// The composer's access menu order: the three postures, then read only.
+pub const ACCESS_LEVELS: [crate::SandboxLevel; 4] = [
     crate::SandboxLevel::WorkspaceWrite,
+    crate::SandboxLevel::Auto,
     crate::SandboxLevel::DangerFullAccess,
     crate::SandboxLevel::ReadOnly,
 ];
+/// Descriptions stay one short line so the menu never wraps.
 pub fn access_details(level: crate::SandboxLevel) -> AccessDetails {
     match level {
         crate::SandboxLevel::WorkspaceWrite => AccessDetails {
             label: "Ask for approval",
-            description: "Review restricted tool requests before they run.",
+            description: "Asks before restricted actions.",
             icon: "icons/access-ask.svg",
+        },
+        crate::SandboxLevel::Auto => AccessDetails {
+            label: "Approve for me",
+            description: "Reviews actions, asks when needed.",
+            icon: "icons/access-auto.svg",
         },
         crate::SandboxLevel::DangerFullAccess => AccessDetails {
             label: "Full access",
-            description: "Allow actions without approval. Plan mode still applies.",
+            description: "Runs actions without approval.",
             icon: "icons/access-full.svg",
         },
         crate::SandboxLevel::ReadOnly => AccessDetails {
             label: "Read only",
-            description: "Inspect files without allowing changes.",
+            description: "Inspects files without changes.",
             icon: "icons/access-read-only.svg",
         },
     }
@@ -522,6 +534,26 @@ mod permission_tests {
         assert_eq!(
             preferences.default_permission_mode,
             PermissionMode::ApprovalRequired
+        );
+    }
+
+    #[test]
+    fn auto_permission_mode_round_trips_and_maps_to_auto_sandbox() {
+        let preferences: WorkspacePreferences =
+            serde_json::from_value(serde_json::json!({"defaultPermissionMode":"auto"})).unwrap();
+        assert_eq!(preferences.default_permission_mode, PermissionMode::Auto);
+        assert_eq!(
+            serde_json::to_value(PermissionMode::Auto).unwrap(),
+            serde_json::json!("auto")
+        );
+        for mode in ["approval-required", "full-access"] {
+            serde_json::from_value::<PermissionMode>(serde_json::json!(mode)).unwrap();
+        }
+        assert_eq!(PermissionMode::Auto.for_chat(None), SandboxLevel::Auto);
+        assert_eq!(PermissionMode::Auto.label(), "Approve for me");
+        assert_eq!(
+            ACCESS_LEVELS.map(|level| access_details(level).label),
+            ["Ask for approval", "Approve for me", "Full access", "Read only"]
         );
     }
 }

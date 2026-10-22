@@ -568,17 +568,17 @@ impl Shell {
                 .aria_selected(active)
                 .cursor_pointer()
                 .flex_none()
-                .max_w(px(160.))
+                .w(px(160.))
                 .h(px(24.))
                 .px(px(8.))
                 .flex()
                 .items_center()
                 .gap(px(6.))
                 .rounded(px(7.))
-                .text_size(crate::typography::ui_rems(12.))
+                .text_size(crate::typography::text_xs())
                 .when(active, |d| {
                     d.bg(theme.accent_fill())
-                        .text_color(theme.text)
+                        .text_color(theme.text_strong)
                         .font_weight(gpui::FontWeight::MEDIUM)
                 })
                 .when(!active, |d| {
@@ -701,7 +701,7 @@ impl Shell {
                         })
                     })
                     .child(leading)
-                    .child(div().min_w_0().truncate().child(title))
+                    .child(div().flex_1().min_w_0().truncate().child(title))
                     .child(close)
                     .on_mouse_down(
                         MouseButton::Middle,
@@ -749,7 +749,7 @@ impl Shell {
                             .flex_none()
                             .text_color(theme.text_muted),
                     })
-                    .child(div().min_w_0().truncate().child(title))
+                    .child(div().flex_1().min_w_0().truncate().child(title))
                     .when(closable, |d| {
                         d.child(
                             close_button(
@@ -811,7 +811,12 @@ impl Shell {
                 )
                 .child(match rename {
                     Some(input) => div().w(px(120.)).child(input).into_any_element(),
-                    None => div().min_w_0().truncate().child(title).into_any_element(),
+                    None => div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(title)
+                        .into_any_element(),
                 })
                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                     if event.click_count() >= 2 {
@@ -963,7 +968,7 @@ impl Shell {
                 .child(
                     div()
                         .flex_none()
-                        .text_size(crate::typography::ui_rems(12.))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child(history_time(
                             chat.last_message_at.unwrap_or(chat.created_at),
@@ -1205,6 +1210,12 @@ impl Shell {
             .flex_none()
             .when(open, |button| button.bg(theme.text.opacity(0.10)))
         });
+        // The left cluster: owner avatar, branch and copy (reference top bar).
+        let identity = if !takeover && !on_canvas {
+            self.render_top_bar_branch(&theme, cx)
+        } else {
+            None
+        };
         let inner = div()
             .size_full()
             .flex()
@@ -1214,8 +1225,10 @@ impl Shell {
             .pl(px(row_left))
             .pr(px(right_pad))
             // In panel takeover the header strip spans the whole band — the
-            // title would sit UNDER it (both flex_none, the row overflows and
-            // paint order stacks them), so it hides for the duration.
+            // identity would sit UNDER it (both flex_none, the row overflows
+            // and paint order stacks them), so it hides for the duration.
+            // The conversation tabs live on their own row below this bar
+            // (`render_conversation_tab_row`).
             .when(!takeover, |el| {
                 el.child(
                     div()
@@ -1225,20 +1238,7 @@ impl Shell {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(6.0))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_1()
-                                .text_size(crate::typography::ui_rems(12.0))
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(if on_canvas {
-                                    theme.text_muted.opacity(0.7)
-                                } else {
-                                    theme.text.opacity(0.85)
-                                })
-                                .child(self.render_thread_conversations(cx)),
-                        ),
+                        .children(identity),
                 )
             })
             .when(takeover, |d| d.child(div().flex_1()))

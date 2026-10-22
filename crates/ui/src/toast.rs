@@ -466,7 +466,7 @@ pub fn render_toaster(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
             .gap(px(10.0))
             .px(px(14.0))
             .py(px(13.0))
-            .text_size(crate::typography::ui_rems(13.0))
+            .text_size(crate::typography::text_sm())
             .text_color(theme.text)
             .child(kind_icon(kind, &theme))
             .child(div().flex_1().min_w_0().child(message.clone()))

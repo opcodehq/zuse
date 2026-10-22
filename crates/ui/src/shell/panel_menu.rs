@@ -186,14 +186,14 @@ impl Shell {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(crate::typography::ui_rems(14.0))
-                            .text_color(theme.text.opacity(0.9))
+                            .text_size(crate::typography::text_md())
+                            .text_color(theme.text)
                             .child(SharedString::from(choice.label())),
                     )
                     .children(shortcut.map(|shortcut| {
                         div()
                             .flex_none()
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted.opacity(0.7))
                             .child(SharedString::from(shortcut))
                     }))
@@ -240,12 +240,12 @@ impl Shell {
                     .role(gpui::Role::MenuItem)
                     .aria_label(choice.label())
                     .gap(px(10.0))
-                    .text_size(crate::typography::ui_rems(14.0))
+                    .text_size(crate::typography::text_md())
                     .child(
                         icon(choice.icon())
                             .size(px(14.0))
                             .flex_none()
-                            .text_color(theme.text.opacity(0.8)),
+                            .text_color(theme.text),
                     )
                     .child(
                         div()

@@ -434,8 +434,15 @@ pub struct ThemeSource {
     pub asset_hash: String,
 }
 
+/// Semantic surface and text roles of one theme variant.
+///
+/// The text ladder is `text_strong` (titles, headings, selected labels),
+/// `text` (default body copy) and `text_muted` (the subtle role: metadata,
+/// timestamps, secondary labels), with `text_faint` below it for placeholders
+/// and disabled copy. `selected` fills selected rows, tabs and navigation
+/// items; `border` is the hairline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "ThemeColorsWire")]
 pub struct ThemeColors {
     pub background: Color,
     pub shell: Color,
@@ -445,9 +452,15 @@ pub struct ThemeColors {
     pub overlay: Color,
     pub hover: Color,
     pub active: Color,
+    /// Fill for selected rows, tabs and navigation items.
+    pub selected: Color,
     pub border: Color,
     pub border_strong: Color,
+    /// Emphasized text: titles, headings and selected labels.
+    pub text_strong: Color,
+    /// Default body text.
     pub text: Color,
+    /// Subtle text: metadata, timestamps and secondary labels.
     pub text_muted: Color,
     pub text_faint: Color,
     pub solid: Color,
@@ -463,6 +476,101 @@ pub struct ThemeColors {
     pub diff_add: Color,
     pub diff_delete: Color,
     pub diff_hunk: Color,
+}
+
+impl ThemeColors {
+    /// Emphasized text derived from body text: halfway toward the extreme
+    /// tone of the background (black on light, white on dark).
+    pub fn derive_text_strong(text: Color, background: Color) -> Color {
+        text.mix(background.best_on_color(), 0.5)
+    }
+
+    /// A neutral selected-row fill derived from the background: a light
+    /// black wash on light themes, a soft white wash on dark ones.
+    pub fn derive_selected(background: Color) -> Color {
+        if background.best_on_color() == Color::WHITE {
+            Color::rgb(235, 235, 235).with_alpha(0.11)
+        } else {
+            Color::BLACK.with_alpha(0.04)
+        }
+    }
+}
+
+/// Deserialization shape of [`ThemeColors`]. Roles added after custom themes
+/// were first persisted are optional here and derived from their neighbours,
+/// so libraries written by older builds keep loading.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThemeColorsWire {
+    background: Color,
+    shell: Color,
+    raised: Color,
+    card: Color,
+    dialog: Color,
+    overlay: Color,
+    hover: Color,
+    active: Color,
+    #[serde(default)]
+    selected: Option<Color>,
+    border: Color,
+    border_strong: Color,
+    #[serde(default)]
+    text_strong: Option<Color>,
+    text: Color,
+    text_muted: Color,
+    text_faint: Color,
+    solid: Color,
+    on_solid: Color,
+    danger: Color,
+    danger_muted: Color,
+    warning: Color,
+    warning_muted: Color,
+    success: Color,
+    success_muted: Color,
+    input: Color,
+    cursor: Color,
+    diff_add: Color,
+    diff_delete: Color,
+    diff_hunk: Color,
+}
+
+impl From<ThemeColorsWire> for ThemeColors {
+    fn from(wire: ThemeColorsWire) -> Self {
+        Self {
+            selected: wire
+                .selected
+                .unwrap_or_else(|| Self::derive_selected(wire.background)),
+            text_strong: wire
+                .text_strong
+                .unwrap_or_else(|| Self::derive_text_strong(wire.text, wire.background)),
+            background: wire.background,
+            shell: wire.shell,
+            raised: wire.raised,
+            card: wire.card,
+            dialog: wire.dialog,
+            overlay: wire.overlay,
+            hover: wire.hover,
+            active: wire.active,
+            border: wire.border,
+            border_strong: wire.border_strong,
+            text: wire.text,
+            text_muted: wire.text_muted,
+            text_faint: wire.text_faint,
+            solid: wire.solid,
+            on_solid: wire.on_solid,
+            danger: wire.danger,
+            danger_muted: wire.danger_muted,
+            warning: wire.warning,
+            warning_muted: wire.warning_muted,
+            success: wire.success,
+            success_muted: wire.success_muted,
+            input: wire.input,
+            cursor: wire.cursor,
+            diff_add: wire.diff_add,
+            diff_delete: wire.diff_delete,
+            diff_hunk: wire.diff_hunk,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -573,6 +681,14 @@ impl ThemeRegistry {
                         "variant id must be unique",
                     ));
                 }
+                validate_contrast(
+                    &mut issues,
+                    variant,
+                    "strong text",
+                    variant.colors.text_strong,
+                    variant.colors.background,
+                    4.5,
+                );
                 validate_contrast(
                     &mut issues,
                     variant,
@@ -819,12 +935,52 @@ mod tests {
             .into_iter()
             .filter(|issue| issue.severity == ValidationSeverity::Error)
             .collect();
-        // Keep the app's authored light primary. Validation must continue to
-        // report its lower non-text contrast rather than silently recolor it.
-        assert_eq!(errors.len(), 1, "{errors:#?}");
-        assert_eq!(errors[0].variant_id, "zuse-light");
-        assert_eq!(errors[0].category, ValidationCategory::Contrast);
-        assert!(errors[0].message.starts_with("accent contrast is 2.11:1"));
+        // Keep the app's authored light primary and its #7f7f7f subtle text
+        // (the design system's metadata tone, 4:1 on white). Validation
+        // must continue to report both rather than silently recolor them.
+        assert_eq!(errors.len(), 2, "{errors:#?}");
+        assert!(errors.iter().all(|error| error.variant_id == "zuse-light"
+            && error.category == ValidationCategory::Contrast));
+        assert!(
+            errors[0]
+                .message
+                .starts_with("muted text contrast is 4.00:1")
+        );
+        assert!(errors[1].message.starts_with("accent contrast is 2.23:1"));
+    }
+
+    #[test]
+    fn zuse_light_carries_the_design_system_neutrals() {
+        let light = ThemeRegistry::builtin().variant("zuse-light").unwrap();
+        let hex = |color: Color| color.to_string();
+        assert_eq!(hex(light.colors.text_muted), "#7f7f7f");
+        assert_eq!(hex(light.colors.text), "#5d5d5d");
+        assert_eq!(hex(light.colors.text_strong), "#292929");
+        assert_eq!(hex(light.colors.selected), "#f5f5f5");
+        assert_eq!(hex(light.colors.border), "#f2f2f2");
+        assert_eq!(hex(light.colors.background), "#ffffff");
+    }
+
+    #[test]
+    fn colors_written_before_strong_and_selected_roles_still_load() {
+        let dark = ThemeRegistry::builtin().variant("zuse-dark").unwrap();
+        let mut json = serde_json::to_value(&dark.colors).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("textStrong");
+        object.remove("selected");
+        let loaded: ThemeColors = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            loaded.text_strong,
+            ThemeColors::derive_text_strong(dark.colors.text, dark.colors.background)
+        );
+        assert_eq!(
+            loaded.selected,
+            ThemeColors::derive_selected(dark.colors.background)
+        );
+        assert!(
+            loaded.text_strong.contrast(loaded.background)
+                > loaded.text.contrast(loaded.background)
+        );
     }
 
     #[test]

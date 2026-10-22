@@ -238,20 +238,7 @@ impl ClaudeHarness {
         if let Some(effort) = to_effort(request.reasoning, request.model.as_deref()) {
             args.extend(["--effort".into(), effort.into()]);
         }
-        if request.sandbox == SandboxLevel::ReadOnly {
-            args.extend(["--permission-mode".into(), "plan".into()]);
-        } else if request.auto_approves_tools() {
-            args.extend(
-                [
-                    "--permission-mode",
-                    "bypassPermissions",
-                    "--dangerously-skip-permissions",
-                ]
-                .map(str::to_owned),
-            );
-        } else {
-            args.extend(["--permission-mode".into(), "default".into()]);
-        }
+        args.extend(permission_args(request).iter().map(|arg| (*arg).to_owned()));
         let mut settings = serde_json::Map::new();
         if option_is_on(&request.model_options, "fastMode") {
             settings.insert("fastMode".into(), Value::Bool(true));
@@ -1322,6 +1309,25 @@ impl Commands {
     }
 }
 
+/// The CLI permission mode for each access level. "Approve for me" is
+/// Claude Code's own `auto` mode: its classifier approves routine actions and
+/// the tool calls it still escalates reach `can_use_tool`, which asks the user.
+fn permission_args(request: &RunRequest) -> &'static [&'static str] {
+    if request.sandbox == SandboxLevel::ReadOnly {
+        &["--permission-mode", "plan"]
+    } else if request.auto_approves_tools() {
+        &[
+            "--permission-mode",
+            "bypassPermissions",
+            "--dangerously-skip-permissions",
+        ]
+    } else if request.sandbox.automatic_review() {
+        &["--permission-mode", "auto"]
+    } else {
+        &["--permission-mode", "default"]
+    }
+}
+
 type RequestInputFn = Box<
     dyn Fn(Vec<UserInputQuestion>) -> tokio::sync::oneshot::Receiver<Vec<UserInputAnswer>>
         + Send
@@ -1515,6 +1521,28 @@ mod tests {
         assert_eq!(qs[1].header, "Alt");
         assert_eq!(qs[1].question, "Pick many");
         assert!(qs[1].multi_select);
+    }
+
+    #[test]
+    fn access_levels_map_to_claude_permission_modes() {
+        for (sandbox, auto, mode) in [
+            (SandboxLevel::ReadOnly, true, "plan"),
+            (SandboxLevel::WorkspaceWrite, true, "default"),
+            (SandboxLevel::Auto, true, "auto"),
+            (SandboxLevel::Auto, false, "auto"),
+            (SandboxLevel::DangerFullAccess, true, "bypassPermissions"),
+            (SandboxLevel::DangerFullAccess, false, "default"),
+        ] {
+            let request: RunRequest = serde_json::from_value(
+                json!({"prompt":"","cwd":"/tmp","sandbox":sandbox,"autoApprove":auto}),
+            )
+            .unwrap();
+            assert_eq!(
+                permission_args(&request)[..2],
+                ["--permission-mode", mode],
+                "{sandbox:?}"
+            );
+        }
     }
 
     #[test]

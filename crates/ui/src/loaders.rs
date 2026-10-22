@@ -376,7 +376,7 @@ pub fn upload_progress_ring(percent: u8, diameter: f32) -> AnyElement {
         .child(
             div()
                 .text_size(px(9.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(gpui::hsla(0.0, 0.0, 1.0, 0.95))
                 .child(SharedString::from(format!("{percent}%"))),
         )
@@ -505,7 +505,7 @@ pub fn splash_overlay(theme: &Theme, fading: bool, view: EntityId, cx: &mut App)
         ))
         .child(
             div()
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted.opacity(0.7))
                 .child(SharedString::from("Opening Zuse")),
         );

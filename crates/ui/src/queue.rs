@@ -661,7 +661,7 @@ impl Composer {
                     .truncate()
                     .text_size(px(QUEUE_TEXT_SIZE))
                     .line_height(px(line_height))
-                    .text_color(theme.text.opacity(0.9))
+                    .text_color(theme.text)
                     .child(crate::composer::chip_text(text, chips, theme));
                 // Attachments the row's chips already show get no tile.
                 let tiled: Vec<String> =

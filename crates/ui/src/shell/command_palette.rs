@@ -1314,7 +1314,7 @@ fn palette_section_header(
         .flex()
         .items_center()
         .gap(px(8.0))
-        .text_size(crate::typography::ui_rems(11.0))
+        .text_size(crate::typography::text_xs())
         .text_color(theme.text_muted)
         .child(title)
         .when_some(status, |header, status| {
@@ -1348,7 +1348,7 @@ pub(super) fn palette_empty(
         .flex_col()
         .items_center()
         .gap(px(6.0))
-        .text_size(crate::typography::ui_rems(13.0))
+        .text_size(crate::typography::text_sm())
         .child(title.into())
         .child(div().text_color(theme.text_muted).child(hint.into()))
 }
@@ -1387,7 +1387,7 @@ pub(super) fn palette_header(theme: &Theme, search: AnyElement, hint: gpui::Div)
             div()
                 .flex_1()
                 .min_w_0()
-                .text_size(crate::typography::ui_rems(14.0))
+                .text_size(crate::typography::text_md())
                 .child(search),
         )
         .child(hint)
@@ -1453,13 +1453,13 @@ pub(super) fn command_key_hint(theme: &Theme, keys: &str, label: &'static str) -
             .child(glyph(crate::icons::ARROW_DOWN)),
         _ => cap
             .font_family(popover::KEY_GLYPH_FONT)
-            .text_size(crate::typography::ui_rems(11.0))
+            .text_size(crate::typography::text_xs())
             .text_color(theme.text_muted)
             .child(SharedString::from(keys.to_string())),
     };
     div().flex().items_center().gap(px(5.0)).child(cap).child(
         div()
-            .text_size(crate::typography::ui_rems(10.0))
+            .text_size(crate::typography::text_xs())
             .text_color(theme.text_muted)
             .child(label),
     )

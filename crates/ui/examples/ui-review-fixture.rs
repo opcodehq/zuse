@@ -87,7 +87,7 @@ fn main() -> anyhow::Result<()> {
             for (ix, (additions, deletions)) in [(1, (93, 20)), (2, (38_100, 1)), (3, (6, 1)), (5, (273, 4)), (7, (12, 0))] {
                 let chat = &mut s.chats[ix];
                 chat.checkout_id = Some(format!("fixture-checkout-{ix}"));
-                let stat = state::CheckoutDiffStat { checkout_id: format!("fixture-checkout-{ix}"), device_id: chat.device_id.clone(), cwd: "/tmp/fieldnotes".into(), additions, deletions };
+                let stat = state::CheckoutDiffStat { checkout_id: format!("fixture-checkout-{ix}"), device_id: chat.device_id.clone(), cwd: "/tmp/fieldnotes".into(), additions, deletions, files: 3 };
                 s.checkout_diff_stats.push(stat);
             }
             for (ix, pr_state) in [(1, zuse_protocol::ChangeRequestState::Open), (2, zuse_protocol::ChangeRequestState::Merged), (3, zuse_protocol::ChangeRequestState::Closed), (4, zuse_protocol::ChangeRequestState::Open), (6, zuse_protocol::ChangeRequestState::Merged), (7, zuse_protocol::ChangeRequestState::Open), (8, zuse_protocol::ChangeRequestState::Closed)] {
@@ -124,10 +124,21 @@ fn main() -> anyhow::Result<()> {
                 chat.created_at = chrono::Utc::now() - chrono::Duration::minutes(minutes);
                 if let Some((additions, deletions)) = diff {
                     chat.checkout_id = Some(format!("fixture-checkout-{id}"));
-                    s.checkout_diff_stats.push(state::CheckoutDiffStat { checkout_id: format!("fixture-checkout-{id}"), device_id: "local".into(), cwd: "/tmp/fieldnotes".into(), additions, deletions });
+                    s.checkout_diff_stats.push(state::CheckoutDiffStat { checkout_id: format!("fixture-checkout-{id}"), device_id: "local".into(), cwd: "/tmp/fieldnotes".into(), additions, deletions, files: 4 });
                 }
                 s.chats.push(chat);
             }
+            // The open conversation works on a branch with uncommitted
+            // changes: the top bar's branch name and "· N" count.
+            s.chats[0].source_context = Some(zuse_protocol::ConversationSourceContext {
+                checkout_id: "fixture-checkout".into(), repo_root: "/tmp/fieldnotes".into(),
+                cwd: "/tmp/fieldnotes".into(), branch: "alex/connection-handoff".into(),
+                head_sha: None, observed_at: chrono::Utc::now(),
+            });
+            s.chats[0].branch = Some("alex/connection-handoff".into());
+            s.chats[0].checkout_id = Some("fixture-checkout".into());
+            s.chats[0].cwd = Some("/tmp/fieldnotes".into());
+            s.checkout_diff_stats.push(state::CheckoutDiffStat { checkout_id: "fixture-checkout".into(), device_id: "local".into(), cwd: "/tmp/fieldnotes".into(), additions: 214, deletions: 37, files: 10 });
             // Every Threads row state: running, waiting on input, failed
             // unseen and finished unseen (chat-3, bold).
             s.chats[7].last_message_at = Some(chrono::Utc::now());

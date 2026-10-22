@@ -513,7 +513,7 @@ impl PullRequestsPage {
         });
         let search = cx.new(|cx| {
             ComposerInput::with_context("Search pull requests", "PaletteSearch", cx)
-                .with_text_metrics(12.0, 16.0)
+                .with_text_metrics(crate::typography::TEXT_XS, 16.0)
                 .with_accessibility_role(gpui::Role::SearchInput)
                 .with_single_line()
                 .with_tab_stop()
@@ -1187,7 +1187,7 @@ impl PullRequestsPage {
                 .px(px(8.0))
                 .max_w(px(220.0))
                 .min_w_0()
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .aria_label(format!("Repository: {label}"))
                 .aria_expanded(self.repository_menu.is_open())
                 .track_focus(&self.repository_focus)
@@ -1313,7 +1313,7 @@ impl PullRequestsPage {
                                             div()
                                                 .min_w_0()
                                                 .truncate()
-                                                .text_size(crate::typography::ui_rems(11.0))
+                                                .text_size(crate::typography::text_xs())
                                                 .text_color(theme.text_muted)
                                                 .child(detail),
                                         )
@@ -1431,7 +1431,7 @@ impl PullRequestsPage {
                                 .h(px(28.0))
                                 .px(px(10.0))
                                 .flex_none()
-                                .text_size(crate::typography::ui_rems(12.0))
+                                .text_size(crate::typography::text_xs())
                                 .aria_label("Open repository")
                                 .child("Open")
                                 .on_click(cx.listener(|page, _, _, cx| {
@@ -1953,9 +1953,9 @@ impl PullRequestsPage {
                 div()
                     .max_w(px(130.0))
                     .truncate()
-                    .text_size(crate::typography::ui_rems(12.5))
+                    .text_size(crate::typography::text_sm())
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_strong)
                     .child(label),
             )
             .child(
@@ -2003,7 +2003,7 @@ impl PullRequestsPage {
                         .when(local, |element| {
                             element.child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(10.5))
+                                    .text_size(crate::typography::text_xs())
                                     .text_color(theme.text_muted)
                                     .child("This device"),
                             )
@@ -2011,7 +2011,7 @@ impl PullRequestsPage {
                         .when(!online, |element| {
                             element.child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(10.5))
+                                    .text_size(crate::typography::text_xs())
                                     .text_color(theme.text_muted)
                                     .child("Offline"),
                             )
@@ -2084,10 +2084,10 @@ impl PullRequestsPage {
                 div()
                     .w(px(420.0))
                     .max_w_full()
-                    .text_size(crate::typography::ui_rems(15.0))
+                    .text_size(crate::typography::text_lg())
                     .line_height(crate::typography::ui_rems(22.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text_strong)
                     .child(SharedString::from(title)),
             )
             .child(
@@ -2099,7 +2099,7 @@ impl PullRequestsPage {
                     .w(px(420.0))
                     .max_w_full()
                     .debug_selector(|| "pr-empty-description".into())
-                    .text_size(crate::typography::ui_rems(13.0))
+                    .text_size(crate::typography::text_sm())
                     .line_height(crate::typography::ui_rems(20.0))
                     .text_color(theme.text_muted)
                     .child(SharedString::from(body)),
@@ -2464,7 +2464,7 @@ impl Render for PullRequestsPage {
                                         .on_hover(crate::motion::hover_listener(hover_key))
                                         .hover(move |style| style.bg(fill()))
                                         .debug_selector(move || id.into())
-                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .text_size(crate::typography::text_xs())
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .px(px(12.0))
                                         .child(label)
@@ -2562,7 +2562,7 @@ impl Render for PullRequestsPage {
                             // Toggle pills in the tray's material: filled, no
                             // outline, glyph and label centered together.
                             let color = if selected {
-                                theme.text
+                                theme.text_strong
                             } else {
                                 theme.text_muted
                             };
@@ -2583,7 +2583,7 @@ impl Render for PullRequestsPage {
                                 .gap(px(6.0))
                                 .rounded_full()
                                 .cursor_pointer()
-                                .text_size(crate::typography::ui_rems(12.0))
+                                .text_size(crate::typography::text_xs())
                                 .line_height(crate::typography::ui_rems(16.0))
                                 .text_color(color)
                                 .when(selected, |el| {
@@ -2621,7 +2621,7 @@ impl Render for PullRequestsPage {
                 el.child(
                     div()
                         .mt(px(Theme::SPACE_SM))
-                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child(format!(
                             "{} of {} pull requests",
@@ -2652,7 +2652,7 @@ impl Render for PullRequestsPage {
                     .debug_selector(|| "pull-requests-no-results".to_string())
                     .py(px(48.0))
                     .text_center()
-                    .text_size(crate::typography::ui_rems(13.0))
+                    .text_size(crate::typography::text_sm())
                     .text_color(theme.text_muted)
                     .flex()
                     .flex_col()
@@ -2883,7 +2883,7 @@ impl PullRequestsPage {
                 .child(widgets::section_label(theme, group.label()).px_0())
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child(count.to_string()),
                 ),
@@ -3014,7 +3014,7 @@ fn render_table_row(
                 "board-pr-date-{}",
                 pull_request_key(item)
             )))
-            .text_size(crate::typography::ui_rems(11.0))
+            .text_size(crate::typography::text_xs())
             .text_color(theme.text_muted)
             .tooltip(widgets::text_tooltip(exact))
             .child(SharedString::from(
@@ -3182,7 +3182,7 @@ fn render_pr_identity(item: &ChangeRequestListItem, tight: bool, theme: &Theme) 
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_size(crate::typography::text_xs())
                                 .text_color(theme.text_muted)
                                 .child(if item.author.login.is_empty() {
                                     "Unknown author".to_owned()
@@ -3205,7 +3205,7 @@ fn render_pr_identity(item: &ChangeRequestListItem, tight: bool, theme: &Theme) 
                         .debug_selector(|| "pr-row-ci".into())
                         .min_w_0()
                         .truncate()
-                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(match item.ci.state {
                             CiState::Failed => theme.danger_muted,
                             CiState::Passed => theme.success_muted,
@@ -3240,7 +3240,7 @@ fn render_pr_identity(item: &ChangeRequestListItem, tight: bool, theme: &Theme) 
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(tone)
                             .child(status.trim_start_matches("Open · ").to_string()),
                     )
@@ -3264,7 +3264,7 @@ fn render_diff_stats(item: &ChangeRequestListItem, theme: &Theme) -> AnyElement 
         .items_center()
         .gap(px(8.0))
         .font_family(theme.font_mono.clone())
-        .text_size(crate::typography::ui_rems(11.0))
+        .text_size(crate::typography::text_xs())
         .tooltip(widgets::text_tooltip(exact))
         .child(
             div()
@@ -3429,7 +3429,7 @@ fn recent_git_projects(state: &AppState, local: &str) -> Vec<ProjectRef> {
 fn repository_menu_label(theme: &Theme, label: &str) -> gpui::Div {
     widgets::section_label(theme, label.to_owned())
         .py(px(4.0))
-        .text_size(crate::typography::ui_rems(11.0))
+        .text_size(crate::typography::text_xs())
 }
 
 /// A page-level failure as a toast: its title and explanation.

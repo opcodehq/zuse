@@ -61,7 +61,7 @@ use crate::state::{
 };
 use crate::terminal::panel::{TerminalPanel, ToggleTerminal, clamp_terminal_height};
 use crate::theme::Theme;
-use crate::transcript::{self, Transcript, TranscriptEvent};
+use crate::transcript::{self, ForkTarget, Transcript, TranscriptEvent};
 
 mod actions_ui;
 mod chat_dropzone;
@@ -95,6 +95,7 @@ pub(crate) mod spaces;
 mod thread_search;
 use side_chats::SideChatTab;
 mod tabs;
+mod top_bar;
 mod voice_stage;
 use voice_stage::VOICE_STAGE_ORB_SCALE;
 
@@ -1062,7 +1063,7 @@ fn sidebar_diff_stat(additions: u32, deletions: u32, alpha: f32, theme: &Theme) 
         .items_center()
         .gap(px(4.0))
         .whitespace_nowrap()
-        .text_size(crate::typography::ui_rems(10.0))
+        .text_size(crate::typography::text_xs())
         .when(additions > 0, |el| {
             el.child(
                 div()
@@ -1353,7 +1354,7 @@ impl Render for SurfaceTabGhost {
             .bg(theme.surface_raised)
             .border_1()
             .border_color(theme.border_strong)
-            .text_size(crate::typography::ui_rems(11.5))
+            .text_size(crate::typography::text_xs())
             .text_color(theme.text)
             .opacity(0.85)
             .child(div().truncate().child(self.title.clone()))
@@ -2075,6 +2076,7 @@ pub struct Shell {
     right_plus: popover::Popup<()>,
     /// The titlebar's "Open in" menu and the apps it found.
     open_in: open_in::OpenIn,
+    branch_menu: top_bar::BranchMenu,
     /// Host-owned project Actions cached per (device, space).
     project_actions: crate::project_actions::ProjectActionsController,
     /// Diff surfaces by id — each tab its own [`Changes`] viewer with its own
@@ -2626,6 +2628,7 @@ impl Shell {
             right_terminal: None,
             right_plus: popover::Popup::default(),
             open_in: open_in::OpenIn::default(),
+            branch_menu: top_bar::BranchMenu::default(),
             project_actions: crate::project_actions::ProjectActionsController::default(),
             diffs: std::collections::HashMap::new(),
             files: std::collections::HashMap::new(),
@@ -4422,9 +4425,8 @@ impl Shell {
                     cx,
                 );
             }
-            // A message's Fork: the same side-chat fork as the conversation's
-            // own; a side chat's copy lists as its sibling.
-            TranscriptEvent::ForkChat { chat_id } => {
+            // A reply's Fork menu: a new tab in this thread, or a new thread.
+            TranscriptEvent::ForkChat { chat_id, target } => {
                 let source = self
                     .state
                     .read(cx)
@@ -4433,11 +4435,7 @@ impl Shell {
                     .find(|chat| &chat.id == chat_id)
                     .cloned();
                 if let Some(source) = source {
-                    let parent = source
-                        .parent_chat_id
-                        .clone()
-                        .unwrap_or_else(|| source.id.clone());
-                    self.fork_chat(source, parent, cx);
+                    self.fork_chat(source, *target, cx);
                 }
             }
         }
@@ -6074,7 +6072,7 @@ impl Shell {
         let input = cx.new(|cx| {
             ComposerInput::new("Session title", cx)
                 .with_single_line()
-                .with_text_metrics(13.0, 17.0)
+                .with_text_metrics(crate::typography::TEXT_SM, 17.0)
                 .with_accessibility_role(gpui::Role::TextInput)
         });
         input.update(cx, |input, cx| {
@@ -7587,9 +7585,9 @@ impl Shell {
                 .child(
                     div()
                         .whitespace_nowrap()
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(theme.text.opacity(0.85))
+                        .text_size(crate::typography::text_xs())
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text)
                         .child(SharedString::from("Zuse")),
                 )
                 .into_any_element(),
@@ -8025,7 +8023,7 @@ impl Shell {
             .p(px(4.))
             .rounded(px(4.))
             .cursor_pointer()
-            .text_size(crate::typography::ui_rems(12.))
+            .text_size(crate::typography::text_xs())
             .text_color(theme.text_muted)
             .hover(|style| {
                 style
@@ -8184,8 +8182,12 @@ impl Shell {
                                     );
                                     let tab_text = motion::hover_blend(
                                         &hover_key,
-                                        motion::mix(theme.text_muted, theme.text, selection_t),
-                                        theme.text,
+                                        motion::mix(
+                                            theme.text_muted,
+                                            theme.text_strong,
+                                            selection_t,
+                                        ),
+                                        theme.text_strong,
                                     );
                                     settings::widgets::section_tab(
                                         theme,
@@ -8429,7 +8431,7 @@ impl Shell {
                 .flex_none()
                 .whitespace_nowrap()
                 .font_family(crate::popover::KEY_GLYPH_FONT)
-                .text_size(crate::typography::ui_rems(11.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted.opacity(0.5))
                 .child(label)
                 .into_any_element()
@@ -8464,7 +8466,7 @@ impl Shell {
                 .when(!compact, |el| {
                     el.child(
                         div()
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
                             .child(SharedString::from(if archived {
                                 "Unarchive"
@@ -8527,7 +8529,7 @@ impl Shell {
                                 .child(glyph)
                                 .child(
                                     div()
-                                        .text_size(crate::typography::ui_rems(10.0))
+                                        .text_size(crate::typography::text_xs())
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(status_color)
                                         .child(SharedString::from(label)),
@@ -8540,7 +8542,7 @@ impl Shell {
                     .flex_row()
                     .items_center()
                     .gap(px(6.0))
-                    .text_size(crate::typography::ui_rems(10.0))
+                    .text_size(crate::typography::text_xs())
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .children(subagent_pill("idle"))
                     .child(time_ago.clone())
@@ -8607,11 +8609,9 @@ impl Shell {
         let mut corner = Some(corner);
         let (hover, text) = (theme.glass_hover(), theme.text);
         let selected_wash = crate::theme::glass_selected_bg();
-        let subline = if search_query.is_some() {
-            theme.text_muted
-        } else {
-            theme.text_muted.opacity(0.5)
-        };
+        // Metadata reads in the subtle text role; titles in default text,
+        // strong once selected.
+        let subline = theme.text_muted;
         let select_id = id.clone();
         let menu_id = id.clone();
         let search_query_none = search_query.is_none();
@@ -8631,12 +8631,12 @@ impl Shell {
         // below its near-opaque selected fill, and blending toward it visibly
         // dimmed the active row under the pointer (user report).
         let hover_bg = if selected { selected_wash } else { hover };
-        let rest_text = if selected || search_query.is_some() {
-            text
+        let rest_text = if selected {
+            theme.text_strong
         } else if archived {
-            text.opacity(0.55)
+            theme.text_muted
         } else {
-            text.opacity(0.8)
+            text
         };
         let row = div()
             .id(SharedString::from(row_id.clone()))
@@ -8661,7 +8661,7 @@ impl Shell {
             .px(px(Theme::SPACE_SM))
             .when(sidebar, |el| el.justify_center())
             .when(!sidebar, |el| el.py(px(6.0)))
-            .text_color(motion::hover_blend(&fade_key, rest_text, text))
+            .text_color(motion::hover_blend(&fade_key, rest_text, theme.text_strong))
             .bg(motion::hover_blend(&fade_key, rest_bg, hover_bg))
             // No selection ring (user request) — the wash alone marks the
             // active row.
@@ -8831,7 +8831,7 @@ impl Shell {
                 // A card waiting on the user names why in place of its age.
                 div()
                     .whitespace_nowrap()
-                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_size(crate::typography::text_xs())
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(attention_color)
                     .child(if label == "Input" {
@@ -8851,11 +8851,7 @@ impl Shell {
                 div()
                     .whitespace_nowrap()
                     .text_right()
-                    .text_size(crate::typography::ui_rems(if two_line {
-                        11.0
-                    } else {
-                        10.0
-                    }))
+                    .text_size(crate::typography::text_xs())
                     .text_color(faint)
                     .child(label)
                     .into_any_element()
@@ -9037,15 +9033,15 @@ impl Shell {
                     format!("chat-title-{content_id}").into(),
                     true,
                     div()
-                        .text_size(crate::typography::ui_rems(if two_line {
-                            12.5
+                        .text_size(if two_line {
+                            crate::typography::text_sm()
                         } else {
-                            12.0
-                        }))
+                            crate::typography::text_xs()
+                        })
                         .line_height(px(17.0))
                         .when(unread, |el| {
-                            el.font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(theme.text)
+                            el.font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme.text_strong)
                         })
                         .child(title),
                 )
@@ -9072,7 +9068,7 @@ impl Shell {
                     .flex_row()
                     .items_center()
                     .gap(px(6.0))
-                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_size(crate::typography::text_xs())
                     .line_height(px(14.0))
                     .text_color(faint)
                     .child(sidebar_faded_label(
@@ -9093,7 +9089,7 @@ impl Shell {
                     .child(div().flex_1())
                     .children(diff_stat.map(|(additions, deletions)| {
                         sidebar_diff_stat(additions, deletions, 0.75, theme)
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                     }));
                 div()
                     .flex_1()
@@ -9137,7 +9133,7 @@ impl Shell {
                                 format!("chat-device-{content_id}").into(),
                                 true,
                                 div()
-                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_size(crate::typography::text_xs())
                                     .line_height(px(14.0))
                                     .text_color(subline)
                                     .child(popover::search_highlight(
@@ -9191,7 +9187,7 @@ impl Shell {
                                 format!("chat-title-{content_id}").into(),
                                 true,
                                 div()
-                                    .text_size(crate::typography::ui_rems(13.0))
+                                    .text_size(crate::typography::text_sm())
                                     .line_height(px(17.0))
                                     .child(popover::search_highlight(title, search_query, theme)),
                             )
@@ -9319,7 +9315,7 @@ impl Shell {
                                         div()
                                             .whitespace_nowrap()
                                             .text_right()
-                                            .text_size(crate::typography::ui_rems(11.0))
+                                            .text_size(crate::typography::text_xs())
                                             .text_color(subline)
                                             .child(compact_jump_label.unwrap_or(time_ago))
                                             .into_any_element()
@@ -9348,7 +9344,7 @@ impl Shell {
                                     format!("chat-branch-{content_id}").into(),
                                     false,
                                     div()
-                                        .text_size(crate::typography::ui_rems(11.0))
+                                        .text_size(crate::typography::text_xs())
                                         .line_height(px(14.0))
                                         .text_color(subline)
                                         .child(popover::search_highlight(
@@ -9555,7 +9551,7 @@ impl Shell {
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_faint)
                             .child(label),
                     ),
@@ -9843,7 +9839,7 @@ impl Shell {
                                         .justify_center()
                                         .px(px(10.0))
                                         .text_color(theme.text_muted)
-                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .text_size(crate::typography::text_xs())
                                         .child("Drop here to unpin")
                                 })
                                 .children(regular_items),
@@ -9855,7 +9851,7 @@ impl Shell {
             div()
                 .px(px(Theme::SPACE_SM))
                 .pb(px(Theme::SPACE_SM))
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .text_color(theme.text_faint)
                 .child(SharedString::from("No sessions yet"))
                 .into_any_element()
@@ -9985,7 +9981,7 @@ impl Shell {
                 .gap(px(Theme::SPACE_SM))
                 .rounded(px(SIDEBAR_ROW_RADIUS))
                 .cursor_pointer()
-                .text_size(crate::typography::ui_rems(12.0))
+                .text_size(crate::typography::text_xs())
                 .bg(if active {
                     crate::theme::glass_selected_bg()
                 } else {
@@ -9996,7 +9992,7 @@ impl Shell {
                     )
                 })
                 .text_color(if active {
-                    theme.text
+                    theme.text_strong
                 } else {
                     motion::hover_blend(&fade, theme.text_muted, theme.text)
                 })
@@ -10036,7 +10032,7 @@ impl Shell {
                         div()
                             .flex_none()
                             .font_family(crate::popover::KEY_GLYPH_FONT)
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted.opacity(0.7))
                             .child(new_chat_hint),
                     )
@@ -10094,7 +10090,7 @@ impl Shell {
                 .flex_row()
                 .items_center()
                 .gap(px(6.0))
-                .text_size(crate::typography::ui_rems(11.0))
+                .text_size(crate::typography::text_xs())
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(tone)
                 .cursor_pointer()
@@ -10176,7 +10172,7 @@ impl Shell {
             .flex()
             .flex_row()
             .items_center()
-            .text_size(crate::typography::ui_rems(11.0))
+            .text_size(crate::typography::text_xs())
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(tone)
             .child(div().flex_1().min_w_0().child(label));
@@ -10501,7 +10497,7 @@ impl Shell {
             .items_center()
             .gap(px(6.0))
             .rounded(px(7.0))
-            .text_size(crate::typography::ui_rems(11.0))
+            .text_size(crate::typography::text_xs())
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(theme.text_muted)
             .tooltip(crate::settings::widgets::text_tooltip(detail))
@@ -10522,7 +10518,7 @@ impl Shell {
             .items_center()
             .gap(px(4.0))
             .rounded(px(8.0))
-            .text_size(crate::typography::ui_rems(12.0))
+            .text_size(crate::typography::text_xs())
             .text_color(if working > 0 {
                 theme.text
             } else {
@@ -10622,12 +10618,12 @@ impl Shell {
             .flex_row()
             .items_center()
             .gap(px(Theme::SPACE_SM))
-            .text_size(crate::typography::ui_rems(13.0))
+            .text_size(crate::typography::text_sm())
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(if open {
                 theme.text
             } else {
-                motion::hover_blend("user-menu-trigger", theme.text.opacity(0.8), theme.text)
+                motion::hover_blend("user-menu-trigger", theme.text, theme.text_strong)
             })
             .cursor_pointer()
             // user-menu.tsx trigger: hover `bg-white/[0.04]`, open state
@@ -10671,7 +10667,7 @@ impl Shell {
                     .justify_center()
                     .text_size(px(10.0))
                     .line_height(px(SIDEBAR_FOOTER_AVATAR_SIZE))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(gpui::white())
                     .child(div().w_full().text_center().child(initial))
             })
@@ -10696,7 +10692,7 @@ impl Shell {
                         .px(px(8.0))
                         .pt(px(6.0))
                         .pb(px(4.0))
-                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .truncate()
                         .child(menu_identity),
@@ -11021,7 +11017,7 @@ impl Shell {
                     card = card.child(
                         div()
                             .mt(px(4.0))
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .line_height(px(17.0))
                             .text_color(theme.text_muted)
                             .overflow_hidden()
@@ -11090,7 +11086,7 @@ impl Shell {
                     card.child(
                         div()
                             .mt(px(10.0))
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .line_height(px(17.0))
                             .text_color(theme.danger)
                             .child(error),
@@ -11138,7 +11134,7 @@ impl Shell {
                     card.child(
                         div()
                             .mt(px(10.0))
-                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_size(crate::typography::text_xs())
                             .line_height(px(17.0))
                             .text_color(theme.danger)
                             .child(error),
@@ -11293,6 +11289,10 @@ impl Shell {
         }
         if self.open_in.menu.is_open() {
             self.close_open_in(cx);
+            return true;
+        }
+        if self.branch_menu.menu.is_open() {
+            self.close_branch_menu(cx);
             return true;
         }
         if self.right_plus.get().is_some() {
@@ -11995,15 +11995,15 @@ impl Shell {
                         .child(
                             div()
                                 .mt(px(24.0))
-                                .text_size(crate::typography::ui_rems(16.0))
+                                .text_size(crate::typography::text_lg())
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(theme.text)
+                                .text_color(theme.text_strong)
                                 .child(SharedString::from("Add a project to get started")),
                         )
                         .child(
                             div()
                                 .mt(px(6.0))
-                                .text_size(crate::typography::ui_rems(13.0))
+                                .text_size(crate::typography::text_sm())
                                 .text_color(theme.text_muted.opacity(0.7))
                                 .child(SharedString::from(
                                     "A project is a folder on one of your devices.",
@@ -12033,10 +12033,10 @@ impl Shell {
                 .pb(px(80.))
                 .child(
                     div()
-                        .text_size(px(24.))
-                        .line_height(px(32.))
+                        .text_size(crate::typography::text_2xl())
+                        .line_height(crate::typography::ui_rems(32.))
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_strong)
                         .child(project.map_or_else(
                             || "What should we build?".to_owned(),
                             |name| format!("What should we build in {name}?"),
@@ -12516,7 +12516,7 @@ impl Shell {
             .items_center()
             .gap(px(Theme::SPACE_SM))
             .px(px(Theme::SPACE_LG + 8.0))
-            .text_size(crate::typography::ui_rems(11.0));
+            .text_size(crate::typography::text_xs());
 
         let Some(chat_id) = state.selected_chat.clone() else {
             return strip.into_any_element();
@@ -12562,7 +12562,7 @@ impl Shell {
                 ))
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child(SharedString::from("Sending…")),
                 )
@@ -12790,16 +12790,16 @@ impl Shell {
             .child(
                 div()
                     .mt(px(24.0))
-                    .text_size(crate::typography::ui_rems(18.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text)
+                    .text_size(crate::typography::text_xl())
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text_strong)
                     .child(SharedString::from("Signed out")),
             )
             .child(
                 div()
                     .mt(px(6.0))
                     .mb(px(24.0))
-                    .text_size(crate::typography::ui_rems(13.0))
+                    .text_size(crate::typography::text_sm())
                     .line_height(px(19.0))
                     .text_color(theme.text_muted)
                     .child(SharedString::from(
@@ -12810,7 +12810,7 @@ impl Shell {
                 card.child(
                     div()
                         .mb(px(16.0))
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .line_height(px(17.0))
                         .text_color(theme.danger)
                         .child(error),
@@ -13258,7 +13258,7 @@ impl Shell {
                 .gap(px(Theme::SPACE_MD))
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(14.0))
+                        .text_size(crate::typography::text_md())
                         .text_color(theme.text_muted)
                         .child(SharedString::from(error.clone())),
                 )
@@ -13270,7 +13270,7 @@ impl Shell {
                         .rounded(px(8.0))
                         .border_1()
                         .border_color(theme.border)
-                        .text_size(crate::typography::ui_rems(13.0))
+                        .text_size(crate::typography::text_sm())
                         .text_color(theme.text)
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.glass_hover()))
@@ -13302,16 +13302,16 @@ impl Shell {
                 .child(
                     div()
                         .mt(px(24.0))
-                        .text_size(crate::typography::ui_rems(18.0))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(theme.text)
+                        .text_size(crate::typography::text_xl())
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text_strong)
                         .child(SharedString::from("Log in to Zuse")),
                 )
                 .child(
                     div()
                         .mt(px(6.0))
                         .mb(px(24.0))
-                        .text_size(crate::typography::ui_rems(13.0))
+                        .text_size(crate::typography::text_sm())
                         .line_height(px(19.0))
                         .text_color(theme.text_muted)
                         .child(SharedString::from(
@@ -13328,7 +13328,7 @@ impl Shell {
                         .justify_center()
                         .rounded(px(6.0))
                         .bg(theme.text)
-                        .text_size(crate::typography::ui_rems(14.0))
+                        .text_size(crate::typography::text_md())
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.on_solid)
                         .cursor_pointer()
@@ -13423,7 +13423,7 @@ impl Shell {
                     .child(
                         div()
                             .pb(px(8.0))
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.text_muted.opacity(0.6))
                             .child(SharedString::from(
@@ -13441,7 +13441,7 @@ impl Shell {
                                 .border_1()
                                 .border_color(theme.border)
                                 .bg(theme.bg)
-                                .text_size(crate::typography::ui_rems(13.0))
+                                .text_size(crate::typography::text_sm())
                                 .text_color(theme.text)
                                 .when(submitting, |el| el.opacity(0.5))
                                 .cursor_pointer()
@@ -13488,16 +13488,16 @@ impl Shell {
             .child(
                 div()
                     .mt(px(20.0))
-                    .text_size(crate::typography::ui_rems(18.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text)
+                    .text_size(crate::typography::text_xl())
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text_strong)
                     .child(SharedString::from("Create your workspace")),
             )
             .child(
                 div()
                     .mt(px(6.0))
                     .mb(px(24.0))
-                    .text_size(crate::typography::ui_rems(13.0))
+                    .text_size(crate::typography::text_sm())
                     .line_height(px(19.0))
                     .text_color(theme.text_muted)
                     .child(blurb),
@@ -13519,7 +13519,7 @@ impl Shell {
                             .border_1()
                             .border_color(theme.border)
                             .bg(theme.bg)
-                            .text_size(crate::typography::ui_rems(13.0))
+                            .text_size(crate::typography::text_sm())
                             .child(name_input),
                     )
                     .child(
@@ -13531,7 +13531,7 @@ impl Shell {
                             .items_center()
                             .rounded(px(6.0))
                             .bg(theme.text)
-                            .text_size(crate::typography::ui_rems(14.0))
+                            .text_size(crate::typography::text_md())
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.on_solid)
                             .when(submitting, |el| el.opacity(0.5))
@@ -13550,7 +13550,7 @@ impl Shell {
                 el.child(
                     div()
                         .mt(px(16.0))
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .line_height(px(17.0))
                         .text_color(theme.danger_muted.opacity(0.9)) // red-300
                         .child(message),
@@ -13560,7 +13560,7 @@ impl Shell {
                 div().mt(px(24.0)).flex().flex_row().child(
                     div()
                         .id("org-signout")
-                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted.opacity(0.6))
                         .cursor_pointer()
                         .hover(|s| s.text_color(theme.text))
@@ -13792,7 +13792,7 @@ fn windows_caption_button(
         .flex()
         .items_center()
         .justify_center()
-        .text_size(crate::typography::ui_rems(10.0))
+        .text_size(crate::typography::text_xs())
         .text_color(theme.text)
         .hover(move |style| style.bg(hover_bg).text_color(hover_fg))
         .active(move |style| style.bg(active_bg).text_color(active_fg))
@@ -14196,7 +14196,7 @@ impl Render for Shell {
             })
             .text_color(text)
             .font_family(font)
-            .text_size(crate::typography::ui_rems(14.0))
+            .text_size(crate::typography::text_base())
             .on_drag_move::<SidebarSessionDrag>(cx.listener(Self::contain_pinned_session_drag))
             .on_drop::<SidebarSessionDrag>(cx.listener(|this, _, _, cx| {
                 this.cancel_sidebar_session_transfer(cx);
@@ -14639,16 +14639,27 @@ impl Render for Shell {
                 } else {
                     main
                 };
+                // The conversation tabs sit on their own row below the top
+                // bar: the column's content moves down by the row's height
+                // (its own titlebar clearance then fades the transcript out
+                // beneath the row), and the row overlays that band.
+                let tab_row = (on_chat && self.conversation_tab_row_visible(cx))
+                    .then(|| self.render_conversation_tab_row(cx));
                 let card: AnyElement = div()
                     .id("conversation-column")
                     .debug_selector(|| "conversation-column".into())
                     .flex_1()
                     .min_w_0()
+                    .relative()
                     .flex()
                     .flex_row()
                     .overflow_hidden()
                     .opacity(under_stage)
+                    .when(tab_row.is_some(), |column| {
+                        column.pt(px(top_bar::CONVERSATION_TAB_ROW_HEIGHT))
+                    })
                     .child(main)
+                    .children(tab_row)
                     .into_any_element();
                 // The whole app page is one keyed `animate-in` entrance (zuse
                 // App.tsx `<div key={phase} className="animate-in h-full">`):
@@ -18888,7 +18899,21 @@ impl Shell {
         }
         let composer = self.composer.clone();
         let pickers = composer.read(cx).pickers().clone();
-        if route.ends_with("access-menu") {
+        if route.ends_with("access-auto-menu") {
+            // "Approve for me" selected: the chip and the menu's check. Wait
+            // out the new-chat canvas resetting the draft picks.
+            cx.spawn(async move |_, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(200))
+                    .await;
+                composer
+                    .update(cx, |composer, cx| {
+                        composer.fixture_set_permission(zuse_protocol::SandboxLevel::Auto, cx);
+                        composer.fixture_open_permissions(cx);
+                    });
+            })
+            .detach();
+        } else if route.ends_with("access-menu") {
             composer.update(cx, |composer, cx| composer.fixture_open_permissions(cx));
         } else if route.ends_with("device-menu") {
             pickers.update(cx, |p, cx| {
@@ -18902,6 +18927,8 @@ impl Shell {
             self.toggle_command_palette(window, cx);
         } else if route.ends_with("sidebar-view-menu") {
             self.open_sidebar_view_menu(window, cx);
+        } else if route.ends_with("branch-menu") {
+            self.fixture_open_branch_menu(cx);
         } else if route.ends_with("tabs-history-menu") {
             self.conversation_history.open(());
             cx.notify();
@@ -18929,6 +18956,7 @@ impl Shell {
     fn fixture_reset_panels(&mut self, cx: &mut Context<Self>) {
         self.right_plus = popover::Popup::default();
         self.open_in.menu = popover::Popup::default();
+        self.branch_menu.menu = popover::Popup::default();
         self.activate_main_tab(None, cx);
         cx.notify();
     }
@@ -19153,13 +19181,39 @@ impl Shell {
         }
         // `main:transcript` seeds a worked conversation (tool calls, thinking,
         // subagents, a hovered reply footer); `:transcript-card` also opens
-        // the session card over it; `:transcript-outline` adds a second
-        // prompt so the outline control shows.
+        // the session card over it, `:transcript-fork` the reply's Fork
+        // menu; `:transcript-outline` adds a second prompt so the outline
+        // control shows.
         if variant.starts_with("transcript") {
             self.fixture_seed_transcript(variant == "transcript-outline", cx);
-            if variant == "transcript-card" {
+            if variant.starts_with("transcript-card") {
                 self.settings.session_info_hidden = false;
                 self.session_info_overlay = true;
+            }
+            // `:transcript-card-git` runs the chat in a worktree of a Git
+            // project whose branch has a pull request, so the card lists
+            // the checkout, branch and pull request rows.
+            if variant == "transcript-card-git" {
+                self.state.update(cx, |state, cx| {
+                    if let Some(space) = state.spaces.iter_mut().find(|s| s.id == "project") {
+                        space.git_detected = true;
+                    }
+                    let source = state.chats.iter().find(|c| c.id == "chat-0").cloned();
+                    if let Some((source, chat)) =
+                        source.zip(state.chats.iter_mut().find(|c| c.id == "browser-fixture"))
+                    {
+                        chat.branch = source.branch;
+                        chat.source_context = source.source_context;
+                        chat.checkout_id = source.checkout_id;
+                        chat.cwd = Some("/tmp/worktrees/fieldnotes/quiet-owl".into());
+                    }
+                    cx.notify();
+                });
+            }
+            // `:transcript-fork` opens the Fork menu on the hovered reply.
+            if variant == "transcript-fork" {
+                self.transcript
+                    .update(cx, |transcript, cx| transcript.fixture_fork_menu("a1", cx));
             }
             cx.notify();
         }

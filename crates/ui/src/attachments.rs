@@ -1252,7 +1252,7 @@ pub(crate) fn lightbox_with_size(
                         div()
                             .max_w(max_w)
                             .overflow_hidden()
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(crate::typography::text_xs())
                             .text_color(ink(0.45))
                             .child(preview.name.clone()),
                     ),

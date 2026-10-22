@@ -487,8 +487,8 @@ impl PluginsCard {
                                 theme,
                                 "Finish signing in",
                                 format!("Confirm the code {} in your browser.", login.user_code),
-                                12.,
-                                11.,
+                                crate::typography::TEXT_SM,
+                                crate::typography::TEXT_XS,
                             ))
                             .child(button("open-cloud-login", "Continue in browser").on_click(
                                 move |_, _, cx| {
@@ -510,7 +510,7 @@ impl PluginsCard {
                     .id("plugin-notice")
                     .role(gpui::Role::Status)
                     .px(px(8.))
-                    .text_size(crate::typography::ui_rems(12.))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(notice)
                     .into_any_element(),
@@ -520,7 +520,7 @@ impl PluginsCard {
             items.push(
                 div()
                     .px(px(8.))
-                    .text_size(crate::typography::ui_rems(12.))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child("Only workspace administrators can manage these connections.")
                     .into_any_element(),
@@ -545,8 +545,8 @@ impl PluginsCard {
                                 theme,
                                 confirmation.title(),
                                 confirmation.label.clone(),
-                                12.,
-                                11.,
+                                crate::typography::TEXT_SM,
+                                crate::typography::TEXT_XS,
                             ))
                             .child(button("dismiss-plugin-removal", "Keep it").on_click(
                                 cx.listener(|this, _, _, cx| {
@@ -585,8 +585,8 @@ impl PluginsCard {
                                 theme,
                                 "Waiting for authorization",
                                 "Approve the connection in your browser, then check it here.",
-                                12.,
-                                11.,
+                                crate::typography::TEXT_SM,
+                                crate::typography::TEXT_XS,
                             ))
                             .when_some(url, |row, url| {
                                 row.child(
@@ -643,8 +643,8 @@ impl PluginsCard {
                     theme,
                     "Sign in to connect plugins",
                     "Hosted plugins run through your Zuse account. Local agents keep working without one.",
-                    13.,
-                    11.,
+                    crate::typography::TEXT_SM,
+                    crate::typography::TEXT_XS,
                 ))
                 .child(
                     catalog_ui::primary_button(theme, "cloud-account-sign-in")
@@ -702,8 +702,8 @@ impl PluginsCard {
                 theme,
                 definition.name.clone(),
                 definition.description.clone(),
-                13.,
-                12.,
+                crate::typography::TEXT_SM,
+                crate::typography::TEXT_XS,
             ))
             .when(removable, |row| {
                 row.child(
@@ -784,9 +784,9 @@ impl PluginsCard {
             .child(
                 div()
                     .px(px(8.))
-                    .text_size(crate::typography::ui_rems(13.))
+                    .text_size(crate::typography::text_sm())
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_strong)
                     .child(title),
             )
             .child(grid)
@@ -812,7 +812,7 @@ impl PluginsCard {
                 div()
                     .px(px(8.))
                     .py(px(24.))
-                    .text_size(crate::typography::ui_rems(12.))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(if self.connected_only && query.is_empty() {
                         "No connected plugins yet. Connect one from Browse."
@@ -906,7 +906,7 @@ impl PluginsCard {
                     .flex()
                     .flex_col()
                     .gap(px(20.))
-                    .text_size(crate::typography::ui_rems(12.))
+                    .text_size(crate::typography::text_xs())
                     .child(
                         div()
                             .flex()
@@ -914,14 +914,14 @@ impl PluginsCard {
                             .gap(px(4.))
                             .child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(20.))
+                                    .text_size(crate::typography::text_xl())
                                     .line_height(crate::typography::ui_rems(28.))
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .child("Plugins"),
                             )
                             .child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(13.))
+                                    .text_size(crate::typography::text_sm())
                                     .text_color(theme.text_muted)
                                     .child("Connect your tools so agents can work across them in any chat."),
                             ),
@@ -1052,7 +1052,7 @@ impl PluginsCard {
                 .when(total == 0, |el| {
                     el.child(
                         div()
-                            .text_size(crate::typography::ui_rems(11.))
+                            .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
                             .child("Connect tools from the catalog so agents can use them in any chat."),
                     )
@@ -1097,8 +1097,8 @@ impl PluginsCard {
                             theme,
                             connection.label.clone(),
                             description,
-                            13.,
-                            11.,
+                            crate::typography::TEXT_SM,
+                            crate::typography::TEXT_XS,
                         ))
                         .child(
                             widgets::ghost_action(theme)
@@ -1218,7 +1218,7 @@ impl PluginsCard {
                     .child(widgets::row_title(theme, title))
                     .child(
                         div()
-                            .text_size(crate::typography::ui_rems(11.))
+                            .text_size(crate::typography::text_xs())
                             .line_height(crate::typography::ui_rems(16.))
                             .text_color(theme.text_muted)
                             .child(description),

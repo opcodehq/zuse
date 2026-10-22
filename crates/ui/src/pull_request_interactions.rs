@@ -264,7 +264,7 @@ impl PullRequestDetailPage {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(crate::loaders::mini_glyph_spinner(
                         "pr-comment-pending-spinner",
@@ -368,7 +368,7 @@ impl PullRequestDetailPage {
                     .debug_selector(|| "pr-comment-error".into())
                     .px(px(16.0))
                     .pt(px(12.0))
-                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.danger)
                     .child(error.clone()),
             );
