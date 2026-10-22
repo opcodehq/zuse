@@ -106,6 +106,10 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(zuse_cloud::runtime::mailbox::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
     (admin, pool, schema)
 }
 
@@ -1812,4 +1816,376 @@ mod runtime_engine {
         assert_eq!(runtime_post_for_url(&url,credential,&json!({"phase":"agent-started","launchCommandId":"original-launch","sessionHeadVersion":0})).await.0,401);
         api.finish().await;
     }
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn mailbox_durable_ordering_receipts_and_uncertain_lease_fences() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+    use ed25519_dalek::SigningKey;
+    use sha2::{Digest, Sha256};
+    use zuse_cloud::{crypto::MasterKey, runtime::RuntimeControl, tickets::TicketSigner};
+    use zuse_protocol::cloud_commands::{AcknowledgmentState, LeaseRequest, RuntimeAcknowledgment};
+    let (admin, pool, schema) = fixture().await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let key = SigningKey::from_bytes(&[17; 32]);
+    let jwk = json!({"kty":"OKP","crv":"Ed25519","d":B64.encode([17;32]),"x":B64.encode(key.verifying_key().as_bytes())});
+    let signer = TicketSigner::from_jwk(&jwk.to_string(), "https://api-rust.zuse.sh").unwrap();
+    let master = MasterKey::parse(&B64.encode([18; 32])).unwrap();
+    let (transcript, wrapped) = master.create_transcript_key("user-bob", "ws-bob").unwrap();
+    let credential = "mailbox-runtime";
+    let hash: String = Sha256::digest(credential.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    sqlx::query("INSERT INTO zuse_rust_control_owners VALUES ('workspace','ws-bob','rust',2,$1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let config = json!({"runtimeGeneration":2,"runtimeCredentialExpiresAtMs":now+300000,"runtimeRpcProtocol":"zuse-rpc-v1","rustCommandMailboxEnabled":true,"rustRuntimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"original-storage"},"rustStorageEnrollment":{"phase":"committed"}});
+    sqlx::query("UPDATE api_cloud_workspaces SET runtime_credential_hash=$1,wrapped_transcript_key=$2,request_config=$3 WHERE workspace_id='ws-bob'").bind(hash).bind(wrapped).bind(config).execute(&pool).await.unwrap();
+    let control = Arc::new(RuntimeControl::from_pool(pool.clone(), master, signer));
+    let app = router(
+        AppState {
+            store: Store::from_pool(pool.clone()),
+            identity: Arc::new(TestIdentity),
+            organizations_enabled: false,
+            organization_ids: Arc::new(vec![]),
+            runtime: Some(control.clone()),
+            gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
+        },
+        vec![],
+    );
+    let path = "/v1/cloud/workspaces/ws-bob/commands";
+    let envelope = |id: &str, session: &str| json!({"protocolVersion":3,"workspaceId":"ws-bob","sessionId":session,"commandId":id,"kind":"messages.send","fingerprint":format!("hmac-sha256:{}",B64.encode([19;32])),"schemaVersion":1,"keyVersion":1,"destructionFence":0,"createdAt":now,"iv":B64.encode([20;12]),"ciphertext":B64.encode([21;64]),"dependencies":[],"actor":{"subject":"forged-admin"}});
+    let a = envelope("command-a", "session-a");
+    assert_eq!(
+        runtime_post(&app, path, "alice", &a).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, first) = runtime_post(&app, path, "bob", &a).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(first["commandId"], "command-a");
+    assert_eq!(runtime_post(&app, path, "bob", &a).await.1, first);
+    let mut conflict = a.clone();
+    conflict["fingerprint"] = json!(format!("hmac-sha256:{}", B64.encode([22; 32])));
+    assert_eq!(
+        runtime_post(&app, path, "bob", &conflict).await.0,
+        StatusCode::CONFLICT
+    );
+    for (id, session) in [
+        ("command-b", "session-a"),
+        ("command-c", "session-c"),
+        ("command-cancel", "session-cancel"),
+    ] {
+        assert_eq!(
+            runtime_post(&app, path, "bob", &envelope(id, session))
+                .await
+                .0,
+            StatusCode::ACCEPTED
+        );
+    }
+    let wake_jobs: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM zuse_rust_jobs WHERE kind='mailbox-wake'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        wake_jobs, 4,
+        "Retries must not duplicate durable wake responsibility"
+    );
+    // A scheduling failure must roll back acceptance, not strand an accepted command.
+    sqlx::query("ALTER TABLE zuse_rust_jobs ADD CONSTRAINT reject_test_wakes CHECK (kind<>'mailbox-wake') NOT VALID").execute(&pool).await.unwrap();
+    assert_eq!(
+        runtime_post(
+            &app,
+            path,
+            "bob",
+            &envelope("not-accepted", "session-rollback")
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let stranded: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM zuse_rust_mailbox_commands WHERE command_id='not-accepted'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stranded, 0);
+    sqlx::query("ALTER TABLE zuse_rust_jobs DROP CONSTRAINT reject_test_wakes")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("{path}/command-cancel"))
+                .header("authorization", "Bearer bob")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cancelled: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 100000).await.unwrap()).unwrap();
+    assert_eq!(cancelled["state"], "cancelled");
+    let (_, key) = request(&app, "/v1/cloud/workspaces/ws-bob/data-key", "bob", None).await;
+    assert_eq!(key["encodedKey"], transcript.as_str());
+    assert_eq!(key["mailboxEnabled"], true);
+    // A workspace without a guest can acquire its first encryption key; retries preserve it.
+    sqlx::query("INSERT INTO api_cloud_workspaces SELECT (jsonb_populate_record(NULL::api_cloud_workspaces,to_jsonb(w)||'{\"workspace_id\":\"ws-preboot\",\"wrapped_transcript_key\":null}')).* FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO zuse_rust_control_owners VALUES ('workspace','ws-preboot','rust',2,$1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let preboot = request(
+        &app,
+        "/v1/cloud/workspaces/ws-preboot/data-key",
+        "bob",
+        None,
+    )
+    .await;
+    assert_eq!(preboot.0, StatusCode::OK);
+    assert_eq!(
+        B64.decode(preboot.1["encodedKey"].as_str().unwrap())
+            .unwrap()
+            .len(),
+        32
+    );
+    assert_eq!(
+        request(
+            &app,
+            "/v1/cloud/workspaces/ws-preboot/data-key",
+            "bob",
+            None
+        )
+        .await
+        .1,
+        preboot.1
+    );
+
+    let stored: Value = sqlx::query_scalar(
+        "SELECT envelope FROM zuse_rust_mailbox_commands WHERE command_id='command-a'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(stored.get("actor").is_none());
+    assert!(stored.get("plaintext").is_none());
+    let lease_request = LeaseRequest {
+        storage_incarnation_id: "original-storage".into(),
+        wait_ms: None,
+        after_revision: None,
+    };
+    let lease = control
+        .command_lease("ws-bob", credential, &lease_request, now)
+        .await
+        .unwrap();
+    assert_eq!(lease.leases.len(), 2);
+    assert_eq!(lease.leases[0].command.command_id, "command-a");
+    assert_eq!(lease.leases[1].command.command_id, "command-c");
+    assert!(
+        control
+            .command_lease("ws-bob", credential, &lease_request, now + 1)
+            .await
+            .unwrap()
+            .leases
+            .is_empty()
+    );
+    let ack = RuntimeAcknowledgment {
+        command_id: "command-a".into(),
+        lease_token: lease.leases[0].lease_token.clone(),
+        fingerprint: a["fingerprint"].as_str().unwrap().into(),
+        state: AcknowledgmentState::Applied,
+        category: None,
+        result_iv: Some(B64.encode([0; 12])),
+        result_ciphertext: Some(B64.encode([1; 16])),
+    };
+    let accepted = control
+        .command_ack("ws-bob", credential, &ack, now + 2)
+        .await
+        .unwrap();
+    assert_eq!(accepted["state"], "applied");
+    assert_eq!(
+        control
+            .command_ack("ws-bob", credential, &ack, now + 3)
+            .await
+            .unwrap(),
+        accepted
+    );
+    let second = control
+        .command_lease("ws-bob", credential, &lease_request, now + 3)
+        .await
+        .unwrap();
+    assert_eq!(second.leases.len(), 1);
+    assert_eq!(second.leases[0].command.command_id, "command-b");
+    let expired = control
+        .command_lease("ws-bob", credential, &lease_request, now + 31000)
+        .await
+        .unwrap();
+    assert!(expired.fence_required);
+    assert!(expired.leases.is_empty());
+    // Expired lease with a definitive receipt may finish; it must not be reissued by a live generation.
+    let late = RuntimeAcknowledgment {
+        command_id: "command-b".into(),
+        lease_token: second.leases[0].lease_token.clone(),
+        ..ack.clone()
+    };
+    assert_eq!(
+        control
+            .command_ack("ws-bob", credential, &late, now + 32000)
+            .await
+            .unwrap()["state"],
+        "applied"
+    );
+    // Advancing the owned generation authorizes retry only against the same durable storage.
+    sqlx::query("UPDATE zuse_rust_control_owners SET generation=3 WHERE resource_id='ws-bob'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{runtimeGeneration}','3') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+    let retry = control
+        .command_lease("ws-bob", credential, &lease_request, now + 33000)
+        .await
+        .unwrap();
+    assert_eq!(retry.leases.len(), 1);
+    assert_eq!(retry.leases[0].command.command_id, "command-c");
+    let stale = RuntimeAcknowledgment {
+        command_id: "command-c".into(),
+        lease_token: lease.leases[1].lease_token.clone(),
+        ..ack.clone()
+    };
+    assert_eq!(
+        control
+            .command_ack("ws-bob", credential, &stale, now + 34000)
+            .await
+            .unwrap_err()
+            .code,
+        "stale-runtime-lease"
+    );
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustRuntimeStorage,storageIncarnationId}','\"replacement-storage\"') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+    let changed = LeaseRequest {
+        storage_incarnation_id: "replacement-storage".into(),
+        ..lease_request
+    };
+    let replaced = control
+        .command_lease("ws-bob", credential, &changed, now + 34000)
+        .await
+        .unwrap();
+    assert!(replaced.leases.is_empty());
+    assert!(!replaced.fence_required);
+    assert_eq!(
+        request(&app, &format!("{path}/command-c"), "bob", None)
+            .await
+            .1["state"],
+        "outcome-unknown"
+    );
+    let watch = request(&app, &format!("{path}/watch?afterRevision=0"), "bob", None)
+        .await
+        .1;
+    assert_eq!(watch["changes"].as_array().unwrap().len(), 4);
+    // Long polling waits outside the transaction and wakes on a committed enqueue.
+    let after = watch["nextRevision"].as_i64().unwrap();
+    let waiting_app = app.clone();
+    let watch_task = tokio::spawn(async move {
+        request(
+            &waiting_app,
+            &format!(
+                "/v1/cloud/workspaces/ws-bob/commands/watch?afterRevision={after}&waitMs=2000"
+            ),
+            "bob",
+            None,
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(!watch_task.is_finished());
+    assert_eq!(
+        runtime_post(&app, path, "bob", &envelope("command-wake", "session-wake"))
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    let woke = tokio::time::timeout(std::time::Duration::from_millis(500), watch_task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(woke.0, StatusCode::OK);
+    assert_eq!(woke.1["changes"][0]["commandId"], "command-wake");
+    // A pending destructive fence cancels never-leased work rather than executing stale bytes.
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{cloudMailboxLifecycleDelivered}','{\"action\":\"archive\",\"destructionFence\":1}') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+    let invalidated = control
+        .command_lease("ws-bob", credential, &changed, now + 34500)
+        .await
+        .unwrap();
+    assert!(invalidated.leases.is_empty());
+    assert_eq!(
+        request(&app, &format!("{path}/command-wake"), "bob", None)
+            .await
+            .1["state"],
+        "cancelled"
+    );
+    assert_eq!(
+        runtime_post(&app, path, "bob", &envelope("stale-fence", "session-wake"))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    // Archived reads do not wake compute; admission and execution are both held.
+    sqlx::query("UPDATE api_cloud_workspaces SET state='archived',desired_state='archived' WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+
+    let archived_key = request(&app, "/v1/cloud/workspaces/ws-bob/data-key", "bob", None).await;
+    assert_eq!(archived_key.0, StatusCode::OK);
+    assert_eq!(archived_key.1["encodedKey"], transcript.as_str());
+    assert_eq!(archived_key.1["mailboxEnabled"], false);
+    assert_eq!(
+        runtime_post(&app, path, "bob", &envelope("held", "session-a"))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        control
+            .command_lease("ws-bob", credential, &changed, now + 35000)
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "cloud_workspace_runtime_not_ready"
+    );
+    assert_eq!(
+        request(&app, &format!("{path}/command-a"), "bob", None)
+            .await
+            .1["state"],
+        "applied"
+    );
+    sqlx::query(
+        "UPDATE api_cloud_workspaces SET desired_state='deleted' WHERE workspace_id='ws-bob'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        control
+            .command_ack("ws-bob", credential, &ack, now + 36000)
+            .await
+            .unwrap_err()
+            .code,
+        "workspace_runtime_fenced"
+    );
+    pool.close().await;
+    sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
 }

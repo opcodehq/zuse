@@ -17,6 +17,8 @@ use sqlx::{
 use std::{env, str::FromStr, sync::Arc, time::Duration};
 use subtle::ConstantTimeEq;
 
+pub mod mailbox;
+
 pub struct RuntimeConfig {
     master: MasterKey,
     signer: TicketSigner,
@@ -58,6 +60,7 @@ pub struct RuntimeControl {
     master: MasterKey,
     signer: TicketSigner,
     idle_ms: i64,
+    pub(crate) mailbox_changes: tokio::sync::broadcast::Sender<()>,
 }
 
 pub use zuse_protocol::cloud::{
@@ -118,10 +121,11 @@ impl RuntimeControl {
             master,
             signer,
             idle_ms: 10 * 60 * 1000,
+            mailbox_changes: tokio::sync::broadcast::channel(128).0,
         }
     }
     pub async fn ready(&self) -> Result<(), ApiError> {
-        let ready: bool = sqlx::query_scalar("SELECT to_regclass('zuse_rust_control_owners') IS NOT NULL AND to_regclass('api_cloud_workspace_launch_intents') IS NOT NULL AND to_regclass('zuse_rust_gateway_leases') IS NOT NULL")
+        let ready: bool = sqlx::query_scalar("SELECT to_regclass('zuse_rust_control_owners') IS NOT NULL AND to_regclass('api_cloud_workspace_launch_intents') IS NOT NULL AND to_regclass('zuse_rust_gateway_leases') IS NOT NULL AND to_regclass('zuse_rust_mailbox_commands') IS NOT NULL")
             .fetch_one(&self.pool).await?;
         if !ready {
             return Err(ApiError::unavailable("cloud_runtime_schema_not_ready"));

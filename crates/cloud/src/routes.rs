@@ -10,7 +10,7 @@ use crate::{
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State, WebSocketUpgrade, rejection::JsonRejection},
-    http::{HeaderMap, HeaderValue, Method, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware,
     response::Response,
     routing::{get, post},
@@ -49,7 +49,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(origins.as_ref().clone())
         .allow_methods(if state.runtime.is_some() {
-            vec![Method::GET, Method::POST]
+            vec![Method::GET, Method::POST, Method::DELETE]
         } else {
             vec![Method::GET]
         })
@@ -72,6 +72,31 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         );
     if state.runtime.is_some() {
         app = app
+            .route(
+                "/v1/cloud/workspaces/{id}/commands",
+                post(command_enqueue).layer(DefaultBodyLimit::max(
+                    zuse_protocol::cloud_commands::MAX_ENVELOPE_BYTES,
+                )),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/commands/watch",
+                get(command_watch),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/commands/{command}",
+                get(command_status).delete(command_cancel),
+            )
+            .route("/v1/cloud/workspaces/{id}/data-key", get(command_data_key))
+            .route(
+                "/v1/cloud/workspaces/{id}/runtime/commands/lease",
+                post(command_lease).layer(DefaultBodyLimit::max(4096)),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/runtime/commands/ack",
+                post(command_ack).layer(DefaultBodyLimit::max(
+                    zuse_protocol::cloud_commands::MAX_ENVELOPE_BYTES,
+                )),
+            )
             .route(
                 "/v1/cloud/workspaces/{id}/runtime/storage/enroll",
                 post(runtime_storage).layer(DefaultBodyLimit::max(4096)),
@@ -416,5 +441,182 @@ async fn archive_status(
     Ok(Json(
         serde_json::to_value(archive::status(&workspace.row))
             .map_err(|_| ApiError::unavailable("archive_status_invalid"))?,
+    ))
+}
+
+async fn command_enqueue(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_commands::CommandEnvelope>, JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    state.store.workspace(&access, &id).await?;
+    let Json(command) = body.map_err(|_| ApiError::bad_request("cloud_command_not_eligible"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(
+            runtime
+                .command_enqueue(&id, &access, command, chrono::Utc::now().timestamp_millis())
+                .await?,
+        ),
+    ))
+}
+async fn command_status(
+    State(state): State<AppState>,
+    Path((id, command)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    command_item(state, id, command, headers, false).await
+}
+async fn command_cancel(
+    State(state): State<AppState>,
+    Path((id, command)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    command_item(state, id, command, headers, true).await
+}
+async fn command_item(
+    state: AppState,
+    id: String,
+    command: String,
+    headers: HeaderMap,
+    cancel: bool,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    state.store.workspace(&access, &id).await?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(
+        runtime
+            .command_status(
+                &id,
+                &access,
+                &command,
+                cancel,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommandWatchQuery {
+    #[serde(default)]
+    after_revision: i64,
+    wait_ms: Option<u32>,
+}
+async fn command_watch(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Query(query): Query<CommandWatchQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    state.store.workspace(&access, &id).await?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    let wait = query
+        .wait_ms
+        .unwrap_or(zuse_protocol::cloud_commands::WATCH_MAX_WAIT_MS);
+    if wait > zuse_protocol::cloud_commands::WATCH_MAX_WAIT_MS {
+        return Err(ApiError::bad_request("invalid_mailbox_wait"));
+    }
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(wait.into());
+    let mut events = runtime.mailbox_changes.subscribe();
+    loop {
+        let page = runtime
+            .command_watch(&id, &access, query.after_revision)
+            .await?;
+        if !page["changes"].as_array().is_some_and(|v| v.is_empty())
+            || page["resetRequired"] == true
+            || tokio::time::Instant::now() >= deadline
+        {
+            return Ok(Json(page));
+        }
+        tokio::select! { _=events.recv()=>{}, _=tokio::time::sleep_until(deadline.min(tokio::time::Instant::now()+std::time::Duration::from_secs(1)))=>{} }
+    }
+}
+async fn command_data_key(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    state.store.workspace(&access, &id).await?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(runtime.command_data_key(&id, &access).await?))
+}
+async fn command_lease(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_commands::LeaseRequest>, JsonRejection>,
+) -> Result<Json<zuse_protocol::cloud_commands::LeasePage>, ApiError> {
+    let Json(request) =
+        body.map_err(|_| ApiError::bad_request("cloud_mailbox_revision_invalid"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    let credential = runtime_bearer(&headers)?;
+    let wait = request.wait_ms.unwrap_or(0);
+    if wait > zuse_protocol::cloud_commands::WATCH_MAX_WAIT_MS {
+        return Err(ApiError::bad_request("invalid_mailbox_wait"));
+    }
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(wait.into());
+    let mut events = runtime.mailbox_changes.subscribe();
+    loop {
+        let page = runtime
+            .command_lease(
+                &id,
+                credential,
+                &request,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?;
+        if !page.leases.is_empty()
+            || page.fence_required
+            || request
+                .after_revision
+                .is_some_and(|v| v != page.mailbox_revision)
+            || tokio::time::Instant::now() >= deadline
+        {
+            return Ok(Json(page));
+        }
+        tokio::select! {_=events.recv()=>{},_=tokio::time::sleep_until(deadline.min(tokio::time::Instant::now()+std::time::Duration::from_secs(1)))=>{}}
+    }
+}
+async fn command_ack(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_commands::RuntimeAcknowledgment>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = body.map_err(|_| ApiError::bad_request("invalid_runtime_command_ack"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(
+        runtime
+            .command_ack(
+                &id,
+                runtime_bearer(&headers)?,
+                &request,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
     ))
 }

@@ -11,7 +11,7 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK/renewal and leased personal-workspace gateway added; Rust guest executable, persisted enrollment/storage binding, renewal/reconnect supervision, original launch adoption and explicit RPC negotiation added; allocation reconciliation, images, credential grants, durable mailbox and UI create/send/reopen pending | Boxd/WebCrypto, PostgreSQL/HTTP/WebSocket and real-engine reopen/dedup acceptance pass with a deterministic provider; live cloud provider acceptance pending |
+| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK/renewal and leased personal-workspace gateway added; Rust guest executable, persisted enrollment/storage binding, renewal/reconnect supervision, original launch adoption and explicit RPC negotiation added; PostgreSQL encrypted mailbox API and focused acceptance added; allocation reconciliation, images, credential grants, guest mailbox delivery and UI create/send/reopen pending | Boxd/WebCrypto, PostgreSQL/HTTP/WebSocket and real-engine reopen/dedup acceptance pass with a deterministic provider; live cloud provider acceptance pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -48,6 +48,13 @@ With `ZUSE_CLOUD_RUNTIME_WRITES=true`, these routes are additionally registered:
 - `POST /v1/cloud/workspaces/:id/ready` (`agent-started` receipt for Rust guests).
 - `POST /v1/cloud/workspaces/:id/gateway/ticket`.
 - `GET /v1/cloud/workspaces/:id/gateway` (authenticated WebSocket upgrade).
+- `POST /v1/cloud/workspaces/:id/commands`, `GET .../commands/:commandId`,
+  `DELETE .../commands/:commandId`, `GET .../commands/watch?afterRevision=...`.
+- `GET /v1/cloud/workspaces/:id/data-key` (authorized editor only).
+- `POST /v1/cloud/workspaces/:id/runtime/commands/lease` and `.../ack`.
+  Mailbox enqueue/lease additionally require explicit per-workspace
+  `request_config.rustCommandMailboxEnabled=true`; leave off until guest delivery
+  and billing capacity/reservation integration pass acceptance.
 
 Other feature routes remain absent until their behavior is implemented. Runtime-derived
 native-agent availability is not yet returned by the workspace projection.
@@ -111,10 +118,11 @@ preparation and provider grants must complete in the allocation/image workflow.
 
 ## Coordination and archive requirements
 
-`crates/cloud/migrations/0001_control_plane.sql` and `0002_gateway_leases.sql`
+`crates/cloud/migrations/0001_control_plane.sql`, `0002_gateway_leases.sql` and
+`0003_command_mailbox.sql`
 add only Rust coordination tables.
-It neither replaces original `api_*` tables nor assigns any resource to Rust.
-Apply it explicitly to an isolated test database first. Jobs require a matching
+They neither replace original `api_*` tables nor assign any resource to Rust.
+Apply them explicitly to an isolated test database first. Jobs require a matching
 Rust owner and generation before claim; enqueue belongs to the same transaction as
 the eventual lifecycle intent. Reconcilers must additionally fence provider effects
 and acknowledge results in the resource transaction before production activation.
@@ -317,3 +325,50 @@ Mac/Linux UI acceptance are not established by local fixtures. Existing producti
 data and billing ownership must remain unchanged until the corresponding milestone
 passes. The current desktop account URL remains `api.zuse.sh` until cloud compatibility
 is implemented and rollout explicitly selects the Rust origin.
+
+## Durable mailbox port (in progress)
+
+Additive migration `0003_command_mailbox.sql` persists original v3 encrypted
+command envelopes and result ciphertext in PostgreSQL. Shared Rust types preserve
+reference protocol, AAD field ordering, fingerprints, lease fields and terminal
+states. The control plane never decrypts command bodies. Each accepted command commits a
+generation-fenced `mailbox-wake` job in the same transaction; duplicate acceptance
+reuses its job and scheduler failure rolls back acceptance. Provider reconciliation
+of those jobs is still pending. Original Worker mailbox
+imports are still pending; changing the writer without importing pending commands
+is not supported.
+
+Workspace/owner row locks serialize enqueue, lease, acknowledgment and lifecycle
+admission. Enqueue preserves client command IDs, rejects different fingerprints,
+strips client-supplied actor metadata, caps nonterminal count/bytes and orders
+commands by session. Leases are thirty seconds. Expiry requires a proven later
+runtime generation on the same storage before redelivery; changed storage marks
+previously attempted commands outcome-unknown. Late definitive acknowledgments
+remain accepted until a newer lease replaces them. Only never-leased work may be
+cancelled. Archived history/status and authorized encryption-key reads do not contact
+providers or wake compute. First key issuance installs the original wrapped format
+under the workspace lock, so commands can be encrypted before a guest is enrolled.
+
+This is not complete mailbox parity yet: guest execution/receipts, encrypted client
+transport, provider wake reconciliation, billing capacity/reservations,
+original mailbox import and archival/deletion cleanup remain required before
+activation. The API is deliberately gated rather than advertising an unavailable
+runtime capability.
+
+Mailbox checks: `mailbox_durable_ordering_receipts_and_uncertain_lease_fences`
+passes against isolated PostgreSQL 15 with actual Axum handlers. Covers durable
+retries/conflicts, account isolation, author stripping, editor key access before guest enrollment and during archive,
+per-conversation ordering, atomic wake-job responsibility/rollback, cancellation,
+receipt redelivery, expiry barriers,
+stale leases, storage replacement and archive/delete admission. Bounded HTTP
+watch/lease waits use commit notifications with a one-second cross-process repair
+poll; no database connection or workspace lock remains held while waiting.
+
+Validation for this chunk: 12 cloud checks passed (five unit checks plus seven
+isolated PostgreSQL/HTTP/WebSocket/guest-process scenarios), including the new
+mailbox scenario. After the wake-job and key-issuance additions, the focused mailbox
+scenario passed again. Four shared cloud protocol checks passed. Scoped strict
+Clippy for `zuse-cloud-api`/`zuse-cloud`, package formatting, protocol formatting and
+`git diff --check` passed. No production migrations, owner handoffs or provider
+operations were performed. Live-provider, guest mailbox and billing acceptance
+remain outstanding; the mailbox activation flag stays off by default.
