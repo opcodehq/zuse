@@ -14075,6 +14075,7 @@ dependencies = [
  "futures",
  "hmac",
  "jsonwebtoken",
+ "libc",
  "prost",
  "rand 0.8.7",
  "reqwest",
@@ -14092,6 +14093,7 @@ dependencies = [
  "tower-http",
  "uuid",
  "zeroize",
+ "zuse-cloud-runtime",
  "zuse-engine",
  "zuse-protocol",
  "zuse-providers",
@@ -14110,6 +14112,51 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zuse-cloud",
+]
+
+[[package]]
+name = "zuse-cloud-guest"
+version = "0.25.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "zuse-cloud-runtime",
+ "zuse-engine",
+ "zuse-mcp",
+ "zuse-protocol",
+ "zuse-providers",
+ "zuse-rpc",
+]
+
+[[package]]
+name = "zuse-cloud-runtime"
+version = "0.25.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "jsonwebtoken",
+ "libc",
+ "rand 0.8.7",
+ "reqwest",
+ "rsa",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "zeroize",
+ "zuse-protocol",
+ "zuse-rpc",
 ]
 
 [[package]]

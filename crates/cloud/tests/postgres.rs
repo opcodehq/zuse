@@ -561,6 +561,11 @@ async fn runtime_enrollment_preserves_keys_intent_and_fences_retries() {
         )
     );
     let renewed_token = first.1["runtimeCredential"].as_str().unwrap();
+    assert_eq!(
+        runtime_post(&app, &ack_path, renewed_token, &ack).await.0,
+        StatusCode::OK
+    );
+
     sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(jsonb_set(request_config,'{runtimeCredentialExpiresAtMs}',$1),'{runtimeCredentialRenewal,expiresAtMs}',$1) WHERE workspace_id='ws-bob'")
         .bind(json!(now-1000)).execute(&pool).await.unwrap();
     let recovered = runtime_post(&app, renew_path, token, &renewal).await;
@@ -1077,7 +1082,7 @@ mod runtime_engine {
         sqlx::query(
             "UPDATE api_cloud_workspaces SET request_config=$1 WHERE workspace_id='ws-bob'",
         )
-        .bind(json!({"runtimeGeneration":2,"gatewayEpoch":5,"runtimeRpcProtocol":RUST_RPC}))
+        .bind(json!({"runtimeGeneration":2,"gatewayEpoch":5,"runtimeRpcProtocol":RUST_RPC,"rustRuntimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"storage-bob"}}))
         .execute(&pool)
         .await
         .unwrap();
@@ -1189,6 +1194,37 @@ mod runtime_engine {
             runs: Arc::new(AtomicUsize::new(0)),
         });
         let core = engine(&data, provider.clone());
+        use zuse_protocol::cloud::{CloudStorageEnrollment, CloudStoragePhase};
+        let prepared = control
+            .enroll_storage(
+                "ws-bob",
+                bootstrap["runtimeCredential"].as_str().unwrap(),
+                CloudStorageEnrollment {
+                    phase: CloudStoragePhase::Prepare,
+                    runtime_generation: 2,
+                    gateway_epoch: 5,
+                    storage_incarnation_id: "storage-bob".into(),
+                    enrollment_id: None,
+                },
+                now,
+            )
+            .await
+            .unwrap();
+        control
+            .enroll_storage(
+                "ws-bob",
+                bootstrap["runtimeCredential"].as_str().unwrap(),
+                CloudStorageEnrollment {
+                    phase: CloudStoragePhase::Commit,
+                    runtime_generation: 2,
+                    gateway_epoch: 5,
+                    storage_incarnation_id: "storage-bob".into(),
+                    enrollment_id: Some(prepared["enrollmentId"].as_str().unwrap().into()),
+                },
+                now,
+            )
+            .await
+            .unwrap();
         let runtime_grant = cloud::Grant {
             workspace_id: "ws-bob".into(),
             ws_url: url.clone(),
@@ -1350,5 +1386,430 @@ mod runtime_engine {
             .await
             .unwrap();
         admin.close().await;
+    }
+    struct GuestApi {
+        pool: PgPool,
+        admin: PgPool,
+        schema: String,
+        origin: String,
+        control: Arc<zuse_cloud::runtime::RuntimeControl>,
+        stop: tokio::sync::oneshot::Sender<()>,
+        server: tokio::task::JoinHandle<()>,
+    }
+    impl GuestApi {
+        async fn start() -> Self {
+            use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+            use ed25519_dalek::SigningKey;
+            use sha2::{Digest, Sha256};
+            use zuse_cloud::{crypto::MasterKey, runtime::RuntimeControl, tickets::TicketSigner};
+            let (admin, pool, schema) = fixture().await;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let mint = SigningKey::from_bytes(&[14; 32]);
+            let jwk = json!({"kty":"OKP","crv":"Ed25519","d":B64.encode([14;32]),"x":B64.encode(mint.verifying_key().as_bytes())});
+            let signer = TicketSigner::from_jwk(&jwk.to_string(), &origin).unwrap();
+            let master = MasterKey::parse(&B64.encode([15; 32])).unwrap();
+            let now = chrono::Utc::now().timestamp_millis();
+            let hash: String = Sha256::digest(b"packaged-guest-boot")
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            sqlx::query(
+                "INSERT INTO zuse_rust_control_owners VALUES ('workspace','ws-bob','rust',2,$1)",
+            )
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query("UPDATE api_cloud_workspaces SET runtime_boot_token_hash=$1,runtime_boot_token_expires_at=$2,request_config=$3 WHERE workspace_id='ws-bob'").bind(hash).bind(now+120000).bind(json!({"runtimeGeneration":2,"gatewayEpoch":5,"runtimeRpcProtocol":"zuse-rpc-v1","rustRuntimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"packaged-storage"}})).execute(&pool).await.unwrap();
+            let intent = json!({"commandId":"original-launch","turnId":"original-turn","title":"Guest launch","agent":"mock","model":"fixture","permissions":[],"runtimeMode":"approval-required","firstMessage":"Original guest prompt"});
+            let ciphertext = master
+                .seal(
+                    b"zuse-cloud-workspace-launch-intent-v1\nuser-bob\nws-bob",
+                    intent.to_string().as_bytes(),
+                )
+                .unwrap();
+            sqlx::query("INSERT INTO api_cloud_workspace_launch_intents VALUES ('ws-bob','user-bob','chat-bob','session-bob','original-turn','original-launch',$1,$2,$3)").bind(ciphertext).bind(now+120000).bind(now).execute(&pool).await.unwrap();
+            let control = Arc::new(RuntimeControl::from_pool(pool.clone(), master, signer));
+            let app = router(
+                AppState {
+                    store: Store::from_pool(pool.clone()),
+                    identity: Arc::new(TestIdentity),
+                    organizations_enabled: false,
+                    organization_ids: Arc::new(vec![]),
+                    runtime: Some(control.clone()),
+                    gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
+                },
+                vec![],
+            );
+            let (stop, stopped) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async {
+                        let _ = stopped.await;
+                    })
+                    .await
+                    .unwrap();
+            });
+            Self {
+                pool,
+                admin,
+                schema,
+                origin,
+                control,
+                stop,
+                server,
+            }
+        }
+        async fn finish(self) {
+            let _ = self.stop.send(());
+            tokio::time::timeout(Duration::from_secs(5), self.server)
+                .await
+                .unwrap()
+                .unwrap();
+            self.pool.close().await;
+            sqlx::raw_sql(&format!("DROP SCHEMA {} CASCADE", self.schema))
+                .execute(&self.admin)
+                .await
+                .unwrap();
+            self.admin.close().await;
+        }
+        async fn client(&self) -> zuse_rpc::cloud::Connection {
+            let (status, ticket) = runtime_post_for_url(
+                &format!("{}/v1/cloud/workspaces/ws-bob/gateway/ticket", self.origin),
+                "bob",
+                &json!({"protocol":"zuse-workspace-rust-v1","rpcProtocol":"zuse-rpc-v1"}),
+            )
+            .await;
+            assert_eq!(status, 200, "{ticket}");
+            zuse_rpc::cloud::connect(
+                serde_json::from_value(ticket).unwrap(),
+                "ws-bob",
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .unwrap()
+        }
+    }
+    #[tokio::test]
+    #[ignore = "requires isolated localhost PostgreSQL and runtime acceptance feature"]
+    async fn rust_cloud_guest_recovers_lost_renewal_response_and_acknowledgement_with_same_keys() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+        use zuse_cloud_runtime::{Authority, DataLock, Identity, IdentityBinding};
+        let api = GuestApi::start().await;
+        let directory = tempfile::tempdir().unwrap();
+        let _lock = DataLock::acquire(directory.path(), None).unwrap();
+        let binding = IdentityBinding {
+            workspace: "ws-bob".into(),
+            api_url: api.origin.clone(),
+            incarnation: "packaged-storage".into(),
+            generation: 2,
+        };
+        let authority = Authority::new(&api.origin).unwrap();
+        let mut identity =
+            Identity::open(directory.path(), &binding, Some("packaged-guest-boot")).unwrap();
+        let boot = authority
+            .enroll(&mut identity, &binding, Some("packaged-guest-boot"))
+            .await
+            .unwrap();
+        let key = identity
+            .open_transcript_key(&boot.sealed_transcript_key)
+            .unwrap();
+        let wrapped: String = sqlx::query_scalar(
+            "SELECT wrapped_transcript_key FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
+        )
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        let master = zuse_cloud::crypto::MasterKey::parse(&B64.encode([15; 32])).unwrap();
+        assert_eq!(
+            key.as_str(),
+            master
+                .open_transcript_key("user-bob", "ws-bob", &wrapped)
+                .unwrap()
+                .as_str()
+        );
+        let original_keys = identity.request();
+        let request = identity.begin_renewal().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{runtimeCredentialExpiresAtMs}',$1) WHERE workspace_id='ws-bob'").bind(json!(now-1000)).execute(&api.pool).await.unwrap();
+        let accepted = api
+            .control
+            .renew(
+                "ws-bob",
+                &boot.runtime_credential,
+                zuse_cloud::runtime::RenewRequest {
+                    request_id: request.clone(),
+                    proof: identity.renewal_proof(&request, now).unwrap(),
+                },
+                now,
+            )
+            .await
+            .unwrap();
+        // The network lost the committed response and the local ACK marker.
+        drop(identity);
+        let path = directory.path().join("cloud-runtime-identity.json");
+        let mut stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        stored["bootstrapAcknowledged"] = json!(false);
+        std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let mut recovered = Identity::open(directory.path(), &binding, None).unwrap();
+        let renewed = authority
+            .enroll(&mut recovered, &binding, None)
+            .await
+            .unwrap();
+        assert_eq!(renewed.runtime_credential, accepted["runtimeCredential"]);
+        assert!(recovered.acknowledged());
+        assert!(!recovered.has_pending_renewal());
+        assert_eq!(
+            original_keys.credential_public_jwk,
+            recovered.request().credential_public_jwk
+        );
+        assert_eq!(
+            original_keys.signing_public_jwk,
+            recovered.request().signing_public_jwk
+        );
+        assert_eq!(
+            key.as_str(),
+            recovered
+                .open_transcript_key(&renewed.sealed_transcript_key)
+                .unwrap()
+                .as_str()
+        );
+        sqlx::query(
+            "UPDATE zuse_rust_control_owners SET backend='legacy' WHERE resource_id='ws-bob'",
+        )
+        .execute(&api.pool)
+        .await
+        .unwrap();
+        let error = authority.renew(&mut recovered).await.unwrap_err();
+        assert!(!zuse_cloud_runtime::supervisor::retryable(&error));
+        api.finish().await;
+    }
+    fn guest_command(
+        api: &GuestApi,
+        directory: &std::path::Path,
+        checkout: &std::path::Path,
+        boot: Option<&std::path::Path>,
+        log: &std::path::Path,
+    ) -> tokio::process::Command {
+        let binary = std::env::var_os("ZUSE_CLOUD_TEST_GUEST_BIN")
+            .expect("Set ZUSE_CLOUD_TEST_GUEST_BIN to the built zuse-cloud-runtime executable");
+        let mut command = tokio::process::Command::new(binary);
+        command
+            .args([
+                "--workspace-id",
+                "ws-bob",
+                "--api-url",
+                &api.origin,
+                "--storage-incarnation-id",
+                "packaged-storage",
+                "--generation",
+                "2",
+                "--ipc-port",
+                "0",
+                "--test-harness",
+            ])
+            .arg("--data-dir")
+            .arg(directory)
+            .arg("--workspace-root")
+            .arg(checkout)
+            .env("RUST_LOG", "warn")
+            .env_remove("ZUSE_RUNTIME_BOOT_TOKEN")
+            .env_remove("ZUSE_WORKSPACE_RUNTIME_LOCK_FD")
+            .env_remove("ZUSE_RUNTIME_BOOT_TOKEN_FILE")
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::fs::File::create(log).unwrap());
+        if let Some(boot) = boot {
+            command.arg("--boot-token-file").arg(boot);
+        }
+        command
+    }
+    async fn stop_guest(child: &mut tokio::process::Child) {
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(child.id().unwrap() as i32, libc::SIGTERM);
+        }
+        #[cfg(not(unix))]
+        child.start_kill().unwrap();
+        let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(status.success());
+    }
+    #[tokio::test]
+    #[ignore = "requires isolated PostgreSQL and ZUSE_CLOUD_TEST_GUEST_BIN"]
+    async fn rust_cloud_guest_executable_enrolls_adopts_launch_and_reopens_original_storage() {
+        let api = GuestApi::start().await;
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("runtime");
+        let checkout = temporary.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let boot = temporary.path().join("boot-token");
+        std::fs::write(&boot, "packaged-guest-boot").unwrap();
+        let log = temporary.path().join("guest.log");
+        let mut child = guest_command(&api, &directory, &checkout, Some(&boot), &log)
+            .spawn()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    panic!(
+                        "Guest exited {status}: {}",
+                        std::fs::read_to_string(&log).unwrap()
+                    );
+                }
+                let state: String = sqlx::query_scalar(
+                    "SELECT state FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
+                )
+                .fetch_one(&api.pool)
+                .await
+                .unwrap();
+                if state == "ready" {
+                    let count: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM api_cloud_workspace_launch_intents",
+                    )
+                    .fetch_one(&api.pool)
+                    .await
+                    .unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let client = api.client().await;
+        let first = client
+            .client
+            .call(zuse_rpc::methods::ENGINE_INFO, json!({}))
+            .await
+            .unwrap();
+        let mut messages = client
+            .client
+            .subscribe(
+                zuse_rpc::methods::WATCH_DOC_MESSAGES,
+                json!({"chatId":"session-bob"}),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let snapshot = messages.recv().await.unwrap();
+                if snapshot.to_string().contains("Cloud runtime fixture reply") {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        drop(messages);
+        client.closed.cancel();
+        drop(client);
+        stop_guest(&mut child).await;
+        let stored: Value = serde_json::from_slice(
+            &std::fs::read(directory.join("cloud-runtime-identity.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored["accountId"], "user-bob");
+        assert_eq!(stored["storageIncarnationId"], "packaged-storage");
+        assert_eq!(stored["bootstrapAcknowledged"], true);
+        let mut restarted = guest_command(&api, &directory, &checkout, None, &log)
+            .spawn()
+            .unwrap();
+        // Cached ready state is insufficient: a fresh gateway client must reach
+        // this guest and its retained database after the previous socket retires.
+        let client = api.client().await;
+        let next = client
+            .client
+            .call(zuse_rpc::methods::ENGINE_INFO, json!({}))
+            .await
+            .unwrap();
+        assert_eq!(first["deviceId"], next["deviceId"]);
+        let mut messages = client
+            .client
+            .subscribe(
+                zuse_rpc::methods::WATCH_DOC_MESSAGES,
+                json!({"chatId":"session-bob"}),
+            )
+            .await
+            .unwrap();
+        let snapshot = tokio::time::timeout(Duration::from_secs(5), messages.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(snapshot.to_string().contains("Original guest prompt"));
+        assert!(snapshot.to_string().contains("Cloud runtime fixture reply"));
+        assert_eq!(
+            snapshot
+                .to_string()
+                .matches("Cloud runtime fixture reply")
+                .count(),
+            1,
+            "Restart re-executed the original command"
+        );
+
+        drop(messages);
+        client.closed.cancel();
+        drop(client);
+        stop_guest(&mut restarted).await;
+        let after: Value = serde_json::from_slice(
+            &std::fs::read(directory.join("cloud-runtime-identity.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored["credentialPublicJwk"], after["credentialPublicJwk"]);
+        assert_eq!(stored["signingPublicJwk"], after["signingPublicJwk"]);
+        let database = directory.join("orgs/ws-bob/user-bob/docs.sqlite3");
+        assert!(database.is_file());
+        let saved = database.with_extension("saved");
+        std::fs::rename(&database, &saved).unwrap();
+        let status = tokio::time::timeout(
+            Duration::from_secs(10),
+            guest_command(&api, &directory, &checkout, None, &log).status(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!status.success());
+        assert!(!database.exists());
+        assert!(saved.is_file());
+        assert!(
+            std::fs::read_to_string(&log)
+                .unwrap()
+                .contains("runtime_storage_missing")
+        );
+        // Lose both local marker and database, while the persisted control-plane
+        // barrier still records that this workspace has executed accepted work.
+        let empty = temporary.path().join("empty-runtime");
+        std::fs::create_dir(&empty).unwrap();
+        std::fs::copy(
+            directory.join("cloud-runtime-identity.json"),
+            empty.join("cloud-runtime-identity.json"),
+        )
+        .unwrap();
+        let status = tokio::time::timeout(
+            Duration::from_secs(10),
+            guest_command(&api, &empty, &checkout, None, &log).status(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!status.success());
+        assert!(!empty.join("orgs").exists());
+        assert!(saved.is_file());
+        assert!(
+            std::fs::read_to_string(&log)
+                .unwrap()
+                .contains("runtime_storage_recovery_required")
+        );
+        let credential = after["bootstrap"]["runtimeCredential"].as_str().unwrap();
+        let url = format!("{}/v1/cloud/workspaces/ws-bob/ready", api.origin);
+        assert_eq!(runtime_post_for_url(&url,credential,&json!({"phase":"agent-started","launchCommandId":"unrelated-command","sessionHeadVersion":0})).await.0,409);
+        sqlx::query("UPDATE api_cloud_workspaces SET state='archived',desired_state='archived' WHERE workspace_id='ws-bob'").execute(&api.pool).await.unwrap();
+        assert_eq!(runtime_post_for_url(&url,credential,&json!({"phase":"agent-started","launchCommandId":"original-launch","sessionHeadVersion":0})).await.0,401);
+        api.finish().await;
     }
 }

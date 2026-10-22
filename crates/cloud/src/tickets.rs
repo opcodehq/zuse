@@ -44,7 +44,13 @@ impl TicketSigner {
             .map_err(|_| ApiError::bad_request("invalid_signing_key"))?;
         let issuer =
             reqwest::Url::parse(issuer).map_err(|_| ApiError::bad_request("invalid_api_issuer"))?;
-        if issuer.scheme() != "https"
+        let local_http = issuer.scheme() == "http"
+            && issuer.host_str().is_some_and(|h| {
+                h == "localhost"
+                    || h.parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            });
+        if (issuer.scheme() != "https" && !local_http)
             || !issuer.username().is_empty()
             || issuer.password().is_some()
             || issuer.query().is_some()
@@ -183,7 +189,12 @@ impl TicketSigner {
 
     pub fn gateway_url(&self, workspace: &str) -> String {
         let mut url = self.issuer.clone();
-        url.set_scheme("wss").expect("HTTPS issuer can use WSS");
+        url.set_scheme(if self.issuer.scheme() == "https" {
+            "wss"
+        } else {
+            "ws"
+        })
+        .expect("HTTP issuer can use WebSocket");
         url.path_segments_mut()
             .expect("HTTPS origin has path segments")
             .clear()
@@ -267,4 +278,30 @@ pub fn verify_renewal_proof(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod issuer_tests {
+    use super::*;
+    #[test]
+    fn plaintext_gateway_issuers_are_limited_to_loopback() {
+        let seed = [21u8; 32];
+        let key = SigningKey::from_bytes(&seed);
+        let jwk=json!({"kty":"OKP","crv":"Ed25519","d":URL_SAFE_NO_PAD.encode(seed),"x":URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes())}).to_string();
+        let local = TicketSigner::from_jwk(&jwk, "http://127.0.0.1:8080").unwrap();
+        assert_eq!(
+            local.gateway_url("workspace"),
+            "ws://127.0.0.1:8080/v1/cloud/workspaces/workspace/gateway"
+        );
+        for invalid in [
+            "http://api-rust.zuse.sh",
+            "http://0.0.0.0:8080",
+            "https://user:password@api-rust.zuse.sh",
+            "https://api-rust.zuse.sh/path",
+        ] {
+            assert!(TicketSigner::from_jwk(&jwk, invalid).is_err());
+        }
+        let production = TicketSigner::from_jwk(&jwk, "https://api-rust.zuse.sh").unwrap();
+        assert!(production.gateway_url("workspace").starts_with("wss://"));
+    }
 }

@@ -224,3 +224,63 @@ mod tests {
         assert_eq!(archive_deadline(None, None), None);
     }
 }
+
+pub const RUST_RUNTIME_STORAGE_FORMAT: &str = "zuse-rust-engine-v1";
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudRuntimeStorage {
+    pub format: String,
+    pub storage_incarnation_id: String,
+}
+
+/// Enrollment response contains credentials; deliberately never implements Debug.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudRuntimeBootstrap {
+    pub workspace_id: String,
+    pub zuse_account_id: String,
+    pub chat_id: String,
+    pub initial_session_id: String,
+    pub runtime_credential: String,
+    pub runtime_generation: i64,
+    pub gateway_epoch: i64,
+    pub runtime_credential_expires_at: i64,
+    pub gateway_url: String,
+    pub gateway_protocol: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpc_protocol: Option<String>,
+    pub sealed_transcript_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_storage: Option<CloudRuntimeStorage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_intent: Option<CloudLaunchIntent>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudRuntimeReady {
+    pub phase: String,
+    #[serde(default)]
+    pub launch_command_id: Option<String>,
+    #[serde(default)]
+    pub session_head_version: Option<i64>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CloudStoragePhase {
+    Prepare,
+    Commit,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudStorageEnrollment {
+    pub phase: CloudStoragePhase,
+    pub runtime_generation: i64,
+    pub gateway_epoch: i64,
+    pub storage_incarnation_id: String,
+    #[serde(default)]
+    pub enrollment_id: Option<String>,
+}

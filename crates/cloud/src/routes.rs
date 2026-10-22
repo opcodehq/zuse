@@ -73,6 +73,14 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
     if state.runtime.is_some() {
         app = app
             .route(
+                "/v1/cloud/workspaces/{id}/runtime/storage/enroll",
+                post(runtime_storage).layer(DefaultBodyLimit::max(4096)),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/ready",
+                post(runtime_ready).layer(DefaultBodyLimit::max(4096)),
+            )
+            .route(
                 "/v1/cloud/workspaces/{id}/gateway/ticket",
                 post(gateway_ticket).layer(DefaultBodyLimit::max(1024)),
             )
@@ -244,6 +252,51 @@ async fn gateway_upgrade(
         .max_message_size(max_frame)
         .max_frame_size(max_frame)
         .on_upgrade(move |socket| room.serve(grant, socket, permit)))
+}
+async fn runtime_storage(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud::CloudStorageEnrollment>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) =
+        body.map_err(|_| ApiError::bad_request("invalid_runtime_storage_request"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(
+        runtime
+            .enroll_storage(
+                &id,
+                runtime_bearer(&headers)?,
+                request,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
+}
+async fn runtime_ready(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud::CloudRuntimeReady>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) = body.map_err(|_| ApiError::bad_request("invalid_runtime_ready_request"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(
+        runtime
+            .ready_launch(
+                &id,
+                runtime_bearer(&headers)?,
+                request,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
 }
 async fn runtime_bootstrap(
     State(state): State<AppState>,

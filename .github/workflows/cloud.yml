@@ -4,6 +4,9 @@ on:
   push:
     paths:
       - apps/cloud/**
+      - apps/cloud-runtime/**
+      - infra/cloud/**
+      - crates/cloud-runtime/**
       - crates/cloud/**
       - crates/protocol/src/cloud*.rs
       - crates/rpc/src/cloud.rs
@@ -14,6 +17,9 @@ on:
   pull_request:
     paths:
       - apps/cloud/**
+      - apps/cloud-runtime/**
+      - infra/cloud/**
+      - crates/cloud-runtime/**
       - crates/cloud/**
       - crates/protocol/src/cloud*.rs
       - crates/rpc/src/cloud.rs
@@ -33,6 +39,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: 0
       CARGO_INCREMENTAL: 0
       CARGO_BUILD_JOBS: 2
+      ZUSE_CLOUD_TEST_GUEST_BIN: ${{ github.workspace }}/target/debug/zuse-cloud-runtime
       ZUSE_CLOUD_TEST_DATABASE_URL: postgres://zuse_test:zuse_test@127.0.0.1:5432/zuse_test
     services:
       postgres:
@@ -50,6 +57,9 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -57,9 +67,11 @@ jobs:
         with:
           key: cloud
       - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
-      - run: cargo fmt -p zuse-cloud -p zuse-cloud-api -p zuse-rpc --check
+      - run: cargo fmt -p zuse-cloud -p zuse-cloud-api -p zuse-cloud-runtime -p zuse-cloud-guest -p zuse-rpc --check
       - run: rustfmt --edition 2024 --check crates/protocol/src/cloud.rs crates/protocol/src/cloud_gateway.rs
-      - run: cargo check --locked -p zuse-cloud-api
+      - run: cargo check --locked -p zuse-cloud-api -p zuse-cloud-guest
+      - run: cargo build --locked -p zuse-cloud-guest
+      - run: cargo test --locked -p zuse-cloud-runtime -- --include-ignored
       - run: cargo test --locked -p zuse-cloud -- --include-ignored
-      - run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud_turn -- --ignored
+      - run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud -- --ignored
       - run: cargo test --locked -p zuse-protocol cloud

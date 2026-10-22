@@ -20,6 +20,7 @@ use subtle::ConstantTimeEq;
 pub struct RuntimeConfig {
     master: MasterKey,
     signer: TicketSigner,
+    idle_ms: i64,
 }
 impl RuntimeConfig {
     pub fn from_env() -> anyhow::Result<Option<Self>> {
@@ -32,7 +33,18 @@ impl RuntimeConfig {
         let mint = env::var("RELAY_MINT_PRIVATE_JWK")
             .map_err(|_| anyhow::anyhow!("Runtime writes require RELAY_MINT_PRIVATE_JWK"))?;
         let issuer = env::var("API_ISSUER").unwrap_or_else(|_| "https://api-rust.zuse.sh".into());
+        let idle_ms = env::var("CLOUD_WORKSPACE_IDLE_TIMEOUT_MS")
+            .ok()
+            .map(|s| s.parse::<i64>())
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("Invalid cloud idle timeout"))?
+            .unwrap_or(10 * 60 * 1000);
+        anyhow::ensure!(
+            (1000..=86400000).contains(&idle_ms),
+            "Invalid cloud idle timeout"
+        );
         Ok(Some(Self {
+            idle_ms,
             master: MasterKey::parse(&encryption)
                 .map_err(|_| anyhow::anyhow!("Invalid cloud data encryption key"))?,
             signer: TicketSigner::from_jwk(&mint, &issuer)
@@ -45,6 +57,7 @@ pub struct RuntimeControl {
     pool: PgPool,
     master: MasterKey,
     signer: TicketSigner,
+    idle_ms: i64,
 }
 
 pub use zuse_protocol::cloud::{
@@ -91,7 +104,8 @@ impl RuntimeControl {
             .connect_with(options)
             .await
             .map_err(|_| anyhow::anyhow!("Cannot connect runtime-control database"))?;
-        let control = Self::from_pool(pool, config.master, config.signer);
+        let mut control = Self::from_pool(pool, config.master, config.signer);
+        control.idle_ms = config.idle_ms;
         control
             .ready()
             .await
@@ -103,6 +117,7 @@ impl RuntimeControl {
             pool,
             master,
             signer,
+            idle_ms: 10 * 60 * 1000,
         }
     }
     pub async fn ready(&self) -> Result<(), ApiError> {
@@ -312,11 +327,206 @@ impl RuntimeControl {
         if let Some(intent) = intent {
             response["launchIntent"] = intent;
         }
+        if rpc_protocol == zuse_protocol::cloud_gateway::RUST_RPC {
+            let storage: zuse_protocol::cloud::CloudRuntimeStorage =
+                serde_json::from_value(config["rustRuntimeStorage"].clone())
+                    .map_err(|_| ApiError::conflict("runtime_storage_enrollment_required"))?;
+            if storage.format != zuse_protocol::cloud::RUST_RUNTIME_STORAGE_FORMAT
+                || storage.storage_incarnation_id.is_empty()
+                || storage.storage_incarnation_id.len() > 128
+            {
+                return Err(ApiError::conflict("runtime_storage_enrollment_required"));
+            }
+            response["runtimeStorage"] = serde_json::to_value(storage)
+                .map_err(|_| ApiError::conflict("runtime_storage_enrollment_required"))?;
+        }
         if let Some(context) = config.get("initialGithubContext") {
             response["initialGithubContext"] = context.clone();
         }
         tx.commit().await?;
         Ok(response)
+    }
+
+    pub async fn enroll_storage(
+        &self,
+        id: &str,
+        credential: &str,
+        request: zuse_protocol::cloud::CloudStorageEnrollment,
+        now: i64,
+    ) -> Result<Value, ApiError> {
+        use zuse_protocol::cloud::CloudStoragePhase;
+        let mut tx = self.pool.begin().await?;
+        let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
+        let mut config = row["request_config"].clone();
+        if blocked(&row)
+            || row["desired_state"] != "ready"
+            || request.runtime_generation != generation
+            || request.gateway_epoch != epoch
+            || row["runtime_credential_hash"]
+                .as_str()
+                .is_none_or(|h| !equal(h, &hash(credential)))
+            || config["runtimeCredentialExpiresAtMs"].as_i64().unwrap_or(0) <= now
+        {
+            return Err(ApiError::unauthorized("workspace_runtime_fenced"));
+        }
+        if config["runtimeRpcProtocol"] != zuse_protocol::cloud_gateway::RUST_RPC
+            || config["rustRuntimeStorage"]["storageIncarnationId"]
+                != request.storage_incarnation_id
+            || request.storage_incarnation_id.is_empty()
+        {
+            return Err(ApiError::conflict("runtime_storage_enrollment_required"));
+        }
+        let credential_key = config["runtimeCredentialKeyThumbprint"]
+            .as_str()
+            .ok_or_else(rejected)?
+            .to_owned();
+        let signing_key = config["runtimeSigningKeyThumbprint"]
+            .as_str()
+            .ok_or_else(rejected)?
+            .to_owned();
+        let source = required(&row, "provider_sandbox_id")?;
+        let prior = config.get("rustStorageEnrollment").cloned();
+        let mut record = match prior {
+            Some(prior) => {
+                if prior["storageIncarnationId"] != request.storage_incarnation_id
+                    || prior["credentialKeyThumbprint"] != credential_key
+                    || prior["signingKeyThumbprint"] != signing_key
+                    || prior["sourceSandboxId"] != source
+                {
+                    return Err(ApiError::conflict("runtime_storage_recovery_required"));
+                }
+                prior
+            }
+            None => {
+                if request.phase != CloudStoragePhase::Prepare
+                    || config["sessionHeadVersion"].is_number()
+                {
+                    return Err(ApiError::conflict("runtime_storage_recovery_required"));
+                }
+                json!({"enrollmentId":uuid::Uuid::new_v4().to_string(),"phase":"prepared","storageIncarnationId":request.storage_incarnation_id,"credentialKeyThumbprint":credential_key,"signingKeyThumbprint":signing_key,"sourceSandboxId":source,"generation":generation,"preparedAt":now})
+            }
+        };
+        let enrollment = record["enrollmentId"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ApiError::conflict("runtime_storage_recovery_required"))?
+            .to_owned();
+        match request.phase {
+            CloudStoragePhase::Prepare => {
+                if record["phase"] != "prepared" {
+                    return Err(ApiError::conflict("runtime_storage_recovery_required"));
+                }
+            }
+            CloudStoragePhase::Commit => {
+                if request.enrollment_id.as_deref() != Some(&enrollment)
+                    || !matches!(record["phase"].as_str(), Some("prepared" | "committed"))
+                {
+                    return Err(ApiError::conflict("runtime_storage_enrollment_rejected"));
+                }
+                record["phase"] = json!("committed");
+                record["generation"] = json!(generation);
+                if record["committedAt"].is_null() {
+                    record["committedAt"] = json!(now);
+                }
+            }
+        }
+        if config.get("rustStorageEnrollment") != Some(&record) {
+            config["rustStorageEnrollment"] = record;
+            sqlx::query("UPDATE api_cloud_workspaces SET request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1").bind(id).bind(config).bind(now).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(json!({"enrollmentId":enrollment}))
+    }
+
+    pub async fn ready_launch(
+        &self,
+        id: &str,
+        credential: &str,
+        request: zuse_protocol::cloud::CloudRuntimeReady,
+        now: i64,
+    ) -> Result<Value, ApiError> {
+        if request.phase != "agent-started" || request.session_head_version.is_none_or(|v| v < 0) {
+            return Err(ApiError::bad_request("invalid_runtime_ready_request"));
+        }
+        let command = request
+            .launch_command_id
+            .filter(|s| !s.is_empty() && s.len() <= 512)
+            .ok_or_else(|| ApiError::bad_request("invalid_runtime_ready_request"))?;
+        let head = request.session_head_version.unwrap_or(0);
+        let mut tx = self.pool.begin().await?;
+        let (row, _, _) = locked_workspace(&mut tx, id).await?;
+        if blocked(&row)
+            || row["desired_state"] != "ready"
+            || row["runtime_credential_hash"]
+                .as_str()
+                .is_none_or(|h| !equal(h, &hash(credential)))
+            || row["request_config"]["runtimeCredentialExpiresAtMs"]
+                .as_i64()
+                .unwrap_or(0)
+                <= now
+        {
+            return Err(ApiError::unauthorized("workspace_runtime_fenced"));
+        }
+        if row["request_config"]["runtimeRpcProtocol"] != zuse_protocol::cloud_gateway::RUST_RPC {
+            return Err(ApiError::conflict("workspace_rpc_protocol_mismatch"));
+        }
+        let mut config = row["request_config"].clone();
+        if config["rustStorageEnrollment"]["phase"] != "committed" {
+            return Err(ApiError::conflict("runtime_storage_enrollment_required"));
+        }
+
+        let intent:Option<String>=sqlx::query_scalar("SELECT command_id FROM api_cloud_workspace_launch_intents WHERE workspace_id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?;
+        if intent.as_deref() != Some(&command)
+            && !(intent.is_none() && config["rustCompletedLaunchCommandId"] == command)
+        {
+            return Err(ApiError::conflict("launch_intent_receipt_rejected"));
+        }
+        let previous = config["sessionHeadVersion"].as_i64().unwrap_or(0);
+        if intent.is_some() || head > previous {
+            config["sessionHeadVersion"] = json!(previous.max(head));
+            config["rustCompletedLaunchCommandId"] = json!(command);
+            for key in [
+                "runtimeSessionRecoveryPending",
+                "launchErrorCode",
+                "startupFailureDiagnostic",
+            ] {
+                config.as_object_mut().ok_or_else(rejected)?.remove(key);
+            }
+            if !config["startupTimings"].is_object() {
+                config["startupTimings"] = json!({});
+            }
+            for key in ["connectedAt", "repositoryReadyAt"] {
+                if config["startupTimings"][key].is_null() {
+                    config["startupTimings"][key] = json!(now);
+                }
+            }
+            if head > 0 && config["startupTimings"]["messageAcceptedAt"].is_null() {
+                config["startupTimings"]["messageAcceptedAt"] = json!(now);
+            }
+            let mut next = now + self.idle_ms;
+            if config["runtimeReleaseChangeRequested"] == true
+                || matches!(
+                    config["runtimeActivation"]["phase"].as_str(),
+                    Some("preparing" | "launching" | "confirming" | "rolling-back")
+                )
+            {
+                next = next.min(row["next_action_at"].as_i64().unwrap_or(next));
+            }
+            sqlx::query("UPDATE api_cloud_workspaces SET runtime_state='online',state='ready',status_code='ready',request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3),last_activity_at=$3,next_action_at=$4 WHERE workspace_id=$1")
+                .bind(id).bind(config).bind(now).bind(next).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM api_cloud_workspace_launch_intents WHERE workspace_id=$1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        let row: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(crate::store::Workspace { row }.public())
     }
 
     pub async fn gateway_ticket(
@@ -421,6 +631,12 @@ impl RuntimeControl {
         }
         if owner.starts_with("organization:") {
             return Err(ApiError::conflict("workspace_runtime_update_required"));
+        }
+        if claims["role"] == "runtime"
+            && expected_rpc == zuse_protocol::cloud_gateway::RUST_RPC
+            && row["request_config"]["rustStorageEnrollment"]["phase"] != "committed"
+        {
+            return Err(ApiError::conflict("runtime_storage_enrollment_required"));
         }
         let grant = crate::gateway::Grant {
             workspace: id.into(),
@@ -569,8 +785,6 @@ impl RuntimeControl {
         let receipt: Receipt = serde_json::from_value(config["runtimeBootstrapReceipt"].clone())
             .map_err(|_| rejected())?;
         if receipt.workspace_id != id
-            || !equal(&receipt.runtime_credential_hash, &hash(credential))
-            || receipt.runtime_credential_expires_at_ms <= now
             || blocked(&row)
             || row["desired_state"] == "archived"
             || row["desired_state"] == "deleted"

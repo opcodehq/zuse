@@ -3,6 +3,8 @@ resolver = "2"
 exclude = ["vendor/zkit"]
 members = [
     "apps/cloud",
+    "apps/cloud-runtime",
+    "crates/cloud-runtime",
     "crates/cloud",
     "crates/icons",
     "crates/voice",

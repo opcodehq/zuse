@@ -6,10 +6,11 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-runtime-acceptance = ["dep:zuse-engine", "dep:zuse-providers", "dep:zuse-rpc", "dep:tempfile", "dep:tokio-util"]
+runtime-acceptance = ["dep:zuse-engine", "dep:zuse-providers", "dep:zuse-rpc", "dep:tempfile", "dep:tokio-util", "dep:zuse-cloud-runtime"]
 
 [dependencies]
 zuse-engine = { workspace = true, optional = true }
+zuse-cloud-runtime = { path = "../cloud-runtime", optional = true }
 zuse-providers = { workspace = true, optional = true }
 zuse-rpc = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
@@ -39,6 +40,7 @@ zuse-protocol.workspace = true
 zeroize = "1"
 
 [dev-dependencies]
+libc.workspace = true
 tokio-tungstenite.workspace = true
 tower = { version = "0.5", features = ["util"] }
 rand = "0.8"

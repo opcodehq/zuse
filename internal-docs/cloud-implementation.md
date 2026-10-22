@@ -11,7 +11,7 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK/renewal and leased personal-workspace gateway added; Rust guest/client transport and explicit RPC negotiation added; allocation reconciliation, images, credential grants, durable mailbox, guest packaging/enrollment and UI create/send/reopen pending | Boxd/WebCrypto, PostgreSQL/HTTP/WebSocket and real-engine reopen/dedup acceptance pass with a deterministic provider; live cloud provider acceptance pending |
+| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK/renewal and leased personal-workspace gateway added; Rust guest executable, persisted enrollment/storage binding, renewal/reconnect supervision, original launch adoption and explicit RPC negotiation added; allocation reconciliation, images, credential grants, durable mailbox and UI create/send/reopen pending | Boxd/WebCrypto, PostgreSQL/HTTP/WebSocket and real-engine reopen/dedup acceptance pass with a deterministic provider; live cloud provider acceptance pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -44,6 +44,8 @@ With `ZUSE_CLOUD_RUNTIME_WRITES=true`, these routes are additionally registered:
 - `POST /v1/cloud/workspaces/:id/runtime/bootstrap`.
 - `POST /v1/cloud/workspaces/:id/runtime/bootstrap/ack`.
 - `POST /v1/cloud/workspaces/:id/runtime/credentials/renew`.
+- `POST /v1/cloud/workspaces/:id/runtime/storage/enroll` (prepare/commit activation barrier).
+- `POST /v1/cloud/workspaces/:id/ready` (`agent-started` receipt for Rust guests).
 - `POST /v1/cloud/workspaces/:id/gateway/ticket`.
 - `GET /v1/cloud/workspaces/:id/gateway` (authenticated WebSocket upgrade).
 
@@ -80,12 +82,32 @@ Configuration:
 | `ZUSE_CLOUD_RUNTIME_WRITES` | Defaults disabled; literal `true` enables owner-fenced bootstrap/ACK/renewal |
 | `CLOUD_DATA_ENCRYPTION_KEY` | Existing master key required for runtime writes; legacy fallback `CLOUD_CREDENTIAL_VAULT_KEY` |
 | `RELAY_MINT_PRIVATE_JWK` | Existing Ed25519 mint key required for runtime writes |
-| `API_ISSUER` | Runtime ticket/gateway origin, defaults `https://api-rust.zuse.sh` |
+| `API_ISSUER` | Runtime ticket/gateway origin, defaults `https://api-rust.zuse.sh`; plaintext HTTP is allowed only for loopback acceptance |
+| `CLOUD_WORKSPACE_IDLE_TIMEOUT_MS` | Existing idle policy; defaults ten minutes, preserves earlier runtime-operation deadlines |
 
 Organization access rechecks membership and separates content/admin/billing roles.
 Only allowlist organizations after their existing rollout/GitHub-enrollment policy has
 been assessed. Porting those additional policy gates remains required before broad
 organization rollout. Personal records are never a fallback for an organization request.
+
+## Guest executable
+
+Build `cargo build -p zuse-cloud-guest`. The executable is `zuse-cloud-runtime`.
+A launcher supplies these values through flags or the launcher environment:
+
+| Variable | Purpose |
+| --- | --- |
+| `ZUSE_CLOUD_WORKSPACE_ID`, `ZUSE_API_URL` | Registered workspace and control-plane origin |
+| `ZUSE_USER_DATA`, `ZUSE_CLOUD_WORKSPACE_ROOT` | Authoritative data directory and prepared checkout |
+| `ZUSE_STORAGE_INCARNATION_ID`, `ZUSE_RUNTIME_GENERATION` | Control-plane-approved storage and runtime generation |
+| `ZUSE_RUNTIME_BOOT_TOKEN_FILE` | Initial boot credential file; restart uses persisted identity |
+| `ZUSE_WORKSPACE_RUNTIME_LOCK_FD` | Optional original launcher-held lifetime lock descriptor |
+
+The guest serves agent MCP tools over its bound loopback IPC port and the authenticated
+cloud gateway. It does not expose a public unauthenticated engine listener. Native
+providers come from the shared engine registry; `--test-harness` selects only the
+deterministic acceptance provider and cannot call live models. Initial repository
+preparation and provider grants must complete in the allocation/image workflow.
 
 ## Coordination and archive requirements
 
@@ -114,7 +136,9 @@ ZUSE_CLOUD_TEST_DATABASE_URL=postgres://user@127.0.0.1:5432/test \
   cargo test -p zuse-cloud --test postgres -- --ignored
 cargo test -p zuse-protocol cloud
 ZUSE_CLOUD_TEST_DATABASE_URL=postgres://user@127.0.0.1:5432/test \
-  cargo test -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud_turn -- --ignored
+  ZUSE_CLOUD_TEST_GUEST_BIN="$PWD/target/debug/zuse-cloud-runtime" \
+  cargo test -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud -- --ignored
+cargo test -p zuse-cloud-runtime -- --include-ignored
 ```
 
 The PostgreSQL scenarios create and remove only generated test schemas. They cover
@@ -128,9 +152,9 @@ and transaction rollback when initial launch state is unavailable. Renewal accep
 covers fresh guest proofs, expired-bearer recovery, concurrent/lost-response retries,
 stale bearer/request rejection, deletion fences and valid-bearer legacy compatibility.
 
-Verified on October 22, 2026: four cloud unit/HTTP fixture tests, three
-PostgreSQL/HTTP/WebSocket scenarios and the optional real-engine acceptance scenario
-pass. JWT acceptance uses generated RSA keys and an actual JWKS
+Verified on October 22, 2026: five cloud unit/HTTP fixture tests, six
+PostgreSQL/HTTP/WebSocket/engine/process scenarios and four guest identity/storage
+checks pass (15 total). JWT acceptance uses generated RSA keys and an actual JWKS
 HTTP endpoint; the catalog scenario uses PostgreSQL 15, original column names and
 real Axum handlers. The deployed read-only Store reports its actual PostgreSQL
 read-only setting. These fixtures establish local behavior, not live WorkOS accounts,
@@ -138,7 +162,7 @@ provider execution, billing, migration or deployment.
 
 The built executable also passed local `/healthz`, `/readyz`, unauthenticated API
 rejection and `inspect` smoke checks against a separate seeded localhost database.
-Crate-scoped strict Clippy and formatting pass. Dependency-inclusive strict Clippy
+Crate-scoped strict Clippy for cloud API/guest/runtime packages and formatting pass. Dependency-inclusive strict Clippy
 finds existing unrelated warnings in `protocol/presentation.rs` and `plugin_state.rs`.
 Strict Clippy for the RPC crate additionally reports seven existing warnings in
 `rpc/client.rs`, `managed.rs` and `device_room.rs` (`manual_map`, `collapsible_if`,
@@ -232,10 +256,50 @@ now includes this acceptance command; hosted execution remains blocked by reposi
 billing as noted below. This establishes the engine/transport workflow locally,
 not live provider allocation, credential grants or populated-workspace migration.
 
-Guest storage enrollment/identity persistence, credential renewal supervision, initial
-launch adoption, native provider grants and a packaged guest executable are still
-pending. The transport does not open or migrate a database, select another account,
-or initialize an empty replacement over retained storage.
+`apps/cloud-runtime` packages the existing engine as `zuse-cloud-runtime`.
+`crates/cloud-runtime` preserves original identity-file fields and JWKs, decrypts the
+wrapped transcript key and persists enrollment before ACK. Renewals save their request
+ID before sending, so a lost response is recovered with the same credential lineage.
+A renewed current credential can finish an interrupted bootstrap ACK. One gateway
+supervisor reconnects with bounded backoff while accepted engine work remains alive;
+definitive authority/generation fences retire the engine.
+
+Startup holds the original `.workspace-runtime.lock`, including a validated inherited
+launcher descriptor, and the engine's own instance lock. The control plane must set
+`request_config.rustRuntimeStorage` to `{ "format": "zuse-rust-engine-v1",
+"storageIncarnationId": "..." }` before Rust enrollment. The guest additionally binds
+workspace, account, incarnation and canonical database path in an owner-only local
+marker and inside the existing engine SQLite database. An additional persisted
+control-plane prepare/commit barrier binds initialization to the same machine,
+recipient/signing keys and storage incarnation. Once committed, that authority never
+reissues fresh-storage admission for an empty directory; losing both local marker and
+database requires recovery. Retained storage is revalidated before opening the engine.
+Existing legacy files require verified migration. A missing database after enrollment fails without creating a
+replacement. No automatic legacy import or ownership transfer is performed.
+
+The guest adopts the original thread, initial conversation, model, command and turn
+IDs. It completes the initial launch receipt only after engine command admission.
+Archived/fenced workspaces cannot complete that callback, and repeat receipts are
+idempotent. Nonempty legacy permission lists, edit/bash auto-approval modes and
+unimported forks currently fail explicitly; native credential grants, complete mode
+translation and populated-workspace import remain required. The guest does not
+advertise GitHub/device/mailbox capabilities that are not implemented.
+
+The base container is `infra/cloud/runtime.Dockerfile`; prepared images must install
+the selected native agent CLIs. Docker is unavailable here, so a container build is
+not claimed. Local executable and process acceptance are recorded below.
+
+Packaged guest acceptance starts the actual executable, enrolls and automatically
+adopts the sealed initial launch, then stops and restarts without a boot token. It
+verifies original history/device/key identity, one initial execution, refusal to
+replace a missing database, refusal to create storage after both local marker and
+database disappear, and rejection of late ready callbacks after archive. A separate
+HTTP/PG scenario loses a committed renewal response and local ACK marker, then
+recovers the same credentials and keys. Independent Node WebCrypto imports the
+persisted RSA/Ed25519 JWKs; lock/storage checks preserve unrelated bytes and reject
+legacy, cross-account and mismatched database ownership. Integrity scanning is kept
+out of ordinary retained reopen; initial installation and archive verification own
+that work.
 
 Before enabling writes, the legacy lifecycle writer must also honor ownership or be
 fenced/drained. The new ownership table alone does not stop the existing scheduler.

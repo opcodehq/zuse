@@ -8,11 +8,15 @@ Chat access controls and their current provider-specific limits are described in
 
 The Rust hosted-cloud rewrite and its acceptance checklist are tracked in
 [cloud implementation](internal-docs/cloud-implementation.md). Its current API supports
-authenticated read-only catalog and archive status; hosted execution and cutover remain in progress.
+authenticated catalog/archive reads and explicitly gated runtime enrollment, renewal
+and gateway transport. The guest executable passes local process acceptance; live
+provider execution, the full archive lifecycle and cutover remain in progress.
 
 ## Repository
 
 - `apps/desktop`: native entrypoint and service commands.
+- `apps/cloud`, `crates/cloud`: hosted API, authorization and lifecycle coordination.
+- `apps/cloud-runtime`, `crates/cloud-runtime`: enrolled guest and persisted storage identity.
 - `crates/ui`: native shell, transcript, composer, settings, files, terminal, voice and visuals.
 - `crates/engine`: local sessions, persistence, workspaces and execution.
 - `crates/providers`: provider wire protocols and narrowly scoped SDK adapters.
