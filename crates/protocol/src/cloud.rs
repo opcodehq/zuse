@@ -286,3 +286,33 @@ pub struct CloudStorageEnrollment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Vec<String>>,
 }
+
+/// Original cloud create contract. Unsupported guest capabilities are rejected before admission.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudWorkspaceCreateRequest {
+    pub project_id: String,
+    pub provider_id: String,
+    pub base_ref: String,
+    pub agent: String,
+    pub model: String,
+    pub idempotency_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_mode: Option<CloudRuntimeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_bindings: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_message_delivery: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_source: Option<serde_json::Value>,
+}

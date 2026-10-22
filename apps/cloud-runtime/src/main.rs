@@ -149,6 +149,21 @@ async fn run() -> Result<()> {
         &binding.incarnation,
         &enrollment,
     )?;
+    if let Some(plan) = bootstrap.extra.get("rustRepositoryCheckout") {
+        ensure!(
+            !storage.initialized() || directory.join("rust-repository-ready.json").is_file(),
+            "runtime_repository_import_required"
+        );
+        let plan: zuse_cloud_runtime::repository::CheckoutPlan =
+            serde_json::from_value(plan.clone())?;
+        zuse_cloud_runtime::repository::prepare(
+            &directory,
+            &checkout,
+            &binding.workspace,
+            &binding.incarnation,
+            &plan,
+        )?;
+    }
     let retained = storage.initialized();
     if retained {
         authority.commit_storage(&bootstrap, &enrollment).await?;

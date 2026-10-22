@@ -12,7 +12,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, Query, State, WebSocketUpgrade, rejection::JsonRejection},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware,
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use serde::Deserialize;
@@ -70,6 +70,16 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             "/v1/cloud/workspaces/{id}/archive-status",
             get(archive_status),
         );
+    if state
+        .runtime
+        .as_ref()
+        .is_some_and(|runtime| runtime.creation_enabled())
+    {
+        app = app.route(
+            "/v1/cloud/workspaces",
+            post(workspace_create).layer(DefaultBodyLimit::max(256 * 1024)),
+        );
+    }
     if state.runtime.is_some() {
         app = app
             .route(
@@ -619,4 +629,41 @@ async fn command_ack(
             )
             .await?,
     ))
+}
+
+async fn workspace_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<crate::runtime::creation::CreateWorkspace>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_cloud_workspace_request"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_writes_disabled"))?;
+    let (response, created) = runtime
+        .create_workspace(&access, body, chrono::Utc::now().timestamp_millis())
+        .await?;
+    let id = response["workspace"]["workspaceId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let mut response = (
+        if created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(response),
+    )
+        .into_response();
+    if created {
+        response.headers_mut().insert(
+            "x-zuse-reconcile-cloud-workspace",
+            HeaderValue::from_str(&id)
+                .map_err(|_| ApiError::unavailable("cloud_workspace_response_invalid"))?,
+        );
+    }
+    Ok(response)
 }

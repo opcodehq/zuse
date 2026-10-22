@@ -11,8 +11,8 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Boxd transport and durable prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input delivery. Remaining: authenticated HTTP creation/admission, image selection/builds, provider grants, context/attachment delivery, and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
+| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input delivery. Remaining: complete image selection/builds, provider grants, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| C: billing/admin | Existing entitlement/ledger/reservation capacity reads ported; remaining: Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
 | F: complete GPUI parity | Existing partial UI; complete reference comparison pending | Pending |
@@ -41,6 +41,8 @@ It serves only implemented routes:
 
 With `ZUSE_CLOUD_RUNTIME_WRITES=true`, these routes are additionally registered:
 
+- `POST /v1/cloud/workspaces` is additionally registered only for an explicit
+  `ZUSE_CLOUD_CREATE_ACCOUNTS` allowlist; see the creation gates below.
 - `POST /v1/cloud/workspaces/:id/runtime/bootstrap`.
 - `POST /v1/cloud/workspaces/:id/runtime/bootstrap/ack`.
 - `POST /v1/cloud/workspaces/:id/runtime/credentials/renew`.
@@ -595,3 +597,83 @@ allocation scenarios passed again after the final control-flow cleanup. The API
 binary builds and exposes `allocate`/`worker`; cloud/API strict Clippy, Rust
 formatting, launcher shell syntax and diff checks pass. No live provider, production
 database, charge export, owner transfer or Docker build was performed.
+
+
+### Authenticated initial workspace creation
+
+`POST /v1/cloud/workspaces` now uses the original shared
+`CloudWorkspaceCreateRequest` Rust contract, WorkOS personal-account authorization,
+original usable-entitlement policy and current billing capacity. Set
+`ZUSE_CLOUD_CREATE_ACCOUNTS` to an explicit comma-separated account allowlist, with
+runtime writes separately enabled, to register the route. The default is disabled.
+Do not enable this for customers before provider-grant, image and billing settlement
+acceptance. Organization, connected-provider, custom-layout/fork, local-device,
+secret-binding and unsupported permission-mode variants still need their ports;
+requests requiring those capabilities are rejected before admission.
+
+The transaction preserves account/subscription IDs and existing billing ownership.
+It reads the current period, provider-cost and settled-charge ledger totals, and
+live reservations; it never creates periods, changes payment providers, emits a
+charge or exports usage. Ended/grace/held periods and exhausted caps block admission.
+The same capacity gate runs before initial provider allocation/launch, so a hold
+arriving after acceptance blocks those effects. Already-online enrollment can still
+complete its receipt cleanup. Settlement, allowance reservations/refresh, payment
+webhooks, period repair and runtime billing enforcement remain required in C.
+
+Creation requires an owned ready project and the latest retained ready Boxd build.
+The prepared build must explicitly attest these settings:
+
+```json
+{
+  "runtimeRpcProtocol": "zuse-rpc-v1",
+  "rustRuntimeStorageFormat": "zuse-rust-engine-v1",
+  "rustSessionCommandVersion": 1,
+  "rustRuntimeCheckoutProjectId": "<selected-project-id>"
+}
+```
+
+These describe the initial prepared single-project checkout contract; account-image
+cache selection, build/rebuild publication, custom snapshot layouts, sizing and fresh
+remote-ref fetching remain in the image/repository milestones. Legacy images are
+never guessed to speak Rust RPC. The image must have the selected repository at
+`/home/zuse/workspace` with the requested base ref available. Project/request secrets
+cannot be silently omitted; those flows remain gated until delivery is ported.
+
+One transaction commits the new workspace and its fresh Rust owner, original-format
+wrapped transcript key, sealed initial launch intent, allocation operation and
+durable job. The account/idempotency key binds a keyed canonical request digest.
+Concurrent retries retain the original workspace/chat/session/command/turn IDs;
+changed requests reject a reused key. Active and archived branches stay reserved,
+and conflicts return `cloud_branch_in_use`. Only new resources receive ownership;
+this endpoint does not migrate or replace existing workspaces. Responses preserve
+201/200 semantics, the workspace/chat/session response shape, reconciliation header
+and the optional `mailbox-v1` initial delivery contract.
+
+The authority supplies a repository checkout plan in Rust bootstrap. Under the
+existing lifetime data lock, the guest journals the base commit before first branch
+selection and writes its completion marker before admitting the original launch.
+Reopen with a completed marker preserves advanced branches, tracked modifications
+and untracked files. Occupied branches, dirty initial checkouts and mismatched
+journal identities fail without resetting files or refs. Retained runtime storage
+without a corresponding repository journal requires verified import. Recovery
+capture/restore must preserve `rust-repository-ready.json` with the canonical data.
+
+Creation acceptance covers authenticated HTTP, concurrent retries, request/branch
+conflicts, private-project isolation, existing ledger/reservation cap enforcement,
+expired reservations, post-admission billing holds, entitlement expiry and complete
+rollback when allocation enqueue fails. Original subscription IDs and ledger rows
+are unchanged. Allocation acceptance now starts a real guest through its requested
+Git branch before streaming the original chat. Separate checkout tests preserve
+advanced commits and working bytes across reopen and refuse occupied branches.
+Live native-provider turns and production rollout remain unverified.
+
+
+Final creation-chunk verification: 27 local checks pass (six cloud fixture/unit
+checks, 14 PostgreSQL/HTTP/gateway/engine/process scenarios and seven guest
+crypto/storage/repository checks). The rebuilt API and guest pass the shared
+creation contract; the final PostgreSQL suite passed again after persisting the
+original permission-mode metadata. Rust formatting and scoped cloud/API/runtime/
+guest strict Clippy pass. Production creation stays disabled by default. No billing
+owner transfer, payment/export write, live-provider turn or full milestone completion
+is claimed. The next substantial backend work remains provider grants, images and
+complete billing/lifecycle integration before customer activation.

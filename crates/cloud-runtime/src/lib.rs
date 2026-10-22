@@ -19,3 +19,5 @@ pub mod mailbox;
 
 #[cfg(feature = "engine")]
 pub mod engine;
+
+pub mod repository;

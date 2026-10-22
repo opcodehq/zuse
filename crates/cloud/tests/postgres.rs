@@ -1753,6 +1753,38 @@ mod runtime_engine {
         use std::os::unix::fs::PermissionsExt;
         let checkout = root.join("checkout");
         std::fs::create_dir(&checkout).unwrap();
+        for args in [
+            vec!["init", "--initial-branch=main"],
+            vec!["config", "user.email", "fixture@example.invalid"],
+            vec!["config", "user.name", "Fixture"],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&checkout)
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        std::fs::write(checkout.join("tracked"), "prepared repository bytes").unwrap();
+        for args in [
+            vec!["add", "tracked"],
+            vec!["commit", "-m", "Prepared fixture"],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&checkout)
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
         let binary = std::env::var_os("ZUSE_CLOUD_TEST_GUEST_BIN").expect("Set guest binary");
         let wrapper = root.join("test-runtime");
         // Python exec passes the executable path as data, independent of shell quoting.
@@ -1763,7 +1795,7 @@ mod runtime_engine {
         );
         std::fs::write(&wrapper, wrapper_text).unwrap();
         std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
-        sqlx::query("UPDATE api_cloud_workspaces SET state='queued',desired_state='ready',runtime_state='offline',provider_sandbox_id=NULL,runtime_boot_token_hash=NULL,runtime_boot_token_expires_at=NULL,runtime_credential_hash=NULL,request_config='{\"runtimeGeneration\":2,\"gatewayEpoch\":5}' WHERE workspace_id='ws-bob'").execute(&api.pool).await.unwrap();
+        sqlx::query("UPDATE api_cloud_workspaces SET state='queued',desired_state='ready',runtime_state='offline',provider_sandbox_id=NULL,runtime_boot_token_hash=NULL,runtime_boot_token_expires_at=NULL,runtime_credential_hash=NULL,request_config='{\"runtimeGeneration\":2,\"gatewayEpoch\":5,\"rustRepositoryCheckout\":{\"branch\":\"cloud/allocated\",\"baseRef\":\"main\"}}' WHERE workspace_id='ws-bob'").execute(&api.pool).await.unwrap();
         AllocatorFixture {
             machine: std::sync::Mutex::new(None),
             creates: AtomicUsize::new(0),
@@ -1901,6 +1933,16 @@ mod runtime_engine {
         .await
         .unwrap();
         assert_eq!(record["phase"], "ready");
+        let branch = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&provider.checkout)
+            .args(["branch", "--show-current"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(branch.stdout).unwrap().trim(),
+            "cloud/allocated"
+        );
         assert!(record["sealed_boot_token"].is_null());
         assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
         assert_eq!(provider.launches.load(Ordering::SeqCst), 1);
@@ -3425,6 +3467,202 @@ async fn mailbox_durable_ordering_receipts_and_uncertain_lease_fences() {
             .code,
         "workspace_runtime_fenced"
     );
+    pool.close().await;
+    sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn authenticated_creation_is_atomic_idempotent_and_honors_existing_billing_capacity() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+    use ed25519_dalek::SigningKey;
+    use zuse_cloud::{crypto::MasterKey, runtime::RuntimeControl, tickets::TicketSigner};
+    let (admin, pool, schema) = fixture().await;
+    sqlx::raw_sql(include_str!("fixtures/creation.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    sqlx::query("INSERT INTO api_cloud_billing_periods(period_id,account_id,status,period_start,period_end,included_provider_cost_micros,markup_basis_points,overage_cap_micros,provider_subscription_id) VALUES('original-period','user-bob','active',$1,$2,1000,500,500,'original-subscription')").bind(now-1000).bind(now+86_400_000).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO api_cloud_billing_ledger VALUES('original-cost','original-period','provider-cost',900)").execute(&pool).await.unwrap();
+    let signing = SigningKey::from_bytes(&[26; 32]);
+    let jwk = json!({"kty":"OKP","crv":"Ed25519","d":B64.encode([26;32]),"x":B64.encode(signing.verifying_key().as_bytes())});
+    let key = B64.encode([27; 32]);
+    let master = MasterKey::parse(&key).unwrap();
+    let control = Arc::new(
+        RuntimeControl::from_pool(
+            pool.clone(),
+            MasterKey::parse(&key).unwrap(),
+            TicketSigner::from_jwk(&jwk.to_string(), "https://api-rust.zuse.sh").unwrap(),
+        )
+        .with_creation_accounts(vec!["user-bob".into(), "user-alice".into()]),
+    );
+    let app = router(
+        AppState {
+            store: Store::from_pool(pool.clone()),
+            identity: Arc::new(TestIdentity),
+            organizations_enabled: false,
+            organization_ids: Arc::new(vec![]),
+            runtime: Some(control.clone()),
+            gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
+        },
+        vec![],
+    );
+    let body = json!({"projectId":"create-project","providerId":"boxd","baseRef":"main","branch":"cloud/created","agent":"codex","model":"fixture","firstMessage":"Original retained prompt","idempotencyKey":"create-once"});
+    let endpoint = "/v1/cloud/workspaces";
+    assert_eq!(
+        runtime_post(&app, endpoint, "", &body).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, created) = runtime_post(&app, endpoint, "bob", &body).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["workspace"]["workspaceId"].as_str().unwrap();
+    assert_eq!(created["workspace"]["branch"], "cloud/created");
+    let mut retries = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let app = app.clone();
+        let body = body.clone();
+        retries
+            .spawn(async move { runtime_post(&app, "/v1/cloud/workspaces", "bob", &body).await });
+    }
+    while let Some(reply) = retries.join_next().await {
+        let (status, reply) = reply.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(reply, created);
+    }
+    let intent:(String,String,String)=sqlx::query_as("SELECT ciphertext,command_id,turn_id FROM api_cloud_workspace_launch_intents WHERE workspace_id=$1").bind(id).fetch_one(&pool).await.unwrap();
+    let plaintext = master
+        .open(
+            format!("zuse-cloud-workspace-launch-intent-v1\nuser-bob\n{id}").as_bytes(),
+            &intent.0,
+        )
+        .unwrap();
+    let decoded: Value = serde_json::from_slice(&plaintext).unwrap();
+    assert_eq!(decoded["firstMessage"], body["firstMessage"]);
+    assert_eq!(decoded["commandId"], intent.1);
+    assert_eq!(decoded["turnId"], intent.2);
+    let counts:(i64,i64,i64)=sqlx::query_as("SELECT (SELECT COUNT(*) FROM zuse_rust_allocations WHERE workspace_id=$1),(SELECT COUNT(*) FROM zuse_rust_jobs WHERE resource_id=$1),(SELECT COUNT(*) FROM zuse_rust_control_owners WHERE resource_id=$1 AND generation=1 AND backend='rust')").bind(id).fetch_one(&pool).await.unwrap();
+    assert_eq!(counts, (1, 1, 1));
+    let settings: Value =
+        sqlx::query_scalar("SELECT request_config FROM api_cloud_workspaces WHERE workspace_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(settings["runtimeMode"], "approval-required");
+    assert_eq!(settings["permissions"], json!([]));
+    assert!(!created.to_string().contains("ciphertext"));
+    assert!(!created.to_string().contains("boot_token"));
+    assert!(!created.to_string().contains("rustCreateRequestDigest"));
+    let mut changed = body.clone();
+    changed["firstMessage"] = json!("Changed on retry");
+    assert_eq!(
+        runtime_post(&app, endpoint, "bob", &changed).await.1["error"],
+        "cloud_workspace_idempotency_conflict"
+    );
+    changed = body.clone();
+    changed["idempotencyKey"] = json!("branch-conflict");
+    assert_eq!(
+        runtime_post(&app, endpoint, "bob", &changed).await.1["error"],
+        "cloud_branch_in_use"
+    );
+    changed["branch"] = json!("cloud/other");
+    changed["projectId"] = json!("private-project");
+    assert_eq!(
+        runtime_post(&app, endpoint, "bob", &changed).await.1["error"],
+        "cloud_project_not_found"
+    );
+    changed["projectId"] = body["projectId"].clone();
+    sqlx::query("INSERT INTO api_cloud_billing_reservations VALUES('original-period','other-runtime',600,$1)").bind(now+60_000).execute(&pool).await.unwrap();
+    assert_eq!(
+        runtime_post(&app, endpoint, "bob", &changed).await.1["error"],
+        "cloud_billing_hold"
+    );
+    sqlx::query("UPDATE api_cloud_billing_reservations SET expires_at=$1")
+        .bind(now - 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // A failed durable allocation enqueue must roll back the complete accepted request.
+    sqlx::raw_sql("CREATE FUNCTION fail_allocation_job() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'enqueue failed fixture'; END $$; CREATE TRIGGER fail_allocation BEFORE INSERT ON zuse_rust_jobs FOR EACH ROW EXECUTE FUNCTION fail_allocation_job();").execute(&pool).await.unwrap();
+    assert_eq!(
+        runtime_post(&app, endpoint, "bob", &changed).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let absent:bool=sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM api_cloud_workspaces WHERE account_id='user-bob' AND idempotency_key='branch-conflict')").fetch_one(&pool).await.unwrap();
+    assert!(absent);
+    let counts:(i64,i64,i64,i64)=sqlx::query_as("SELECT (SELECT COUNT(*) FROM zuse_rust_allocations),(SELECT COUNT(*) FROM zuse_rust_control_owners),(SELECT COUNT(*) FROM api_cloud_workspace_launch_intents),(SELECT COUNT(*) FROM zuse_rust_jobs)").fetch_one(&pool).await.unwrap();
+    assert_eq!(counts, (1, 1, 1, 1));
+    sqlx::raw_sql(
+        "DROP TRIGGER fail_allocation ON zuse_rust_jobs; DROP FUNCTION fail_allocation_job();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        runtime_post(&app, endpoint, "bob", &changed).await.0,
+        StatusCode::CREATED
+    );
+    sqlx::query("UPDATE api_cloud_billing_periods SET status='grace'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    struct NoProviderEffects;
+    #[async_trait]
+    impl zuse_cloud::runtime::allocation::AllocationProvider for NoProviderEffects {
+        async fn find(
+            &self,
+            _: &str,
+        ) -> Result<Option<zuse_cloud::providers::Machine>, zuse_cloud::providers::ProviderError>
+        {
+            panic!("Billing hold must fence provider inspection");
+        }
+        async fn create(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<zuse_cloud::providers::Machine, zuse_cloud::providers::ProviderError> {
+            panic!("Billing hold must fence provider allocation");
+        }
+        async fn launch(
+            &self,
+            _: &str,
+            _: &zuse_cloud::runtime::allocation::RuntimeLaunch,
+        ) -> Result<(), zuse_cloud::providers::ProviderError> {
+            panic!("Billing hold must fence provider launch");
+        }
+    }
+    assert_eq!(
+        control
+            .allocate_once(&NoProviderEffects, chrono::Utc::now().timestamp_millis())
+            .await
+            .unwrap_err()
+            .code,
+        "cloud_billing_hold"
+    );
+    changed["idempotencyKey"] = json!("held");
+    changed["branch"] = json!("cloud/held");
+    assert_eq!(
+        runtime_post(&app, endpoint, "bob", &changed).await.1["error"],
+        "cloud_billing_hold"
+    );
+    sqlx::query(
+        "UPDATE api_entitlements SET status='ended',paid_through=$1 WHERE account_id='user-alice'",
+    )
+    .bind(now - 1)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        runtime_post(&app, endpoint, "alice", &changed).await.1["error"],
+        "cloud_entitlement_required"
+    );
+    let original:(String,i64)=sqlx::query_as("SELECT provider_subscription_id,(SELECT COUNT(*) FROM api_cloud_billing_ledger) FROM api_cloud_billing_periods WHERE period_id='original-period'").fetch_one(&pool).await.unwrap();
+    assert_eq!(original, ("original-subscription".into(), 1));
     pool.close().await;
     sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin)

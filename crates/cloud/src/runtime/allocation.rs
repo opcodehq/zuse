@@ -101,11 +101,22 @@ impl RuntimeControl {
         snapshot: &str,
         now: i64,
     ) -> Result<String, ApiError> {
+        let mut tx = self.pool.begin().await?;
+        let operation = self.queue_allocation_tx(&mut tx, id, snapshot, now).await?;
+        tx.commit().await?;
+        Ok(operation)
+    }
+    pub(crate) async fn queue_allocation_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        id: &str,
+        snapshot: &str,
+        now: i64,
+    ) -> Result<String, ApiError> {
         if snapshot.is_empty() || snapshot.len() > 512 || snapshot.chars().any(char::is_control) {
             return Err(ApiError::bad_request("invalid_prepared_image"));
         }
-        let mut tx = self.pool.begin().await?;
-        let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
+        let (row, generation, epoch) = locked_workspace(tx, id).await?;
         if row["provider"] != "boxd"
             || required(&row, "account_id")?.starts_with("organization:")
             || row["request_config"]["providerConnectionId"].is_string()
@@ -115,12 +126,11 @@ impl RuntimeControl {
             return Err(ApiError::conflict("cloud_allocation_unavailable"));
         }
         let prior: Option<(String,String)> = sqlx::query_as("SELECT operation_id,snapshot_id FROM zuse_rust_allocations WHERE workspace_id=$1 AND generation=$2 FOR UPDATE")
-            .bind(id).bind(generation).fetch_optional(&mut *tx).await?;
+            .bind(id).bind(generation).fetch_optional(&mut **tx).await?;
         if let Some((operation, image)) = prior {
             if image != snapshot {
                 return Err(ApiError::conflict("cloud_allocation_identity_conflict"));
             }
-            tx.commit().await?;
             return Ok(operation);
         }
         let mut config = row["request_config"].clone();
@@ -136,7 +146,7 @@ impl RuntimeControl {
             return Err(ApiError::conflict("cloud_allocation_retained_state"));
         }
         let launch_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_cloud_workspace_launch_intents WHERE workspace_id=$1 AND expires_at>$2)")
-            .bind(id).bind(now).fetch_one(&mut *tx).await?;
+            .bind(id).bind(now).fetch_one(&mut **tx).await?;
         if !launch_exists {
             return Err(ApiError::conflict(
                 "cloud_workspace_launch_intent_unavailable",
@@ -156,7 +166,7 @@ impl RuntimeControl {
             .seal_api(&boot_context(id, &operation, generation), &boot)
             .map_err(|_| ApiError::unavailable("cloud_boot_grant_unavailable"))?;
         sqlx::query("INSERT INTO zuse_rust_allocations (operation_id,workspace_id,generation,snapshot_id,machine_name,storage_incarnation_id,sealed_boot_token,boot_expires_at,phase,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'planned',$9,$9)")
-            .bind(&operation).bind(id).bind(generation).bind(snapshot).bind(name).bind(&incarnation).bind(sealed).bind(now+BOOT_TTL).bind(now).execute(&mut *tx).await?;
+            .bind(&operation).bind(id).bind(generation).bind(snapshot).bind(name).bind(&incarnation).bind(sealed).bind(now+BOOT_TTL).bind(now).execute(&mut **tx).await?;
         config["runtimeGeneration"] = json!(generation);
         config["gatewayEpoch"] = json!(epoch);
         config["runtimeRpcProtocol"] = json!(zuse_protocol::cloud_gateway::RUST_RPC);
@@ -166,9 +176,9 @@ impl RuntimeControl {
         config["rustAllocationOperationId"] = json!(operation);
         config["startupTimings"]["requestedAt"] = json!(now);
         sqlx::query("UPDATE api_cloud_workspaces SET state='provisioning',status_code='allocating',runtime_state='offline',runtime_boot_token_hash=$2,runtime_boot_token_expires_at=$3,request_config=$4,revision=revision+1,updated_at=GREATEST(updated_at+1,$5),next_action_at=$5 WHERE workspace_id=$1")
-            .bind(id).bind(hash(&boot)).bind(now+BOOT_TTL).bind(config).bind(now).execute(&mut *tx).await?;
+            .bind(id).bind(hash(&boot)).bind(now+BOOT_TTL).bind(config).bind(now).execute(&mut **tx).await?;
         let job = jobs::enqueue(
-            &mut tx,
+            tx,
             &format!("allocation:{operation}"),
             JOB_KIND,
             id,
@@ -179,9 +189,8 @@ impl RuntimeControl {
         .await?;
         sqlx::query("UPDATE zuse_rust_jobs SET max_attempts=120 WHERE job_id=$1")
             .bind(job)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
-        tx.commit().await?;
         Ok(operation)
     }
 
@@ -220,6 +229,12 @@ impl RuntimeControl {
             .bind(job.payload["operationId"].as_str()).bind(&job.resource_id).bind(job.generation).fetch_one(&mut *tx).await?;
         if workspace["request_config"]["rustAllocationOperationId"] != operation["operation_id"] {
             return Err(ApiError::conflict("cloud_allocation_fenced"));
+        }
+        if !(workspace["runtime_state"] == "online"
+            && storage_enrolled(&workspace)
+            && workspace["request_config"]["rustCompletedLaunchCommandId"].is_string())
+        {
+            check_creation_capacity(&mut tx, &workspace, clock_ms()).await?;
         }
         tx.commit().await?;
         Ok((workspace, operation))
@@ -333,6 +348,9 @@ impl RuntimeControl {
         {
             return Err(ApiError::conflict("cloud_allocation_fenced"));
         }
+        if !complete {
+            check_creation_capacity(&mut tx, &row, now).await?;
+        }
         let changed=sqlx::query("UPDATE zuse_rust_allocations SET phase=$2,sealed_boot_token=CASE WHEN $3 THEN NULL ELSE sealed_boot_token END,updated_at=$4 WHERE operation_id=$1 AND workspace_id=$5 AND generation=$6")
             .bind(job.payload["operationId"].as_str()).bind(phase).bind(complete).bind(now).bind(&job.resource_id).bind(job.generation).execute(&mut *tx).await?;
         if changed.rows_affected() != 1 {
@@ -367,4 +385,20 @@ impl RuntimeControl {
 }
 fn clock_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+async fn check_creation_capacity(
+    tx: &mut Transaction<'_, Postgres>,
+    workspace: &Value,
+    now: i64,
+) -> Result<(), ApiError> {
+    if !workspace["request_config"]["rustCreateRequestDigest"].is_string() {
+        return Ok(());
+    }
+    let account = required(workspace, "account_id")?;
+    let entitled:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_entitlements WHERE account_id=$1 AND kind='cloud-workspace' AND (status IN ('active','grace') OR (status='ended' AND paid_through>$2)) AND (paid_through IS NULL OR paid_through>$2))").bind(account).bind(now).fetch_one(&mut **tx).await?;
+    if !entitled {
+        return Err(ApiError::forbidden("cloud_entitlement_required"));
+    }
+    crate::billing::require_capacity(tx, account, now).await
 }

@@ -18,12 +18,14 @@ use std::{env, str::FromStr, sync::Arc, time::Duration};
 use subtle::ConstantTimeEq;
 
 pub mod allocation;
+pub mod creation;
 pub mod mailbox;
 
 pub struct RuntimeConfig {
     master: MasterKey,
     signer: TicketSigner,
     idle_ms: i64,
+    creation_accounts: Vec<String>,
 }
 impl RuntimeConfig {
     pub fn from_env() -> anyhow::Result<Option<Self>> {
@@ -47,6 +49,13 @@ impl RuntimeConfig {
             "Invalid cloud idle timeout"
         );
         Ok(Some(Self {
+            creation_accounts: env::var("ZUSE_CLOUD_CREATE_ACCOUNTS")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect(),
             idle_ms,
             master: MasterKey::parse(&encryption)
                 .map_err(|_| anyhow::anyhow!("Invalid cloud data encryption key"))?,
@@ -61,6 +70,7 @@ pub struct RuntimeControl {
     master: MasterKey,
     signer: TicketSigner,
     idle_ms: i64,
+    creation_accounts: Vec<String>,
     pub(crate) mailbox_changes: tokio::sync::broadcast::Sender<()>,
 }
 
@@ -110,6 +120,7 @@ impl RuntimeControl {
             .map_err(|_| anyhow::anyhow!("Cannot connect runtime-control database"))?;
         let mut control = Self::from_pool(pool, config.master, config.signer);
         control.idle_ms = config.idle_ms;
+        control.creation_accounts = config.creation_accounts;
         control
             .ready()
             .await
@@ -122,6 +133,7 @@ impl RuntimeControl {
             master,
             signer,
             idle_ms: 10 * 60 * 1000,
+            creation_accounts: vec![],
             mailbox_changes: tokio::sync::broadcast::channel(128).0,
         }
     }
@@ -130,6 +142,13 @@ impl RuntimeControl {
             .fetch_one(&self.pool).await?;
         if !ready {
             return Err(ApiError::unavailable("cloud_runtime_schema_not_ready"));
+        }
+        if self.creation_enabled() {
+            self.allocation_ready().await?;
+            let ready:bool=sqlx::query_scalar("SELECT to_regclass('api_cloud_projects') IS NOT NULL AND to_regclass('api_cloud_project_builds') IS NOT NULL AND to_regclass('api_cloud_snapshots') IS NOT NULL AND to_regclass('api_cloud_billing_periods') IS NOT NULL AND to_regclass('api_cloud_billing_ledger') IS NOT NULL AND to_regclass('api_cloud_billing_reservations') IS NOT NULL").fetch_one(&self.pool).await?;
+            if !ready {
+                return Err(ApiError::unavailable("cloud_creation_schema_not_ready"));
+            }
         }
         Ok(())
     }
@@ -334,6 +353,9 @@ impl RuntimeControl {
         }
         if rpc_protocol == zuse_protocol::cloud_gateway::RUST_RPC {
             response["commandMailboxEnabled"] = json!(config["rustCommandMailboxEnabled"] == true);
+            if let Some(plan) = config.get("rustRepositoryCheckout") {
+                response["rustRepositoryCheckout"] = plan.clone();
+            }
             let storage: zuse_protocol::cloud::CloudRuntimeStorage =
                 serde_json::from_value(config["rustRuntimeStorage"].clone())
                     .map_err(|_| ApiError::conflict("runtime_storage_enrollment_required"))?;
