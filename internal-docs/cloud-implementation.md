@@ -9,7 +9,7 @@ do not publish to `main`. The [feature inventory](cloud-parity-inventory.md) def
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport added; allocation reconciliation, images/enrollment/gateway/mailbox, Rust guest and UI create/send/reopen pending | Boxd HTTP/protobuf fixture passes; live cloud chat pending |
+| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport and legacy encryption compatibility added; allocation reconciliation, images/enrollment/gateway/mailbox, Rust guest and UI create/send/reopen pending | Boxd HTTP/protobuf and WebCrypto compatibility fixtures pass; live cloud chat pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -136,6 +136,19 @@ node scripts/fixtures/generate-boxd-wire.mjs /path/to/sdk/package
 
 Provider source contracts and remaining operations are recorded in
 [provider port notes](cloud-provider-port.md). No live provider acceptance is claimed.
+
+Cloud encryption uses the original AES-256-GCM JSON envelopes/AAD, account/workspace
+transcript-key wrapping, HMAC archive/API digests, RFC 7638 RSA thumbprints and
+RSA-OAEP-256/A256GCM compact runtime grants. Existing ciphertext and digest vectors
+generated with WebCrypto pass without conversion; wrong owner/workspace contexts
+are rejected. The synthetic RSA fixture contains only a generated test key.
+`scripts/fixtures/generate-cloud-crypto.mjs` regenerates those independent vectors.
+These primitives still need wiring into transactional runtime enrollment and the
+credential authority; they do not establish production-key or historical-data acceptance.
+
+Hosted CI is externally blocked: run `39848991883` for `604fa76` has no job steps;
+GitHub reports failed recent account payments or a spending limit requiring an increase.
+Local tests remain the available verification until repository billing is restored.
 
 ## Remaining external acceptance
 

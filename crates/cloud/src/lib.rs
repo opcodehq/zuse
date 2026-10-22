@@ -3,6 +3,7 @@ pub mod access;
 pub mod archive;
 pub mod auth;
 pub mod config;
+pub mod crypto;
 pub mod error;
 pub mod jobs;
 pub mod providers;

@@ -134,7 +134,7 @@ impl Identity for WorkosIdentity {
         // WorkOS binds these access tokens with client_id rather than aud.
         validation.validate_aud = false;
         validation.validate_nbf = true;
-        validation.leeway = 30;
+        validation.leeway = 0;
         let claims = decode::<Claims>(token, &key, &validation)
             .map_err(|_| invalid())?
             .claims;

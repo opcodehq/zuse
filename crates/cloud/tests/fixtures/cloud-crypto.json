@@ -1,0 +1,23 @@
+{
+  "source": "WebCrypto; original Zuse AES-GCM envelope and AAD contracts at 2016cf4",
+  "masterKey": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "context": "message\nuser_fixture\nworkspace_fixture\nmessage_fixture",
+  "plaintext": "fixture message\nwith a second line",
+  "apiEnvelope": "{\"version\":1,\"iv\":\"AAECAwQFBgcICQoL\",\"ciphertext\":\"IWuub7CXpzvgJOT40I4dZ_S_81zQGn8PXQSK63lJbNtvdUKHDAcUc4DPvd0V6kAiVhA\"}",
+  "transcriptKey": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+  "transcriptEnvelope": "{\"version\":1,\"iv\":\"AAECAwQFBgcICQoL\",\"ciphertext\":\"DkGTcoyck3fHKPTk-roXH8-Vt0G8AR4EdQ2otVM9WYFOVMXK4LtloSTOR1r7LaQ97MurInZYrhptkBw\"}",
+  "archivePayload": "[\"user_fixture\",\"workspace_fixture\",\"operation_fixture\",3600000,\"write\"]",
+  "archiveDigest": "7c6920b1917f9a8d9b3a9e583eadab62b16d0553e03707633ac8c4ca37fe48b7",
+  "runtimePublicJwk": {
+    "key_ops": [
+      "encrypt"
+    ],
+    "ext": true,
+    "alg": "RSA-OAEP-256",
+    "kty": "RSA",
+    "n": "0E1U67kryo8n77UBdr3d4KjB_SWjBheJz-Z-4ibcR4ObB7BTdVshx152GV1FseRsy2iluM181ajCLMrvx3id4H88BbzDf5HWSyXBwCJBbm1do_GW_WDz33A7ptqrw31m6gaWoRN1p5qfP6evX1uARsRK41HQF55zepL-0sSUYPqXnDPcyxlX9811k17po3hFODSJRb8_kmGfrI8Harq_r3MWPCKVcHn2oyei1zr2nB37ym2Kb6cTyRsIuzAtK7e2NGIINSjB-FBRZKEyXK9BjwpoFqiUq2p1Zj4NmftXFxhrBCmCpKor2YjDBrrXAsN3FYKVsoeo5pVQ-Zyrihvlow",
+    "e": "AQAB"
+  },
+  "runtimePrivatePkcs8": "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDQTVTruSvKjyfvtQF2vd3gqMH9JaMGF4nP5n7iJtxHg5sHsFN1WyHHXnYZXUWx5GzLaKW4zXzVqMIsyu_HeJ3gfzwFvMN_kdZLJcHAIkFubV2j8Zb9YPPfcDum2qvDfWbqBpahE3Wnmp8_p69fW4BGxErjUdAXnnN6kv7SxJRg-pecM9zLGVf3zXWTXumjeEU4NIlFvz-SYZ-sjwdqur-vcxY8IpVwefajJ6LXOvacHfvKbYpvpxPJGwi7MC0rt7Y0Ygg1KMH4UFFkoTJcr0GPCmgWqJSranVmPg2Z-1cXGGsEKYKkqivZiMMGutcCw3cVgpWyh6jmlVD5nKuKG-WjAgMBAAECggEAM7X27nvuJJ-MVQQ05FL3OXX7joog4frG8g8xEZh_F9vSiUKbPWeNx64qGFrg2ewwnACTH4EXy_zUk4UfqH_HhbtgXbZCPDGqpsYtRrLaVn0dAX2Qs781W5NDo8TmXiYL_e37x-oKS7zlasqIjV4sRqUlSDB_vdVOqq_CRfWaNkaciQi4jYlLcK3A_AN87PPOPWkTGE6DtlzTRmQTq6_n-uzXseB37xIwrWu7kT1UoKgx34Pltav2M66AjD9cgnpm644uo6XCHTC79yTRMf4OKrfOOIN-CCJP4EIJ3iWDEmbuKX7lvBHsO0OUmBc0m_HW3LLomBSHdaU_GruKGymMeQKBgQD513vY2hceo7a3xD7c_yiMQHkyMv6X22-gAEMVgOyVc-Td4MhYbrV3KUoix0mdIWTYbnUZo-ZKlXtHt4PEDJHpmwWDmmMxFUG8Z2HuDXkx-zuQj_0CD4_LgWY5GqGBgk6Q2dRn5WYrsjTRyPkkpqr8N1lCKYd4qt_3hRl9DNelyQKBgQDVb7rw08iMPIXN2sL6X95ZXdS-gEQk4V294bogyp4PgGgbsTEoRIFmcKFWeabgxtQBTjS7w5mDckD8jTDM8mIQ05hKw_mxGON_SOd96wnX1PuNw21rOuXT05VK9In41DFG8Ty4MxaVsh8BGXGII_ZCawQ-BIy7hDI11uCWPhSWCwKBgEoh7DeeDroirba9XkHI3EkxYETK6Mw6ala5fS5GQOzfpItJhWjoAKRI9hx3sZoULI4jyE9BWLXMwPW4uDpV2H3OZ8Zy6vfHbOfwbRhrmwh_mV79un8ACxTBYomTI1UASzujxujFIpnYmN-emH6NjbKk4bFGDVJ6sVYKglOemeYxAoGAAjsZvByqkvSq_VzU_uLzowF9EMSscao9XZe3Z1JW1pij_e4bMm2M4LI6rXm2CdFqM91KZdAEkcAm97zODsZVyhE8HUPxHy3AavsrGEDVqIDcZD3vrdg-wLkMbW0i6Avnu_MXjGFUUho7grpuWlrt3wHZWICZq_gUwkVNsaRSeMMCgYBf33JMa0xUCZYOP7b_OguLDV2luQitnCNshHIpoZc2QBvr1BmlfNMiRqVnGYFac_JgEFjq2dYuHwUMs_sLbF38osmQWpr7LeYU88xe3h7eYPfkMmSuZY8GAWuVxbdmQHAEMXUFMY5waFlFK__BiW3ZH0yfNgEFcSoULY0BFkOWjg",
+  "runtimeThumbprint": "meQ5wss4lrLXqXgk3EZxjFb94OMd3FK7hXOyLflQqw4"
+}

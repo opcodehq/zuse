@@ -14065,12 +14065,14 @@ dependencies = [
 name = "zuse-cloud"
 version = "0.25.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "async-trait",
  "axum",
  "base64 0.22.1",
  "chrono",
  "futures",
+ "hmac",
  "jsonwebtoken",
  "prost",
  "rand 0.8.7",
@@ -14078,11 +14080,13 @@ dependencies = [
  "rsa",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "tower",
  "tower-http",
  "uuid",
+ "zeroize",
  "zuse-protocol",
 ]
 

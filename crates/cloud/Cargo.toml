@@ -8,22 +8,26 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+aes-gcm = { version = "0.10.3", features = ["std"] }
 axum.workspace = true
 futures.workspace = true
+base64 = "0.22"
+hmac = "0.12"
 jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto"] }
 prost = "0.14"
 reqwest.workspace = true
+rsa = "0.9"
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "json"] }
 tokio.workspace = true
 tower-http = { workspace = true, features = ["cors"] }
 uuid.workspace = true
 zuse-protocol.workspace = true
+zeroize = "1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-base64 = "0.22"
 chrono.workspace = true
 rand = "0.8"
-rsa = "0.9"
