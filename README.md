@@ -6,6 +6,10 @@ This repository is under active implementation. See [the implementation plan](in
 
 Chat access controls and their current provider-specific limits are described in [permissions](internal-docs/permissions.md).
 
+The Rust hosted-cloud rewrite and its acceptance checklist are tracked in
+[cloud implementation](internal-docs/cloud-implementation.md). Its current API supports
+authenticated read-only catalog and archive status; hosted execution and cutover remain in progress.
+
 ## Repository
 
 - `apps/desktop`: native entrypoint and service commands.

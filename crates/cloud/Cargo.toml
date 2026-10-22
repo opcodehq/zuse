@@ -1,0 +1,28 @@
+[package]
+name = "zuse-cloud"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+futures.workspace = true
+jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto"] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "json"] }
+tokio.workspace = true
+tower-http = { workspace = true, features = ["cors"] }
+uuid.workspace = true
+zuse-protocol.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+base64 = "0.22"
+chrono.workspace = true
+rand = "0.8"
+rsa = "0.9"
