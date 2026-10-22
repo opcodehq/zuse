@@ -1399,9 +1399,13 @@ mod runtime_engine {
         control: Arc<zuse_cloud::runtime::RuntimeControl>,
         stop: tokio::sync::oneshot::Sender<()>,
         server: tokio::task::JoinHandle<()>,
+        lost_ack_release: Arc<Notify>,
     }
     impl GuestApi {
         async fn start() -> Self {
+            Self::start_with_mailbox(false).await
+        }
+        async fn start_with_mailbox(mailbox: bool) -> Self {
             use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
             use ed25519_dalek::SigningKey;
             use sha2::{Digest, Sha256};
@@ -1425,7 +1429,7 @@ mod runtime_engine {
             .execute(&pool)
             .await
             .unwrap();
-            sqlx::query("UPDATE api_cloud_workspaces SET runtime_boot_token_hash=$1,runtime_boot_token_expires_at=$2,request_config=$3 WHERE workspace_id='ws-bob'").bind(hash).bind(now+120000).bind(json!({"runtimeGeneration":2,"gatewayEpoch":5,"runtimeRpcProtocol":"zuse-rpc-v1","rustRuntimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"packaged-storage"}})).execute(&pool).await.unwrap();
+            sqlx::query("UPDATE api_cloud_workspaces SET runtime_boot_token_hash=$1,runtime_boot_token_expires_at=$2,request_config=$3 WHERE workspace_id='ws-bob'").bind(hash).bind(now+120000).bind(json!({"runtimeGeneration":2,"gatewayEpoch":5,"runtimeRpcProtocol":"zuse-rpc-v1","rustCommandMailboxEnabled":mailbox,"rustRuntimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"packaged-storage"}})).execute(&pool).await.unwrap();
             let intent = json!({"commandId":"original-launch","turnId":"original-turn","title":"Guest launch","agent":"mock","model":"fixture","permissions":[],"runtimeMode":"approval-required","firstMessage":"Original guest prompt"});
             let ciphertext = master
                 .seal(
@@ -1446,6 +1450,34 @@ mod runtime_engine {
                 },
                 vec![],
             );
+            let lost_ack_release = Arc::new(Notify::new());
+            let fail_first = Arc::new(std::sync::atomic::AtomicBool::new(mailbox));
+            let app = app.layer(axum::middleware::from_fn({
+                let release = lost_ack_release.clone();
+                move |request: Request<Body>, next: axum::middleware::Next| {
+                    let release = release.clone();
+                    let fail = fail_first.clone();
+                    async move {
+                        let ack = request.uri().path().ends_with("/runtime/commands/ack");
+                        let response = next.run(request).await;
+                        if ack
+                            && response.status().is_success()
+                            && fail.swap(false, Ordering::SeqCst)
+                        {
+                            // Commit really happened. The guest is stopped before receiving this response.
+                            release.notified().await;
+                            use axum::response::IntoResponse;
+                            (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                axum::Json(json!({"error":"simulated_lost_ack_response"})),
+                            )
+                                .into_response()
+                        } else {
+                            response
+                        }
+                    }
+                }
+            }));
             let (stop, stopped) = tokio::sync::oneshot::channel();
             let server = tokio::spawn(async move {
                 axum::serve(listener, app)
@@ -1463,9 +1495,11 @@ mod runtime_engine {
                 control,
                 stop,
                 server,
+                lost_ack_release,
             }
         }
         async fn finish(self) {
+            self.lost_ack_release.notify_waiters();
             let _ = self.stop.send(());
             tokio::time::timeout(Duration::from_secs(5), self.server)
                 .await
@@ -1641,6 +1675,226 @@ mod runtime_engine {
             .unwrap()
             .unwrap();
         assert!(status.success());
+    }
+    fn encrypted_mailbox_message(
+        key: &zuse_cloud_runtime::mailbox::CommandKey,
+        id: &str,
+        prompt: &str,
+    ) -> Value {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+        let payload = json!({"commandId":id,"sessionId":"session-bob","clientMessageId":format!("message-{id}"),"text":prompt});
+        let plaintext = payload.to_string();
+        let mut envelope:zuse_protocol::cloud_commands::CommandEnvelope=serde_json::from_value(json!({"protocolVersion":3,"workspaceId":"ws-bob","sessionId":"session-bob","commandId":id,"kind":"messages.send","fingerprint":key.fingerprint(plaintext.as_bytes()),"schemaVersion":1,"keyVersion":1,"destructionFence":0,"createdAt":chrono::Utc::now().timestamp_millis(),"iv":B64.encode([0;12]),"ciphertext":"pending","dependencies":[]})).unwrap();
+        let (iv, ciphertext) = key.encrypt(&envelope, plaintext.as_bytes()).unwrap();
+        envelope.iv = iv;
+        envelope.ciphertext = ciphertext;
+        serde_json::to_value(envelope).unwrap()
+    }
+    async fn wait_command_state(api: &GuestApi, id: &str, state: &str) {
+        tokio::time::timeout(Duration::from_secs(20),async {
+            loop {
+                let current:Option<String>=sqlx::query_scalar("SELECT state FROM zuse_rust_mailbox_commands WHERE workspace_id='ws-bob' AND command_id=$1").bind(id).fetch_optional(&api.pool).await.unwrap();
+                if current.as_deref()==Some(state){break;}
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.unwrap();
+    }
+    #[tokio::test]
+    #[ignore = "requires isolated PostgreSQL and ZUSE_CLOUD_TEST_GUEST_BIN"]
+    async fn rust_cloud_guest_mailbox_accepts_before_start_and_recovers_lost_ack_and_receipt() {
+        use zuse_cloud_runtime::mailbox::CommandKey;
+        let api = GuestApi::start_with_mailbox(true).await;
+        let client = reqwest::Client::new();
+        let key_response = client
+            .get(format!(
+                "{}/v1/cloud/workspaces/ws-bob/data-key",
+                api.origin
+            ))
+            .bearer_auth("bob")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(key_response.status(), reqwest::StatusCode::OK);
+        let key_response: Value = key_response.json().await.unwrap();
+        let key = CommandKey::parse(key_response["encodedKey"].as_str().unwrap()).unwrap();
+        let endpoint = format!("{}/v1/cloud/workspaces/ws-bob/commands", api.origin);
+        for (id, prompt) in [
+            ("mailbox-first", "First durable message"),
+            ("mailbox-second", "Second durable message"),
+        ] {
+            assert_eq!(
+                runtime_post_for_url(
+                    &endpoint,
+                    "bob",
+                    &encrypted_mailbox_message(&key, id, prompt)
+                )
+                .await
+                .0,
+                202
+            );
+        }
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("runtime");
+        let checkout = temporary.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let boot = temporary.path().join("boot");
+        std::fs::write(&boot, "packaged-guest-boot").unwrap();
+        let log = temporary.path().join("guest.log");
+        let mut child = guest_command(&api, &directory, &checkout, Some(&boot), &log)
+            .spawn()
+            .unwrap();
+        wait_command_state(&api, "mailbox-first", "applied").await;
+        // The first ACK response is still withheld. Stop with its durable receipt unacknowledged locally.
+        stop_guest(&mut child).await;
+        api.lost_ack_release.notify_waiters();
+        let db_path = directory.join("orgs/ws-bob/user-bob/docs.sqlite3");
+        let db = rusqlite_for_acceptance(&db_path);
+        let pending:i64=db.query_row("SELECT COUNT(*) FROM zuse_cloud_command_receipts WHERE delivered=0 AND acknowledgment IS NOT NULL",[],|row|row.get(0)).unwrap();
+        assert_eq!(pending, 1);
+        drop(db);
+        let mut child = guest_command(&api, &directory, &checkout, None, &log)
+            .spawn()
+            .unwrap();
+        wait_command_state(&api, "mailbox-second", "applied").await;
+        let connection = api.client().await;
+        let mut messages = connection
+            .client
+            .subscribe(
+                zuse_rpc::methods::WATCH_DOC_MESSAGES,
+                json!({"chatId":"session-bob"}),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut entries = Vec::new();
+            loop {
+                let snapshot: zuse_doc::TranscriptUpdate =
+                    serde_json::from_value(messages.recv().await.unwrap()).unwrap();
+                zuse_doc::transcript_delta::apply_transcript_frame(&mut entries, snapshot.frame)
+                    .unwrap();
+                if entries
+                    .iter()
+                    .any(|entry| entry.id == "message-mailbox-first")
+                    && entries
+                        .iter()
+                        .any(|entry| entry.id == "message-mailbox-second")
+                {
+                    assert_eq!(
+                        entries
+                            .iter()
+                            .filter(|entry| entry.id == "message-mailbox-first")
+                            .count(),
+                        1
+                    );
+                    assert_eq!(
+                        entries
+                            .iter()
+                            .filter(|entry| entry.id == "message-mailbox-second")
+                            .count(),
+                        1
+                    );
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        drop(messages);
+        connection.closed.cancel();
+        drop(connection);
+        // Fail exactly the receipt commit after the canonical engine queue admission.
+        let db = rusqlite_for_acceptance(&db_path);
+        db.execute_batch("CREATE TRIGGER fail_receipt BEFORE UPDATE OF acknowledgment ON zuse_cloud_command_receipts WHEN NEW.acknowledgment IS NOT NULL BEGIN SELECT RAISE(FAIL,'receipt failure fixture'); END;").unwrap();
+        drop(db);
+        assert_eq!(
+            runtime_post_for_url(
+                &endpoint,
+                "bob",
+                &encrypted_mailbox_message(&key, "mailbox-receipt-gap", "Recover admission proof")
+            )
+            .await
+            .0,
+            202
+        );
+        let status = tokio::time::timeout(Duration::from_secs(15), child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !status.success(),
+            "A failed durable receipt must stop its consumer"
+        );
+        let db = rusqlite_for_acceptance(&db_path);
+        let unfinished:i64=db.query_row("SELECT COUNT(*) FROM zuse_cloud_command_receipts WHERE command_id='mailbox-receipt-gap' AND acknowledgment IS NULL",[],|row|row.get(0)).unwrap();
+        assert_eq!(unfinished, 1);
+        db.execute_batch("DROP TRIGGER fail_receipt;").unwrap();
+        drop(db);
+        let mut recovered = guest_command(&api, &directory, &checkout, None, &log)
+            .spawn()
+            .unwrap();
+        wait_command_state(&api, "mailbox-receipt-gap", "applied").await;
+        let connection = api.client().await;
+        let mut messages = connection
+            .client
+            .subscribe(
+                zuse_rpc::methods::WATCH_DOC_MESSAGES,
+                json!({"chatId":"session-bob"}),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut entries = Vec::new();
+            loop {
+                let snapshot: zuse_doc::TranscriptUpdate =
+                    serde_json::from_value(messages.recv().await.unwrap()).unwrap();
+                zuse_doc::transcript_delta::apply_transcript_frame(&mut entries, snapshot.frame)
+                    .unwrap();
+                if entries
+                    .iter()
+                    .any(|entry| entry.id == "message-mailbox-receipt-gap")
+                {
+                    assert_eq!(
+                        entries
+                            .iter()
+                            .filter(|entry| entry.id == "message-mailbox-receipt-gap")
+                            .count(),
+                        1
+                    );
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        drop(messages);
+        connection.closed.cancel();
+        drop(connection);
+        stop_guest(&mut recovered).await;
+        let db = rusqlite_for_acceptance(&db_path);
+        for id in ["mailbox-first", "mailbox-second", "mailbox-receipt-gap"] {
+            let processed: i64 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM processed_commands WHERE command_id=?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                processed, 1,
+                "Canonical engine claim must not be duplicated"
+            );
+        }
+        drop(db);
+        api.finish().await;
+    }
+    fn rusqlite_for_acceptance(path: &std::path::Path) -> rusqlite::Connection {
+        let db = rusqlite::Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )
+        .unwrap();
+        db.busy_timeout(Duration::from_secs(5)).unwrap();
+        db
     }
     #[tokio::test]
     #[ignore = "requires isolated PostgreSQL and ZUSE_CLOUD_TEST_GUEST_BIN"]
@@ -1843,7 +2097,7 @@ async fn mailbox_durable_ordering_receipts_and_uncertain_lease_fences() {
         .execute(&pool)
         .await
         .unwrap();
-    let config = json!({"runtimeGeneration":2,"runtimeCredentialExpiresAtMs":now+300000,"runtimeRpcProtocol":"zuse-rpc-v1","rustCommandMailboxEnabled":true,"rustRuntimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"original-storage"},"rustStorageEnrollment":{"phase":"committed"}});
+    let config = json!({"runtimeGeneration":2,"runtimeCredentialExpiresAtMs":now+300000,"runtimeRpcProtocol":"zuse-rpc-v1","rustCommandMailboxEnabled":true,"rustRuntimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"original-storage"},"runtimeBootstrapReceipt":{"workspaceId":"ws-bob","generation":2,"gatewayEpoch":2},"runtimeCredentialKeyThumbprint":"fixture-rsa","runtimeSigningKeyThumbprint":"fixture-ed","rustStorageEnrollment":{"phase":"committed","generation":2,"sourceSandboxId":"machine-bob","storageIncarnationId":"original-storage","credentialKeyThumbprint":"fixture-rsa","signingKeyThumbprint":"fixture-ed"}});
     sqlx::query("UPDATE api_cloud_workspaces SET runtime_credential_hash=$1,wrapped_transcript_key=$2,request_config=$3 WHERE workspace_id='ws-bob'").bind(hash).bind(wrapped).bind(config).execute(&pool).await.unwrap();
     let control = Arc::new(RuntimeControl::from_pool(pool.clone(), master, signer));
     let app = router(
@@ -2053,6 +2307,22 @@ async fn mailbox_durable_ordering_receipts_and_uncertain_lease_fences() {
         .await
         .unwrap();
     sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{runtimeGeneration}','3') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+    assert_eq!(
+        control
+            .command_lease("ws-bob", credential, &lease_request, now + 33000)
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "workspace_runtime_fenced"
+    );
+    let credential = "mailbox-runtime-generation-3";
+    let hash: String = Sha256::digest(credential.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    sqlx::query("UPDATE api_cloud_workspaces SET runtime_credential_hash=$1,request_config=request_config||'{\"runtimeBootstrapReceipt\":{\"workspaceId\":\"ws-bob\",\"generation\":3,\"gatewayEpoch\":3}}' WHERE workspace_id='ws-bob'").bind(hash).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustStorageEnrollment,generation}','3') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
     let retry = control
         .command_lease("ws-bob", credential, &lease_request, now + 33000)
         .await
@@ -2073,6 +2343,7 @@ async fn mailbox_durable_ordering_receipts_and_uncertain_lease_fences() {
         "stale-runtime-lease"
     );
     sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustRuntimeStorage,storageIncarnationId}','\"replacement-storage\"') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustStorageEnrollment,storageIncarnationId}','\"replacement-storage\"') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
     let changed = LeaseRequest {
         storage_incarnation_id: "replacement-storage".into(),
         ..lease_request

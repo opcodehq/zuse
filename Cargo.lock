@@ -14080,6 +14080,7 @@ dependencies = [
  "rand 0.8.7",
  "reqwest",
  "rsa",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
@@ -14094,6 +14095,7 @@ dependencies = [
  "uuid",
  "zeroize",
  "zuse-cloud-runtime",
+ "zuse-doc",
  "zuse-engine",
  "zuse-protocol",
  "zuse-providers",
@@ -14119,6 +14121,7 @@ name = "zuse-cloud-guest"
 version = "0.25.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "serde_json",
  "tokio",
@@ -14126,6 +14129,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zuse-cloud-runtime",
+ "zuse-doc",
  "zuse-engine",
  "zuse-mcp",
  "zuse-protocol",
@@ -14139,8 +14143,10 @@ version = "0.25.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "ed25519-dalek",
+ "hmac",
  "jsonwebtoken",
  "libc",
  "rand 0.8.7",

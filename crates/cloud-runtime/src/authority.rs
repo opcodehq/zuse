@@ -18,6 +18,7 @@ impl std::fmt::Display for Failure {
     }
 }
 impl std::error::Error for Failure {}
+#[derive(Clone)]
 pub struct Authority {
     client: reqwest::Client,
     origin: reqwest::Url,
@@ -50,7 +51,7 @@ impl Authority {
     pub fn origin(&self) -> String {
         self.origin.origin().ascii_serialization()
     }
-    async fn post(
+    pub(crate) async fn post(
         &self,
         workspace: &str,
         suffix: &[&str],
@@ -78,7 +79,7 @@ impl Authority {
         ensure!(
             response
                 .content_length()
-                .is_none_or(|l| l <= 2 * 1024 * 1024),
+                .is_none_or(|l| l <= 8 * 1024 * 1024),
             "runtime_authority_response_invalid"
         );
         let mut bytes = Vec::new();
@@ -87,13 +88,17 @@ impl Authority {
             retryable: true,
         })? {
             ensure!(
-                bytes.len() + chunk.len() <= 2 * 1024 * 1024,
+                bytes.len() + chunk.len() <= 8 * 1024 * 1024,
                 "runtime_authority_response_invalid"
             );
             bytes.extend_from_slice(&chunk);
         }
         if !status.is_success() {
             const CODES: &[&str] = &[
+                "cloud_command_mailbox_disabled",
+                "cloud_workspace_runtime_not_ready",
+                "stale-runtime-lease",
+                "runtime-storage-replaced",
                 "workspace_runtime_fenced",
                 "workspace_runtime_revoked",
                 "workspace_bootstrap_rejected",

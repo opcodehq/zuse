@@ -254,7 +254,11 @@ impl EngineCore {
         registry.load_prefs(data_dir);
         let pairings = zuse_remote::authority::Authority::open(profile.store_root())
             .map_err(|error| EngineError::Other(error.to_string()))?;
-        let store = Arc::new(DocsStore::open(profile.store_root())?);
+        let store = Arc::new(if profile.durable_command_commits() {
+            DocsStore::open_durable(profile.store_root())?
+        } else {
+            DocsStore::open(profile.store_root())?
+        });
         let store_for_import = store.clone();
         let journal = Arc::new(RunJournal::open(profile.store_root().join("journals"))?);
         let sessions = SessionsEngine::new(device_id.clone(), journal, registry.clone());

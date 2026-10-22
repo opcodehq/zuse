@@ -9,7 +9,8 @@ Chat access controls and their current provider-specific limits are described in
 The Rust hosted-cloud rewrite and its acceptance checklist are tracked in
 [cloud implementation](internal-docs/cloud-implementation.md). Its current API supports
 authenticated catalog/archive reads and explicitly gated runtime enrollment, renewal
-and gateway transport. The guest executable passes local process acceptance; live
+and gateway transport, plus encrypted text-message mailbox admission and recovery.
+The guest executable passes local process acceptance; live
 provider execution, the full archive lifecycle and cutover remain in progress.
 
 ## Repository

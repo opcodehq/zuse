@@ -40,6 +40,8 @@ zuse-protocol.workspace = true
 zeroize = "1"
 
 [dev-dependencies]
+zuse-doc.workspace = true
+rusqlite.workspace = true
 libc.workspace = true
 tokio-tungstenite.workspace = true
 tower = { version = "0.5", features = ["util"] }

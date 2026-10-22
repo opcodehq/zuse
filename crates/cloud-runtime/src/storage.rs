@@ -92,6 +92,9 @@ impl Storage {
             Err(_) => bail!("runtime_storage_marker_invalid"),
         }
     }
+    pub fn database_path(&self) -> &Path {
+        &self.database
+    }
     pub fn initialized(&self) -> bool {
         self.binding.ready
     }

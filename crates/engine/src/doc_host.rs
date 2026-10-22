@@ -4726,6 +4726,81 @@ impl DocHost {
         Ok(())
     }
 
+    /// A canonical queued entry proves admission even if its HTTP/local receipt was lost.
+    pub fn mailbox_command_admitted(
+        &self,
+        chat_id: &str,
+        command_id: &str,
+        fingerprint: &str,
+    ) -> Result<bool, EngineError> {
+        if !self.is_host(chat_id) {
+            return Ok(false);
+        }
+        let handle = self.open_local(chat_id)?;
+        let issuer = format!("cloud-mailbox:{fingerprint}");
+        Ok(handle.doc.read_commands()?.iter().any(|entry| {
+            entry.id == command_id
+                && entry.issued_by == issuer
+                && entry.resolution.as_deref() != Some("mailbox admission could not be persisted")
+        }))
+    }
+
+    /// Admit an encrypted-mailbox command to the existing durable command queue.
+    /// `issued_by` binds the authenticated fingerprint. A retry retains the
+    /// original queued request/configuration and never directly dispatches tools.
+    pub async fn admit_mailbox_command(
+        &self,
+        chat_id: &str,
+        entry: SessionCommandEntry,
+    ) -> Result<(), EngineError> {
+        if !self.is_host(chat_id) || !entry.issued_by.starts_with("cloud-mailbox:hmac-sha256:") {
+            return Err(EngineError::Other(
+                "mailbox_command_identity_rejected".into(),
+            ));
+        }
+        let handle = self.open_local(chat_id)?;
+        let exclusive = handle.command_drain_lock.lock().await;
+        let sessions = self
+            .sessions()
+            .ok_or_else(|| EngineError::Other("executor unavailable".into()))?;
+        let filesystem = sessions.filesystem_admission().await;
+        self.require_unarchived(chat_id)?;
+        let commands = handle.doc.read_commands()?;
+        if let Some(existing) = commands.iter().find(|command| command.id == entry.id) {
+            if existing.issued_by != entry.issued_by {
+                return Err(EngineError::Other(
+                    "mailbox_command_identity_rejected".into(),
+                ));
+            }
+            // The bound entry is itself the admission receipt. Retain its original settings.
+            self.persist_fork(&handle)?;
+            self.inner.store.schedule_sync_job(chat_id, "wake")?;
+        } else {
+            if self.inner.store.is_processed(&entry.id)? {
+                return Err(EngineError::Other("mailbox_command_receipt_missing".into()));
+            }
+            self.inner.store.schedule_sync_job(chat_id, "wake")?;
+            handle.doc.queue_command(&entry)?;
+            if let Err(error) = self.persist_fork(&handle) {
+                let _ = handle.doc.set_command_status(
+                    &entry.id,
+                    SessionCommandStatus::Cancelled,
+                    Some("mailbox admission could not be persisted"),
+                );
+                return Err(error);
+            }
+        }
+        drop(filesystem);
+        drop(exclusive);
+        // The doc-change task may have observed the entry while this method held
+        // its drain lock. Schedule a fresh pass after releasing that lock.
+        let host = self.clone();
+        self.spawn_worker(async move {
+            host.drain_commands(&handle).await;
+        });
+        Ok(())
+    }
+
     /// Host side of [`zuse_rpc::methods::RELAY_COMMAND`]: evaluate the
     /// forwarded entry against OUR doc (dedupe/TTL/supersede rules apply
     /// unchanged), claim its client-minted id in the processed ledger, then

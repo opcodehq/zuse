@@ -198,12 +198,14 @@ impl RuntimeControl {
         let mut tx = self.pool.begin().await?;
         let (row, generation, _) = locked_workspace(&mut tx, id).await?;
         runtime_auth(&row, credential, now)?;
-        if row["request_config"]["rustCommandMailboxEnabled"] != true
-            || blocked(&row)
+        if row["request_config"]["rustCommandMailboxEnabled"] != true {
+            return Err(ApiError::conflict("cloud_command_mailbox_disabled"));
+        }
+        if blocked(&row)
             || row["desired_state"] != "ready"
             || row["state"] != "ready"
             || row["runtime_state"] != "online"
-            || row["request_config"]["rustStorageEnrollment"]["phase"] != "committed"
+            || !storage_enrolled(&row)
             || row["request_config"]["cloudMailboxLifecyclePending"]["action"] == "archive"
         {
             return Err(ApiError::conflict("cloud_workspace_runtime_not_ready"));
@@ -371,9 +373,10 @@ fn authorize(row: &Value, access: &Access, edit: bool) -> Result<(), ApiError> {
     Ok(())
 }
 fn runtime_auth(row: &Value, credential: &str, now: i64) -> Result<(), ApiError> {
-    if row["runtime_credential_hash"]
-        .as_str()
-        .is_none_or(|v| !equal(v, &hash(credential)))
+    if !enrollment_matches(row)
+        || row["runtime_credential_hash"]
+            .as_str()
+            .is_none_or(|v| !equal(v, &hash(credential)))
         || row["request_config"]["runtimeCredentialExpiresAtMs"]
             .as_i64()
             .unwrap_or(0)

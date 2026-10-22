@@ -11,7 +11,7 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK/renewal and leased personal-workspace gateway added; Rust guest executable, persisted enrollment/storage binding, renewal/reconnect supervision, original launch adoption and explicit RPC negotiation added; PostgreSQL encrypted mailbox API and focused acceptance added; allocation reconciliation, images, credential grants, guest mailbox delivery and UI create/send/reopen pending | Boxd/WebCrypto, PostgreSQL/HTTP/WebSocket and real-engine reopen/dedup acceptance pass with a deterministic provider; live cloud provider acceptance pending |
+| B: real cloud chat | Boxd transport; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch and encrypted text-mailbox admission/receipt recovery. Remaining: allocation, images, grants, full queue/context/attachment/steering delivery and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -349,8 +349,8 @@ cancelled. Archived history/status and authorized encryption-key reads do not co
 providers or wake compute. First key issuance installs the original wrapped format
 under the workspace lock, so commands can be encrypted before a guest is enrolled.
 
-This is not complete mailbox parity yet: guest execution/receipts, encrypted client
-transport, provider wake reconciliation, billing capacity/reservations,
+This is not complete mailbox parity yet: desktop/browser encrypted client
+transport, rich-context translation, provider wake reconciliation, billing capacity/reservations,
 original mailbox import and archival/deletion cleanup remain required before
 activation. The API is deliberately gated rather than advertising an unavailable
 runtime capability.
@@ -372,3 +372,62 @@ Clippy for `zuse-cloud-api`/`zuse-cloud`, package formatting, protocol formattin
 `git diff --check` passed. No production migrations, owner handoffs or provider
 operations were performed. Live-provider, guest mailbox and billing acceptance
 remain outstanding; the mailbox activation flag stays off by default.
+
+### Guest delivery and canonical queue admission
+
+The guest consumes original AES-GCM/HMAC v3 text-message envelopes using the
+workspace transcript key. The engine admits the original command/message IDs to
+its existing `SessionDoc` command queue, synchronously saves the canonical snapshot
+and records durable discovery responsibility before returning admission. It reuses
+the engine's normal drain, model settings, queued-turn handling, execution journal
+and processed-command ledger. A retry preserves the first queued request/settings.
+The hosted profile enables SQLite FULL synchronization before engine workers are
+assembled, including command queue snapshots and processed claims. Local profiles
+retain their existing policy. No direct tool replay or separate history database
+is added.
+
+Encrypted envelope bindings and acknowledgment receipts live in additive
+`zuse_cloud_command_receipts` inside that same verified engine SQLite database.
+Receipts are committed before HTTP acknowledgment. Restart first checks unfinished
+receipt bindings against the canonical engine command entry; an existing bound
+entry proves prior admission without a fresh tool call. Without that proof, the
+guest requires a fresh valid lease. Lost ACK responses replay only receipts. Guest
+leases bind the original workspace, sandbox, runtime generation and storage
+incarnation. One supervisor renews credentials and publishes updates to the
+independent long-polling consumer; gateway reconnect does not cancel admitted work.
+Gateway command messages are notifications, never execution grants.
+
+The consumer is enabled only by the explicitly gated bootstrap
+`commandMailboxEnabled` flag. Ordinary runtime startup stays functional with the
+flag off. Organization execution remains disabled. Text and empty-reference
+composer inputs are supported; nonempty file/skill/annotation inputs require the
+remaining context adapter, and unsupported content is rejected rather than lost.
+Original v3 attachment/goal restrictions remain explicit. Full attachments/queues,
+steering and UI delivery still require their remaining inventory workflows. In
+particular, the engine's recovered normal queue is currently frozen by its existing
+restart policy; cloud-specific queue recovery and long-running queue acceptance
+must pass before claiming full background-work parity.
+
+Focused guest acceptance now proves encrypted commands accepted before startup,
+original IDs/history retained through restart, a committed API ACK with its response
+withheld, and a failed local receipt commit after canonical queue admission. The
+latter is recovered from the existing command entry, without a new engine claim.
+Independent Node WebCrypto checks verify AES-GCM/HMAC compatibility in both
+directions, including rejection of modified routing metadata or keyed identity.
+Archive/restore/deletion must carry or purge the new mailbox rows/jobs and local
+receipt table as part of their existing ownership scope; those lifecycle workflows
+remain pending.
+
+Current Rust enrollment proofs now bind runtime generation/epoch before raw-bearer
+gateway attachment, mailbox delivery, storage enrollment, launch readiness and
+renewal. Committed storage additionally binds the current generation, sandbox,
+incarnation and key thumbprints. A generation change with an unchanged old bearer
+is rejected; fresh authorized enrollment is required. Legacy protocol adapters
+retain their existing contract.
+
+Validation: the final hosted guest builds; 18 cloud/guest checks and one hosted WAL
+durability check passed locally. The cloud suite passed again after the enrollment
+fence changes, and the independent crypto test additionally verifies omission of
+original optional payload fields. Scoped strict Clippy and formatting passed.
+No production owner transfer, live-provider execution, billing export, deployment
+or full milestone completion is claimed by this chunk.

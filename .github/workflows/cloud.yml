@@ -11,6 +11,9 @@ on:
       - crates/protocol/src/cloud*.rs
       - crates/rpc/src/cloud.rs
       - crates/engine/src/doc_host.rs
+      - crates/engine/src/profile.rs
+      - crates/engine/src/lib.rs
+      - crates/sync/src/store.rs
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/cloud.yml
@@ -24,6 +27,9 @@ on:
       - crates/protocol/src/cloud*.rs
       - crates/rpc/src/cloud.rs
       - crates/engine/src/doc_host.rs
+      - crates/engine/src/profile.rs
+      - crates/engine/src/lib.rs
+      - crates/sync/src/store.rs
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/cloud.yml
@@ -71,6 +77,8 @@ jobs:
       - run: rustfmt --edition 2024 --check crates/protocol/src/cloud.rs crates/protocol/src/cloud_gateway.rs crates/protocol/src/cloud_commands.rs
       - run: cargo check --locked -p zuse-cloud-api -p zuse-cloud-guest
       - run: cargo build --locked -p zuse-cloud-guest
+      - run: rustfmt --edition 2024 --config skip_children=true --check crates/engine/src/doc_host.rs crates/engine/src/profile.rs crates/engine/src/lib.rs crates/sync/src/store.rs
+      - run: cargo test --locked -p zuse-sync --lib hosted_admission_and_processed_claims_use_full_wal_commits
       - run: cargo test --locked -p zuse-cloud-runtime -- --include-ignored
       - run: cargo test --locked -p zuse-cloud -- --include-ignored
       - run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud -- --ignored

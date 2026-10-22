@@ -332,6 +332,7 @@ impl RuntimeControl {
             response["launchIntent"] = intent;
         }
         if rpc_protocol == zuse_protocol::cloud_gateway::RUST_RPC {
+            response["commandMailboxEnabled"] = json!(config["rustCommandMailboxEnabled"] == true);
             let storage: zuse_protocol::cloud::CloudRuntimeStorage =
                 serde_json::from_value(config["rustRuntimeStorage"].clone())
                     .map_err(|_| ApiError::conflict("runtime_storage_enrollment_required"))?;
@@ -362,7 +363,8 @@ impl RuntimeControl {
         let mut tx = self.pool.begin().await?;
         let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
         let mut config = row["request_config"].clone();
-        if blocked(&row)
+        if !enrollment_matches(&row)
+            || blocked(&row)
             || row["desired_state"] != "ready"
             || request.runtime_generation != generation
             || request.gateway_epoch != epoch
@@ -459,7 +461,8 @@ impl RuntimeControl {
         let head = request.session_head_version.unwrap_or(0);
         let mut tx = self.pool.begin().await?;
         let (row, _, _) = locked_workspace(&mut tx, id).await?;
-        if blocked(&row)
+        if !enrollment_matches(&row)
+            || blocked(&row)
             || row["desired_state"] != "ready"
             || row["runtime_credential_hash"]
                 .as_str()
@@ -475,7 +478,7 @@ impl RuntimeControl {
             return Err(ApiError::conflict("workspace_rpc_protocol_mismatch"));
         }
         let mut config = row["request_config"].clone();
-        if config["rustStorageEnrollment"]["phase"] != "committed" {
+        if !storage_enrolled(&row) {
             return Err(ApiError::conflict("runtime_storage_enrollment_required"));
         }
 
@@ -596,6 +599,7 @@ impl RuntimeControl {
                     zuse_protocol::cloud_gateway::RUST_PROTOCOL,
                 ]
                 .contains(&protocol)
+                    && enrollment_matches(&row)
                     && row["runtime_credential_hash"]
                         .as_str()
                         .is_some_and(|h| equal(h, &hash(credential)))
@@ -638,7 +642,7 @@ impl RuntimeControl {
         }
         if claims["role"] == "runtime"
             && expected_rpc == zuse_protocol::cloud_gateway::RUST_RPC
-            && row["request_config"]["rustStorageEnrollment"]["phase"] != "committed"
+            && !storage_enrolled(&row)
         {
             return Err(ApiError::conflict("runtime_storage_enrollment_required"));
         }
@@ -701,7 +705,7 @@ impl RuntimeControl {
         }
         let mut tx = self.pool.begin().await?;
         let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
-        if blocked(&row) || row["desired_state"] == "archived" {
+        if !enrollment_matches(&row) || blocked(&row) || row["desired_state"] == "archived" {
             return Err(ApiError::unauthorized("workspace_runtime_revoked"));
         }
         let mut config = row["request_config"].clone();
@@ -877,4 +881,32 @@ fn negotiate_rpc<'a>(config: &'a Value, requested: Option<&str>) -> Result<&'a s
         return Err(ApiError::conflict("workspace_rpc_protocol_mismatch"));
     }
     Ok(expected)
+}
+
+fn enrollment_matches(row: &Value) -> bool {
+    let config = &row["request_config"];
+    if config["runtimeRpcProtocol"] != zuse_protocol::cloud_gateway::RUST_RPC {
+        return true;
+    }
+    let generation = config["runtimeGeneration"].as_i64().unwrap_or(1);
+    let epoch = config["gatewayEpoch"].as_i64().unwrap_or(generation);
+    let receipt = &config["runtimeBootstrapReceipt"];
+    receipt["workspaceId"] == row["workspace_id"]
+        && receipt["generation"].as_i64() == Some(generation)
+        && receipt["gatewayEpoch"].as_i64() == Some(epoch)
+}
+fn storage_enrolled(row: &Value) -> bool {
+    let config = &row["request_config"];
+    let storage = &config["rustStorageEnrollment"];
+    enrollment_matches(row)
+        && storage["phase"] == "committed"
+        && storage["generation"].as_i64() == Some(config["runtimeGeneration"].as_i64().unwrap_or(1))
+        && storage["sourceSandboxId"].as_str().is_some()
+        && storage["sourceSandboxId"] == row["provider_sandbox_id"]
+        && storage["storageIncarnationId"].as_str().is_some()
+        && storage["storageIncarnationId"] == config["rustRuntimeStorage"]["storageIncarnationId"]
+        && storage["credentialKeyThumbprint"].as_str().is_some()
+        && storage["credentialKeyThumbprint"] == config["runtimeCredentialKeyThumbprint"]
+        && storage["signingKeyThumbprint"].as_str().is_some()
+        && storage["signingKeyThumbprint"] == config["runtimeSigningKeyThumbprint"]
 }

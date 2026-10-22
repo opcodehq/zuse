@@ -241,7 +241,8 @@ pub async fn serve_guest(
                             peers.insert(connection_id,Peer {input,_task:AbortOnDropHandle::new(task)});
                         }
                         Control::Close {connection_id}=>{peers.remove(&connection_id);}
-                        Control::Command=>return Err(RpcError::Capability("cloud.mailbox_unavailable".into())),
+                        // Notifications grant no execution authority; the guest polls its durable mailbox.
+                        Control::Command=>{},
                     }
                 }
                 Some(Ok(Message::Binary(bytes)))=> {

@@ -27,6 +27,7 @@ pub struct EngineProfile {
     uploads_root: PathBuf,
     org_id: String,
     user_id: String,
+    durable_command_commits: bool,
 }
 
 impl EngineProfile {
@@ -41,6 +42,7 @@ impl EngineProfile {
             store_root,
             org_id: LOCAL_ORG_ID.to_string(),
             user_id: profile_id,
+            durable_command_commits: false,
         })
     }
 
@@ -66,7 +68,17 @@ impl EngineProfile {
             store_root,
             org_id: org_id.to_string(),
             user_id: user_id.to_string(),
+            durable_command_commits: false,
         }
+    }
+
+    /// Hosted admission receipts require the command queue/claims to reach stable storage.
+    pub fn with_durable_command_commits(mut self) -> Self {
+        self.durable_command_commits = true;
+        self
+    }
+    pub(crate) fn durable_command_commits(&self) -> bool {
+        self.durable_command_commits
     }
 
     pub fn scope(&self) -> WorkspaceScope {

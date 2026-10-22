@@ -9,6 +9,7 @@ pub async fn serve(
     identity: &mut Identity,
     service: Arc<dyn zuse_rpc::RpcService>,
     cancel: CancellationToken,
+    credentials: tokio::sync::watch::Sender<zuse_protocol::cloud::CloudRuntimeBootstrap>,
 ) -> Result<()> {
     let mut backoff = 1u64;
     loop {
@@ -23,7 +24,11 @@ pub async fn serve(
             || bootstrap.runtime_credential_expires_at <= now_ms() + 60000
         {
             match authority.renew(identity).await {
-                Ok(()) => {}
+                Ok(()) => {
+                    if let Some(boot) = identity.bootstrap() {
+                        credentials.send_replace(boot.clone());
+                    }
+                }
                 Err(error) if retryable(&error) => {
                     wait(&cancel, backoff).await;
                     backoff = (backoff * 2).min(10);
@@ -63,7 +68,7 @@ pub async fn serve(
                     let boot=identity.bootstrap().ok_or_else(||anyhow::anyhow!("runtime_not_enrolled"))?;
                     if identity.has_pending_renewal() || boot.runtime_credential_expires_at<=now_ms()+120000 {
                         match authority.renew(identity).await {
-                            Ok(())=>{backoff=1;},Err(error) if retryable(&error)=>{},Err(error)=>return Err(error),
+                            Ok(())=>{backoff=1;if let Some(boot)=identity.bootstrap(){credentials.send_replace(boot.clone());}},Err(error) if retryable(&error)=>{},Err(error)=>return Err(error),
                         }
                     }
                     if identity.bootstrap().is_none_or(|b|b.runtime_credential_expires_at<=now_ms()) {link_cancel.cancel();let _=(&mut socket).await;break;}

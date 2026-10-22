@@ -117,12 +117,19 @@ pub struct DocsStore {
 impl DocsStore {
     /// Open (creating directory, database, and schema as needed).
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::open_with_durability(data_dir, false)
+    }
+    /// Commit command admission and claims before a hosted runtime can dispatch tools.
+    pub fn open_durable(data_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::open_with_durability(data_dir, true)
+    }
+    fn open_with_durability(data_dir: impl AsRef<Path>, durable: bool) -> Result<Self, StoreError> {
         let data_dir = data_dir.as_ref();
         std::fs::create_dir_all(data_dir)?;
         let path = data_dir.join("docs.sqlite3");
         let mut conn = Connection::open(&path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "synchronous", if durable { "FULL" } else { "NORMAL" })?;
         conn.pragma_update(None, "journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES)?;
         conn.busy_timeout(STORE_BUSY_TIMEOUT)?;
         migrate(&mut conn)?;
@@ -1151,5 +1158,37 @@ mod maintenance_tests {
             store.reclaim_free_space();
             assert_eq!(pragma(&store.conn(), "freelist_count"), 0, "{lock}");
         }
+    }
+}
+
+#[cfg(test)]
+mod hosted_durability_tests {
+    use super::*;
+    #[test]
+    fn hosted_admission_and_processed_claims_use_full_wal_commits() {
+        let normal = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(normal.path()).unwrap();
+        assert_eq!(
+            store
+                .conn()
+                .query_row("PRAGMA synchronous", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        drop(store);
+        let hosted = tempfile::tempdir().unwrap();
+        let store = DocsStore::open_durable(hosted.path()).unwrap();
+        assert_eq!(
+            store
+                .conn()
+                .query_row("PRAGMA synchronous", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert!(store.mark_processed("hosted-command").unwrap());
+        drop(store);
+        let reopened = DocsStore::open_durable(hosted.path()).unwrap();
+        assert!(reopened.is_processed("hosted-command").unwrap());
+        assert!(!reopened.mark_processed("hosted-command").unwrap());
     }
 }
