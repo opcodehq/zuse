@@ -30,6 +30,9 @@ impl ApiError {
     pub fn not_found(code: &'static str) -> Self {
         Self::new(StatusCode::NOT_FOUND, code)
     }
+    pub fn conflict(code: &'static str) -> Self {
+        Self::new(StatusCode::CONFLICT, code)
+    }
 }
 
 impl IntoResponse for ApiError {

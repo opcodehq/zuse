@@ -3,13 +3,15 @@
 Reference: original Zuse `2016cf4f0cc240e6797916dd5cab1d8bebab89ae`.
 Target origin: `https://api-rust.zuse.sh`. Work takes place on `swarajbachu/rust-cloud-parity`;
 do not publish to `main`. The [feature inventory](cloud-parity-inventory.md) defines parity.
+UI acceptance must save before/after screenshots under `.context/` and embed the
+completed UI images in the final user-facing report.
 
 ## Milestone ledger
 
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport and legacy encryption compatibility added; allocation reconciliation, images/enrollment/gateway/mailbox, Rust guest and UI create/send/reopen pending | Boxd HTTP/protobuf and WebCrypto compatibility fixtures pass; live cloud chat pending |
+| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK added; allocation reconciliation, images, credential grants, gateway/mailbox, Rust guest and UI create/send/reopen pending | Boxd HTTP/protobuf and WebCrypto compatibility fixtures pass; live cloud chat pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -24,9 +26,11 @@ Do not mark a milestone complete from compilation alone. Record tested behavior 
 catalog reads and durable job primitives. Shared archive contracts live in
 `zuse_protocol::cloud`. No new history database or alternate local engine is introduced.
 
-The current API is **read-only**, including PostgreSQL session enforcement. It does
-not wake machines, transfer ownership, export charges, perform checkout reconciliation
-or mutate legacy records. It serves only implemented routes:
+The API defaults to **read-only**, including PostgreSQL session enforcement for
+catalog reads. Explicitly enabled runtime control uses a separate writable pool and
+requires a matching Rust workspace owner/generation in each transaction. It never
+wakes machines, transfers ownership, exports charges or reconciles checkouts.
+It serves only implemented routes:
 
 - `GET /healthz`, `GET /readyz`.
 - `GET /v1/cloud/context` (new: authenticated actor, selected scope and owner).
@@ -34,6 +38,11 @@ or mutate legacy records. It serves only implemented routes:
 - `GET /v1/cloud/workspaces[?projectId=...]`, `GET /v1/cloud/workspaces/:id`.
 - `GET /v1/cloud/workspaces/:id/archive-status` (new: retained machine, deadline,
   backup/retirement/restore phase and verification progress; no compute activation).
+
+With `ZUSE_CLOUD_RUNTIME_WRITES=true`, these routes are additionally registered:
+
+- `POST /v1/cloud/workspaces/:id/runtime/bootstrap`.
+- `POST /v1/cloud/workspaces/:id/runtime/bootstrap/ack`.
 
 Other feature routes remain absent until their behavior is implemented. Runtime-derived
 native-agent availability is not yet returned by the workspace projection.
@@ -65,6 +74,10 @@ Configuration:
 | `ORGANIZATION_WORKSPACES_ENABLED` | Defaults false |
 | `ZUSE_CLOUD_ORGANIZATION_IDS` | Explicit migration allowlist; default empty denies all org access |
 | `ZUSE_CLOUD_ALLOWED_ORIGINS` | Comma-separated exact HTTPS browser origins; empty denies cross-origin browser access |
+| `ZUSE_CLOUD_RUNTIME_WRITES` | Defaults disabled; literal `true` enables owner-fenced bootstrap/ACK |
+| `CLOUD_DATA_ENCRYPTION_KEY` | Existing master key required for runtime writes; legacy fallback `CLOUD_CREDENTIAL_VAULT_KEY` |
+| `RELAY_MINT_PRIVATE_JWK` | Existing Ed25519 mint key required for runtime writes |
+| `API_ISSUER` | Runtime ticket/gateway origin, defaults `https://api-rust.zuse.sh` |
 
 Organization access rechecks membership and separates content/admin/billing roles.
 Only allowlist organizations after their existing rollout/GitHub-enrollment policy has
@@ -98,13 +111,17 @@ ZUSE_CLOUD_TEST_DATABASE_URL=postgres://user@127.0.0.1:5432/test \
 cargo test -p zuse-protocol cloud::tests
 ```
 
-The PostgreSQL scenario creates and removes only a generated test schema. It covers
+The PostgreSQL scenarios create and remove only generated test schemas. They cover
 actual HTTP routing, personal isolation, organization sharing/financial roles,
 secret-free catalog projection, archive reads without mutation, idempotent jobs,
-competing claims, expired-worker recovery and stale lease rejection.
+competing claims, expired-worker recovery and stale lease rejection. Runtime enrollment
+acceptance also covers concurrent bootstrap retries through real HTTP handlers,
+verified Ed25519 gateway JWTs, original launch-intent identity and transcript-key
+preservation, changed-key rejection, idempotent ACK, ownership-generation fencing
+and transaction rollback when initial launch state is unavailable.
 
-Verified on October 22, 2026: two identity tests and the combined PostgreSQL/HTTP
-acceptance scenario pass. JWT acceptance uses generated RSA keys and an actual JWKS
+Verified on October 22, 2026: four cloud unit/HTTP fixture tests and both
+PostgreSQL/HTTP acceptance scenarios pass. JWT acceptance uses generated RSA keys and an actual JWKS
 HTTP endpoint; the catalog scenario uses PostgreSQL 15, original column names and
 real Axum handlers. The deployed read-only Store reports its actual PostgreSQL
 read-only setting. These fixtures establish local behavior, not live WorkOS accounts,
@@ -143,8 +160,17 @@ RSA-OAEP-256/A256GCM compact runtime grants. Existing ciphertext and digest vect
 generated with WebCrypto pass without conversion; wrong owner/workspace contexts
 are rejected. The synthetic RSA fixture contains only a generated test key.
 `scripts/fixtures/generate-cloud-crypto.mjs` regenerates those independent vectors.
-These primitives still need wiring into transactional runtime enrollment and the
-credential authority; they do not establish production-key or historical-data acceptance.
+Transactional bootstrap now uses these primitives to retain the original wrapped
+transcript key and decrypt the existing launch intent. It binds the enrollment receipt
+to the boot token, both runtime public keys, generation and gateway epoch. Concurrent
+retries return the persisted receipt; ACK clears the boot credential once. Missing
+initial launch data aborts the whole transaction. Runtime control does not yet issue
+provider launch grants, resolve Git identity, attach a gateway or start an agent.
+Production-key and historical-data acceptance remain pending.
+
+Before enabling writes, the legacy lifecycle writer must also honor ownership or be
+fenced/drained. The new ownership table alone does not stop the existing scheduler.
+No production migration, owner reassignment or runtime-write activation has occurred.
 
 Hosted CI is externally blocked: run `39848991883` for `604fa76` has no job steps;
 GitHub reports failed recent account payments or a spending limit requiring an increase.

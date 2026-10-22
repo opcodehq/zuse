@@ -4,6 +4,61 @@ use serde::{Deserialize, Serialize};
 pub const ARCHIVE_RETENTION_MS: i64 = 10 * 24 * 60 * 60 * 1000;
 pub const DELETION_TOMBSTONE_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
+/// Public runtime keys only; reusable credentials are never part of enrollment input.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudRuntimeBootstrapRequest {
+    pub credential_public_jwk: String,
+    pub signing_public_jwk: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudRuntimeBootstrapAck {
+    pub runtime_generation: i64,
+    pub gateway_epoch: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudRuntimeMode {
+    Auto,
+    ApprovalRequired,
+    AutoAcceptEdits,
+    AutoAcceptEditsAndBash,
+    FullAccess,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudForkSource {
+    pub chat_id: String,
+    pub session_id: String,
+    pub message_id: String,
+}
+
+/// The sealed initial intent retains the original command/turn identity.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudLaunchIntent {
+    pub command_id: String,
+    pub turn_id: String,
+    pub title: String,
+    pub agent: String,
+    pub model: String,
+    pub permissions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_mode: Option<CloudRuntimeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_rename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_source: Option<CloudForkSource>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ArchivePhase {

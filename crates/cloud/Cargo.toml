@@ -11,6 +11,8 @@ async-trait.workspace = true
 aes-gcm = { version = "0.10.3", features = ["std"] }
 axum.workspace = true
 futures.workspace = true
+ed25519-dalek = { version = "2", features = ["pkcs8"] }
+chrono.workspace = true
 base64 = "0.22"
 hmac = "0.12"
 jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto"] }
@@ -20,6 +22,7 @@ rsa = "0.9"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+subtle.workspace = true
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "json"] }
 tokio.workspace = true
 tower-http = { workspace = true, features = ["cors"] }
@@ -29,5 +32,4 @@ zeroize = "1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-chrono.workspace = true
 rand = "0.8"

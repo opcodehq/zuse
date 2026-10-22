@@ -5,6 +5,7 @@ use zuse_cloud::{
     auth::WorkosIdentity,
     config::Config,
     routes::{AppState, router},
+    runtime::{RuntimeConfig, RuntimeControl},
     store::Store,
 };
 
@@ -16,7 +17,7 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Serve authenticated read-only catalog and archive status endpoints.
+    /// Serve the cloud API; runtime control writes require explicit configuration.
     Serve,
     /// Inspect existing schema/data counts without changing ownership or data.
     Inspect,
@@ -45,11 +46,19 @@ async fn main() -> Result<()> {
         }
         Command::Serve => {
             let config = Config::from_env()?;
+            let runtime = match RuntimeConfig::from_env()? {
+                Some(settings) => {
+                    Some(RuntimeControl::connect(&config.database_url, settings).await?)
+                }
+                None => None,
+            };
+            let runtime_enabled = runtime.is_some();
             let state = AppState {
                 store: Store::connect_read_only(&config.database_url).await?,
                 identity: WorkosIdentity::new(&config)?,
                 organizations_enabled: config.organizations_enabled,
                 organization_ids: Arc::new(config.organization_ids),
+                runtime,
             };
             let origins = config
                 .allowed_origins
@@ -57,7 +66,7 @@ async fn main() -> Result<()> {
                 .map(|origin| origin.parse())
                 .collect::<Result<Vec<_>, _>>()?;
             let listener = tokio::net::TcpListener::bind(config.listen).await?;
-            tracing::info!(address = %listener.local_addr()?, "Zuse cloud API listening (read-only)");
+            tracing::info!(address = %listener.local_addr()?,runtime_control=runtime_enabled, "Zuse cloud API listening");
             axum_serve(listener, router(state, origins)).await?;
         }
     }

@@ -114,6 +114,7 @@ async fn catalog_authorization_archive_reads_and_durable_job_recovery() {
         identity: Arc::new(TestIdentity),
         organizations_enabled: true,
         organization_ids: Arc::new(vec!["org-team".into()]),
+        runtime: None,
     };
     let app = router(state, vec![]);
     assert_eq!(request(&app, "/readyz", "", None).await.0, StatusCode::OK);
@@ -332,6 +333,215 @@ async fn catalog_authorization_archive_reads_and_durable_job_recovery() {
     drop(readonly);
     pool.close().await;
     // This schema name is generated above; no application or shared tables are dropped.
+    sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+async fn runtime_post(app: &Router, path: &str, token: &str, body: &Value) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn runtime_enrollment_preserves_keys_intent_and_fences_retries() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::SigningKey;
+    use sha2::{Digest, Sha256};
+    use zuse_cloud::{crypto::MasterKey, runtime::RuntimeControl, tickets::TicketSigner};
+    let (admin, pool, schema) = fixture().await;
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/cloud-crypto.json")).unwrap();
+    let master = MasterKey::parse(fixture["masterKey"].as_str().unwrap()).unwrap();
+    let (_, envelope) = master.create_transcript_key("user-bob", "ws-bob").unwrap();
+    let boot = "synthetic-bootstrap-token";
+    let hash = |s: &str| -> String {
+        Sha256::digest(s.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    sqlx::query("UPDATE api_cloud_workspaces SET runtime_boot_token_hash=$1,runtime_boot_token_expires_at=$2,wrapped_transcript_key=$3,request_config=$4 WHERE workspace_id='ws-bob'")
+        .bind(hash(boot)).bind(now+120000).bind(&envelope)
+        .bind(json!({"runtimeGeneration":2,"gatewayEpoch":5,"providerAuthMode":"broker-v1"}))
+        .execute(&pool).await.unwrap();
+    let intent = json!({"commandId":"original-command","turnId":"original-turn","title":"Original chat","agent":"claude","model":"original-model","permissions":[],"runtimeMode":"approval-required","firstMessage":"Keep the original prompt"});
+    let ciphertext = master
+        .seal(
+            b"zuse-cloud-workspace-launch-intent-v1\nuser-bob\nws-bob",
+            intent.to_string().as_bytes(),
+        )
+        .unwrap();
+    sqlx::query("INSERT INTO api_cloud_workspace_launch_intents VALUES ('ws-bob','user-bob','chat-bob','session-bob','original-turn','original-command',$1,$2,$3)")
+        .bind(ciphertext).bind(now+120000).bind(now).execute(&pool).await.unwrap();
+    let mint = SigningKey::from_bytes(&[7; 32]);
+    let mint_jwk = json!({"kty":"OKP","crv":"Ed25519","d":URL_SAFE_NO_PAD.encode([7;32]),"x":URL_SAFE_NO_PAD.encode(mint.verifying_key().as_bytes())});
+    let guest = SigningKey::from_bytes(&[8; 32]);
+    let guest_jwk = json!({"kty":"OKP","crv":"Ed25519","x":URL_SAFE_NO_PAD.encode(guest.verifying_key().as_bytes())});
+    let signer = TicketSigner::from_jwk(&mint_jwk.to_string(), "https://api-rust.zuse.sh").unwrap();
+    let app = router(
+        AppState {
+            store: Store::from_pool(pool.clone()),
+            identity: Arc::new(TestIdentity),
+            organizations_enabled: false,
+            organization_ids: Arc::new(vec![]),
+            runtime: Some(Arc::new(RuntimeControl::from_pool(
+                pool.clone(),
+                master,
+                signer,
+            ))),
+        },
+        vec![],
+    );
+    let body = json!({"credentialPublicJwk":fixture["runtimePublicJwk"].to_string(),"signingPublicJwk":guest_jwk.to_string(),"capabilities":["github-execution-v1"]});
+    let path = "/v1/cloud/workspaces/ws-bob/runtime/bootstrap";
+    assert_eq!(
+        runtime_post(&app, path, boot, &body).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    sqlx::query("INSERT INTO zuse_rust_control_owners VALUES ('workspace','ws-bob','rust',2,$1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime_post(&app, path, "wrong-token", &body).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (a, b) = tokio::join!(
+        runtime_post(&app, path, boot, &body),
+        runtime_post(&app, path, boot, &body)
+    );
+    assert_eq!(a.0, StatusCode::OK, "{}", a.1);
+    assert_eq!(b.0, StatusCode::OK, "{}", b.1);
+    assert_eq!(
+        a.1, b.1,
+        "Concurrent retries must return the committed receipt"
+    );
+    let response = a.1;
+    assert_eq!(response["launchIntent"], intent);
+    assert_eq!(response["chatId"], "chat-bob");
+    assert_eq!(response["initialSessionId"], "session-bob");
+    assert_eq!(response["providerAuthMode"], "broker-v1");
+    assert_eq!(response["gatewayProtocol"], "zuse-workspace-v2");
+    let token = response["runtimeCredential"].as_str().unwrap();
+    let gateway_token = response["runtimeGatewayCredential"].as_str().unwrap();
+    let public = json!({"kty":"OKP","crv":"Ed25519","x":mint_jwk["x"]});
+    let key =
+        jsonwebtoken::DecodingKey::from_jwk(&serde_json::from_value(public).unwrap()).unwrap();
+    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::EdDSA);
+    validation.set_audience(&["zuse-workspace:ws-bob"]);
+    validation.set_issuer(&["https://api-rust.zuse.sh"]);
+    let decoded = jsonwebtoken::decode::<Value>(gateway_token, &key, &validation).unwrap();
+    assert_eq!(decoded.header.typ.as_deref(), Some("workspace-runtime+jwt"));
+    assert_eq!(decoded.claims["generation"], 2);
+    assert_eq!(decoded.claims["gatewayEpoch"], 5);
+    assert_eq!(decoded.claims["sub"], "user-bob");
+    let stored: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored["wrapped_transcript_key"], envelope);
+    assert_eq!(stored["runtime_credential_hash"], hash(token));
+    assert_eq!(stored["revision"], 2);
+    assert_eq!(stored["state"], "setup");
+    let mut changed = body.clone();
+    changed["signingPublicJwk"] =
+        json!(json!({"kty":"OKP","crv":"Ed25519","x":mint_jwk["x"]}).to_string());
+    assert_eq!(
+        runtime_post(&app, path, boot, &changed).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let ack_path = format!("{path}/ack");
+    assert_eq!(
+        runtime_post(
+            &app,
+            &ack_path,
+            token,
+            &json!({"runtimeGeneration":1,"gatewayEpoch":5})
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let ack = json!({"runtimeGeneration":2,"gatewayEpoch":5});
+    assert_eq!(
+        runtime_post(&app, &ack_path, token, &ack).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        runtime_post(&app, &ack_path, token, &ack).await.0,
+        StatusCode::OK
+    );
+    let stored: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(stored["runtime_boot_token_hash"].is_null());
+    assert!(stored["runtime_boot_token_expires_at"].is_null());
+    assert_eq!(
+        stored["revision"], 3,
+        "Repeated ACK must not advance revision"
+    );
+    assert_eq!(
+        runtime_post(&app, path, boot, &body).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    sqlx::query("UPDATE zuse_rust_control_owners SET generation=3 WHERE resource_id='ws-bob'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime_post(&app, &ack_path, token, &ack).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    // Failed first enrollment must roll back key creation and leave no accepted receipt.
+    sqlx::query("UPDATE zuse_rust_control_owners SET generation=2 WHERE resource_id='ws-bob'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM api_cloud_workspace_launch_intents WHERE workspace_id='ws-bob'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE api_cloud_workspaces SET runtime_boot_token_hash=$1,runtime_boot_token_expires_at=$2,wrapped_transcript_key=NULL,runtime_credential_hash=NULL,request_config=$3 WHERE workspace_id='ws-bob'")
+        .bind(hash(boot)).bind(now+120000).bind(json!({"runtimeGeneration":2,"gatewayEpoch":5})).execute(&pool).await.unwrap();
+    assert_eq!(
+        runtime_post(&app, path, boot, &body).await.0,
+        StatusCode::CONFLICT
+    );
+    let stored: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(stored["wrapped_transcript_key"].is_null());
+    assert!(stored["runtime_credential_hash"].is_null());
+    assert!(stored["request_config"]["runtimeBootstrapReceipt"].is_null());
+    pool.close().await;
     sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin)
         .await

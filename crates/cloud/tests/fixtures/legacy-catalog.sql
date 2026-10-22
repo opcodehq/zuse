@@ -30,3 +30,12 @@ INSERT INTO api_cloud_workspaces VALUES
  ('ws-bob','user-bob','project','image','boxd','machine-bob',NULL,NULL,NULL,'online','chat-bob','session-bob','feature-bob','main','ready','ready','ready','{}',NULL,NULL,NULL,1,1,2,1),
  ('ws-org-private','organization:org-team','project-org','image','boxd','machine-org',NULL,NULL,NULL,'offline','chat-org','session-org','private','main','paused','paused','paused','{"sharingPolicy":{"audience":"private","permission":"view","creatorSubject":"user-admin","creatorMembershipId":"member-admin","grants":[]}}',NULL,NULL,NULL,1,1,2,1),
  ('ws-org-shared','organization:org-team','project-org','image','boxd','machine-shared',NULL,NULL,NULL,'offline','chat-shared','session-shared','shared','main','paused','paused','paused','{"sharingPolicy":{"audience":"organization","permission":"view","creatorSubject":"user-admin","creatorMembershipId":"member-admin","grants":[]}}',NULL,NULL,NULL,1,1,2,1);
+
+-- Original runtime columns and launch table used by bootstrap acceptance.
+ALTER TABLE api_cloud_workspaces ADD COLUMN runtime_boot_token_expires_at bigint;
+ALTER TABLE api_cloud_workspaces ADD COLUMN next_action_at bigint NOT NULL DEFAULT 0;
+CREATE TABLE api_cloud_workspace_launch_intents (
+    workspace_id text PRIMARY KEY, account_id text NOT NULL, chat_id text NOT NULL,
+    session_id text NOT NULL, turn_id text NOT NULL, command_id text NOT NULL,
+    ciphertext text NOT NULL, expires_at bigint NOT NULL, created_at bigint NOT NULL
+);
