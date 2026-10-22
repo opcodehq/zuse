@@ -31,5 +31,6 @@ zuse-protocol.workspace = true
 zeroize = "1"
 
 [dev-dependencies]
+tokio-tungstenite.workspace = true
 tower = { version = "0.5", features = ["util"] }
 rand = "0.8"

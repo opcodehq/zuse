@@ -59,6 +59,7 @@ async fn main() -> Result<()> {
                 organizations_enabled: config.organizations_enabled,
                 organization_ids: Arc::new(config.organization_ids),
                 runtime,
+                gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
             };
             let origins = config
                 .allowed_origins

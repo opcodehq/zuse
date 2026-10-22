@@ -3,12 +3,13 @@ use crate::{
     archive,
     auth::Identity,
     error::ApiError,
+    gateway::Hub,
     runtime::{BootstrapAck, BootstrapRequest, RenewRequest, RuntimeControl},
     store::Store,
 };
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, Query, State, rejection::JsonRejection},
+    extract::{DefaultBodyLimit, Path, Query, State, WebSocketUpgrade, rejection::JsonRejection},
     http::{HeaderMap, HeaderValue, Method, header},
     middleware,
     response::Response,
@@ -26,6 +27,7 @@ pub struct AppState {
     pub organizations_enabled: bool,
     pub organization_ids: Arc<Vec<String>>,
     pub runtime: Option<Arc<RuntimeControl>>,
+    pub gateway: Arc<Hub>,
 }
 
 impl AppState {
@@ -42,8 +44,10 @@ impl AppState {
 }
 
 pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
+    let origins = Arc::new(origins);
+    let gateway_origins = origins.clone();
     let cors = CorsLayer::new()
-        .allow_origin(origins)
+        .allow_origin(origins.as_ref().clone())
         .allow_methods(if state.runtime.is_some() {
             vec![Method::GET, Method::POST]
         } else {
@@ -53,6 +57,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
             header::HeaderName::from_static("x-zuse-workspace"),
+            header::HeaderName::from_static("x-zuse-device-id"),
         ]);
     let mut app = Router::new()
         .route("/healthz", get(health))
@@ -67,6 +72,17 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         );
     if state.runtime.is_some() {
         app = app
+            .route(
+                "/v1/cloud/workspaces/{id}/gateway/ticket",
+                post(gateway_ticket).layer(DefaultBodyLimit::max(1024)),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/gateway",
+                get(move |state, path, headers: HeaderMap, ws| {
+                    let origins = gateway_origins.clone();
+                    async move { gateway_upgrade(state, path, headers, ws, origins).await }
+                }),
+            )
             .route(
                 "/v1/cloud/workspaces/{id}/runtime/bootstrap",
                 post(runtime_bootstrap).layer(DefaultBodyLimit::max(64 * 1024)),
@@ -116,6 +132,112 @@ fn mode(state: &AppState) -> &'static str {
     }
 }
 
+async fn gateway_ticket(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    // Use the catalog authorization first so other owners remain indistinguishable.
+    state.store.workspace(&access, &id).await?;
+    let body: Value = if body.is_empty() {
+        json!({})
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|_| ApiError::bad_request("invalid_workspace_gateway_protocol"))?
+    };
+    if !body.is_object() {
+        return Err(ApiError::bad_request("invalid_workspace_gateway_protocol"));
+    }
+    let protocol = match body.get("protocol") {
+        None => zuse_protocol::cloud_gateway::PROTOCOL,
+        Some(value) => value
+            .as_str()
+            .ok_or_else(|| ApiError::bad_request("invalid_workspace_gateway_protocol"))?,
+    };
+    let device = headers
+        .get("x-zuse-device-id")
+        .map(|v| {
+            v.to_str()
+                .map_err(|_| ApiError::bad_request("invalid_device_id"))
+        })
+        .transpose()?
+        .unwrap_or(&access.actor.account_id);
+    let control = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(
+        control
+            .gateway_ticket(
+                &id,
+                &access,
+                protocol,
+                device,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
+}
+async fn gateway_upgrade(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+    origins: Arc<Vec<HeaderValue>>,
+) -> Result<Response, ApiError> {
+    // Cookies and forwarded gateway headers never grant authority. Browser origins
+    // must be explicitly configured; native guests carry no Origin header.
+    if headers
+        .get(header::ORIGIN)
+        .is_some_and(|origin| !origins.contains(origin))
+    {
+        return Err(ApiError::forbidden("workspace_gateway_origin_rejected"));
+    }
+    let values: Vec<_> = headers
+        .get(header::SEC_WEBSOCKET_PROTOCOL)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .collect();
+    if values.len() != 2
+        || ![
+            zuse_protocol::cloud_gateway::PROTOCOL,
+            zuse_protocol::cloud_gateway::PENDING_PROTOCOL,
+            zuse_protocol::cloud_gateway::LEGACY_PROTOCOL,
+        ]
+        .contains(&values[0])
+    {
+        return Err(ApiError::unauthorized("workspace_gateway_rejected"));
+    }
+    let control = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?
+        .clone();
+    let grant = control
+        .gateway_authorize(
+            &id,
+            values[0],
+            values[1],
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
+    let permit = state.gateway.permit()?;
+    let room = state.gateway.room(control, &grant).await?;
+    let max_frame = if grant.protocol == zuse_protocol::cloud_gateway::LEGACY_PROTOCOL {
+        zuse_protocol::cloud_gateway::MAX_FRAME * 4 / 3 + 1024
+    } else {
+        zuse_protocol::cloud_gateway::MAX_FRAME
+    };
+    Ok(ws
+        .protocols([grant.protocol.clone()])
+        .max_message_size(max_frame)
+        .max_frame_size(max_frame)
+        .on_upgrade(move |socket| room.serve(grant, socket, permit)))
+}
 async fn runtime_bootstrap(
     State(state): State<AppState>,
     Path(id): Path<String>,

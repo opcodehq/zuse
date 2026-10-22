@@ -102,6 +102,10 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .await
         .unwrap();
     sqlx::raw_sql(jobs::MIGRATION).execute(&pool).await.unwrap();
+    sqlx::raw_sql(zuse_cloud::gateway::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
     (admin, pool, schema)
 }
 
@@ -115,6 +119,7 @@ async fn catalog_authorization_archive_reads_and_durable_job_recovery() {
         organizations_enabled: true,
         organization_ids: Arc::new(vec!["org-team".into()]),
         runtime: None,
+        gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
     };
     let app = router(state, vec![]);
     assert_eq!(request(&app, "/readyz", "", None).await.0, StatusCode::OK);
@@ -408,6 +413,7 @@ async fn runtime_enrollment_preserves_keys_intent_and_fences_retries() {
                 master,
                 signer,
             ))),
+            gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
         },
         vec![],
     );
@@ -674,4 +680,295 @@ async fn runtime_enrollment_preserves_keys_intent_and_fences_retries() {
         .await
         .unwrap();
     admin.close().await;
+}
+
+type TestSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+async fn socket_connect(url: &str, protocol: &str, credential: &str) -> TestSocket {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = url.into_client_request().unwrap();
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        format!("{protocol}, {credential}").parse().unwrap(),
+    );
+    // These headers are untrusted and must not override ticket-derived authority.
+    request
+        .headers_mut()
+        .insert("x-zuse-gateway-actor", "attacker".parse().unwrap());
+    let (socket, response) = tokio_tungstenite::connect_async(request).await.unwrap();
+    assert_eq!(response.headers()["sec-websocket-protocol"], protocol);
+    socket
+}
+async fn socket_message(socket: &mut TestSocket) -> tokio_tungstenite::tungstenite::Message {
+    use futures::StreamExt;
+    tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+}
+async fn socket_json(socket: &mut TestSocket) -> Value {
+    serde_json::from_str(socket_message(socket).await.to_text().unwrap()).unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn gateway_multiplexes_live_sockets_and_fences_runtime_ownership() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::SigningKey;
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    use zuse_cloud::{crypto::MasterKey, runtime::RuntimeControl, tickets::TicketSigner};
+    use zuse_protocol::cloud_gateway::{Direction, Frame, PENDING_PROTOCOL, PROTOCOL, Payload};
+    let (admin, pool, schema) = fixture().await;
+    let now = chrono::Utc::now().timestamp_millis();
+    sqlx::query("INSERT INTO zuse_rust_control_owners VALUES ('workspace','ws-bob','rust',2,$1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=$1 WHERE workspace_id='ws-bob'")
+        .bind(json!({"runtimeGeneration":2,"gatewayEpoch":5}))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mint = SigningKey::from_bytes(&[9; 32]);
+    let jwk=json!({"kty":"OKP","crv":"Ed25519","d":URL_SAFE_NO_PAD.encode([9;32]),"x":URL_SAFE_NO_PAD.encode(mint.verifying_key().as_bytes())}).to_string();
+    let signer = TicketSigner::from_jwk(&jwk, "https://api-rust.zuse.sh").unwrap();
+    let runtime_ticket = signer
+        .runtime("user-bob", "ws-bob", 2, 5, now + 900000)
+        .unwrap();
+    let wrong_workspace = signer
+        .runtime("user-bob", "ws-alice", 2, 5, now + 900000)
+        .unwrap();
+    let expired = signer
+        .runtime("user-bob", "ws-bob", 2, 5, now - 1000)
+        .unwrap();
+    let control = Arc::new(RuntimeControl::from_pool(
+        pool.clone(),
+        MasterKey::parse(&URL_SAFE_NO_PAD.encode([10; 32])).unwrap(),
+        signer,
+    ));
+    let app = router(
+        AppState {
+            store: Store::from_pool(pool.clone()),
+            identity: Arc::new(TestIdentity),
+            organizations_enabled: false,
+            organization_ids: Arc::new(vec![]),
+            runtime: Some(control.clone()),
+            gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
+        },
+        vec![],
+    );
+    let ticket_path = "/v1/cloud/workspaces/ws-bob/gateway/ticket";
+    assert_eq!(
+        runtime_post(&app, ticket_path, "alice", &json!({})).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        runtime_post(&app, ticket_path, "bob", &json!({"protocol":"unknown"}))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, ticket) = runtime_post(
+        &app,
+        ticket_path,
+        "bob",
+        &json!({"protocol":PENDING_PROTOCOL}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ticket}");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "ws://{}/v1/cloud/workspaces/ws-bob/gateway",
+        listener.local_addr().unwrap()
+    );
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+    });
+    let credential = ticket["credential"].as_str().unwrap();
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    for (credential, origin, expected) in [
+        (&wrong_workspace, None, 401),
+        (&expired, None, 401),
+        (&runtime_ticket, Some("https://unapproved.example"), 403),
+    ] {
+        let mut request = url.as_str().into_client_request().unwrap();
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            format!("{PROTOCOL}, {credential}").parse().unwrap(),
+        );
+        if let Some(origin) = origin {
+            request
+                .headers_mut()
+                .insert("origin", origin.parse().unwrap());
+        }
+        match tokio_tungstenite::connect_async(request).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status().as_u16(), expected)
+            }
+            _ => panic!("Gateway accepted invalid admission authority"),
+        }
+    }
+    let mut client = socket_connect(&url, PENDING_PROTOCOL, credential).await;
+    assert_eq!(
+        socket_json(&mut client).await,
+        json!({"_zuseGateway":"availability","state":"pending"})
+    );
+    client
+        .send(Message::Text("never replay this mutation".into()))
+        .await
+        .unwrap();
+    // Ensure the pending send is processed before the runtime arrives.
+    client.send(Message::Ping(vec![1])).await.unwrap();
+    assert!(matches!(
+        socket_message(&mut client).await,
+        Message::Pong(_)
+    ));
+    let mut runtime = socket_connect(&url, PROTOCOL, &runtime_ticket).await;
+    let opened = socket_json(&mut runtime).await;
+    assert_eq!(opened["type"], "client.open");
+    assert_eq!(opened["actorId"], "user-bob");
+    assert_eq!(opened["permission"], "edit");
+    let connection = opened["connectionId"].as_str().unwrap();
+    assert_eq!(
+        socket_json(&mut client).await,
+        json!({"_zuseGateway":"availability","state":"available","reset":false})
+    );
+    assert!(
+        control
+            .gateway_lease("ws-bob", "competing-process", (2, 5))
+            .await
+            .is_err()
+    );
+    let payload = vec![0, 255, 1, 2, 0, 128];
+    client.send(Message::Binary(payload.clone())).await.unwrap();
+    let frame = Frame::decode(&socket_message(&mut runtime).await.into_data()).unwrap();
+    assert_eq!(frame.direction, Direction::Client);
+    assert_eq!(frame.connection_id, connection);
+    assert_eq!(frame.payload, Payload::Binary(payload));
+    runtime
+        .send(Message::Binary(
+            Frame {
+                direction: Direction::Runtime,
+                connection_id: connection.into(),
+                payload: Payload::Text("original response".into()),
+            }
+            .encode()
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        socket_message(&mut client).await.to_text().unwrap(),
+        "original response"
+    );
+    let (status, second) = runtime_post_for_url(
+        &url.replace("ws://", "http://")
+            .replace("/gateway", "/gateway/ticket"),
+        "bob",
+        &json!({"protocol":PROTOCOL}),
+    )
+    .await;
+    assert_eq!(status, 200, "{second}");
+    let mut other = socket_connect(&url, PROTOCOL, second["credential"].as_str().unwrap()).await;
+    let other_open = socket_json(&mut runtime).await;
+    let other_id = other_open["connectionId"].as_str().unwrap();
+    assert_ne!(other_id, connection);
+    runtime
+        .send(Message::Binary(
+            Frame {
+                direction: Direction::Runtime,
+                connection_id: other_id.into(),
+                payload: Payload::Binary(vec![255, 0]),
+            }
+            .encode()
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(socket_message(&mut other).await.into_data(), vec![255, 0]);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(75), client.next())
+            .await
+            .is_err(),
+        "A runtime response crossed client connections"
+    );
+    runtime.close(None).await.unwrap();
+    assert_eq!(socket_json(&mut client).await["state"], "pending");
+    assert!(
+        matches!(socket_message(&mut other).await,Message::Close(Some(frame)) if u16::from(frame.code)==4100)
+    );
+    use sha2::{Digest, Sha256};
+    let legacy_bearer = "retained-runtime-bearer";
+    let legacy_hash: String = Sha256::digest(legacy_bearer.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    sqlx::query("UPDATE api_cloud_workspaces SET runtime_credential_hash=$1,request_config=jsonb_set(request_config,'{runtimeCredentialExpiresAtMs}',$2) WHERE workspace_id='ws-bob'").bind(legacy_hash).bind(json!(now+900000)).execute(&pool).await.unwrap();
+    let mut replacement = socket_connect(
+        &url,
+        zuse_protocol::cloud_gateway::LEGACY_PROTOCOL,
+        legacy_bearer,
+    )
+    .await;
+    assert_eq!(
+        socket_json(&mut client).await,
+        json!({"_zuseGateway":"availability","state":"available","reset":true})
+    );
+    // A reset connection is never silently attached to a replacement runtime.
+    let mut fresh = socket_connect(&url, PROTOCOL, second["credential"].as_str().unwrap()).await;
+    let fresh_open = socket_json(&mut replacement).await;
+    assert_ne!(fresh_open["connectionId"], connection);
+    fresh.send(Message::Binary(vec![0, 255])).await.unwrap();
+    let legacy_frame = socket_json(&mut replacement).await;
+    assert_eq!(
+        legacy_frame,
+        json!({"type":"client.frame","connectionId":fresh_open["connectionId"],"encoding":"base64","payload":"AP8="})
+    );
+    replacement.send(Message::Text(json!({"type":"runtime.frame","connectionId":fresh_open["connectionId"],"encoding":"base64","payload":"/wA="}).to_string())).await.unwrap();
+    assert_eq!(socket_message(&mut fresh).await.into_data(), vec![255, 0]);
+
+    sqlx::query("UPDATE zuse_rust_control_owners SET generation=3 WHERE resource_id='ws-bob'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        matches!(socket_message(&mut replacement).await,Message::Close(Some(frame)) if u16::from(frame.code)==4101)
+    );
+    assert!(
+        matches!(socket_message(&mut fresh).await,Message::Close(Some(frame)) if u16::from(frame.code)==4101)
+    );
+    let _ = client.close(None).await;
+    let _ = fresh.close(None).await;
+    let _ = replacement.close(None).await;
+    let _ = other.close(None).await;
+    stop.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    pool.close().await;
+    sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+async fn runtime_post_for_url(url: &str, token: &str, body: &Value) -> (u16, Value) {
+    let response = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(token)
+        .json(body)
+        .send()
+        .await
+        .unwrap();
+    (response.status().as_u16(), response.json().await.unwrap())
 }

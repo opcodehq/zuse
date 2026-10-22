@@ -106,7 +106,7 @@ impl RuntimeControl {
         }
     }
     pub async fn ready(&self) -> Result<(), ApiError> {
-        let ready: bool = sqlx::query_scalar("SELECT to_regclass('zuse_rust_control_owners') IS NOT NULL AND to_regclass('api_cloud_workspace_launch_intents') IS NOT NULL")
+        let ready: bool = sqlx::query_scalar("SELECT to_regclass('zuse_rust_control_owners') IS NOT NULL AND to_regclass('api_cloud_workspace_launch_intents') IS NOT NULL AND to_regclass('zuse_rust_gateway_leases') IS NOT NULL")
             .fetch_one(&self.pool).await?;
         if !ready {
             return Err(ApiError::unavailable("cloud_runtime_schema_not_ready"));
@@ -315,6 +315,126 @@ impl RuntimeControl {
         }
         tx.commit().await?;
         Ok(response)
+    }
+
+    pub async fn gateway_ticket(
+        &self,
+        id: &str,
+        access: &crate::access::Access,
+        protocol: &str,
+        device: &str,
+        now: i64,
+    ) -> Result<Value, ApiError> {
+        use zuse_protocol::cloud_gateway::{PENDING_PROTOCOL, PROTOCOL};
+        if ![PROTOCOL, PENDING_PROTOCOL].contains(&protocol)
+            || device.is_empty()
+            || device.len() > 512
+        {
+            return Err(ApiError::bad_request("invalid_workspace_gateway_protocol"));
+        }
+        let mut tx = self.pool.begin().await?;
+        let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
+        if row["account_id"] != access.owner_id {
+            return Err(ApiError::not_found("cloud_workspace_not_found"));
+        }
+        let permission = access.workspace_permission(&access.owner_id, &row["request_config"])?;
+        if blocked(&row) || row["desired_state"] == "archived" || row["state"] == "failed" {
+            return Err(ApiError::conflict("cloud_workspace_unavailable"));
+        }
+        // Organization execution requires the runtime access callback, ported separately.
+        if access.membership.is_some() {
+            return Err(ApiError::conflict("workspace_runtime_update_required"));
+        }
+        let credential=self.signer.client(json!({"sub":access.owner_id,"workspaceId":id,"actorId":access.actor.account_id,"deviceId":device,"permission":permission,"protocol":protocol,"generation":generation,"gatewayEpoch":epoch}),id,now)?;
+        tx.commit().await?;
+        Ok(
+            json!({"workspaceId":id,"wsUrl":self.signer.gateway_url(id),"workspaceScope":access.scope,"protocol":protocol,"role":"client","generation":generation,"gatewayEpoch":epoch,"credential":credential,"expiresAt":now+crate::tickets::CLIENT_TTL_MS}),
+        )
+    }
+
+    pub async fn gateway_authorize(
+        &self,
+        id: &str,
+        protocol: &str,
+        credential: &str,
+        now: i64,
+    ) -> Result<crate::gateway::Grant, ApiError> {
+        let mut tx = self.pool.begin().await?;
+        let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
+        if blocked(&row) || row["desired_state"] == "archived" {
+            return Err(ApiError::unauthorized("workspace_gateway_rejected"));
+        }
+        let owner = required(&row, "account_id")?;
+        // Preserve raw runtime bearers for retained guests; browsers use signed tickets.
+        let claims = match self.signer.verify_gateway(credential, id, protocol, now) {
+            Ok(claims) => claims,
+            Err(_)
+                if [
+                    GATEWAY_PROTOCOL,
+                    zuse_protocol::cloud_gateway::LEGACY_PROTOCOL,
+                ]
+                .contains(&protocol)
+                    && row["runtime_credential_hash"]
+                        .as_str()
+                        .is_some_and(|h| equal(h, &hash(credential)))
+                    && row["request_config"]["runtimeCredentialExpiresAtMs"]
+                        .as_i64()
+                        .is_some_and(|e| e > now) =>
+            {
+                json!({"role":"runtime","sub":owner,"generation":generation,"gatewayEpoch":epoch,"exp":row["request_config"]["runtimeCredentialExpiresAtMs"].as_i64().unwrap_or(0)/1000})
+            }
+            Err(error) => return Err(error),
+        };
+        if claims["sub"] != owner
+            || claims["generation"] != generation
+            || claims["gatewayEpoch"] != epoch
+        {
+            return Err(ApiError::unauthorized("workspace_runtime_fenced"));
+        }
+        if owner.starts_with("organization:") {
+            return Err(ApiError::conflict("workspace_runtime_update_required"));
+        }
+        let grant = crate::gateway::Grant {
+            workspace: id.into(),
+            generation,
+            epoch,
+            runtime: claims["role"] == "runtime",
+            protocol: protocol.into(),
+            actor: claims["actorId"].as_str().unwrap_or(owner).into(),
+            permission: claims["permission"].as_str().unwrap_or("edit").into(),
+            expires_at: claims["exp"].as_i64().unwrap_or(0) * 1000,
+        };
+        tx.commit().await?;
+        Ok(grant)
+    }
+
+    pub async fn gateway_lease(
+        &self,
+        id: &str,
+        token: &str,
+        fence: (i64, i64),
+    ) -> Result<(), ApiError> {
+        let mut tx = self.pool.begin().await?;
+        let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
+        if blocked(&row) || row["desired_state"] == "archived" || (generation, epoch) != fence {
+            return Err(ApiError::unauthorized("workspace_runtime_fenced"));
+        }
+        let leased:Option<String>=sqlx::query_scalar("INSERT INTO zuse_rust_gateway_leases (workspace_id,owner_token,expires_at) VALUES ($1,$2,(extract(epoch from clock_timestamp())*1000)::bigint+10000) ON CONFLICT (workspace_id) DO UPDATE SET owner_token=EXCLUDED.owner_token,expires_at=EXCLUDED.expires_at WHERE zuse_rust_gateway_leases.expires_at<=(extract(epoch from clock_timestamp())*1000)::bigint OR zuse_rust_gateway_leases.owner_token=$2 RETURNING owner_token")
+            .bind(id).bind(token).fetch_optional(&mut *tx).await?;
+        if leased.is_none() {
+            return Err(ApiError::unavailable("workspace_gateway_owned_elsewhere"));
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+    pub async fn release_gateway(&self, id: &str, token: &str) {
+        let _ = sqlx::query(
+            "DELETE FROM zuse_rust_gateway_leases WHERE workspace_id=$1 AND owner_token=$2",
+        )
+        .bind(id)
+        .bind(token)
+        .execute(&self.pool)
+        .await;
     }
 
     pub async fn renew(

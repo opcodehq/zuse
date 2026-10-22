@@ -11,7 +11,7 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK/renewal added; allocation reconciliation, images, credential grants, gateway/mailbox, Rust guest and UI create/send/reopen pending | Boxd HTTP/protobuf and WebCrypto compatibility fixtures pass; live cloud chat pending |
+| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK/renewal and leased personal-workspace gateway added; allocation reconciliation, images, credential grants, durable mailbox, Rust guest and UI create/send/reopen pending | Boxd/WebCrypto fixtures and real PostgreSQL/HTTP/WebSocket gateway acceptance pass; live cloud chat pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -44,6 +44,8 @@ With `ZUSE_CLOUD_RUNTIME_WRITES=true`, these routes are additionally registered:
 - `POST /v1/cloud/workspaces/:id/runtime/bootstrap`.
 - `POST /v1/cloud/workspaces/:id/runtime/bootstrap/ack`.
 - `POST /v1/cloud/workspaces/:id/runtime/credentials/renew`.
+- `POST /v1/cloud/workspaces/:id/gateway/ticket`.
+- `GET /v1/cloud/workspaces/:id/gateway` (authenticated WebSocket upgrade).
 
 Other feature routes remain absent until their behavior is implemented. Runtime-derived
 native-agent availability is not yet returned by the workspace projection.
@@ -87,7 +89,8 @@ organization rollout. Personal records are never a fallback for an organization 
 
 ## Coordination and archive requirements
 
-`crates/cloud/migrations/0001_control_plane.sql` adds only Rust coordination tables.
+`crates/cloud/migrations/0001_control_plane.sql` and `0002_gateway_leases.sql`
+add only Rust coordination tables.
 It neither replaces original `api_*` tables nor assigns any resource to Rust.
 Apply it explicitly to an isolated test database first. Jobs require a matching
 Rust owner and generation before claim; enqueue belongs to the same transaction as
@@ -123,8 +126,8 @@ and transaction rollback when initial launch state is unavailable. Renewal accep
 covers fresh guest proofs, expired-bearer recovery, concurrent/lost-response retries,
 stale bearer/request rejection, deletion fences and valid-bearer legacy compatibility.
 
-Verified on October 22, 2026: four cloud unit/HTTP fixture tests and both
-PostgreSQL/HTTP acceptance scenarios pass. JWT acceptance uses generated RSA keys and an actual JWKS
+Verified on October 22, 2026: four cloud unit/HTTP fixture tests and all three
+PostgreSQL/HTTP/WebSocket acceptance scenarios pass. JWT acceptance uses generated RSA keys and an actual JWKS
 HTTP endpoint; the catalog scenario uses PostgreSQL 15, original column names and
 real Axum handlers. The deployed read-only Store reports its actual PostgreSQL
 read-only setting. These fixtures establish local behavior, not live WorkOS accounts,
@@ -171,8 +174,33 @@ initial launch data aborts the whole transaction. Credential renewal verifies th
 registered guest's Ed25519 proof and persists the existing renewal receipt format;
 expired bearer recovery requires that proof. Delete intent metadata fences callbacks
 even if row state regresses. Runtime control does not yet issue
-provider launch grants, resolve Git identity, attach a gateway or start an agent.
+provider launch grants, resolve Git identity or start an agent.
 Production-key and historical-data acceptance remain pending.
+
+The gateway now mints existing-format one-minute client admission tickets and verifies
+workspace/owner/protocol/generation/epoch bindings. It multiplexes opaque binary/text
+payloads across one retained runtime socket, carries ticket-derived actor/permission
+in `client.open`, supports v2 binary and v1 text/base64 adapters, and preserves v3
+pending/available/reset behavior without queuing or replaying application requests.
+A separate database lease admits one gateway process per workspace. Heartbeats check
+lifecycle ownership; a conservative monotonic deadline stops forwarding if ownership
+cannot be renewed. Socket queues and total buffered bytes are bounded.
+
+Acceptance uses actual TCP WebSockets with two clients and a retained-runtime
+replacement. It verifies identity-header spoofing has no effect, cross-workspace and
+expired tickets/unknown origins fail, competing ownership fails, bytes remain exact,
+responses stay on their originating connection, pending requests are not replayed,
+v1/v2 adapters interoperate, and a generation handoff closes active sockets. Ticket
+expiry governs admission, matching existing long-lived connection behavior; lifecycle
+fences govern established sockets. No provider is allocated or resumed by the gateway.
+
+Gateway organization admission remains explicitly disabled until runtime access
+callbacks and ongoing collaboration authorization are ported. Deployment initially
+requires one gateway instance or workspace-sticky routing: competing API processes
+return `workspace_gateway_owned_elsewhere` instead of creating separate rooms.
+A gateway backplane/routing rollout and live guest acceptance remain pending. The
+legacy outer transport does not negotiate the Rust engine's distinct RPC schema;
+that explicit negotiation belongs to the Rust guest/client integration next.
 
 Before enabling writes, the legacy lifecycle writer must also honor ownership or be
 fenced/drained. The new ownership table alone does not stop the existing scheduler.

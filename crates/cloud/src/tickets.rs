@@ -7,12 +7,14 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
+pub const CLIENT_TTL_MS: i64 = 60 * 1000;
 pub const RUNTIME_TTL_MS: i64 = 15 * 60 * 1000;
 pub const GATEWAY_PROTOCOL: &str = "zuse-workspace-v2";
 
 /// The platform signing key is never serialized or logged.
 pub struct TicketSigner {
     key: EncodingKey,
+    verify: jsonwebtoken::DecodingKey,
     issuer: reqwest::Url,
 }
 
@@ -53,6 +55,11 @@ impl TicketSigner {
         }
         Ok(Self {
             key: EncodingKey::from_ed_der(der.as_bytes()),
+            verify: jsonwebtoken::DecodingKey::from_jwk(
+                &serde_json::from_value(json!({"kty":"OKP","crv":"Ed25519","x":expected}))
+                    .map_err(|_| ApiError::bad_request("invalid_signing_key"))?,
+            )
+            .map_err(|_| ApiError::bad_request("invalid_signing_key"))?,
             issuer,
         })
     }
@@ -75,6 +82,72 @@ impl TicketSigner {
         header.typ = Some("workspace-runtime+jwt".into());
         jsonwebtoken::encode(&header, &claims, &self.key)
             .map_err(|_| ApiError::unavailable("workspace_runtime_ticket_sign_failed"))
+    }
+
+    pub fn client(&self, mut claims: Value, workspace: &str, now: i64) -> Result<String, ApiError> {
+        claims["iss"] = json!(self.issuer());
+        claims["aud"] = json!(format!("zuse-workspace:{workspace}"));
+        claims["iat"] = json!(now / 1000);
+        claims["exp"] = json!((now + CLIENT_TTL_MS) / 1000);
+        claims["scope"] = json!("workspace-client");
+        claims["role"] = json!("client");
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.typ = Some("workspace-client+jwt".into());
+        jsonwebtoken::encode(&header, &claims, &self.key)
+            .map_err(|_| ApiError::unavailable("workspace_ticket_sign_failed"))
+    }
+
+    pub fn verify_gateway(
+        &self,
+        credential: &str,
+        workspace: &str,
+        protocol: &str,
+        now: i64,
+    ) -> Result<Value, ApiError> {
+        let rejected = || ApiError::unauthorized("workspace_gateway_rejected");
+        if credential.len() > 16384 {
+            return Err(rejected());
+        }
+        let mut validation = jsonwebtoken::Validation::new(Algorithm::EdDSA);
+        validation.set_issuer(&[self.issuer()]);
+        validation.set_audience(&[format!("zuse-workspace:{workspace}")]);
+        validation.validate_exp = false;
+        let decoded = jsonwebtoken::decode::<Value>(credential, &self.verify, &validation)
+            .map_err(|_| rejected())?;
+        let claims = decoded.claims;
+        let valid_role = match claims["role"].as_str() {
+            Some("runtime") => {
+                decoded.header.typ.as_deref() == Some("workspace-runtime+jwt")
+                    && claims["scope"] == "workspace-runtime"
+                    && [
+                        GATEWAY_PROTOCOL,
+                        zuse_protocol::cloud_gateway::LEGACY_PROTOCOL,
+                    ]
+                    .contains(&protocol)
+            }
+            Some("client") => {
+                decoded.header.typ.as_deref() == Some("workspace-client+jwt")
+                    && claims["scope"] == "workspace-client"
+                    && claims["deviceId"].as_str().is_some_and(|d| !d.is_empty())
+                    && (claims.get("actorId").is_none()
+                        || claims["actorId"].as_str().is_some_and(|a| !a.is_empty()))
+                    && (claims.get("permission").is_none()
+                        || matches!(claims["permission"].as_str(), Some("view" | "edit")))
+            }
+            _ => false,
+        };
+        if !valid_role
+            || claims["workspaceId"] != workspace
+            || claims["protocol"] != protocol
+            || claims["exp"].as_i64().is_none_or(|exp| exp <= now / 1000)
+            || claims
+                .get("nbf")
+                .is_some_and(|nbf| nbf.as_i64().is_none_or(|nbf| nbf > now / 1000))
+            || claims["sub"].as_str().is_none_or(|s| s.is_empty())
+        {
+            return Err(rejected());
+        }
+        Ok(claims)
     }
 
     pub fn issuer(&self) -> String {
