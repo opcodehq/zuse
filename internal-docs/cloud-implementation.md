@@ -9,7 +9,7 @@ do not publish to `main`. The [feature inventory](cloud-parity-inventory.md) def
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Pending: providers/images/enrollment/gateway/mailbox, Rust guest, UI create/send/reopen | Pending |
+| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport added; allocation reconciliation, images/enrollment/gateway/mailbox, Rust guest and UI create/send/reopen pending | Boxd HTTP/protobuf fixture passes; live cloud chat pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -117,6 +117,25 @@ finds existing unrelated warnings in `protocol/presentation.rs` and `plugin_stat
 Container definitions and CI are prepared; Docker is unavailable in this workspace,
 so a container build is not claimed. The configured existing database connection
 was unavailable during a read-only schema inspection; no production write was attempted.
+
+The direct Boxd adapter now exchanges and caches provider tokens and implements
+prepared-snapshot creation, machine inspection, start/hibernate/wake/resume/delete,
+idle policy, bounded bootstrap exec and small file upload. Its HTTP fixture compares
+request bytes with independently generated official SDK 0.2.14 fixtures, decodes
+chunked responses and checks stdout/stderr/exit status, token reuse, provider rejection
+and no automatic replay after an ambiguous create response. It does not yet reconcile
+allocations, verify runtime boot, perform image operations or connect chat execution.
+The provider remains unregistered in the API until that workflow is implemented.
+
+To regenerate wire fixtures, extract the official SDK 0.2.14 package with its
+declared dependencies outside tracked source, then run:
+
+```sh
+node scripts/fixtures/generate-boxd-wire.mjs /path/to/sdk/package
+```
+
+Provider source contracts and remaining operations are recorded in
+[provider port notes](cloud-provider-port.md). No live provider acceptance is claimed.
 
 ## Remaining external acceptance
 

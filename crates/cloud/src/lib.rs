@@ -5,6 +5,7 @@ pub mod auth;
 pub mod config;
 pub mod error;
 pub mod jobs;
+pub mod providers;
 pub mod routes;
 pub mod store;
 
