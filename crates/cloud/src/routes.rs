@@ -174,6 +174,12 @@ async fn gateway_ticket(
                 &id,
                 &access,
                 protocol,
+                body.get("rpcProtocol")
+                    .map(|p| {
+                        p.as_str()
+                            .ok_or_else(|| ApiError::bad_request("invalid_workspace_rpc_protocol"))
+                    })
+                    .transpose()?,
                 device,
                 chrono::Utc::now().timestamp_millis(),
             )
@@ -207,6 +213,7 @@ async fn gateway_upgrade(
             zuse_protocol::cloud_gateway::PROTOCOL,
             zuse_protocol::cloud_gateway::PENDING_PROTOCOL,
             zuse_protocol::cloud_gateway::LEGACY_PROTOCOL,
+            zuse_protocol::cloud_gateway::RUST_PROTOCOL,
         ]
         .contains(&values[0])
     {

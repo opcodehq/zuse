@@ -11,7 +11,7 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK/renewal and leased personal-workspace gateway added; allocation reconciliation, images, credential grants, durable mailbox, Rust guest and UI create/send/reopen pending | Boxd/WebCrypto fixtures and real PostgreSQL/HTTP/WebSocket gateway acceptance pass; live cloud chat pending |
+| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK/renewal and leased personal-workspace gateway added; Rust guest/client transport and explicit RPC negotiation added; allocation reconciliation, images, credential grants, durable mailbox, guest packaging/enrollment and UI create/send/reopen pending | Boxd/WebCrypto, PostgreSQL/HTTP/WebSocket and real-engine reopen/dedup acceptance pass with a deterministic provider; live cloud provider acceptance pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -112,7 +112,9 @@ Use a disposable localhost PostgreSQL database with a separate test URL:
 cargo test -p zuse-cloud
 ZUSE_CLOUD_TEST_DATABASE_URL=postgres://user@127.0.0.1:5432/test \
   cargo test -p zuse-cloud --test postgres -- --ignored
-cargo test -p zuse-protocol cloud::tests
+cargo test -p zuse-protocol cloud
+ZUSE_CLOUD_TEST_DATABASE_URL=postgres://user@127.0.0.1:5432/test \
+  cargo test -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud_turn -- --ignored
 ```
 
 The PostgreSQL scenarios create and remove only generated test schemas. They cover
@@ -126,8 +128,9 @@ and transaction rollback when initial launch state is unavailable. Renewal accep
 covers fresh guest proofs, expired-bearer recovery, concurrent/lost-response retries,
 stale bearer/request rejection, deletion fences and valid-bearer legacy compatibility.
 
-Verified on October 22, 2026: four cloud unit/HTTP fixture tests and all three
-PostgreSQL/HTTP/WebSocket acceptance scenarios pass. JWT acceptance uses generated RSA keys and an actual JWKS
+Verified on October 22, 2026: four cloud unit/HTTP fixture tests, three
+PostgreSQL/HTTP/WebSocket scenarios and the optional real-engine acceptance scenario
+pass. JWT acceptance uses generated RSA keys and an actual JWKS
 HTTP endpoint; the catalog scenario uses PostgreSQL 15, original column names and
 real Axum handlers. The deployed read-only Store reports its actual PostgreSQL
 read-only setting. These fixtures establish local behavior, not live WorkOS accounts,
@@ -137,6 +140,10 @@ The built executable also passed local `/healthz`, `/readyz`, unauthenticated AP
 rejection and `inspect` smoke checks against a separate seeded localhost database.
 Crate-scoped strict Clippy and formatting pass. Dependency-inclusive strict Clippy
 finds existing unrelated warnings in `protocol/presentation.rs` and `plugin_state.rs`.
+Strict Clippy for the RPC crate additionally reports seven existing warnings in
+`rpc/client.rs`, `managed.rs` and `device_room.rs` (`manual_map`, `collapsible_if`,
+`useless_conversion`); none point to the new cloud transport. These unrelated
+files were not changed.
 Container definitions and CI are prepared; Docker is unavailable in this workspace,
 so a container build is not claimed. The configured existing database connection
 was unavailable during a read-only schema inspection; no production write was attempted.
@@ -199,8 +206,36 @@ callbacks and ongoing collaboration authorization are ported. Deployment initial
 requires one gateway instance or workspace-sticky routing: competing API processes
 return `workspace_gateway_owned_elsewhere` instead of creating separate rooms.
 A gateway backplane/routing rollout and live guest acceptance remain pending. The
-legacy outer transport does not negotiate the Rust engine's distinct RPC schema;
-that explicit negotiation belongs to the Rust guest/client integration next.
+Rust engine's distinct RPC schema uses the explicitly negotiated
+`zuse-workspace-rust-v1` WebSocket subprotocol and `zuse-rpc-v1` inner RPC. It uses
+the same routing frames, preserving legacy adapters separately. The cached workspace summary exposes the negotiated RPC mode without connecting to
+compute. A workspace configured
+with `runtimeRpcProtocol: "zuse-rpc-v1"` rejects legacy bootstrap/tickets and requires
+the new protocol. Retained workspaces default to the original Effect RPC. A storage
+format change still requires verified migration and a generation handoff.
+
+`zuse_rpc::cloud` now connects a client and serves an existing engine over one cloud
+gateway socket. Client close removes only its RPC subscriptions. Relayed command
+admission is owned by the engine's tracked workers, so canceling a transport cannot
+abandon admission after its durable claim. Network recovery opens a new connection;
+application frames are never resent by this transport. Gateway generation fencing is
+reported distinctly so the eventual guest supervisor can retire stale execution.
+
+The `runtime-acceptance` scenario runs actual PostgreSQL, Axum/TCP WebSockets and
+the existing Rust engine with a deterministic provider. It exercises bootstrap/ACK,
+protocol selection, original thread/initial-conversation IDs, the sealed initial
+command/turn identity, execution after client closure, transcript reopen, a complete
+engine shutdown/reopen, retained native session ID and file changes, and duplicate
+command receipts without a second provider execution. The dedicated feature keeps
+engine/native dependencies out of normal control-plane builds. The cloud CI workflow
+now includes this acceptance command; hosted execution remains blocked by repository
+billing as noted below. This establishes the engine/transport workflow locally,
+not live provider allocation, credential grants or populated-workspace migration.
+
+Guest storage enrollment/identity persistence, credential renewal supervision, initial
+launch adoption, native provider grants and a packaged guest executable are still
+pending. The transport does not open or migrate a database, select another account,
+or initialize an empty replacement over retained storage.
 
 Before enabling writes, the legacy lifecycle writer must also honor ownership or be
 fenced/drained. The new ownership table alone does not stop the existing scheduler.

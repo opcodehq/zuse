@@ -148,6 +148,7 @@ impl RuntimeControl {
         }
         let owner = required(&row, "account_id")?;
         let mut config = row["request_config"].clone();
+        let rpc_protocol = negotiate_rpc(&config, request.rpc_protocol.as_deref())?.to_owned();
         if (owner.starts_with("organization:")
             || config["initialGithubContext"]["slackMessageId"].is_string())
             && !request
@@ -290,12 +291,13 @@ impl RuntimeControl {
             }
             None => return Err(ApiError::conflict("cloud_workspace_launch_failed")),
         };
-        let gateway_credential = self.signer.runtime(
+        let gateway_credential = self.signer.runtime_with_rpc(
             owner,
             id,
             generation,
             epoch,
             receipt.runtime_credential_expires_at_ms,
+            &rpc_protocol,
         )?;
         let scope = owner
             .strip_prefix("organization:")
@@ -303,7 +305,7 @@ impl RuntimeControl {
             .unwrap_or_else(|| json!({"kind":"personal"}));
         let mut response = json!({"workspaceId":id,"zuseAccountId":owner,"workspaceScope":scope,"providerSandboxId":row["provider_sandbox_id"],
             "runtimeCredential":runtime_credential,"runtimeGatewayCredential":gateway_credential,"cloudCredentials":[],
-            "gatewayUrl":self.signer.gateway_url(id),"gatewayProtocol":GATEWAY_PROTOCOL,"chatId":row["chat_id"],"initialSessionId":row["initial_session_id"],
+            "gatewayUrl":self.signer.gateway_url(id),"gatewayProtocol":if rpc_protocol==zuse_protocol::cloud_gateway::RUST_RPC {zuse_protocol::cloud_gateway::RUST_PROTOCOL} else {GATEWAY_PROTOCOL},"rpcProtocol":rpc_protocol,"chatId":row["chat_id"],"initialSessionId":row["initial_session_id"],
             "codexAuthMode":auth_mode(&config["codexAuthMode"]),"providerAuthMode":auth_mode(&config["providerAuthMode"]),
             "runtimeGeneration":generation,"gatewayEpoch":epoch,"runtimeCredentialExpiresAt":receipt.runtime_credential_expires_at_ms,
             "sealedTranscriptKey":receipt.sealed_transcript_key});
@@ -322,11 +324,12 @@ impl RuntimeControl {
         id: &str,
         access: &crate::access::Access,
         protocol: &str,
+        rpc_protocol: Option<&str>,
         device: &str,
         now: i64,
     ) -> Result<Value, ApiError> {
-        use zuse_protocol::cloud_gateway::{PENDING_PROTOCOL, PROTOCOL};
-        if ![PROTOCOL, PENDING_PROTOCOL].contains(&protocol)
+        use zuse_protocol::cloud_gateway::{PENDING_PROTOCOL, PROTOCOL, RUST_PROTOCOL};
+        if ![PROTOCOL, PENDING_PROTOCOL, RUST_PROTOCOL].contains(&protocol)
             || device.is_empty()
             || device.len() > 512
         {
@@ -337,6 +340,10 @@ impl RuntimeControl {
         if row["account_id"] != access.owner_id {
             return Err(ApiError::not_found("cloud_workspace_not_found"));
         }
+        let rpc_protocol = negotiate_rpc(&row["request_config"], rpc_protocol)?;
+        if (rpc_protocol == zuse_protocol::cloud_gateway::RUST_RPC) != (protocol == RUST_PROTOCOL) {
+            return Err(ApiError::conflict("workspace_rpc_protocol_mismatch"));
+        }
         let permission = access.workspace_permission(&access.owner_id, &row["request_config"])?;
         if blocked(&row) || row["desired_state"] == "archived" || row["state"] == "failed" {
             return Err(ApiError::conflict("cloud_workspace_unavailable"));
@@ -345,10 +352,10 @@ impl RuntimeControl {
         if access.membership.is_some() {
             return Err(ApiError::conflict("workspace_runtime_update_required"));
         }
-        let credential=self.signer.client(json!({"sub":access.owner_id,"workspaceId":id,"actorId":access.actor.account_id,"deviceId":device,"permission":permission,"protocol":protocol,"generation":generation,"gatewayEpoch":epoch}),id,now)?;
+        let credential=self.signer.client(json!({"sub":access.owner_id,"workspaceId":id,"actorId":access.actor.account_id,"deviceId":device,"permission":permission,"protocol":protocol,"rpcProtocol":rpc_protocol,"generation":generation,"gatewayEpoch":epoch}),id,now)?;
         tx.commit().await?;
         Ok(
-            json!({"workspaceId":id,"wsUrl":self.signer.gateway_url(id),"workspaceScope":access.scope,"protocol":protocol,"role":"client","generation":generation,"gatewayEpoch":epoch,"credential":credential,"expiresAt":now+crate::tickets::CLIENT_TTL_MS}),
+            json!({"workspaceId":id,"wsUrl":self.signer.gateway_url(id),"workspaceScope":access.scope,"protocol":protocol,"rpcProtocol":rpc_protocol,"role":"client","generation":generation,"gatewayEpoch":epoch,"credential":credential,"expiresAt":now+crate::tickets::CLIENT_TTL_MS}),
         )
     }
 
@@ -366,12 +373,13 @@ impl RuntimeControl {
         }
         let owner = required(&row, "account_id")?;
         // Preserve raw runtime bearers for retained guests; browsers use signed tickets.
-        let claims = match self.signer.verify_gateway(credential, id, protocol, now) {
-            Ok(claims) => claims,
+        let (claims, signed) = match self.signer.verify_gateway(credential, id, protocol, now) {
+            Ok(claims) => (claims, true),
             Err(_)
                 if [
                     GATEWAY_PROTOCOL,
                     zuse_protocol::cloud_gateway::LEGACY_PROTOCOL,
+                    zuse_protocol::cloud_gateway::RUST_PROTOCOL,
                 ]
                 .contains(&protocol)
                     && row["runtime_credential_hash"]
@@ -381,10 +389,30 @@ impl RuntimeControl {
                         .as_i64()
                         .is_some_and(|e| e > now) =>
             {
-                json!({"role":"runtime","sub":owner,"generation":generation,"gatewayEpoch":epoch,"exp":row["request_config"]["runtimeCredentialExpiresAtMs"].as_i64().unwrap_or(0)/1000})
+                (
+                    json!({"role":"runtime","sub":owner,"generation":generation,"gatewayEpoch":epoch,"exp":row["request_config"]["runtimeCredentialExpiresAtMs"].as_i64().unwrap_or(0)/1000}),
+                    false,
+                )
             }
             Err(error) => return Err(error),
         };
+        let expected_rpc = negotiate_rpc(
+            &row["request_config"],
+            row["request_config"]["runtimeRpcProtocol"].as_str(),
+        )?;
+        if (expected_rpc == zuse_protocol::cloud_gateway::RUST_RPC)
+            != (protocol == zuse_protocol::cloud_gateway::RUST_PROTOCOL)
+        {
+            return Err(ApiError::conflict("workspace_rpc_protocol_mismatch"));
+        }
+        if signed {
+            let actual_rpc = claims["rpcProtocol"]
+                .as_str()
+                .unwrap_or(zuse_protocol::cloud_gateway::LEGACY_RPC);
+            if actual_rpc != expected_rpc {
+                return Err(ApiError::conflict("workspace_rpc_protocol_mismatch"));
+            }
+        }
         if claims["sub"] != owner
             || claims["generation"] != generation
             || claims["gatewayEpoch"] != epoch
@@ -622,4 +650,13 @@ fn auth_mode(value: &Value) -> &str {
         Some("snapshot-native") => "snapshot-native",
         _ => "legacy-image",
     }
+}
+
+fn negotiate_rpc<'a>(config: &'a Value, requested: Option<&str>) -> Result<&'a str, ApiError> {
+    use zuse_protocol::cloud_gateway::{LEGACY_RPC, RUST_RPC};
+    let expected = config["runtimeRpcProtocol"].as_str().unwrap_or(LEGACY_RPC);
+    if ![LEGACY_RPC, RUST_RPC].contains(&expected) || requested.unwrap_or(LEGACY_RPC) != expected {
+        return Err(ApiError::conflict("workspace_rpc_protocol_mismatch"));
+    }
+    Ok(expected)
 }

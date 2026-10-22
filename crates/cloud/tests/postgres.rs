@@ -432,6 +432,13 @@ async fn runtime_enrollment_preserves_keys_intent_and_fences_retries() {
         runtime_post(&app, path, "wrong-token", &body).await.0,
         StatusCode::UNAUTHORIZED
     );
+    let mut incompatible = body.clone();
+    incompatible["rpcProtocol"] = json!(zuse_protocol::cloud_gateway::RUST_RPC);
+    assert_eq!(
+        runtime_post(&app, path, boot, &incompatible).await.0,
+        StatusCode::CONFLICT
+    );
+
     let (a, b) = tokio::join!(
         runtime_post(&app, path, boot, &body),
         runtime_post(&app, path, boot, &body)
@@ -971,4 +978,377 @@ async fn runtime_post_for_url(url: &str, token: &str, body: &Value) -> (u16, Val
         .await
         .unwrap();
     (response.status().as_u16(), response.json().await.unwrap())
+}
+
+#[cfg(feature = "runtime-acceptance")]
+mod runtime_engine {
+    use super::*;
+    use async_trait::async_trait;
+    use futures::{StreamExt, stream::BoxStream};
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+    use tokio::sync::Notify;
+    use zuse_engine::{EngineCore, HarnessRegistry};
+    use zuse_protocol::{AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest};
+    use zuse_providers::{Harness, HarnessError, RunControls};
+    struct Provider {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+        runs: Arc<AtomicUsize>,
+    }
+    #[async_trait]
+    impl Harness for Provider {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "Cloud acceptance provider"
+        }
+        fn supports_steering(&self) -> bool {
+            false
+        }
+        fn steering_mode(&self) -> zuse_protocol::SteeringMode {
+            zuse_protocol::SteeringMode::TurnBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            request: RunRequest,
+            _: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            self.started.notify_one();
+            let release = self.release.clone();
+            let cwd = std::path::PathBuf::from(request.cwd);
+            Ok(futures::stream::once(async move {
+                release.notified().await;
+                std::fs::write(cwd.join("cloud-result.txt"), "retained change").unwrap();
+                Ok(AgentEvent::TextDelta {
+                    text: "Original turn completed after the client closed".into(),
+                })
+            })
+            .chain(futures::stream::iter([Ok(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                result: None,
+                error: None,
+                session_id: Some("original-agent-session".into()),
+            })]))
+            .boxed())
+        }
+    }
+    fn engine(path: &std::path::Path, provider: Arc<Provider>) -> EngineCore {
+        let registry = Arc::new(HarnessRegistry::new());
+        registry.register(provider);
+        EngineCore::assemble_with_identity(
+            path,
+            registry,
+            HarnessId::Mock,
+            None,
+            "workspace-ws-bob",
+            "user-bob",
+        )
+        .unwrap()
+    }
+    #[tokio::test]
+    #[ignore = "requires explicit isolated localhost PostgreSQL and engine acceptance feature"]
+    async fn rust_cloud_turn_survives_client_closure_and_engine_reopen_without_reexecution() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use ed25519_dalek::SigningKey;
+        use tokio_util::sync::CancellationToken;
+        use zuse_cloud::{crypto::MasterKey, runtime::RuntimeControl, tickets::TicketSigner};
+        use zuse_protocol::cloud_gateway::{RUST_PROTOCOL, RUST_RPC};
+        use zuse_rpc::{cloud, methods};
+        let (admin, pool, schema) = fixture().await;
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query(
+            "INSERT INTO zuse_rust_control_owners VALUES ('workspace','ws-bob','rust',2,$1)",
+        )
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE api_cloud_workspaces SET request_config=$1 WHERE workspace_id='ws-bob'",
+        )
+        .bind(json!({"runtimeGeneration":2,"gatewayEpoch":5,"runtimeRpcProtocol":RUST_RPC}))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mint = SigningKey::from_bytes(&[11; 32]);
+        let jwk=json!({"kty":"OKP","crv":"Ed25519","d":URL_SAFE_NO_PAD.encode([11;32]),"x":URL_SAFE_NO_PAD.encode(mint.verifying_key().as_bytes())}).to_string();
+        let signer = TicketSigner::from_jwk(&jwk, "https://api-rust.zuse.sh").unwrap();
+        let legacy_runtime_ticket = signer
+            .runtime("user-bob", "ws-bob", 2, 5, now + 900000)
+            .unwrap();
+        use sha2::{Digest, Sha256};
+        let boot = "rust-guest-boot";
+        let boot_hash: String = Sha256::digest(boot.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        sqlx::query("UPDATE api_cloud_workspaces SET runtime_boot_token_hash=$1,runtime_boot_token_expires_at=$2 WHERE workspace_id='ws-bob'").bind(boot_hash).bind(now+120000).execute(&pool).await.unwrap();
+        let master = MasterKey::parse(&URL_SAFE_NO_PAD.encode([12; 32])).unwrap();
+        let intent = json!({"commandId":"original-command","turnId":"original-turn","title":"Cloud conversation","agent":"mock","model":"fixture-model","permissions":[],"firstMessage":"Finish while the client is closed"});
+        let ciphertext = master
+            .seal(
+                b"zuse-cloud-workspace-launch-intent-v1\nuser-bob\nws-bob",
+                intent.to_string().as_bytes(),
+            )
+            .unwrap();
+        sqlx::query("INSERT INTO api_cloud_workspace_launch_intents VALUES ('ws-bob','user-bob','chat-bob','session-bob','original-turn','original-command',$1,$2,$3)").bind(ciphertext).bind(now+120000).bind(now).execute(&pool).await.unwrap();
+        let control = Arc::new(RuntimeControl::from_pool(pool.clone(), master, signer));
+        let app = router(
+            AppState {
+                store: Store::from_pool(pool.clone()),
+                identity: Arc::new(TestIdentity),
+                organizations_enabled: false,
+                organization_ids: Arc::new(vec![]),
+                runtime: Some(control.clone()),
+                gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
+            },
+            vec![],
+        );
+        let crypto_fixture: Value =
+            serde_json::from_str(include_str!("fixtures/cloud-crypto.json")).unwrap();
+        let guest_key = SigningKey::from_bytes(&[13; 32]);
+        let public = json!({"kty":"OKP","crv":"Ed25519","x":URL_SAFE_NO_PAD.encode(guest_key.verifying_key().as_bytes())});
+        let body = json!({"credentialPublicJwk":crypto_fixture["runtimePublicJwk"].to_string(),"signingPublicJwk":public.to_string(),"rpcProtocol":RUST_RPC});
+        let (status, bootstrap) = runtime_post(
+            &app,
+            "/v1/cloud/workspaces/ws-bob/runtime/bootstrap",
+            boot,
+            &body,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{bootstrap}");
+        assert_eq!(bootstrap["launchIntent"], intent);
+        assert_eq!(bootstrap["chatId"], "chat-bob");
+        assert_eq!(bootstrap["initialSessionId"], "session-bob");
+        assert_eq!(bootstrap["gatewayProtocol"], RUST_PROTOCOL);
+        assert_eq!(
+            runtime_post(
+                &app,
+                "/v1/cloud/workspaces/ws-bob/runtime/bootstrap/ack",
+                bootstrap["runtimeCredential"].as_str().unwrap(),
+                &json!({"runtimeGeneration":2,"gatewayEpoch":5})
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        let (status, summary) = request(&app, "/v1/cloud/workspaces/ws-bob", "bob", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(summary["rpcProtocol"], RUST_RPC);
+        let ticket_path = "/v1/cloud/workspaces/ws-bob/gateway/ticket";
+        assert_eq!(
+            runtime_post(&app, ticket_path, "bob", &json!({})).await.0,
+            StatusCode::CONFLICT
+        );
+        assert!(
+            control
+                .gateway_authorize("ws-bob", RUST_PROTOCOL, &legacy_runtime_ticket, now)
+                .await
+                .is_err()
+        );
+        let (status, ticket) = runtime_post(
+            &app,
+            ticket_path,
+            "bob",
+            &json!({"protocol":RUST_PROTOCOL,"rpcProtocol":RUST_RPC}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{ticket}");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "ws://{}/v1/cloud/workspaces/ws-bob/gateway",
+            listener.local_addr().unwrap()
+        );
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+                .unwrap();
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("runtime");
+        let checkout = temp.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let provider = Arc::new(Provider {
+            started: Arc::new(Notify::new()),
+            release: Arc::new(Notify::new()),
+            runs: Arc::new(AtomicUsize::new(0)),
+        });
+        let core = engine(&data, provider.clone());
+        let runtime_grant = cloud::Grant {
+            workspace_id: "ws-bob".into(),
+            ws_url: url.clone(),
+            protocol: RUST_PROTOCOL.into(),
+            rpc_protocol: RUST_RPC.into(),
+            credential: bootstrap["runtimeGatewayCredential"]
+                .as_str()
+                .unwrap()
+                .into(),
+            generation: 2,
+            gateway_epoch: 5,
+            expires_at: now + 900000,
+        };
+        let runtime_cancel = CancellationToken::new();
+        let guest = tokio::spawn({
+            let service = core.rpc_service();
+            let grant = runtime_grant.clone();
+            let cancel = runtime_cancel.clone();
+            async move { cloud::serve_guest(service, grant, "ws-bob", "user-bob", cancel).await }
+        });
+        let client_grant = cloud::Grant {
+            ws_url: url.clone(),
+            ..serde_json::from_value(ticket.clone()).unwrap()
+        };
+        let client = cloud::connect(client_grant.clone(), "ws-bob", CancellationToken::new())
+            .await
+            .unwrap();
+        client.client.call(methods::MUTATE,json!({"op":"createChat","chatId":"chat-bob","deviceId":core.device_id,"cwd":checkout,"config":{"harness":"mock","sandbox":"workspace-write"}})).await.unwrap();
+        client
+            .client
+            .call(
+                methods::CREATE_THREAD_SESSION,
+                json!({"chatId":bootstrap["initialSessionId"],"threadId":bootstrap["chatId"]}),
+            )
+            .await
+            .unwrap();
+        let command = json!({"chatId":bootstrap["initialSessionId"],"entry":{"id":intent["commandId"],"payload":{"kind":"run","messageId":intent["turnId"],"request":{"prompt":intent["firstMessage"],"model":intent["model"],"harness":"mock","cwd":checkout,"sandbox":"workspace-write"}},"issuedBy":"cloud-client","issuedAt":now,"expiresAt":now+120000,"status":"pending"}});
+        let accepted = client
+            .client
+            .call(methods::RELAY_COMMAND, command.clone())
+            .await
+            .unwrap();
+        assert_eq!(accepted["outcome"], "executed");
+        tokio::time::timeout(Duration::from_secs(10), provider.started.notified())
+            .await
+            .unwrap();
+        client.closed.cancel();
+        drop(client);
+        assert!(core.sessions.has_run("session-bob"));
+        provider.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while core.sessions.has_run("session-bob") {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("cloud-result.txt")).unwrap(),
+            "retained change"
+        );
+        let reopened = cloud::connect(client_grant.clone(), "ws-bob", CancellationToken::new())
+            .await
+            .unwrap();
+        let duplicate = reopened
+            .client
+            .call(methods::RELAY_COMMAND, command.clone())
+            .await
+            .unwrap();
+        assert_eq!(duplicate["outcome"], "duplicate");
+        let mut history = reopened
+            .client
+            .subscribe(methods::WATCH_DOC_MESSAGES, json!({"chatId":"session-bob"}))
+            .await
+            .unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(5), history.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            first
+                .to_string()
+                .contains("Original turn completed after the client closed"),
+            "{first}"
+        );
+        drop(history);
+        reopened.closed.cancel();
+        drop(reopened);
+        runtime_cancel.cancel();
+        guest.await.unwrap().unwrap();
+        core.shutdown().await;
+        drop(core);
+        let core = engine(&data, provider.clone());
+        let cancel = CancellationToken::new();
+        let guest = tokio::spawn({
+            let service = core.rpc_service();
+            let grant = runtime_grant;
+            let cancel = cancel.clone();
+            async move { cloud::serve_guest(service, grant, "ws-bob", "user-bob", cancel).await }
+        });
+        let reopened = cloud::connect(client_grant, "ws-bob", CancellationToken::new())
+            .await
+            .unwrap();
+        let duplicate = reopened
+            .client
+            .call(methods::RELAY_COMMAND, command)
+            .await
+            .unwrap();
+        assert_eq!(duplicate["outcome"], "duplicate");
+        let mut history = reopened
+            .client
+            .subscribe(methods::WATCH_DOC_MESSAGES, json!({"chatId":"session-bob"}))
+            .await
+            .unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(5), history.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            first
+                .to_string()
+                .contains("Original turn completed after the client closed"),
+            "{first}"
+        );
+        assert_eq!(provider.runs.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            core.workspace
+                .chat("session-bob")
+                .unwrap()
+                .unwrap()
+                .thread_id(),
+            "chat-bob"
+        );
+
+        assert_eq!(
+            core.workspace
+                .chat("session-bob")
+                .unwrap()
+                .unwrap()
+                .harness_session_id
+                .as_deref(),
+            Some("original-agent-session")
+        );
+        drop(history);
+        reopened.closed.cancel();
+        drop(reopened);
+        cancel.cancel();
+        guest.await.unwrap().unwrap();
+        core.shutdown().await;
+        drop(core);
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+        pool.close().await;
+        sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        admin.close().await;
+    }
 }

@@ -72,12 +72,38 @@ impl TicketSigner {
         epoch: i64,
         expires: i64,
     ) -> Result<String, ApiError> {
+        self.runtime_with_rpc(
+            owner,
+            workspace,
+            generation,
+            epoch,
+            expires,
+            zuse_protocol::cloud_gateway::LEGACY_RPC,
+        )
+    }
+    pub fn runtime_with_rpc(
+        &self,
+        owner: &str,
+        workspace: &str,
+        generation: i64,
+        epoch: i64,
+        expires: i64,
+        rpc_protocol: &str,
+    ) -> Result<String, ApiError> {
         if generation < 1 || epoch < 1 || expires < RUNTIME_TTL_MS {
             return Err(ApiError::bad_request("invalid_runtime_generation"));
         }
-        let claims = json!({"workspaceId":workspace,"scope":"workspace-runtime","role":"runtime", "protocol":GATEWAY_PROTOCOL,
+        let protocol = if rpc_protocol == zuse_protocol::cloud_gateway::RUST_RPC {
+            zuse_protocol::cloud_gateway::RUST_PROTOCOL
+        } else {
+            GATEWAY_PROTOCOL
+        };
+        let mut claims = json!({"workspaceId":workspace,"scope":"workspace-runtime","role":"runtime", "protocol":protocol,
             "generation":generation,"gatewayEpoch":epoch,"iss":self.issuer.origin().ascii_serialization(),
             "aud":format!("zuse-workspace:{workspace}"),"sub":owner,"iat":(expires-RUNTIME_TTL_MS)/1000,"exp":expires/1000});
+        if rpc_protocol != zuse_protocol::cloud_gateway::LEGACY_RPC {
+            claims["rpcProtocol"] = json!(rpc_protocol);
+        }
         let mut header = Header::new(Algorithm::EdDSA);
         header.typ = Some("workspace-runtime+jwt".into());
         jsonwebtoken::encode(&header, &claims, &self.key)
@@ -122,6 +148,7 @@ impl TicketSigner {
                     && [
                         GATEWAY_PROTOCOL,
                         zuse_protocol::cloud_gateway::LEGACY_PROTOCOL,
+                        zuse_protocol::cloud_gateway::RUST_PROTOCOL,
                     ]
                     .contains(&protocol)
             }

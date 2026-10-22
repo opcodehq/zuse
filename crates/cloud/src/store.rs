@@ -140,6 +140,12 @@ impl Workspace {
             out[to] = row[from].clone();
         }
         out["imageGeneration"] = row["build_id"].clone();
+        out["rpcProtocol"] = json!(match config["runtimeRpcProtocol"].as_str() {
+            Some(zuse_protocol::cloud_gateway::RUST_RPC) => zuse_protocol::cloud_gateway::RUST_RPC,
+            None | Some(zuse_protocol::cloud_gateway::LEGACY_RPC) =>
+                zuse_protocol::cloud_gateway::LEGACY_RPC,
+            _ => "unsupported",
+        });
         for key in ["codexAuthMode", "providerAuthMode"] {
             out[key] = json!(match config[key].as_str() {
                 Some("broker-v1") => "broker-v1",

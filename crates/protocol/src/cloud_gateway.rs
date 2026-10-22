@@ -2,6 +2,13 @@
 pub const LEGACY_PROTOCOL: &str = "zuse-workspace-v1";
 pub const PROTOCOL: &str = "zuse-workspace-v2";
 pub const PENDING_PROTOCOL: &str = "zuse-workspace-v3";
+/// Inner RPC is negotiated separately from the retained gateway's outer framing.
+pub const RUST_PROTOCOL: &str = "zuse-workspace-rust-v1";
+pub fn supports_availability(protocol: &str) -> bool {
+    protocol == PENDING_PROTOCOL || protocol == RUST_PROTOCOL
+}
+pub const RUST_RPC: &str = "zuse-rpc-v1";
+pub const LEGACY_RPC: &str = "zuse-effect-rpc-v1";
 pub const MAX_PAYLOAD: usize = 8 * 1024 * 1024;
 pub const MAX_FRAME: usize = MAX_PAYLOAD + 521;
 

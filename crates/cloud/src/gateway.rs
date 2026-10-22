@@ -10,7 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
-use zuse_protocol::cloud_gateway::{Direction, Frame, LEGACY_PROTOCOL, PENDING_PROTOCOL, Payload};
+use zuse_protocol::cloud_gateway::{
+    Direction, Frame, LEGACY_PROTOCOL, Payload, supports_availability,
+};
 
 pub const MIGRATION: &str = include_str!("../migrations/0002_gateway_leases.sql");
 const UNAVAILABLE: (u16, &str) = (4100, "workspace runtime unavailable");
@@ -242,7 +244,7 @@ impl Room {
         self.send(peer, Message::Text(value.to_string().into()))
     }
     fn pending(&self, peer: &mut Peer) {
-        if peer.grant.protocol != PENDING_PROTOCOL {
+        if !supports_availability(&peer.grant.protocol) {
             let _ = peer.close.send(Some(UNAVAILABLE));
             return;
         }
@@ -256,7 +258,7 @@ impl Room {
         if client.detached {
             return;
         }
-        if client.grant.protocol == PENDING_PROTOCOL && client.ready {
+        if supports_availability(&client.grant.protocol) && client.ready {
             self.control(
                 client,
                 json!({"_zuseGateway":"availability","state":"available","reset":true}),
@@ -265,11 +267,19 @@ impl Room {
             client.pending_until = None;
             return;
         }
-        if self.control(runtime,json!({"type":"client.open","connectionId":id,"actorId":client.grant.actor,"permission":client.grant.permission})) {
-            if client.grant.protocol==PENDING_PROTOCOL {self.control(client,json!({"_zuseGateway":"availability","state":"available","reset":false}));}
-            client.ready=true;
-            client.pending_until=None;
-        } else {let _=client.close.send(Some(PRESSURE));}
+        let opened=self.control(runtime,json!({"type":"client.open","connectionId":id,"actorId":client.grant.actor,"permission":client.grant.permission}));
+        if opened {
+            if supports_availability(&client.grant.protocol) {
+                self.control(
+                    client,
+                    json!({"_zuseGateway":"availability","state":"available","reset":false}),
+                );
+            }
+            client.ready = true;
+            client.pending_until = None;
+        } else {
+            let _ = client.close.send(Some(PRESSURE));
+        }
     }
     fn attach(&self, id: String, mut peer: Peer) {
         let mut state = lock(&self.state);
@@ -290,7 +300,7 @@ impl Room {
             }
             for (client_id, client) in &mut state.peers {
                 if !client.grant.runtime {
-                    if client.grant.protocol != PENDING_PROTOCOL && client.ready {
+                    if !supports_availability(&client.grant.protocol) && client.ready {
                         let _ = client.close.send(Some(UNAVAILABLE));
                     } else {
                         self.open(&peer, client_id, client);

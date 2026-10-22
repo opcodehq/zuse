@@ -4736,6 +4736,25 @@ impl DocHost {
         chat_id: &str,
         entry: SessionCommandEntry,
     ) -> Result<&'static str, EngineError> {
+        // The engine owns admission once invoked. A transport disappearing while
+        // dispatch awaits must not abandon a command after its durable claim.
+        let host = self.clone();
+        let chat_id = chat_id.to_owned();
+        let (response, received) = tokio::sync::oneshot::channel();
+        self.spawn_worker(async move {
+            let result = host.ingest_relayed_command_owned(&chat_id, entry).await;
+            let _ = response.send(result);
+        });
+        received
+            .await
+            .map_err(|_| EngineError::Other("Command admission stopped with the engine".into()))?
+    }
+
+    async fn ingest_relayed_command_owned(
+        &self,
+        chat_id: &str,
+        entry: SessionCommandEntry,
+    ) -> Result<&'static str, EngineError> {
         let handle = self.open(chat_id)?;
         // The sender sequences attachment transfers BEFORE the relay; refuse
         // (retryably) rather than run without the images.

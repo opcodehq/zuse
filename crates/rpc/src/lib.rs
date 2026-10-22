@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 mod chat_config;
 mod client;
 pub use chat_config::ChatConfigTarget;
+pub mod cloud;
 pub mod managed;
 mod paired;
 pub mod reconnect;

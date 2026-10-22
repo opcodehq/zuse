@@ -12,6 +12,8 @@ pub struct CloudRuntimeBootstrapRequest {
     pub signing_public_jwk: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpc_protocol: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

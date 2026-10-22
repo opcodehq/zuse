@@ -5,7 +5,15 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+runtime-acceptance = ["dep:zuse-engine", "dep:zuse-providers", "dep:zuse-rpc", "dep:tempfile", "dep:tokio-util"]
+
 [dependencies]
+zuse-engine = { workspace = true, optional = true }
+zuse-providers = { workspace = true, optional = true }
+zuse-rpc = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+tokio-util = { workspace = true, features = ["rt"], optional = true }
 anyhow.workspace = true
 async-trait.workspace = true
 aes-gcm = { version = "0.10.3", features = ["std"] }
