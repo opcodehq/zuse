@@ -509,12 +509,99 @@ async fn runtime_enrollment_preserves_keys_intent_and_fences_retries() {
         runtime_post(&app, path, boot, &body).await.0,
         StatusCode::UNAUTHORIZED
     );
+    // A fresh signature recovers an expired bearer, while a lost renewal response
+    // can be retrieved using its original request ID and previous bearer.
+    use ed25519_dalek::pkcs8::EncodePrivateKey;
+    let proof_key =
+        jsonwebtoken::EncodingKey::from_ed_der(guest.to_pkcs8_der().unwrap().as_bytes());
+    let proof = |request_id: &str, seconds: i64| {
+        let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA);
+        header.typ = Some("workspace-runtime-renewal+jwt".into());
+        jsonwebtoken::encode(&header, &json!({"workspaceId":"ws-bob","requestId":request_id,"generation":2,"gatewayEpoch":5,"aud":"https://api-rust.zuse.sh","iat":seconds,"exp":seconds+60}), &proof_key).unwrap()
+    };
+    let renew_path = "/v1/cloud/workspaces/ws-bob/runtime/credentials/renew";
+    let renewal = json!({"requestId":"renew-original","proof":proof("renew-original",now/1000)});
+    assert_eq!(
+        runtime_post(
+            &app,
+            renew_path,
+            token,
+            &json!({"requestId":"renew-original","proof":"invalid"})
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{runtimeCredentialExpiresAtMs}',$1) WHERE workspace_id='ws-bob'")
+        .bind(json!(now-1000)).execute(&pool).await.unwrap();
+    let (first, retry) = tokio::join!(
+        runtime_post(&app, renew_path, token, &renewal),
+        runtime_post(&app, renew_path, token, &renewal)
+    );
+    assert_eq!(first.0, StatusCode::OK, "{}", first.1);
+    assert_eq!(first, retry);
+    assert_eq!(
+        first.1["runtimeCredential"],
+        format!(
+            "workspace_runtime_{}",
+            hash(&format!("{token}:ws-bob:renew-original"))
+        )
+    );
+    let renewed_token = first.1["runtimeCredential"].as_str().unwrap();
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(jsonb_set(request_config,'{runtimeCredentialExpiresAtMs}',$1),'{runtimeCredentialRenewal,expiresAtMs}',$1) WHERE workspace_id='ws-bob'")
+        .bind(json!(now-1000)).execute(&pool).await.unwrap();
+    let recovered = runtime_post(&app, renew_path, token, &renewal).await;
+    assert_eq!(recovered.0, StatusCode::OK, "{}", recovered.1);
+    assert_eq!(recovered.1["runtimeCredential"], renewed_token);
+    assert!(recovered.1["expiresAt"].as_i64().unwrap() > now);
+
+    let next_renewal = json!({"requestId":"renew-next","proof":proof("renew-next",now/1000)});
+    assert_eq!(
+        runtime_post(&app, renew_path, token, &next_renewal).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        runtime_post(
+            &app,
+            renew_path,
+            renewed_token,
+            &json!({"requestId":"renew-next","proof":proof("renew-wrong",now/1000)})
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        runtime_post(
+            &app,
+            renew_path,
+            renewed_token,
+            &json!({"requestId":"renew-next","proof":proof("renew-next",now/1000-180)})
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{cloudMailboxLifecyclePending}','{\"action\":\"delete\"}') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+    assert_eq!(
+        runtime_post(&app, renew_path, renewed_token, &next_renewal)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=request_config-'cloudMailboxLifecyclePending' WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
     sqlx::query("UPDATE zuse_rust_control_owners SET generation=3 WHERE resource_id='ws-bob'")
         .execute(&pool)
         .await
         .unwrap();
     assert_eq!(
         runtime_post(&app, &ack_path, token, &ack).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        runtime_post(&app, renew_path, renewed_token, &next_renewal)
+            .await
+            .0,
         StatusCode::UNAUTHORIZED
     );
     // Failed first enrollment must roll back key creation and leave no accepted receipt.
@@ -528,6 +615,20 @@ async fn runtime_enrollment_preserves_keys_intent_and_fences_retries() {
         .unwrap();
     sqlx::query("UPDATE api_cloud_workspaces SET runtime_boot_token_hash=$1,runtime_boot_token_expires_at=$2,wrapped_transcript_key=NULL,runtime_credential_hash=NULL,request_config=$3 WHERE workspace_id='ws-bob'")
         .bind(hash(boot)).bind(now+120000).bind(json!({"runtimeGeneration":2,"gatewayEpoch":5})).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE api_cloud_workspaces SET state='archived' WHERE workspace_id='ws-bob'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime_post(&app, path, boot, &body).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    sqlx::query("UPDATE api_cloud_workspaces SET state='ready',request_config=jsonb_set(request_config,'{cloudMailboxLifecycleDelivered}','{\"action\":\"delete\"}') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+    assert_eq!(
+        runtime_post(&app, path, boot, &body).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=request_config-'cloudMailboxLifecycleDelivered' WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
     assert_eq!(
         runtime_post(&app, path, boot, &body).await.0,
         StatusCode::CONFLICT
@@ -541,6 +642,32 @@ async fn runtime_enrollment_preserves_keys_intent_and_fences_retries() {
     assert!(stored["wrapped_transcript_key"].is_null());
     assert!(stored["runtime_credential_hash"].is_null());
     assert!(stored["request_config"]["runtimeBootstrapReceipt"].is_null());
+    // Existing unsigned guests retain the original valid-bearer renewal path;
+    // an expired bearer without a registered signing identity cannot recover.
+    sqlx::query("UPDATE api_cloud_workspaces SET runtime_credential_hash=$1,request_config=$2 WHERE workspace_id='ws-bob'")
+        .bind(hash("legacy-runtime")).bind(json!({"runtimeGeneration":2,"gatewayEpoch":5,"runtimeCredentialExpiresAtMs":now+120000})).execute(&pool).await.unwrap();
+    let legacy = runtime_post(
+        &app,
+        renew_path,
+        "legacy-runtime",
+        &json!({"requestId":"legacy-renew","proof":""}),
+    )
+    .await;
+    assert_eq!(legacy.0, StatusCode::OK, "{}", legacy.1);
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{runtimeCredentialExpiresAtMs}',$1) WHERE workspace_id='ws-bob'")
+        .bind(json!(now-1000)).execute(&pool).await.unwrap();
+    assert_eq!(
+        runtime_post(
+            &app,
+            renew_path,
+            legacy.1["runtimeCredential"].as_str().unwrap(),
+            &json!({"requestId":"legacy-expired","proof":""})
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+
     pool.close().await;
     sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin)

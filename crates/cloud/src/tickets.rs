@@ -77,6 +77,10 @@ impl TicketSigner {
             .map_err(|_| ApiError::unavailable("workspace_runtime_ticket_sign_failed"))
     }
 
+    pub fn issuer(&self) -> String {
+        self.issuer.origin().ascii_serialization()
+    }
+
     pub fn gateway_url(&self, workspace: &str) -> String {
         let mut url = self.issuer.clone();
         url.set_scheme("wss").expect("HTTPS issuer can use WSS");
@@ -114,4 +118,53 @@ pub fn signing_thumbprint(encoded: &str) -> Result<String, ApiError> {
     Ok(URL_SAFE_NO_PAD.encode(Sha256::digest(
         format!(r#"{{"crv":"Ed25519","kty":"OKP","x":"{x}"}}"#).as_bytes(),
     )))
+}
+
+/// Validate the registered guest's fresh, workspace-bound proof even after its bearer expires.
+pub fn verify_renewal_proof(
+    proof: &str,
+    public_jwk: &str,
+    issuer: &str,
+    workspace: &str,
+    request: &str,
+    identity: (i64, i64),
+    now: i64,
+) -> Result<(), ApiError> {
+    use jsonwebtoken::{DecodingKey, Validation, decode};
+    let rejected = || ApiError::unauthorized("invalid_runtime_renewal_proof");
+    if proof.len() > 16384 {
+        return Err(rejected());
+    }
+    let jwk = serde_json::from_str(public_jwk).map_err(|_| rejected())?;
+    let key = DecodingKey::from_jwk(&jwk).map_err(|_| rejected())?;
+    let mut validation = Validation::new(Algorithm::EdDSA);
+    validation.set_audience(&[issuer]);
+    // Lifecycle code supplies the transaction's time; evaluate JWT time claims against it.
+    validation.validate_exp = false;
+    let decoded = decode::<Value>(proof, &key, &validation).map_err(|_| rejected())?;
+    let claims = decoded.claims;
+    if claims["workspaceId"] == workspace
+        && claims["requestId"] == request
+        && (claims["generation"] != identity.0 || claims["gatewayEpoch"] != identity.1)
+    {
+        return Err(ApiError::unauthorized("workspace_runtime_fenced"));
+    }
+    if decoded.header.typ.as_deref() != Some("workspace-runtime-renewal+jwt")
+        || claims["workspaceId"] != workspace
+        || claims["requestId"] != request
+        || claims["generation"] != identity.0
+        || claims["gatewayEpoch"] != identity.1
+        || claims["iat"]
+            .as_i64()
+            .is_none_or(|iat| iat > now / 1000 + 30 || iat < now / 1000 - 120)
+        || claims["exp"].as_i64().is_none_or(|exp| exp <= now / 1000)
+        || claims
+            .get("nbf")
+            .is_some_and(|nbf| nbf.as_i64().is_none_or(|nbf| nbf > now / 1000))
+    {
+        return Err(ApiError::unauthorized(
+            "runtime_renewal_proof_binding_mismatch",
+        ));
+    }
+    Ok(())
 }

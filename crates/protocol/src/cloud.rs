@@ -22,6 +22,13 @@ pub struct CloudRuntimeBootstrapAck {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudRuntimeCredentialRenewRequest {
+    pub request_id: String,
+    pub proof: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CloudRuntimeMode {
     Auto,

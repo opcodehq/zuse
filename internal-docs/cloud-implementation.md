@@ -11,7 +11,7 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK added; allocation reconciliation, images, credential grants, gateway/mailbox, Rust guest and UI create/send/reopen pending | Boxd HTTP/protobuf and WebCrypto compatibility fixtures pass; live cloud chat pending |
+| B: real cloud chat | Direct Boxd lifecycle/bootstrap transport, legacy encryption and transactional runtime bootstrap/ACK/renewal added; allocation reconciliation, images, credential grants, gateway/mailbox, Rust guest and UI create/send/reopen pending | Boxd HTTP/protobuf and WebCrypto compatibility fixtures pass; live cloud chat pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -43,6 +43,7 @@ With `ZUSE_CLOUD_RUNTIME_WRITES=true`, these routes are additionally registered:
 
 - `POST /v1/cloud/workspaces/:id/runtime/bootstrap`.
 - `POST /v1/cloud/workspaces/:id/runtime/bootstrap/ack`.
+- `POST /v1/cloud/workspaces/:id/runtime/credentials/renew`.
 
 Other feature routes remain absent until their behavior is implemented. Runtime-derived
 native-agent availability is not yet returned by the workspace projection.
@@ -74,7 +75,7 @@ Configuration:
 | `ORGANIZATION_WORKSPACES_ENABLED` | Defaults false |
 | `ZUSE_CLOUD_ORGANIZATION_IDS` | Explicit migration allowlist; default empty denies all org access |
 | `ZUSE_CLOUD_ALLOWED_ORIGINS` | Comma-separated exact HTTPS browser origins; empty denies cross-origin browser access |
-| `ZUSE_CLOUD_RUNTIME_WRITES` | Defaults disabled; literal `true` enables owner-fenced bootstrap/ACK |
+| `ZUSE_CLOUD_RUNTIME_WRITES` | Defaults disabled; literal `true` enables owner-fenced bootstrap/ACK/renewal |
 | `CLOUD_DATA_ENCRYPTION_KEY` | Existing master key required for runtime writes; legacy fallback `CLOUD_CREDENTIAL_VAULT_KEY` |
 | `RELAY_MINT_PRIVATE_JWK` | Existing Ed25519 mint key required for runtime writes |
 | `API_ISSUER` | Runtime ticket/gateway origin, defaults `https://api-rust.zuse.sh` |
@@ -118,7 +119,9 @@ competing claims, expired-worker recovery and stale lease rejection. Runtime enr
 acceptance also covers concurrent bootstrap retries through real HTTP handlers,
 verified Ed25519 gateway JWTs, original launch-intent identity and transcript-key
 preservation, changed-key rejection, idempotent ACK, ownership-generation fencing
-and transaction rollback when initial launch state is unavailable.
+and transaction rollback when initial launch state is unavailable. Renewal acceptance
+covers fresh guest proofs, expired-bearer recovery, concurrent/lost-response retries,
+stale bearer/request rejection, deletion fences and valid-bearer legacy compatibility.
 
 Verified on October 22, 2026: four cloud unit/HTTP fixture tests and both
 PostgreSQL/HTTP acceptance scenarios pass. JWT acceptance uses generated RSA keys and an actual JWKS
@@ -164,7 +167,10 @@ Transactional bootstrap now uses these primitives to retain the original wrapped
 transcript key and decrypt the existing launch intent. It binds the enrollment receipt
 to the boot token, both runtime public keys, generation and gateway epoch. Concurrent
 retries return the persisted receipt; ACK clears the boot credential once. Missing
-initial launch data aborts the whole transaction. Runtime control does not yet issue
+initial launch data aborts the whole transaction. Credential renewal verifies the
+registered guest's Ed25519 proof and persists the existing renewal receipt format;
+expired bearer recovery requires that proof. Delete intent metadata fences callbacks
+even if row state regresses. Runtime control does not yet issue
 provider launch grants, resolve Git identity, attach a gateway or start an agent.
 Production-key and historical-data acceptance remain pending.
 

@@ -3,7 +3,7 @@ use crate::{
     archive,
     auth::Identity,
     error::ApiError,
-    runtime::{BootstrapAck, BootstrapRequest, RuntimeControl},
+    runtime::{BootstrapAck, BootstrapRequest, RenewRequest, RuntimeControl},
     store::Store,
 };
 use axum::{
@@ -72,6 +72,10 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 post(runtime_bootstrap).layer(DefaultBodyLimit::max(64 * 1024)),
             )
             .route(
+                "/v1/cloud/workspaces/{id}/runtime/credentials/renew",
+                post(runtime_renew).layer(DefaultBodyLimit::max(24 * 1024)),
+            )
+            .route(
                 "/v1/cloud/workspaces/{id}/runtime/bootstrap/ack",
                 post(runtime_ack).layer(DefaultBodyLimit::max(4096)),
             );
@@ -128,6 +132,25 @@ async fn runtime_bootstrap(
     Ok(Json(
         runtime
             .bootstrap(&id, token, request, chrono::Utc::now().timestamp_millis())
+            .await?,
+    ))
+}
+async fn runtime_renew(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<RenewRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let token = runtime_bearer(&headers)?;
+    let Json(request) =
+        body.map_err(|_| ApiError::bad_request("invalid_runtime_renewal_request"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(
+        runtime
+            .renew(&id, token, request, chrono::Utc::now().timestamp_millis())
             .await?,
     ))
 }

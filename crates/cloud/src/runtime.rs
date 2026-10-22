@@ -3,7 +3,9 @@
 use crate::{
     crypto::{MasterKey, credential_thumbprint, seal_runtime_secret},
     error::ApiError,
-    tickets::{GATEWAY_PROTOCOL, RUNTIME_TTL_MS, TicketSigner, signing_thumbprint},
+    tickets::{
+        GATEWAY_PROTOCOL, RUNTIME_TTL_MS, TicketSigner, signing_thumbprint, verify_renewal_proof,
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -47,6 +49,7 @@ pub struct RuntimeControl {
 
 pub use zuse_protocol::cloud::{
     CloudRuntimeBootstrapAck as BootstrapAck, CloudRuntimeBootstrapRequest as BootstrapRequest,
+    CloudRuntimeCredentialRenewRequest as RenewRequest,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -314,6 +317,97 @@ impl RuntimeControl {
         Ok(response)
     }
 
+    pub async fn renew(
+        &self,
+        id: &str,
+        credential: &str,
+        request: RenewRequest,
+        now: i64,
+    ) -> Result<Value, ApiError> {
+        if request.request_id.is_empty()
+            || request.request_id.len() > 512
+            || credential.is_empty()
+            || credential.len() > 512
+        {
+            return Err(ApiError::bad_request("invalid_runtime_renewal_request"));
+        }
+        let mut tx = self.pool.begin().await?;
+        let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
+        if blocked(&row) || row["desired_state"] == "archived" {
+            return Err(ApiError::unauthorized("workspace_runtime_revoked"));
+        }
+        let mut config = row["request_config"].clone();
+        let proof_verified = match config["runtimeSigningPublicJwk"].as_str() {
+            Some(public) => {
+                let thumbprint = signing_thumbprint(public)?;
+                if config["runtimeSigningKeyThumbprint"] != thumbprint {
+                    return Err(ApiError::unauthorized(
+                        "runtime_signing_key_binding_mismatch",
+                    ));
+                }
+                verify_renewal_proof(
+                    &request.proof,
+                    public,
+                    &self.signer.issuer(),
+                    id,
+                    &request.request_id,
+                    (generation, epoch),
+                    now,
+                )?;
+                true
+            }
+            None => false, // Legacy guests may renew only their still-valid current credential.
+        };
+        let current_hash = hash(credential);
+        let next = format!(
+            "workspace_runtime_{}",
+            hash(&format!("{credential}:{id}:{}", request.request_id))
+        );
+        let next_hash = hash(&next);
+        let prior = &config["runtimeCredentialRenewal"];
+        let replay = prior["requestId"] == request.request_id;
+        let mut expires = now + RUNTIME_TTL_MS;
+        if replay {
+            if prior["previousCredentialHash"]
+                .as_str()
+                .is_none_or(|h| !equal(h, &current_hash))
+                || prior["credentialHash"]
+                    .as_str()
+                    .is_none_or(|h| !equal(h, &next_hash))
+                || row["runtime_credential_hash"]
+                    .as_str()
+                    .is_none_or(|h| !equal(h, &next_hash))
+                || prior["generation"] != generation
+                || prior["gatewayEpoch"] != epoch
+            {
+                return Err(rejected());
+            }
+            let previous_expiry = prior["expiresAtMs"].as_i64().ok_or_else(rejected)?;
+            if previous_expiry > now {
+                expires = previous_expiry;
+            } else if !proof_verified {
+                return Err(rejected());
+            }
+        } else if row["runtime_credential_hash"]
+            .as_str()
+            .is_none_or(|h| !equal(h, &current_hash))
+            || (config["runtimeCredentialExpiresAtMs"].as_i64().unwrap_or(0) <= now
+                && !proof_verified)
+        {
+            return Err(rejected());
+        }
+        if !replay || prior["expiresAtMs"].as_i64().unwrap_or(0) <= now {
+            config["runtimeCredentialExpiresAtMs"] = json!(expires);
+            config["runtimeCredentialRenewal"] = json!({"requestId":request.request_id,"credentialHash":next_hash,"previousCredentialHash":current_hash,"expiresAtMs":expires,"generation":generation,"gatewayEpoch":epoch});
+            sqlx::query("UPDATE api_cloud_workspaces SET runtime_credential_hash=$2,request_config=$3 WHERE workspace_id=$1")
+                .bind(id).bind(next_hash).bind(config).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(
+            json!({"workspaceId":id,"requestId":request.request_id,"runtimeCredential":next,"expiresAt":expires,"generation":generation,"gatewayEpoch":epoch}),
+        )
+    }
+
     pub async fn acknowledge(
         &self,
         id: &str,
@@ -386,7 +480,9 @@ fn blocked(row: &Value) -> bool {
     matches!(
         row["state"].as_str(),
         Some("archived" | "archiving" | "deleting" | "deleted")
-    )
+    ) || row["desired_state"] == "deleted"
+        || row["request_config"]["cloudMailboxLifecyclePending"]["action"] == "delete"
+        || row["request_config"]["cloudMailboxLifecycleDelivered"]["action"] == "delete"
 }
 fn rejected() -> ApiError {
     ApiError::unauthorized("workspace_bootstrap_rejected")
