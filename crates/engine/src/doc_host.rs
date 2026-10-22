@@ -574,6 +574,8 @@ pub struct ChatDocHandle {
     drain_lock: tokio::sync::Mutex<()>,
     /// Serialize prompt commands while still allowing interrupt/input controls.
     command_drain_lock: tokio::sync::Mutex<()>,
+    mailbox_admission: tokio::sync::Mutex<()>,
+    mailbox_pending: Mutex<HashSet<String>>,
     /// Queue rows held as explicit steers for a turn-boundary agent. They
     /// lead ordinary queued rows, in the order they were steered.
     steered_rows: Mutex<Vec<String>>,
@@ -672,6 +674,16 @@ impl Drop for DocWriter {
 impl Drop for ChatDocHandle {
     fn drop(&mut self) {
         lock(&self.sync_cancel).cancel();
+    }
+}
+
+struct MailboxPending {
+    handle: Arc<ChatDocHandle>,
+    id: String,
+}
+impl Drop for MailboxPending {
+    fn drop(&mut self) {
+        lock(&self.handle.mailbox_pending).remove(&self.id);
     }
 }
 
@@ -1672,6 +1684,8 @@ impl DocHost {
             queue_tx,
             drain_lock: tokio::sync::Mutex::new(()),
             command_drain_lock: tokio::sync::Mutex::new(()),
+            mailbox_admission: tokio::sync::Mutex::new(()),
+            mailbox_pending: Mutex::new(HashSet::new()),
             steered_rows: Mutex::new(Vec::new()),
             held_sends: Mutex::new(held_sends),
             stopped_by: Mutex::new(None),
@@ -4796,6 +4810,33 @@ impl DocHost {
         }))
     }
 
+    /// Upgrade adapter for launches accepted before canonical mailbox queue receipts existed.
+    pub fn legacy_launch_admitted(
+        &self,
+        chat: &str,
+        command: &str,
+        message: &str,
+        prompt: &str,
+    ) -> Result<bool, EngineError> {
+        if !self.is_host(chat) || !self.inner.store.is_processed(command)? {
+            return Ok(false);
+        }
+        let handle = self.open_local(chat)?;
+        Ok(handle.doc.read_entries()?.iter().any(|entry| {
+            entry.id == message
+                && entry.role == MessageRole::User
+                && entry
+                    .parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        MessagePart::Text { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>()
+                    == prompt
+        }))
+    }
+
     /// Admit an encrypted-mailbox command to the existing durable command queue.
     /// `issued_by` binds the authenticated fingerprint. A retry retains the
     /// original queued request/configuration and never directly dispatches tools.
@@ -4810,7 +4851,7 @@ impl DocHost {
             ));
         }
         let handle = self.open_local(chat_id)?;
-        let exclusive = handle.command_drain_lock.lock().await;
+        let exclusive = handle.mailbox_admission.lock().await;
         let sessions = self
             .sessions()
             .ok_or_else(|| EngineError::Other("executor unavailable".into()))?;
@@ -4831,6 +4872,11 @@ impl DocHost {
                 return Err(EngineError::Other("mailbox_command_receipt_missing".into()));
             }
             self.inner.store.schedule_sync_job(chat_id, "wake")?;
+            lock(&handle.mailbox_pending).insert(entry.id.clone());
+            let pending = MailboxPending {
+                handle: handle.clone(),
+                id: entry.id.clone(),
+            };
             handle.doc.queue_command(&entry)?;
             if let Err(error) = self.persist_fork(&handle) {
                 let _ = handle.doc.set_command_status(
@@ -4840,15 +4886,13 @@ impl DocHost {
                 );
                 return Err(error);
             }
+            drop(pending);
         }
         drop(filesystem);
         drop(exclusive);
-        // The doc-change task may have observed the entry while this method held
-        // its drain lock. Schedule a fresh pass after releasing that lock.
-        let host = self.clone();
-        self.spawn_worker(async move {
-            host.drain_commands(&handle).await;
-        });
+        handle
+            .queue_changes
+            .send_modify(|version| *version = version.wrapping_add(1));
         Ok(())
     }
 
@@ -5322,6 +5366,7 @@ impl DocHost {
                 .iter()
                 .find(|c| {
                     c.status == SessionCommandStatus::Pending
+                        && !lock(&handle.mailbox_pending).contains(&c.id)
                         && !skipped.contains(&c.id)
                         && !is_processed(&c.id)
                         && (prompt_guard.is_some()

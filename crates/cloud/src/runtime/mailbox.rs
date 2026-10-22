@@ -34,6 +34,9 @@ impl RuntimeControl {
         {
             return Err(ApiError::conflict("cloud_command_runtime_update_required"));
         }
+        if wire::is_session_command_kind(&command.kind) && !native_commands_accepted(&row) {
+            return Err(ApiError::conflict("cloud_command_runtime_update_required"));
+        }
         if command.destruction_fence != destruction_fence(&row) {
             return Err(ApiError::conflict("cloud_command_fence_stale"));
         }
@@ -176,7 +179,7 @@ impl RuntimeControl {
             && row["request_config"]["rustCommandMailboxEnabled"] == true;
         tx.commit().await?;
         Ok(
-            json!({"workspaceId":id,"encodedKey":key.as_str(),"keyVersion":1,"destructionFence":destruction_fence(&row),"mailboxEnabled":enabled}),
+            json!({"workspaceId":id,"encodedKey":key.as_str(),"keyVersion":1,"destructionFence":destruction_fence(&row),"mailboxEnabled":enabled,"sessionCommandVersion":if native_commands_accepted(&row){Some(1)}else{None}}),
         )
     }
     pub async fn command_lease(
@@ -268,8 +271,8 @@ impl RuntimeControl {
             .bind(id).fetch_one(&mut *tx).await?;
         let mut leases = Vec::new();
         if !fence_required {
-            let candidates=sqlx::query(&format!("SELECT command_id,envelope,workspace_sequence FROM zuse_rust_mailbox_commands c WHERE workspace_id=$1 AND state IN ('accepted','waiting-for-runtime') AND NOT EXISTS (SELECT 1 FROM zuse_rust_mailbox_commands prior WHERE prior.workspace_id=c.workspace_id AND prior.lane=c.lane AND prior.workspace_sequence<c.workspace_sequence AND prior.state NOT IN {TERMINAL}) ORDER BY workspace_sequence LIMIT 16"))
-                .bind(id).fetch_all(&mut *tx).await?;
+            let candidates=sqlx::query(&format!("SELECT command_id,envelope,workspace_sequence FROM zuse_rust_mailbox_commands c WHERE workspace_id=$1 AND state IN ('accepted','waiting-for-runtime') AND ($2 OR envelope->>'kind' NOT IN ('zuse.session.run','zuse.session.steer','zuse.session.interrupt','zuse.session.respond-input')) AND NOT EXISTS (SELECT 1 FROM zuse_rust_mailbox_commands prior WHERE prior.workspace_id=c.workspace_id AND prior.lane=c.lane AND prior.workspace_sequence<c.workspace_sequence AND prior.state NOT IN {TERMINAL}) ORDER BY workspace_sequence LIMIT 16"))
+                .bind(id).bind(native_commands_supported(&row)).fetch_all(&mut *tx).await?;
             for candidate in candidates {
                 let command_id: String = candidate.get("command_id");
                 let token = uuid::Uuid::new_v4().to_string();

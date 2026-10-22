@@ -14121,7 +14121,6 @@ name = "zuse-cloud-guest"
 version = "0.25.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "clap",
  "serde_json",
  "tokio",
@@ -14161,6 +14160,8 @@ dependencies = [
  "tokio-util",
  "uuid",
  "zeroize",
+ "zuse-doc",
+ "zuse-engine",
  "zuse-protocol",
  "zuse-rpc",
 ]

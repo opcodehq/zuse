@@ -198,7 +198,18 @@ async fn run() -> Result<()> {
         let ipc_task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
             zuse_rpc::serve_ws_listener(ipc, rpc.clone()),
         ));
-        adopt(&core, &bootstrap, &checkout, args.test_harness).await?;
+        let command_key = {
+            let key = identity.open_transcript_key(&bootstrap.sealed_transcript_key)?;
+            zuse_cloud_runtime::mailbox::CommandKey::parse(&key)?
+        };
+        adopt(
+            &core,
+            &bootstrap,
+            &checkout,
+            args.test_harness,
+            &command_key,
+        )
+        .await?;
         if let Some(intent) = &bootstrap.launch_intent {
             let head = core
                 .sessions
@@ -218,7 +229,10 @@ async fn run() -> Result<()> {
                     )
                     .await
                 {
-                    Ok(()) => break,
+                    Ok(()) => {
+                        identity.complete_launch(&intent.command_id)?;
+                        break;
+                    }
                     Err(error) if supervisor::retryable(&error) => {
                         supervisor::wait(&cancel, 3).await;
                         if cancel.is_cancelled() {
@@ -239,15 +253,15 @@ async fn run() -> Result<()> {
         let mailbox = if bootstrap.extra.get("commandMailboxEnabled")
             == Some(&serde_json::Value::Bool(true))
         {
-            let key = identity.open_transcript_key(&bootstrap.sealed_transcript_key)?;
             Some(zuse_cloud_runtime::mailbox::Mailbox::new(
                 storage.database_path(),
                 &bootstrap,
-                zuse_cloud_runtime::mailbox::CommandKey::parse(&key)?,
-                Arc::new(EngineMailbox {
+                command_key,
+                Arc::new(zuse_cloud_runtime::engine::EngineExecutor {
                     core: core.clone(),
                     thread: bootstrap.chat_id.clone(),
                     checkout: checkout.clone(),
+                    allow_test: args.test_harness,
                 }),
             )?)
         } else {
@@ -278,6 +292,7 @@ async fn adopt(
     bootstrap: &CloudRuntimeBootstrap,
     checkout: &std::path::Path,
     allow_test: bool,
+    command_key: &zuse_cloud_runtime::mailbox::CommandKey,
 ) -> Result<()> {
     let Some(intent) = &bootstrap.launch_intent else {
         ensure!(
@@ -288,6 +303,15 @@ async fn adopt(
                     .is_some(),
             "runtime_retained_history_missing"
         );
+        for chat in core.workspace.read_chats()? {
+            if !chat.archived
+                && chat.device_id == core.device_id
+                && (chat.id == bootstrap.chat_id
+                    || chat.thread_id.as_deref() == Some(&bootstrap.chat_id))
+            {
+                core.doc_host.open_local(&chat.id)?;
+            }
+        }
         return Ok(());
     };
     ensure!(intent.fork_source.is_none(), "runtime_fork_import_required");
@@ -330,87 +354,21 @@ async fn adopt(
         core.workspace
             .rename_chat(&bootstrap.chat_id, &intent.title)?;
     }
-    if let Some(prompt) = &intent.first_message {
-        let now = zuse_cloud_runtime::now_ms();
-        let reply=service.handle(methods::RELAY_COMMAND,serde_json::json!({"chatId":bootstrap.initial_session_id,"entry":{"id":intent.command_id,"payload":{"kind":"run","messageId":intent.turn_id,"request":{"prompt":prompt,"harness":harness,"model":intent.model,"cwd":checkout,"sandbox":sandbox,"autoApprove":auto}},"issuedBy":"cloud-launch","issuedAt":now,"expiresAt":now+120000,"status":"pending"}})).await?;
-        if let zuse_rpc::RpcReply::Value(value) = reply {
-            ensure!(
-                matches!(value["outcome"].as_str(), Some("executed" | "duplicate")),
-                "runtime_launch_not_admitted"
-            );
-        } else {
-            anyhow::bail!("runtime_launch_receipt_invalid");
-        }
+    if let Some(prompt) = &intent.first_message
+        && !core.doc_host.legacy_launch_admitted(
+            &bootstrap.initial_session_id,
+            &intent.command_id,
+            &intent.turn_id,
+            prompt,
+        )?
+    {
+        let fingerprint = command_key.fingerprint(&serde_json::to_vec(intent)?);
+        let entry: zuse_doc::SessionCommandEntry = serde_json::from_value(
+            serde_json::json!({"id":intent.command_id,"payload":{"kind":"run","messageId":intent.turn_id,"request":{"prompt":prompt,"harness":harness,"model":intent.model,"cwd":checkout,"sandbox":sandbox,"autoApprove":auto}},"issuedBy":format!("cloud-mailbox:{fingerprint}"),"issuedAt":zuse_cloud_runtime::now_ms(),"expiresAt":9_007_199_254_740_991i64,"status":"pending"}),
+        )?;
+        core.doc_host
+            .admit_mailbox_command(&bootstrap.initial_session_id, entry)
+            .await?;
     }
     Ok(())
-}
-
-struct EngineMailbox {
-    core: Arc<EngineCore>,
-    thread: String,
-    checkout: PathBuf,
-}
-#[async_trait::async_trait]
-impl zuse_cloud_runtime::mailbox::Executor for EngineMailbox {
-    async fn admitted(
-        &self,
-        payload: &zuse_cloud_runtime::mailbox::MessageSend,
-        fingerprint: &str,
-    ) -> Result<bool> {
-        let Some(chat) = self.core.workspace.chat(&payload.session_id)? else {
-            return Ok(false);
-        };
-        ensure!(
-            chat.id == self.thread || chat.thread_id.as_deref() == Some(&self.thread),
-            "mailbox_conversation_scope_rejected"
-        );
-        Ok(self.core.doc_host.mailbox_command_admitted(
-            &payload.session_id,
-            &payload.command_id,
-            fingerprint,
-        )?)
-    }
-    async fn admit(
-        &self,
-        payload: &zuse_cloud_runtime::mailbox::MessageSend,
-        fingerprint: &str,
-        created_at: i64,
-    ) -> Result<()> {
-        let chat = self
-            .core
-            .workspace
-            .chat(&payload.session_id)?
-            .ok_or_else(|| anyhow::anyhow!("mailbox_conversation_missing"))?;
-        ensure!(
-            chat.id == self.thread || chat.thread_id.as_deref() == Some(&self.thread),
-            "mailbox_conversation_scope_rejected"
-        );
-        ensure!(
-            !chat.archived && chat.device_id == self.core.device_id,
-            "mailbox_conversation_unavailable"
-        );
-        let config = self
-            .core
-            .workspace
-            .chat_config(&chat.id)
-            .or_else(|| self.core.workspace.chat_config(&self.thread))
-            .ok_or_else(|| anyhow::anyhow!("mailbox_conversation_settings_missing"))?;
-        let cwd = chat
-            .cwd
-            .as_deref()
-            .unwrap_or_else(|| self.checkout.to_str().unwrap_or(""));
-        ensure!(!cwd.is_empty(), "mailbox_checkout_missing");
-        let model_options = match &payload.model_options {
-            Some(options) => serde_json::to_value(options)?,
-            None => serde_json::to_value(&config.model_options)?,
-        };
-        let entry: zuse_doc::SessionCommandEntry = serde_json::from_value(
-            serde_json::json!({"id":payload.command_id,"payload":{"kind":"run","messageId":payload.client_message_id,"request":{"prompt":payload.prompt(),"harness":config.harness,"model":config.model,"reasoning":config.reasoning,"modelOptions":model_options,"cwd":cwd,"sandbox":config.sandbox,"autoApprove":config.sandbox==SandboxLevel::DangerFullAccess}},"issuedBy":format!("cloud-mailbox:{fingerprint}"),"issuedAt":created_at,"status":"pending"}),
-        )?;
-        self.core
-            .doc_host
-            .admit_mailbox_command(&payload.session_id, entry)
-            .await?;
-        Ok(())
-    }
 }

@@ -9,6 +9,8 @@ on:
       - crates/cloud-runtime/**
       - crates/cloud/**
       - crates/protocol/src/cloud*.rs
+      - crates/protocol/src/session_commands.rs
+      - crates/doc/src/commands.rs
       - crates/rpc/src/cloud.rs
       - crates/engine/src/doc_host.rs
       - crates/engine/src/profile.rs
@@ -27,6 +29,8 @@ on:
       - crates/cloud-runtime/**
       - crates/cloud/**
       - crates/protocol/src/cloud*.rs
+      - crates/protocol/src/session_commands.rs
+      - crates/doc/src/commands.rs
       - crates/rpc/src/cloud.rs
       - crates/engine/src/doc_host.rs
       - crates/engine/src/profile.rs
@@ -78,10 +82,11 @@ jobs:
           key: cloud
       - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
       - run: cargo fmt -p zuse-cloud -p zuse-cloud-api -p zuse-cloud-runtime -p zuse-cloud-guest -p zuse-rpc --check
-      - run: rustfmt --edition 2024 --check crates/protocol/src/cloud.rs crates/protocol/src/cloud_gateway.rs crates/protocol/src/cloud_commands.rs
+      - run: rustfmt --edition 2024 --check crates/protocol/src/cloud.rs crates/protocol/src/cloud_gateway.rs crates/protocol/src/cloud_commands.rs crates/protocol/src/session_commands.rs
       - run: cargo check --locked -p zuse-cloud-api -p zuse-cloud-guest
       - run: cargo build --locked -p zuse-cloud-guest
-      - run: rustfmt --edition 2024 --config skip_children=true --check crates/engine/src/doc_host.rs crates/engine/src/profile.rs crates/engine/src/lib.rs crates/sync/src/store.rs crates/doc/src/queue.rs crates/doc/src/rebuild.rs
+      - run: rustfmt --edition 2024 --config skip_children=true --check crates/engine/src/doc_host.rs crates/engine/src/profile.rs crates/engine/src/lib.rs crates/sync/src/store.rs crates/doc/src/queue.rs crates/doc/src/rebuild.rs crates/doc/src/commands.rs
+      - run: cargo test --locked -p zuse-doc --lib commands::tests
       - run: cargo test --locked -p zuse-doc --lib queued_cloud_request_and_pause_survive_snapshot_and_epoch_rebuild
       - run: cargo test --locked -p zuse-sync --lib hosted_admission_and_processed_claims_use_full_wal_commits
       - run: cargo test --locked -p zuse-cloud-runtime -- --include-ignored

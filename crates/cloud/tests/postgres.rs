@@ -1214,6 +1214,7 @@ mod runtime_engine {
                     gateway_epoch: 5,
                     storage_incarnation_id: "storage-bob".into(),
                     enrollment_id: None,
+                    capabilities: None,
                 },
                 now,
             )
@@ -1229,6 +1230,7 @@ mod runtime_engine {
                     gateway_epoch: 5,
                     storage_incarnation_id: "storage-bob".into(),
                     enrollment_id: Some(prepared["enrollmentId"].as_str().unwrap().into()),
+                    capabilities: None,
                 },
                 now,
             )
@@ -1655,6 +1657,9 @@ mod runtime_engine {
             Self::start_with_mailbox(false).await
         }
         async fn start_with_mailbox(mailbox: bool) -> Self {
+            Self::start_options(mailbox, true, mailbox).await
+        }
+        async fn start_options(mailbox: bool, launch_prompt: bool, withhold_ack: bool) -> Self {
             use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
             use ed25519_dalek::SigningKey;
             use sha2::{Digest, Sha256};
@@ -1679,7 +1684,10 @@ mod runtime_engine {
             .await
             .unwrap();
             sqlx::query("UPDATE api_cloud_workspaces SET runtime_boot_token_hash=$1,runtime_boot_token_expires_at=$2,request_config=$3 WHERE workspace_id='ws-bob'").bind(hash).bind(now+120000).bind(json!({"runtimeGeneration":2,"gatewayEpoch":5,"runtimeRpcProtocol":"zuse-rpc-v1","rustCommandMailboxEnabled":mailbox,"rustRuntimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"packaged-storage"}})).execute(&pool).await.unwrap();
-            let intent = json!({"commandId":"original-launch","turnId":"original-turn","title":"Guest launch","agent":"mock","model":"fixture","permissions":[],"runtimeMode":"approval-required","firstMessage":"Original guest prompt"});
+            let mut intent = json!({"commandId":"original-launch","turnId":"original-turn","title":"Guest launch","agent":"mock","model":"fixture","permissions":[],"runtimeMode":"approval-required"});
+            if launch_prompt {
+                intent["firstMessage"] = json!("Original guest prompt");
+            }
             let ciphertext = master
                 .seal(
                     b"zuse-cloud-workspace-launch-intent-v1\nuser-bob\nws-bob",
@@ -1700,7 +1708,7 @@ mod runtime_engine {
                 vec![],
             );
             let lost_ack_release = Arc::new(Notify::new());
-            let fail_first = Arc::new(std::sync::atomic::AtomicBool::new(mailbox));
+            let fail_first = Arc::new(std::sync::atomic::AtomicBool::new(withhold_ack));
             let app = app.layer(axum::middleware::from_fn({
                 let release = lost_ack_release.clone();
                 move |request: Request<Body>, next: axum::middleware::Next| {
@@ -1872,6 +1880,396 @@ mod runtime_engine {
         assert!(!zuse_cloud_runtime::supervisor::retryable(&error));
         api.finish().await;
     }
+    struct SignalOnDrop(Arc<Notify>);
+    impl Drop for SignalOnDrop {
+        fn drop(&mut self) {
+            self.0.notify_one();
+        }
+    }
+    struct ControlProvider {
+        started: Arc<Notify>,
+        stopped: Arc<Notify>,
+        runs: Arc<AtomicUsize>,
+        prompts: Arc<std::sync::Mutex<Vec<String>>>,
+        steers: Arc<std::sync::Mutex<Vec<String>>>,
+        answers: Arc<std::sync::Mutex<Vec<Vec<zuse_protocol::UserInputAnswer>>>>,
+    }
+    #[async_trait]
+    impl Harness for ControlProvider {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "Native cloud control acceptance"
+        }
+        fn supports_steering(&self) -> bool {
+            true
+        }
+        fn steering_mode(&self) -> zuse_protocol::SteeringMode {
+            zuse_protocol::SteeringMode::StepBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            request: RunRequest,
+            mut controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            self.prompts.lock().unwrap().push(request.prompt.clone());
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            self.started.notify_one();
+            if request.prompt == "blocked-start" {
+                let _stopped = SignalOnDrop(self.stopped.clone());
+                controls.interrupt.cancelled().await;
+                return Ok(futures::stream::iter([Ok(AgentEvent::Done {
+                    status: DoneStatus::Interrupted,
+                    result: None,
+                    error: None,
+                    session_id: None,
+                })])
+                .boxed());
+            }
+            let steers = self.steers.clone();
+            let answers = self.answers.clone();
+            let stream = futures::stream::iter([Ok(AgentEvent::TextDelta {
+                text: "Awaiting native control".into(),
+            })])
+            .chain(
+                futures::stream::once(async move {
+                    let mut events = Vec::new();
+                    if request.prompt == "question" || request.prompt.ends_with("\n\nquestion") {
+                        let questions = vec![zuse_protocol::UserInputQuestion {
+                            id: "choice".into(),
+                            header: "Question".into(),
+                            question: "Continue?".into(),
+                            options: vec!["Continue".into()],
+                            prefill: None,
+                            multiline: false,
+                            multi_select: false,
+                        }];
+                        let received = (controls.request_input)(questions)
+                            .await
+                            .unwrap_or_default();
+                        answers.lock().unwrap().push(received);
+                    } else {
+                        let steer = controls
+                            .steering
+                            .recv()
+                            .await
+                            .expect("native steering delivery");
+                        steers.lock().unwrap().push(steer.prompt);
+                        if let Some(message_id) = steer.message_id {
+                            events.push(AgentEvent::DeliveryAcknowledged { message_id });
+                        }
+                    }
+                    events.push(AgentEvent::TextDelta {
+                        text: "Native control completed".into(),
+                    });
+                    events
+                        .into_iter()
+                        .map(Ok::<_, HarnessError>)
+                        .collect::<Vec<_>>()
+                })
+                .flat_map(futures::stream::iter),
+            )
+            .chain(futures::stream::iter([Ok(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                result: None,
+                error: None,
+                session_id: None,
+            })]))
+            .boxed();
+            Ok(stream)
+        }
+    }
+    fn encrypted_native(
+        key: &zuse_cloud_runtime::mailbox::CommandKey,
+        id: &str,
+        payload: Value,
+        kind_override: Option<&str>,
+    ) -> Value {
+        let command: zuse_protocol::cloud_commands::CloudSessionCommand = serde_json::from_value(
+            json!({"commandId":id,"sessionId":"session-bob","payload":payload}),
+        )
+        .unwrap();
+        let plaintext = serde_json::to_vec(&command).unwrap();
+        let kind = kind_override.unwrap_or(zuse_protocol::cloud_commands::session_command_kind(
+            command.payload.kind(),
+        ));
+        let mut envelope:zuse_protocol::cloud_commands::CommandEnvelope=serde_json::from_value(json!({"protocolVersion":3,"workspaceId":"ws-bob","sessionId":"session-bob","commandId":id,"kind":kind,"fingerprint":key.fingerprint(&plaintext),"schemaVersion":1,"keyVersion":1,"destructionFence":0,"createdAt":chrono::Utc::now().timestamp_millis(),"iv":"pending","ciphertext":"pending","dependencies":[]})).unwrap();
+        let (iv, ciphertext) = key.encrypt(&envelope, &plaintext).unwrap();
+        envelope.iv = iv;
+        envelope.ciphertext = ciphertext;
+        serde_json::to_value(envelope).unwrap()
+    }
+    #[tokio::test]
+    #[ignore = "requires isolated PostgreSQL and runtime acceptance feature"]
+    async fn rust_cloud_native_mailbox_stops_stalled_start_and_delivers_steering_and_answers() {
+        use zuse_cloud_runtime::{
+            Authority, DataLock, Identity, IdentityBinding, Storage,
+            mailbox::{CommandKey, Mailbox},
+        };
+        use zuse_rpc::{RpcService, methods};
+        let api = GuestApi::start_options(true, false, false).await;
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path().join("runtime");
+        let checkout = temporary.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let _lock = DataLock::acquire(&data, None).unwrap();
+        let binding = IdentityBinding {
+            workspace: "ws-bob".into(),
+            api_url: api.origin.clone(),
+            incarnation: "packaged-storage".into(),
+            generation: 2,
+        };
+        let authority = Authority::new(&api.origin).unwrap();
+        let mut identity = Identity::open(&data, &binding, Some("packaged-guest-boot")).unwrap();
+        let boot = authority
+            .enroll(&mut identity, &binding, Some("packaged-guest-boot"))
+            .await
+            .unwrap();
+        let profile = zuse_engine::EngineProfile::synced(&data, "ws-bob", "user-bob")
+            .with_durable_command_commits();
+        let enrollment = authority.prepare_storage(&boot).await.unwrap();
+        let mut storage = Storage::prepare(
+            &data,
+            &profile.store_root().join("docs.sqlite3"),
+            &boot,
+            "packaged-storage",
+            &enrollment,
+        )
+        .unwrap();
+        let provider = Arc::new(ControlProvider {
+            started: Arc::new(Notify::new()),
+            stopped: Arc::new(Notify::new()),
+            runs: Arc::new(AtomicUsize::new(0)),
+            prompts: Arc::new(std::sync::Mutex::new(Vec::new())),
+            steers: Arc::new(std::sync::Mutex::new(Vec::new())),
+            answers: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let registry = Arc::new(HarnessRegistry::new());
+        registry.register(provider.clone());
+        let core = Arc::new(
+            EngineCore::assemble_with_profile_locked(
+                profile,
+                registry,
+                HarnessId::Mock,
+                None,
+                zuse_engine::InstanceLock::acquire(&data).unwrap(),
+            )
+            .unwrap(),
+        );
+        storage.commit().unwrap();
+        // Simulate an existing cached bootstrap from a guest predating native commands.
+        sqlx::query("UPDATE api_cloud_workspaces SET request_config=request_config #- '{runtimeBootstrapReceipt,capabilities}' WHERE workspace_id='ws-bob'")
+            .execute(&api.pool).await.unwrap();
+        let capability_url = format!("{}/v1/cloud/workspaces/ws-bob/data-key", api.origin);
+        let before: Value = reqwest::Client::new()
+            .get(&capability_url)
+            .bearer_auth("bob")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(before["sessionCommandVersion"].is_null());
+        authority.commit_storage(&boot, &enrollment).await.unwrap();
+        let after: Value = reqwest::Client::new()
+            .get(&capability_url)
+            .bearer_auth("bob")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(after["sessionCommandVersion"], 1);
+        core.rpc_service().handle(methods::MUTATE,json!({"op":"createChat","chatId":"chat-bob","deviceId":core.device_id,"cwd":checkout,"config":{"harness":"mock","model":"fixture","sandbox":"workspace-write"}})).await.unwrap();
+        core.rpc_service()
+            .handle(
+                methods::CREATE_THREAD_SESSION,
+                json!({"chatId":"session-bob","threadId":"chat-bob"}),
+            )
+            .await
+            .unwrap();
+        authority
+            .launch_ready(&boot, "original-launch", 0)
+            .await
+            .unwrap();
+        let encoded = identity
+            .open_transcript_key(&boot.sealed_transcript_key)
+            .unwrap();
+        let mailbox = Arc::new(
+            Mailbox::new(
+                storage.database_path(),
+                &boot,
+                CommandKey::parse(&encoded).unwrap(),
+                Arc::new(zuse_cloud_runtime::engine::EngineExecutor {
+                    core: core.clone(),
+                    thread: "chat-bob".into(),
+                    checkout: checkout.clone(),
+                    allow_test: true,
+                }),
+            )
+            .unwrap(),
+        );
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let (_send, receive) = tokio::sync::watch::channel(boot.clone());
+        let worker = tokio::spawn({
+            let mailbox = mailbox.clone();
+            let cancel = cancel.clone();
+            let authority = authority.clone();
+            async move { mailbox.run(authority, receive, cancel).await }
+        });
+        let key = CommandKey::parse(&encoded).unwrap();
+        let endpoint = format!("{}/v1/cloud/workspaces/ws-bob/commands", api.origin);
+        let run = |prompt: &str, id: &str| json!({"kind":"run","messageId":format!("message-{id}"),"request":{"prompt":prompt,"harness":"mock","model":"fixture","cwd":checkout,"sandbox":"workspace-write"}});
+        let first = encrypted_native(&key, "stalled", run("blocked-start", "stalled"), None);
+        assert_eq!(runtime_post_for_url(&endpoint, "bob", &first).await.0, 202);
+        tokio::time::timeout(Duration::from_secs(5), provider.started.notified())
+            .await
+            .unwrap();
+        wait_command_state(&api, "stalled", "applied").await;
+        let stop = encrypted_native(&key, "stop-stalled", json!({"kind":"interrupt"}), None);
+        let start = tokio::time::Instant::now();
+        assert_eq!(runtime_post_for_url(&endpoint, "bob", &stop).await.0, 202);
+        tokio::time::timeout(Duration::from_secs(4), provider.stopped.notified())
+            .await
+            .unwrap();
+        assert!(start.elapsed() < Duration::from_secs(4));
+        wait_command_state(&api, "stop-stalled", "applied").await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while core.sessions.turn_in_flight("session-bob") {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime_post_for_url(
+                &endpoint,
+                "bob",
+                &encrypted_native(&key, "steer-run", run("steering", "steer-run"), None)
+            )
+            .await
+            .0,
+            202
+        );
+        tokio::time::timeout(Duration::from_secs(5), provider.started.notified())
+            .await
+            .unwrap();
+        let steer = encrypted_native(
+            &key,
+            "steer-command",
+            json!({"kind":"steer","prompt":"Continue this way","messageId":"message-steer"}),
+            None,
+        );
+        assert_eq!(runtime_post_for_url(&endpoint, "bob", &steer).await.0, 202);
+        wait_command_state(&api, "steer-command", "applied").await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if !provider.steers.lock().unwrap().is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(runtime_post_for_url(&endpoint, "bob", &steer).await.0, 202);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while core.sessions.turn_in_flight("session-bob") {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            provider.steers.lock().unwrap().as_slice(),
+            ["Continue this way"]
+        );
+        assert_eq!(
+            runtime_post_for_url(
+                &endpoint,
+                "bob",
+                &encrypted_native(&key, "question-run", run("question", "question-run"), None)
+            )
+            .await
+            .0,
+            202
+        );
+        let handle = core.doc_host.open_local("session-bob").unwrap();
+        let request_id = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                for entry in handle.doc_arc().read_entries().unwrap() {
+                    for part in entry.parts {
+                        if let zuse_doc::MessagePart::Input {
+                            id,
+                            resolved: false,
+                            ..
+                        } = part
+                        {
+                            return id;
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|error|panic!("Question did not reach transcript: {error}; runs={}; worker_finished={}; prompts={:?}; session={:?}; entries={:?}",provider.runs.load(Ordering::SeqCst),worker.is_finished(),provider.prompts.lock().unwrap(),core.sessions.session_status("session-bob"),handle.doc_arc().read_entries().unwrap()));
+        let answer = encrypted_native(
+            &key,
+            "answer-command",
+            json!({"kind":"respondInput","requestId":request_id,"answers":[{"questionId":"choice","labels":["Continue"],"text":null}]}),
+            None,
+        );
+        assert_eq!(runtime_post_for_url(&endpoint, "bob", &answer).await.0, 202);
+        wait_command_state(&api, "answer-command", "applied").await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if !provider.answers.lock().unwrap().is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(runtime_post_for_url(&endpoint, "bob", &answer).await.0, 202);
+        assert_eq!(provider.answers.lock().unwrap().len(), 1);
+        assert_eq!(provider.answers.lock().unwrap()[0][0].labels, ["Continue"]);
+        // An authenticated envelope cannot label a chargeable Run as a free Stop.
+        let wrong = encrypted_native(
+            &key,
+            "wrong-kind",
+            run("blocked-start", "wrong-kind"),
+            Some("zuse.session.interrupt"),
+        );
+        assert_eq!(runtime_post_for_url(&endpoint, "bob", &wrong).await.0, 202);
+        wait_command_state(&api, "wrong-kind", "rejected").await;
+        assert_eq!(provider.runs.load(Ordering::SeqCst), 3);
+        let category: Option<String> = sqlx::query_scalar(
+            "SELECT category FROM zuse_rust_mailbox_commands WHERE command_id='wrong-kind'",
+        )
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        assert_eq!(category.as_deref(), Some("command-kind-mismatch"));
+        cancel.cancel();
+        worker.await.unwrap().unwrap();
+        drop(mailbox);
+        drop(handle);
+        core.shutdown().await;
+        drop(core);
+        api.finish().await;
+    }
+
     fn guest_command(
         api: &GuestApi,
         directory: &std::path::Path,
@@ -2224,6 +2622,7 @@ mod runtime_engine {
         assert_eq!(stored["accountId"], "user-bob");
         assert_eq!(stored["storageIncarnationId"], "packaged-storage");
         assert_eq!(stored["bootstrapAcknowledged"], true);
+        assert!(stored["bootstrap"]["launchIntent"].is_null());
         let mut restarted = guest_command(&api, &directory, &checkout, None, &log)
             .spawn()
             .unwrap();

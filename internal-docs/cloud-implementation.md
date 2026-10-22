@@ -11,7 +11,7 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Boxd transport; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text-mailbox recovery, and retained queue/model/Stop recovery. Remaining: allocation, images, grants, durable steering/input and context/attachment delivery, and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| B: real cloud chat | Boxd transport; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input delivery. Remaining: allocation, images, grants, context/attachment delivery, and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -402,10 +402,8 @@ The consumer is enabled only by the explicitly gated bootstrap
 flag off. Organization execution remains disabled. Text and empty-reference
 composer inputs are supported; nonempty file/skill/annotation inputs require the
 remaining context adapter, and unsupported content is rejected rather than lost.
-Original v3 attachment/goal restrictions remain explicit. Full attachments/queues,
-steering and UI delivery still require their remaining inventory workflows. Cloud queue recovery now persists held run settings and explicit pause decisions;
-long-running restart/Stop/Send now acceptance has passed. Full background-task,
-steering, attachment and UI workflows still require their inventory acceptance.
+Original v3 attachment/goal restrictions remain explicit. Full attachment, background-task and UI delivery still require their remaining inventory workflows. Cloud queue recovery now persists held run settings and explicit pause decisions;
+long-running restart/Stop/Send now acceptance has passed. Full background-task, attachment and UI workflows still require their inventory acceptance.
 
 Focused guest acceptance now proves encrypted commands accepted before startup,
 original IDs/history retained through restart, a committed API ACK with its response
@@ -468,3 +466,56 @@ strict Clippy and formatting passed. Broader Sync strict Clippy additionally rep
 six existing diagnostics in `chat_client.rs` and `dial.rs`; none is in the changed
 store code. The task branch remains separate from main. Full milestones and live
 provider, migration, billing and UI acceptance remain pending in the ledger above.
+
+
+### Native cloud command delivery
+
+The encrypted mailbox accepts explicit versioned `zuse.session.run`,
+`zuse.session.steer`, `zuse.session.interrupt` and `zuse.session.respond-input`
+commands. They share the engine's existing session command payload types, preserving
+local wire serialization and public Doc re-exports. The authenticated outside kind
+must match the decrypted payload; a Run cannot be mislabeled as a control. Every
+session remains FIFO at durable admission, preserving prompt/Stop ordering. Applied
+means durably admitted; execution state still comes from the canonical transcript.
+
+Native admission is separate from the prompt dispatch lock. Provider startup can
+remain pending while Stop and input controls enter the durable queue. A temporary
+admission barrier prevents workers from executing a command before its snapshot
+is committed, then wakes both prompt and control drains. Production and acceptance
+use the same EngineExecutor adapter. Default cloud command expiry is unbounded;
+explicit expiry still applies. Archived accepted work must not silently expire
+through the ordinary local 24-hour command default.
+
+The initial launch uses this durable queue too, retaining original command/turn
+IDs and allowing gateway readiness before provider startup completes. A successful
+ready receipt clears the cached launch intent. Existing processed launches are
+recognized only with the original user-message identity and text. Retained boots
+open owned active conversation documents so background work resumes without a
+viewer. Organization execution and rich context remain separately gated.
+
+`data-key.sessionCommandVersion` advertises native support. Fresh bootstrap advertises
+`rust-session-commands-v1`; retained upgrades refresh these known capabilities at
+the authenticated storage commit barrier. Legacy storage commit requests remain
+valid and clear native command support, so the authority does not hand a new command
+to a guest that has not declared its decoder. Prepared-image allocation may explicitly set `rustSessionCommandVersion=1`
+to admit work before boot, but leasing waits for the actual guest capability. That
+flag is reserved for authority-approved images, not inferred from legacy protocols.
+The allocator and browser/desktop client wiring remain pending.
+
+
+Native-command verification: 33 local checks passed (five cloud fixture tests,
+11 PostgreSQL/HTTP/gateway/engine/process scenarios, five guest crypto/storage
+checks, four protocol cases and eight canonical command evaluator cases). The final
+rebuilt executable passed all 11 PostgreSQL scenarios again after the decoder layout
+and capability-selection changes. The native scenario interrupts a provider stalled
+before stream creation, delivers steering and question answers once despite repeated
+submission, rejects mismatched outside/payload kinds, and refreshes capabilities
+from an older cached bootstrap through storage commit. Guest-process acceptance
+also verifies the completed launch intent is absent from retained identity storage.
+Scoped strict Clippy and formatting pass. The previously existing large payload
+enum warning now resides in `protocol/session_commands.rs` after the unchanged
+payload layout moved there; dependency-wide lint limitations remain as recorded.
+
+This chunk does not enable production writes or charges. Allocation/image preparation,
+provider grants, attachment/context import, billing, workspace lifecycle/archives,
+client integration, full GPUI parity and migration still require their listed work.

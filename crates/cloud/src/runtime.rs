@@ -360,6 +360,14 @@ impl RuntimeControl {
         now: i64,
     ) -> Result<Value, ApiError> {
         use zuse_protocol::cloud::CloudStoragePhase;
+        if request.capabilities.as_ref().is_some_and(|caps| {
+            caps.len() > 2
+                || caps
+                    .iter()
+                    .any(|cap| !matches!(cap.as_str(), "rust-rpc-v1" | "rust-session-commands-v1"))
+        }) {
+            return Err(ApiError::bad_request("invalid_runtime_capabilities"));
+        }
         let mut tx = self.pool.begin().await?;
         let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
         let mut config = row["request_config"].clone();
@@ -429,6 +437,7 @@ impl RuntimeControl {
                 {
                     return Err(ApiError::conflict("runtime_storage_enrollment_rejected"));
                 }
+                record["capabilities"] = json!(request.capabilities.unwrap_or_default());
                 record["phase"] = json!("committed");
                 record["generation"] = json!(generation);
                 if record["committedAt"].is_null() {
@@ -909,4 +918,21 @@ fn storage_enrolled(row: &Value) -> bool {
         && storage["credentialKeyThumbprint"] == config["runtimeCredentialKeyThumbprint"]
         && storage["signingKeyThumbprint"].as_str().is_some()
         && storage["signingKeyThumbprint"] == config["runtimeSigningKeyThumbprint"]
+}
+
+fn native_commands_supported(row: &Value) -> bool {
+    let config = &row["request_config"];
+    let capabilities =
+        if storage_enrolled(row) && config["rustStorageEnrollment"]["capabilities"].is_array() {
+            &config["rustStorageEnrollment"]["capabilities"]
+        } else {
+            &config["runtimeBootstrapReceipt"]["capabilities"]
+        };
+    enrollment_matches(row)
+        && capabilities
+            .as_array()
+            .is_some_and(|caps| caps.iter().any(|cap| cap == "rust-session-commands-v1"))
+}
+fn native_commands_accepted(row: &Value) -> bool {
+    native_commands_supported(row) || row["request_config"]["rustSessionCommandVersion"] == 1
 }

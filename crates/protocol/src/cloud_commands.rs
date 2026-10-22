@@ -3,6 +3,36 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const PROTOCOL_VERSION: u32 = 3;
+/// Native commands are accepted only on explicitly negotiated Rust workspaces.
+pub fn session_command_kind(kind: crate::session_commands::SessionCommandKind) -> &'static str {
+    use crate::session_commands::SessionCommandKind::*;
+    match kind {
+        Run => "zuse.session.run",
+        Steer => "zuse.session.steer",
+        Interrupt => "zuse.session.interrupt",
+        RespondInput => "zuse.session.respond-input",
+    }
+}
+pub fn is_session_command_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "zuse.session.run"
+            | "zuse.session.steer"
+            | "zuse.session.interrupt"
+            | "zuse.session.respond-input"
+    )
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CloudSessionCommand {
+    pub command_id: String,
+    pub session_id: String,
+    pub payload: crate::session_commands::SessionCommandPayload,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub based_on: Option<crate::session_commands::CommandBasedOn>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+}
 pub const MAX_ENVELOPE_BYTES: usize = 256 * 1024;
 pub const MAX_NONTERMINAL: i64 = 256;
 pub const MAX_MAILBOX_BYTES: i64 = 8 * 1024 * 1024;
@@ -90,7 +120,7 @@ impl CommandEnvelope {
     }
     pub fn eligible(&self) -> bool {
         self.protocol_version == PROTOCOL_VERSION
-            && self.kind == "messages.send"
+            && (self.kind == "messages.send" || is_session_command_kind(&self.kind))
             && self.schema_version == 1
             && self.key_version == 1
             && self.dependencies.is_empty()

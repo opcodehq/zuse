@@ -273,6 +273,8 @@ impl Authority {
                 .storage_incarnation_id
                 .clone(),
             enrollment_id: enrollment.map(str::to_owned),
+            capabilities: enrollment
+                .map(|_| vec!["rust-rpc-v1".into(), "rust-session-commands-v1".into()]),
         };
         let response = self
             .post(

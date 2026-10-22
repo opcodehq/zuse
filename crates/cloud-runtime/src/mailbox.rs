@@ -24,7 +24,8 @@ use zeroize::Zeroizing;
 use zuse_protocol::{
     cloud::CloudRuntimeBootstrap,
     cloud_commands::{
-        AcknowledgmentState, CommandEnvelope, LeasePage, RuntimeAcknowledgment, RuntimeLease,
+        AcknowledgmentState, CloudSessionCommand, CommandEnvelope, LeasePage,
+        RuntimeAcknowledgment, RuntimeLease,
     },
 };
 
@@ -86,10 +87,30 @@ impl MessageSend {
         None
     }
 }
+enum DecodedCommand {
+    Message(Box<MessageSend>),
+    Session(Box<CloudSessionCommand>),
+}
+impl DecodedCommand {
+    fn expired(&self) -> bool {
+        matches!(self,Self::Session(command) if command.expires_at.is_some_and(|expiry|expiry<=now_ms()))
+    }
+}
 #[async_trait]
 pub trait Executor: Send + Sync {
     /// Read proof only. A missing proof must never execute work without a fresh lease.
     async fn admitted(&self, payload: &MessageSend, fingerprint: &str) -> Result<bool>;
+    async fn native_admitted(
+        &self,
+        payload: &CloudSessionCommand,
+        fingerprint: &str,
+    ) -> Result<bool>;
+    async fn admit_native(
+        &self,
+        payload: &CloudSessionCommand,
+        fingerprint: &str,
+        created_at: i64,
+    ) -> Result<()>;
     /// Must durably admit to the canonical engine queue, retaining the command ID.
     async fn admit(&self, payload: &MessageSend, fingerprint: &str, created_at: i64) -> Result<()>;
 }
@@ -274,6 +295,31 @@ impl Mailbox {
             generation: bootstrap.runtime_generation,
         })
     }
+    async fn admitted(&self, command: &DecodedCommand, fingerprint: &str) -> Result<bool> {
+        match command {
+            DecodedCommand::Message(command) => self.executor.admitted(command, fingerprint).await,
+            DecodedCommand::Session(command) => {
+                self.executor.native_admitted(command, fingerprint).await
+            }
+        }
+    }
+    async fn admit(
+        &self,
+        command: &DecodedCommand,
+        fingerprint: &str,
+        created_at: i64,
+    ) -> Result<()> {
+        match command {
+            DecodedCommand::Message(command) => {
+                self.executor.admit(command, fingerprint, created_at).await
+            }
+            DecodedCommand::Session(command) => {
+                self.executor
+                    .admit_native(command, fingerprint, created_at)
+                    .await
+            }
+        }
+    }
     async fn recover(&self) -> Result<()> {
         for lease in self.receipts.unfinished()? {
             ensure!(
@@ -282,10 +328,7 @@ impl Mailbox {
                 "runtime-receipt-invalid"
             );
             if let Ok(payload) = self.decode(&lease.command)
-                && self
-                    .executor
-                    .admitted(&payload, &lease.command.fingerprint)
-                    .await?
+                && self.admitted(&payload, &lease.command.fingerprint).await?
             {
                 let result = json!({"commandId":lease.command.command_id,"result":null});
                 let (iv, ciphertext) = self
@@ -333,6 +376,12 @@ impl Mailbox {
         let payload = self.decode(&lease.command);
         match payload {
             Ok(payload) => {
+                if payload.expired() {
+                    ack.state = AcknowledgmentState::Expired;
+                    ack.category = Some("command-expired".into());
+                    self.receipts.save(&ack)?;
+                    return Ok(Some(ack));
+                }
                 let result = json!({"commandId":lease.command.command_id,"result":null});
                 let (iv, ciphertext) = self
                     .key
@@ -341,7 +390,6 @@ impl Mailbox {
                     return Ok(None);
                 }
                 match self
-                    .executor
                     .admit(
                         &payload,
                         &lease.command.fingerprint,
@@ -365,7 +413,10 @@ impl Mailbox {
         self.receipts.save(&ack)?;
         Ok(Some(ack))
     }
-    fn decode(&self, envelope: &CommandEnvelope) -> std::result::Result<MessageSend, &'static str> {
+    fn decode(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> std::result::Result<DecodedCommand, &'static str> {
         if envelope.actor.is_some() {
             return Err("command-author-access-unavailable");
         }
@@ -373,6 +424,27 @@ impl Mailbox {
             .key
             .decrypt(envelope)
             .map_err(|_| "command-decryption-failed")?;
+        if zuse_protocol::cloud_commands::is_session_command_kind(&envelope.kind) {
+            let command: CloudSessionCommand =
+                serde_json::from_slice(&bytes).map_err(|_| "command-payload-invalid")?;
+            if command.command_id != envelope.command_id
+                || command.session_id != envelope.session_id
+            {
+                return Err("command-payload-identity-mismatch");
+            }
+            if zuse_protocol::cloud_commands::session_command_kind(command.payload.kind())
+                != envelope.kind
+            {
+                return Err("command-kind-mismatch");
+            }
+            if command
+                .expires_at
+                .is_some_and(|expiry| !(0..=9_007_199_254_740_991).contains(&expiry))
+            {
+                return Err("command-expiry-invalid");
+            }
+            return Ok(DecodedCommand::Session(Box::new(command)));
+        }
         let payload: MessageSend =
             serde_json::from_slice(&bytes).map_err(|_| "command-payload-invalid")?;
         if payload.command_id != envelope.command_id
@@ -386,7 +458,7 @@ impl Mailbox {
         if let Some(category) = payload.limitation() {
             return Err(category);
         }
-        Ok(payload)
+        Ok(DecodedCommand::Message(Box::new(payload)))
     }
     pub async fn run(
         &self,

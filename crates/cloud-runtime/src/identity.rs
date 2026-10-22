@@ -234,7 +234,10 @@ impl Identity {
         CloudRuntimeBootstrapRequest {
             credential_public_jwk: self.stored.credential_public_jwk.clone(),
             signing_public_jwk: self.stored.signing_public_jwk.clone(),
-            capabilities: Some(vec!["rust-rpc-v1".into()]),
+            capabilities: Some(vec![
+                "rust-rpc-v1".into(),
+                "rust-session-commands-v1".into(),
+            ]),
             rpc_protocol: Some(zuse_protocol::cloud_gateway::RUST_RPC.into()),
         }
     }
@@ -254,6 +257,23 @@ impl Identity {
     pub fn acknowledge(&mut self) -> Result<()> {
         self.stored.bootstrap_acknowledged = true;
         self.save()
+    }
+    /// The engine queue owns the launch after the authority accepts its readiness receipt.
+    pub fn complete_launch(&mut self, command: &str) -> Result<()> {
+        let bootstrap = self
+            .stored
+            .bootstrap
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("runtime_not_enrolled"))?;
+        if let Some(intent) = &bootstrap.launch_intent {
+            ensure!(
+                intent.command_id == command,
+                "runtime_launch_identity_mismatch"
+            );
+            bootstrap.launch_intent = None;
+            self.save()?;
+        }
+        Ok(())
     }
     pub fn begin_renewal(&mut self) -> Result<String> {
         if self.stored.pending_renewal_id.is_none() {

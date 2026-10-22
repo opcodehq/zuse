@@ -283,4 +283,6 @@ pub struct CloudStorageEnrollment {
     pub storage_incarnation_id: String,
     #[serde(default)]
     pub enrollment_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
 }

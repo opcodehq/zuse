@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-runtime-acceptance = ["dep:zuse-engine", "dep:zuse-providers", "dep:zuse-rpc", "dep:tempfile", "dep:tokio-util", "dep:zuse-cloud-runtime"]
+runtime-acceptance = ["zuse-cloud-runtime/engine", "dep:zuse-engine", "dep:zuse-providers", "dep:zuse-rpc", "dep:tempfile", "dep:tokio-util", "dep:zuse-cloud-runtime"]
 
 [dependencies]
 zuse-engine = { workspace = true, optional = true }

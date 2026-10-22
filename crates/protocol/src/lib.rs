@@ -10,6 +10,7 @@ pub mod chat_config;
 pub mod chat_mentions;
 pub mod cloud;
 pub mod cloud_commands;
+pub mod session_commands;
 pub mod cloud_gateway;
 pub mod custom_acp;
 pub mod device_paths;
