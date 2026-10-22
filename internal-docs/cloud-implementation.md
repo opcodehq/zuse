@@ -11,7 +11,7 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Boxd transport; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch and encrypted text-mailbox admission/receipt recovery. Remaining: allocation, images, grants, full queue/context/attachment/steering delivery and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| B: real cloud chat | Boxd transport; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text-mailbox recovery, and retained queue/model/Stop recovery. Remaining: allocation, images, grants, durable steering/input and context/attachment delivery, and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -403,10 +403,9 @@ flag off. Organization execution remains disabled. Text and empty-reference
 composer inputs are supported; nonempty file/skill/annotation inputs require the
 remaining context adapter, and unsupported content is rejected rather than lost.
 Original v3 attachment/goal restrictions remain explicit. Full attachments/queues,
-steering and UI delivery still require their remaining inventory workflows. In
-particular, the engine's recovered normal queue is currently frozen by its existing
-restart policy; cloud-specific queue recovery and long-running queue acceptance
-must pass before claiming full background-work parity.
+steering and UI delivery still require their remaining inventory workflows. Cloud queue recovery now persists held run settings and explicit pause decisions;
+long-running restart/Stop/Send now acceptance has passed. Full background-task,
+steering, attachment and UI workflows still require their inventory acceptance.
 
 Focused guest acceptance now proves encrypted commands accepted before startup,
 original IDs/history retained through restart, a committed API ACK with its response
@@ -431,3 +430,41 @@ fence changes, and the independent crypto test additionally verifies omission of
 original optional payload fields. Scoped strict Clippy and formatting passed.
 No production owner transfer, live-provider execution, billing export, deployment
 or full milestone completion is claimed by this chunk.
+
+### Hosted queue continuation
+
+Hosted profiles now journal local Loro updates to the existing SQLite outbox even
+without an Edge connection. Reopen replays those committed updates before exposing
+the document. This reuses the original journal and processed-command ledger.
+Network sync remains separately controlled; no connection is started by that local
+journal.
+
+Held messages persist their original run request beside the queue row, preserving
+model, reasoning, options, cwd and approval configuration through restart. Queue
+pause decisions are persisted: explicit Stop and archive remain held, while a
+runtime shutdown's temporary barrier does not revoke previously accepted work.
+Hosted reopening follows the persisted policy; ordinary local profiles retain the
+existing conservative reopen behavior. Snapshot and thin-document rebuilds carry
+queued rows, their run settings and the pause decision together.
+
+Queue verification: a real hosted engine is stopped and reopened twice while a
+turn-boundary provider is active. Held and explicitly queued messages retain
+selected model/options after subsequent settings changes. Explicit Stop remains
+paused after reopen, and Send now delivers the retained row once with its original
+ID. A separate snapshot/epoch-rebuild test preserves queue rows, pause state and
+run settings. The rebuilt guest passed the full cloud regression suite. A separate normal-profile
+reopen test confirms local queues still require an explicit send after restart.
+
+Broader `zuse-doc` strict Clippy currently reports four existing diagnostics outside
+these changes: `commands.rs` large enum variant, two collapsible conditionals in
+`registry/sidebar_pins.rs`, and one in `registry/sidebar_sections.rs`. No unrelated
+refactor is included. Cloud-package lint, focused checks and formatting remain the
+verification gate for this chunk. Offline journal compaction/export and full cloud
+UI/control integration remain required before production activation.
+
+Final queue-chunk checks: 19 cloud/guest checks passed, plus the snapshot/rebuild
+case and the local conservative-reopen case (21 checks total). Scoped cloud-package
+strict Clippy and formatting passed. Broader Sync strict Clippy additionally reports
+six existing diagnostics in `chat_client.rs` and `dial.rs`; none is in the changed
+store code. The task branch remains separate from main. Full milestones and live
+provider, migration, billing and UI acceptance remain pending in the ledger above.

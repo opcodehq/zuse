@@ -589,6 +589,7 @@ pub struct ChatDocHandle {
     /// explicit prompt or queue send resumes it; incidental doc/status changes
     /// must not turn Cancel into "send the next row".
     queue_paused: AtomicBool,
+    queue_changes: watch::Sender<u64>,
     /// True when the doc changed while nobody watched: the mirror rebuild is
     /// deferred to the next `watch_messages` attach instead of paid per commit.
     mirror_dirty: AtomicBool,
@@ -675,6 +676,20 @@ impl Drop for ChatDocHandle {
 }
 
 impl ChatDocHandle {
+    fn set_queue_paused(&self, paused: bool) -> bool {
+        let previous = self.queue_paused.load(Ordering::Acquire);
+        if let Err(error) = self.doc.set_queue_paused(paused) {
+            self.queue_paused.store(true, Ordering::Release);
+            self.publication_failed.store(true, Ordering::Release);
+            tracing::error!(chat=%self.chat_id,%error,"queue pause state could not be persisted");
+            return previous;
+        }
+        self.queue_paused.store(paused, Ordering::Release);
+        self.queue_changes
+            .send_modify(|version| *version = version.wrapping_add(1));
+        previous
+    }
+
     /// The turn ending now is followed at once by a message the user has
     /// already sent: one still on its way through the command log (a burst
     /// the agent outran), or one held for a turn-boundary agent's turn end.
@@ -1171,9 +1186,7 @@ impl DocHost {
 
     /// Keep pre-archive queued rows held until an explicit send resumes them.
     pub(crate) fn pause_chat_queue(&self, chat_id: &str) -> Result<(), EngineError> {
-        self.open(chat_id)?
-            .queue_paused
-            .store(true, Ordering::Release);
+        self.open(chat_id)?.set_queue_paused(true);
         Ok(())
     }
 
@@ -1582,7 +1595,7 @@ impl DocHost {
         };
         // Recover committed outgoing operations even when the snapshot debounce
         // did not run before a crash. Imported updates do not echo as local writes.
-        if room_gen >= 2 {
+        if room_gen >= 2 || self.inner.store.durable_commits() {
             for (_, bytes) in self.inner.store.pending_chat_updates(chat_id)? {
                 doc.doc()
                     .import(&bytes)
@@ -1608,6 +1621,7 @@ impl DocHost {
         let history = transcript_history.clone();
         let watched = messages_tx.clone();
         let weak_doc = Arc::downgrade(&doc);
+        let queue_changes = changed_tx.clone();
         let sub = doc.doc().subscribe_root(Arc::new(move |diff| {
             // This callback runs before the change worker can publish. The
             // import origin belongs to the event, so concurrent local commits
@@ -1633,6 +1647,19 @@ impl DocHost {
         // until an explicit prompt / Send now / Steer action thaws it. Rows
         // appended after the handle exists retain the normal automatic drain.
         let recovered_queue_pending = !initial_queue.is_empty();
+        let recovered_pause = if self.inner.store.durable_commits() {
+            doc.queue_paused().unwrap_or(recovered_queue_pending)
+        } else {
+            recovered_queue_pending
+        };
+        let mut held_sends = HashMap::new();
+        for item in &initial_queue {
+            if doc.queued_request_is_held(&item.id)?
+                && let Some(request) = doc.queued_run_request(&item.id)?
+            {
+                held_sends.insert(item.id.clone(), request);
+            }
+        }
         let (queue_tx, _) = watch::channel(initial_queue);
 
         let handle = Arc::new(ChatDocHandle {
@@ -1646,9 +1673,10 @@ impl DocHost {
             drain_lock: tokio::sync::Mutex::new(()),
             command_drain_lock: tokio::sync::Mutex::new(()),
             steered_rows: Mutex::new(Vec::new()),
-            held_sends: Mutex::new(HashMap::new()),
+            held_sends: Mutex::new(held_sends),
             stopped_by: Mutex::new(None),
-            queue_paused: AtomicBool::new(recovered_queue_pending),
+            queue_paused: AtomicBool::new(recovered_pause),
+            queue_changes,
             mirror_dirty: AtomicBool::new(true),
             last_access: AtomicI64::new(now_ms()),
             last_focus: AtomicU64::new(0),
@@ -1689,8 +1717,8 @@ impl DocHost {
         // retried: the exact "transcript frozen until restart" report.
         // Retry on the workspace host's capped, jittered backoff; a system
         // wake redials immediately; eviction/purge ends the loop via `weak`.
-        if self.inner.config.edge.is_some() {
-            if room_gen >= 2 {
+        if self.inner.config.edge.is_some() || self.inner.store.durable_commits() {
+            if room_gen >= 2 || self.inner.store.durable_commits() {
                 // Subscription BEFORE the dial (review B3): every local
                 // commit lands in the client when connected, else in the
                 // pending buffer the join drains — nothing composed during
@@ -3543,6 +3571,21 @@ impl DocHost {
         self.require_unarchived(chat_id)?;
         let handle = self.open(chat_id)?;
         let id = new_id();
+        if self.inner.store.durable_commits()
+            && let Some(mut request) = self.request_from_chat_row(chat_id, text)
+        {
+            if let Some(previous) = self
+                .sessions()
+                .and_then(|sessions| sessions.last_request(chat_id))
+            {
+                request.auto_approve = previous.auto_approve;
+                request.worktree = previous.worktree;
+            }
+            request.attachments = attachments.clone();
+            handle
+                .doc
+                .set_queued_run_context(&id, Some(&request), false)?;
+        }
         handle.doc.push_queued(&QueuedMessage {
             id: id.clone(),
             text: text.to_string(),
@@ -3607,6 +3650,8 @@ impl DocHost {
         let _drain = handle.drain_lock.lock().await;
         let removed = handle.doc.remove_queued(id)?;
         if removed {
+            handle.doc.set_queued_run_request(id, None)?;
+            lock(&handle.held_sends).remove(id);
             handle.publish_queue();
         }
         Ok(removed)
@@ -3990,14 +4035,14 @@ impl DocHost {
         let Some(item) = handle.doc.take_queued(id)? else {
             return Ok(false);
         };
-        let was_paused = handle.queue_paused.swap(false, Ordering::AcqRel);
+        let was_paused = handle.set_queue_paused(false);
         handle.publish_queue();
         if let Err(err) = self
             .dispatch_queued(&handle, &item, QueueSend::Interrupt)
             .await
         {
             if was_paused {
-                handle.queue_paused.store(true, Ordering::Release);
+                handle.set_queue_paused(true);
             }
             // Put it back rather than swallowing what the user typed — at the
             // head, because the user just said this one was the urgent one.
@@ -4051,21 +4096,21 @@ impl DocHost {
             handle
                 .doc
                 .insert_queued(handle.steer_slot(&item.id)?, &item)?;
-            handle.queue_paused.store(false, Ordering::Release);
+            handle.set_queue_paused(false);
             handle.publish_queue();
             return Ok(true);
         }
         let Some(item) = handle.doc.take_queued(id)? else {
             return Ok(false);
         };
-        let was_paused = handle.queue_paused.swap(false, Ordering::AcqRel);
+        let was_paused = handle.set_queue_paused(false);
         handle.publish_queue();
         // Always attempt the non-interrupting path first. If no turn exists,
         // `dispatch_queued` falls through to NextTurn; if a new turn appeared
         // after our capability check, the prompt steers that turn instead.
         if let Err(err) = self.dispatch_queued(&handle, &item, QueueSend::Steer).await {
             if was_paused {
-                handle.queue_paused.store(true, Ordering::Release);
+                handle.set_queue_paused(true);
             }
             let _ = handle.doc.insert_queued(0, &item);
             handle.publish_queue();
@@ -4156,7 +4201,7 @@ impl DocHost {
             handle.publish_queue();
             if let Err(err) = self.dispatch_queued(handle, &item, send).await {
                 tracing::warn!(chat = %handle.chat_id, error = %err, "queued send failed");
-                handle.queue_paused.store(true, Ordering::Release);
+                handle.set_queue_paused(true);
                 let _ = handle.doc.insert_queued(0, &item);
                 handle.publish_queue();
                 return;
@@ -4254,16 +4299,16 @@ impl DocHost {
         {
             return Ok(false);
         }
-        handle.queue_paused.store(true, Ordering::Release);
+        handle.set_queue_paused(true);
         self.cancel_held_sends(handle);
         match sessions.interrupt(&handle.chat_id).await {
             Ok(true) => Ok(true),
             Ok(false) => {
-                handle.queue_paused.store(false, Ordering::Release);
+                handle.set_queue_paused(false);
                 Ok(false)
             }
             Err(err) => {
-                handle.queue_paused.store(false, Ordering::Release);
+                handle.set_queue_paused(false);
                 Err(err)
             }
         }
@@ -4320,8 +4365,10 @@ impl DocHost {
         let mut attachments = item.attachments.clone();
         // A send held for the turn end goes out exactly as it was sent: its
         // text never carried the queue's image note.
-        let held = lock(&handle.held_sends).remove(&item.id);
-        let mut prompt = if held.is_some() {
+        let in_memory = lock(&handle.held_sends).remove(&item.id);
+        let is_held = in_memory.is_some() || handle.doc.queued_request_is_held(&item.id)?;
+        let held = in_memory.or(handle.doc.queued_run_request(&item.id)?);
+        let mut prompt = if is_held {
             item.text.clone()
         } else {
             queued_message_prompt(&item.text, &attachments)
@@ -4374,6 +4421,10 @@ impl DocHost {
         let harness = self.harness_for_request(chat_id, &request);
         self.dispatch_with_source_context(&sessions, chat_id, harness, request, Some(message_id))
             .await?;
+        // Cleanup follows successful admission; failure must not put an admitted turn back in the queue.
+        if let Err(error) = handle.doc.set_queued_run_request(&item.id, None) {
+            tracing::warn!(chat=%chat_id,%error,"queued request cleanup failed");
+        }
         Ok(())
     }
 
@@ -5696,7 +5747,7 @@ impl DocHost {
                 // A fresh user-authored turn is the deliberate action that
                 // thaws a queue frozen by Cancel. Clear only after dispatch
                 // succeeds so a failed send cannot silently unfreeze it.
-                handle.queue_paused.store(false, Ordering::Release);
+                handle.set_queue_paused(false);
                 Ok((SessionCommandStatus::Applied, None))
             }
             SessionCommandPayload::Steer { prompt, message_id } => {
@@ -5832,6 +5883,7 @@ impl DocHost {
             return Ok(()); // a redelivered command: already held
         }
         if let Some(request) = request {
+            handle.doc.set_queued_run_request(&item.id, Some(request))?;
             lock(&handle.held_sends).insert(item.id.clone(), request.clone());
         }
         if steer {
@@ -5842,7 +5894,7 @@ impl DocHost {
             handle.doc.push_queued(&item)?;
         }
         // Sending is the deliberate action that thaws a queue frozen by Cancel.
-        handle.queue_paused.store(false, Ordering::Release);
+        handle.set_queue_paused(false);
         handle.publish_queue();
         Ok(())
     }
@@ -5899,7 +5951,7 @@ impl DocHost {
             .await?
         {
             SteerOutcome::Accepted => {
-                handle.queue_paused.store(false, Ordering::Release);
+                handle.set_queue_paused(false);
                 Ok((SessionCommandStatus::Applied, None))
             }
             SteerOutcome::NotSteerable => {
@@ -5923,7 +5975,7 @@ impl DocHost {
                 let harness = self.harness_for_request(chat_id, &request);
                 self.dispatch_with_source_context(sessions, chat_id, harness, request, message_id)
                     .await?;
-                handle.queue_paused.store(false, Ordering::Release);
+                handle.set_queue_paused(false);
                 Ok((
                     SessionCommandStatus::Applied,
                     Some("queued as new turn".into()),

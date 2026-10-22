@@ -108,6 +108,7 @@ const MAINTENANCE_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 /// cold starts instant and offline restarts possible) and the command ledger
 /// that gives command execution mark-BEFORE-execute idempotence.
 pub struct DocsStore {
+    durable_commits: bool,
     conn: Mutex<Connection>,
     failed_publications: Mutex<HashSet<String>>,
     /// Snapshot jobs wait here asynchronously before entering the blocking pool.
@@ -141,10 +142,15 @@ impl DocsStore {
         checkpoint_truncate(&conn, &path, "open");
         conn.busy_timeout(STORE_BUSY_TIMEOUT)?;
         Ok(Self {
+            durable_commits: durable,
             conn: Mutex::new(conn),
             failed_publications: Mutex::new(HashSet::new()),
             snapshot_writer: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         })
+    }
+
+    pub fn durable_commits(&self) -> bool {
+        self.durable_commits
     }
 
     /// Insert before sending. Stable IDs make crash-after-ACK replay idempotent.

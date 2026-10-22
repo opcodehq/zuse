@@ -1006,6 +1006,8 @@ mod runtime_engine {
         started: Arc<Notify>,
         release: Arc<Notify>,
         runs: Arc<AtomicUsize>,
+        requests: Arc<std::sync::Mutex<Vec<RunRequest>>>,
+        supports_steering: bool,
     }
     #[async_trait]
     impl Harness for Provider {
@@ -1016,13 +1018,13 @@ mod runtime_engine {
             "Cloud acceptance provider"
         }
         fn supports_steering(&self) -> bool {
-            false
+            self.supports_steering
         }
         fn steering_mode(&self) -> zuse_protocol::SteeringMode {
             zuse_protocol::SteeringMode::TurnBoundary
         }
         fn reasoning_levels(&self) -> &[ReasoningLevel] {
-            &[]
+            &[ReasoningLevel::High]
         }
         async fn models(&self) -> Result<Vec<Model>, HarnessError> {
             Ok(vec![])
@@ -1033,6 +1035,7 @@ mod runtime_engine {
             _: RunControls,
         ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
             self.runs.fetch_add(1, Ordering::SeqCst);
+            self.requests.lock().unwrap().push(request.clone());
             self.started.notify_one();
             let release = self.release.clone();
             let cwd = std::path::PathBuf::from(request.cwd);
@@ -1196,6 +1199,8 @@ mod runtime_engine {
             started: Arc::new(Notify::new()),
             release: Arc::new(Notify::new()),
             runs: Arc::new(AtomicUsize::new(0)),
+            requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+            supports_steering: false,
         });
         let core = engine(&data, provider.clone());
         use zuse_protocol::cloud::{CloudStorageEnrollment, CloudStoragePhase};
@@ -1391,6 +1396,250 @@ mod runtime_engine {
             .unwrap();
         admin.close().await;
     }
+    fn queued_cloud_engine(
+        path: &std::path::Path,
+        provider: Arc<Provider>,
+        durable: bool,
+    ) -> EngineCore {
+        let registry = Arc::new(HarnessRegistry::new());
+        registry.register(provider);
+        let profile = zuse_engine::EngineProfile::synced(path, "ws-queue", "user-bob");
+        let profile = if durable {
+            profile.with_durable_command_commits()
+        } else {
+            profile
+        };
+        let lock = zuse_engine::InstanceLock::acquire(path).unwrap();
+        EngineCore::assemble_with_profile_locked(profile, registry, HarnessId::Mock, None, lock)
+            .unwrap()
+    }
+    #[tokio::test]
+    #[ignore = "requires cloud runtime acceptance feature"]
+    async fn rust_cloud_queue_restores_selected_model_and_preserves_explicit_stop() {
+        use zuse_rpc::{RpcService, methods};
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path().join("runtime");
+        let checkout = temporary.path().join("checkout");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir(&checkout).unwrap();
+        let provider = Arc::new(Provider {
+            started: Arc::new(Notify::new()),
+            release: Arc::new(Notify::new()),
+            runs: Arc::new(AtomicUsize::new(0)),
+            requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+            supports_steering: true,
+        });
+        let core = queued_cloud_engine(&data, provider.clone(), true);
+        core.rpc_service().handle(methods::MUTATE,json!({"op":"createChat","chatId":"queue-chat","deviceId":core.device_id,"cwd":checkout,"config":{"harness":"mock","model":"initial-model","sandbox":"workspace-write"}})).await.unwrap();
+        let command = |id: &str, model: &str| -> zuse_doc::SessionCommandEntry {
+            serde_json::from_value(json!({"id":id,"issuedBy":format!("cloud-mailbox:hmac-sha256:{id}"),"issuedAt":chrono::Utc::now().timestamp_millis(),"status":"pending","payload":{"kind":"run","messageId":format!("message-{id}"),"request":{"prompt":format!("Prompt {id}"),"harness":"mock","model":model,"reasoning":"high","modelOptions":{"fast":"enabled"},"cwd":checkout,"sandbox":"workspace-write"}}})).unwrap()
+        };
+        core.doc_host
+            .admit_mailbox_command("queue-chat", command("first", "queued-selected-model"))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), provider.started.notified())
+            .await
+            .unwrap();
+        core.doc_host
+            .admit_mailbox_command("queue-chat", command("held", "queued-selected-model"))
+            .await
+            .unwrap();
+        let handle = core.doc_host.open_local("queue-chat").unwrap();
+        let mut queue = handle.watch_queue();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if queue.borrow().iter().any(|row| row.id == "message-held") {
+                    break;
+                }
+                queue.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            handle
+                .doc_arc()
+                .queued_run_request("message-held")
+                .unwrap()
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("queued-selected-model")
+        );
+        assert_eq!(handle.doc_arc().queue_paused(), Some(false));
+        let config: zuse_protocol::ChatConfig = serde_json::from_value(
+            json!({"harness":"mock","model":"settings-changed-later","sandbox":"workspace-write"}),
+        )
+        .unwrap();
+        core.workspace
+            .set_chat_config("queue-chat", &config)
+            .unwrap();
+        drop(queue);
+        drop(handle);
+        core.shutdown().await;
+        drop(core);
+        let core = queued_cloud_engine(&data, provider.clone(), true);
+        let handle = core.doc_host.open_local("queue-chat").unwrap();
+        tokio::time::timeout(Duration::from_secs(5), provider.started.notified())
+            .await
+            .unwrap();
+        assert_eq!(provider.runs.load(Ordering::SeqCst), 2);
+        let request = provider.requests.lock().unwrap()[1].clone();
+        assert_eq!(request.model.as_deref(), Some("queued-selected-model"));
+        assert_eq!(request.reasoning, Some(ReasoningLevel::High));
+        assert_eq!(request.model_options["fast"], "enabled");
+        let paused_row = core
+            .doc_host
+            .queue_message("queue-chat", "Hold after Stop", vec![])
+            .unwrap();
+        let newer_config: zuse_protocol::ChatConfig = serde_json::from_value(
+            json!({"harness":"mock","model":"settings-changed-again","sandbox":"workspace-write"}),
+        )
+        .unwrap();
+        core.workspace
+            .set_chat_config("queue-chat", &newer_config)
+            .unwrap();
+        assert!(
+            !handle
+                .doc_arc()
+                .queued_request_is_held(&paused_row)
+                .unwrap(),
+            "An explicitly queued row is not a send held for the running turn"
+        );
+        core.rpc_service().handle(methods::RELAY_COMMAND,json!({"chatId":"queue-chat","entry":{"id":"explicit-stop","issuedBy":"cloud-ui","issuedAt":chrono::Utc::now().timestamp_millis(),"status":"pending","payload":{"kind":"interrupt"}}})).await.unwrap();
+        assert_eq!(handle.doc_arc().queue_paused(), Some(true));
+        assert!(
+            handle
+                .doc_arc()
+                .read_queue()
+                .unwrap()
+                .iter()
+                .any(|row| row.id == paused_row)
+        );
+        drop(handle);
+        core.shutdown().await;
+        drop(core);
+        let core = queued_cloud_engine(&data, provider.clone(), true);
+        let handle = core.doc_host.open_local("queue-chat").unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            provider.runs.load(Ordering::SeqCst),
+            2,
+            "An explicit Stop must remain paused across restart"
+        );
+        assert!(
+            handle
+                .doc_arc()
+                .read_queue()
+                .unwrap()
+                .iter()
+                .any(|row| row.id == paused_row)
+        );
+        assert!(
+            core.doc_host
+                .send_queued_now("queue-chat", &paused_row)
+                .await
+                .unwrap()
+        );
+        tokio::time::timeout(Duration::from_secs(5), provider.started.notified())
+            .await
+            .unwrap();
+        assert_eq!(provider.runs.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            provider.requests.lock().unwrap()[2].model.as_deref(),
+            Some("settings-changed-later")
+        );
+        provider.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while core.sessions.turn_in_flight("queue-chat") {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            handle
+                .doc_arc()
+                .read_entries()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry.id == paused_row)
+                .count(),
+            1
+        );
+        drop(handle);
+        core.shutdown().await;
+        drop(core);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires engine runtime acceptance feature"]
+    async fn rust_cloud_queue_changes_keep_local_reopen_conservative() {
+        use zuse_rpc::{RpcService, methods};
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path().join("runtime");
+        let checkout = temporary.path().join("checkout");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir(&checkout).unwrap();
+        let provider = Arc::new(Provider {
+            started: Arc::new(Notify::new()),
+            release: Arc::new(Notify::new()),
+            runs: Arc::new(AtomicUsize::new(0)),
+            requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+            supports_steering: true,
+        });
+        let core = queued_cloud_engine(&data, provider.clone(), false);
+        core.rpc_service().handle(methods::MUTATE,json!({"op":"createChat","chatId":"local-queue","deviceId":core.device_id,"cwd":checkout,"config":{"harness":"mock","model":"local-model","sandbox":"workspace-write"}})).await.unwrap();
+        core.rpc_service().handle(methods::RELAY_COMMAND,json!({"chatId":"local-queue","entry":{"id":"local-run","issuedBy":"local-ui","issuedAt":chrono::Utc::now().timestamp_millis(),"status":"pending","payload":{"kind":"run","messageId":"local-message","request":{"prompt":"Start local work","harness":"mock","model":"local-model","cwd":checkout,"sandbox":"workspace-write"}}}})).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), provider.started.notified())
+            .await
+            .unwrap();
+        let row = core
+            .doc_host
+            .queue_message("local-queue", "Keep queued after local restart", vec![])
+            .unwrap();
+        core.shutdown().await;
+        drop(core);
+        let core = queued_cloud_engine(&data, provider.clone(), false);
+        let handle = core.doc_host.open_local("local-queue").unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            provider.runs.load(Ordering::SeqCst),
+            1,
+            "Local restart still requires an explicit queue action"
+        );
+        assert!(
+            handle
+                .doc_arc()
+                .read_queue()
+                .unwrap()
+                .iter()
+                .any(|item| item.id == row)
+        );
+        assert!(
+            core.doc_host
+                .send_queued_now("local-queue", &row)
+                .await
+                .unwrap()
+        );
+        tokio::time::timeout(Duration::from_secs(5), provider.started.notified())
+            .await
+            .unwrap();
+        assert_eq!(provider.runs.load(Ordering::SeqCst), 2);
+        provider.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while core.sessions.turn_in_flight("local-queue") {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(handle);
+        core.shutdown().await;
+        drop(core);
+    }
+
     struct GuestApi {
         pool: PgPool,
         admin: PgPool,
