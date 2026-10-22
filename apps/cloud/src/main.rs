@@ -21,6 +21,18 @@ enum Command {
     Serve,
     /// Inspect existing schema/data counts without changing ownership or data.
     Inspect,
+    /// Admit initial allocation for an already Rust-owned workspace and approved prepared image.
+    Allocate {
+        #[arg(long)]
+        workspace_id: String,
+        #[arg(long)]
+        snapshot: String,
+    },
+    /// Reconcile prepared-image allocations independently of API viewers.
+    Worker {
+        #[arg(long, default_value_t = false)]
+        once: bool,
+    },
 }
 
 #[tokio::main]
@@ -43,6 +55,40 @@ async fn main() -> Result<()> {
                         .map_err(|error| anyhow::anyhow!("{}", error.code))?
                 )?
             );
+        }
+        Command::Allocate {
+            workspace_id,
+            snapshot,
+        } => {
+            let runtime = writable_runtime().await?;
+            let operation = runtime
+                .queue_allocation(&workspace_id, &snapshot, now_ms())
+                .await
+                .map_err(|error| anyhow::anyhow!("{}", error.code))?;
+            println!("{operation}");
+        }
+        Command::Worker { once } => {
+            let runtime = writable_runtime().await?;
+            let provider = zuse_cloud::providers::boxd::Boxd::new(
+                env::var("BOXD_API_KEY").context("Allocation worker requires BOXD_API_KEY")?,
+                env::var("BOXD_ORG").ok(),
+            )
+            .map_err(|_| anyhow::anyhow!("Invalid Boxd worker configuration"))?;
+            loop {
+                if let Err(error) = runtime.allocate_once(&provider, now_ms()).await {
+                    tracing::warn!(code = error.code, "Allocation stage deferred");
+                    if once {
+                        anyhow::bail!("{}", error.code);
+                    }
+                }
+                if once {
+                    break;
+                }
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => break,
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {},
+                }
+            }
         }
         Command::Serve => {
             let config = Config::from_env()?;
@@ -94,4 +140,24 @@ async fn axum_serve(listener: tokio::net::TcpListener, app: axum::Router) -> Res
         })
         .await?;
     Ok(())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+async fn writable_runtime() -> Result<Arc<RuntimeControl>> {
+    let settings = RuntimeConfig::from_env()?
+        .context("This command requires ZUSE_CLOUD_RUNTIME_WRITES=true")?;
+    let url = env::var("ZUSE_CLOUD_DATABASE_URL").context("ZUSE_CLOUD_DATABASE_URL is required")?;
+    let runtime = RuntimeControl::connect(&url, settings).await?;
+    runtime.allocation_ready().await.map_err(|error| {
+        anyhow::anyhow!(
+            "{}; apply migration 0004_allocations.sql before running the allocation worker",
+            error.code
+        )
+    })?;
+    Ok(runtime)
 }

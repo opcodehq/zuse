@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /home/zuse/.zuse-data /var/lib/zuse/workspace \
     && chown -R zuse:zuse /home/zuse /var/lib/zuse/workspace
 COPY --from=build /src/target/release/zuse-cloud-runtime /usr/local/bin/zuse-cloud-runtime
+COPY --chmod=0755 infra/cloud/launch-runtime.sh /usr/local/lib/zuse/launch-rust-runtime
 USER 10001:10001
 WORKDIR /home/zuse
 ENV HOME=/home/zuse ZUSE_USER_DATA=/home/zuse/.zuse-data

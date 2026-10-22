@@ -15,3 +15,20 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
+
+  worker:
+    profiles: [allocation]
+    build:
+      context: ../..
+      dockerfile: infra/cloud/Dockerfile
+    command: [worker]
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: .env
+        required: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m

@@ -110,6 +110,10 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(zuse_cloud::runtime::allocation::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
     (admin, pool, schema)
 }
 
@@ -1640,6 +1644,326 @@ mod runtime_engine {
         drop(handle);
         core.shutdown().await;
         drop(core);
+    }
+
+    struct AllocatorFixture {
+        machine: std::sync::Mutex<Option<zuse_cloud::providers::Machine>>,
+        creates: AtomicUsize,
+        launches: AtomicUsize,
+        uncertain_create: std::sync::atomic::AtomicBool,
+        pool: PgPool,
+        fence_create: bool,
+        directory: std::path::PathBuf,
+        checkout: std::path::PathBuf,
+        wrapper: std::path::PathBuf,
+        child: tokio::sync::Mutex<Option<tokio::process::Child>>,
+    }
+    #[async_trait]
+    impl zuse_cloud::runtime::allocation::AllocationProvider for AllocatorFixture {
+        async fn find(
+            &self,
+            name: &str,
+        ) -> Result<Option<zuse_cloud::providers::Machine>, zuse_cloud::providers::ProviderError>
+        {
+            Ok(self
+                .machine
+                .lock()
+                .unwrap()
+                .as_ref()
+                .filter(|machine| machine.id == name || machine.name == name)
+                .cloned())
+        }
+        async fn create(
+            &self,
+            _snapshot: &str,
+            name: &str,
+        ) -> Result<zuse_cloud::providers::Machine, zuse_cloud::providers::ProviderError> {
+            self.creates.fetch_add(1, Ordering::SeqCst);
+            let machine = zuse_cloud::providers::Machine {
+                id: "allocated-guest".into(),
+                name: name.into(),
+                state: zuse_cloud::providers::MachineState::Running,
+                vcpu: Some(2),
+                memory_bytes: Some(8 << 30),
+            };
+            *self.machine.lock().unwrap() = Some(machine.clone());
+            if self.fence_create {
+                sqlx::query("UPDATE api_cloud_workspaces SET desired_state='deleted',state='deleting',revision=revision+1 WHERE workspace_id='ws-bob'").execute(&self.pool).await.unwrap();
+            }
+            if self.uncertain_create.swap(false, Ordering::SeqCst) {
+                return Err(zuse_cloud::providers::ProviderError::OutcomeUnknown);
+            }
+            Ok(machine)
+        }
+        async fn launch(
+            &self,
+            _machine: &str,
+            launch: &zuse_cloud::runtime::allocation::RuntimeLaunch,
+        ) -> Result<(), zuse_cloud::providers::ProviderError> {
+            self.launches.fetch_add(1, Ordering::SeqCst);
+            let mut child = self.child.lock().await;
+            if child.is_none() {
+                let boot = self.directory.parent().unwrap().join("allocation-boot");
+                std::fs::write(&boot, launch.boot_token.as_bytes()).unwrap();
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&boot, std::fs::Permissions::from_mode(0o600)).unwrap();
+                *child = Some(
+                    tokio::process::Command::new("bash")
+                        .arg(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/../../infra/cloud/launch-runtime.sh"
+                        ))
+                        .arg("--foreground")
+                        .env("ZUSE_CLOUD_WORKSPACE_ID", &launch.workspace_id)
+                        .env("ZUSE_API_URL", &launch.api_url)
+                        .env("ZUSE_RUNTIME_GENERATION", launch.generation.to_string())
+                        .env("ZUSE_STORAGE_INCARNATION_ID", &launch.incarnation)
+                        .env("ZUSE_RUNTIME_BOOT_TOKEN_FILE", boot)
+                        .env("ZUSE_USER_DATA", &self.directory)
+                        .env("ZUSE_CLOUD_WORKSPACE_ROOT", &self.checkout)
+                        .env("ZUSE_RUNTIME_BINARY", &self.wrapper)
+                        .env(
+                            "ZUSE_WORKSPACE_RUNTIME_STATUS_DIR",
+                            self.directory.parent().unwrap().join("status"),
+                        )
+                        .stdout(std::process::Stdio::null())
+                        .stderr(
+                            std::fs::File::create(
+                                self.directory.parent().unwrap().join("allocated-guest.log"),
+                            )
+                            .unwrap(),
+                        )
+                        .kill_on_drop(true)
+                        .spawn()
+                        .unwrap(),
+                );
+            }
+            // The guest starts, but the provider response is lost. Reconcile enrollment, not a new VM.
+            Err(zuse_cloud::providers::ProviderError::OutcomeUnknown)
+        }
+    }
+    async fn allocation_due(api: &GuestApi) {
+        sqlx::query("UPDATE zuse_rust_jobs SET due_at=$1 WHERE kind='workspace-allocate' AND state='pending'").bind(chrono::Utc::now().timestamp_millis()).execute(&api.pool).await.unwrap();
+    }
+    async fn allocation_fixture(
+        api: &GuestApi,
+        root: &std::path::Path,
+        fence_create: bool,
+    ) -> AllocatorFixture {
+        use std::os::unix::fs::PermissionsExt;
+        let checkout = root.join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let binary = std::env::var_os("ZUSE_CLOUD_TEST_GUEST_BIN").expect("Set guest binary");
+        let wrapper = root.join("test-runtime");
+        // Python exec passes the executable path as data, independent of shell quoting.
+        let wrapper_text = format!(
+            "#!/usr/bin/env python3\nimport os,sys\nos.environ.pop('ZUSE_API_URL',None)\nos.execv({}, [{}, '--test-harness', '--ipc-port', '0', *sys.argv[1:]])\n",
+            serde_json::to_string(&binary.to_string_lossy()).unwrap(),
+            serde_json::to_string(&binary.to_string_lossy()).unwrap()
+        );
+        std::fs::write(&wrapper, wrapper_text).unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        sqlx::query("UPDATE api_cloud_workspaces SET state='queued',desired_state='ready',runtime_state='offline',provider_sandbox_id=NULL,runtime_boot_token_hash=NULL,runtime_boot_token_expires_at=NULL,runtime_credential_hash=NULL,request_config='{\"runtimeGeneration\":2,\"gatewayEpoch\":5}' WHERE workspace_id='ws-bob'").execute(&api.pool).await.unwrap();
+        AllocatorFixture {
+            machine: std::sync::Mutex::new(None),
+            creates: AtomicUsize::new(0),
+            launches: AtomicUsize::new(0),
+            uncertain_create: std::sync::atomic::AtomicBool::new(!fence_create),
+            pool: api.pool.clone(),
+            fence_create,
+            directory: root.join("data"),
+            checkout,
+            wrapper,
+            child: tokio::sync::Mutex::new(None),
+        }
+    }
+    #[tokio::test]
+    #[ignore = "requires isolated PostgreSQL and ZUSE_CLOUD_TEST_GUEST_BIN"]
+    async fn rust_cloud_allocation_recovers_uncertain_create_and_launch_into_original_chat() {
+        let api = GuestApi::start().await;
+        let now = chrono::Utc::now().timestamp_millis();
+        assert_eq!(
+            api.control
+                .queue_allocation("ws-bob", "prepared-fixture", now)
+                .await
+                .unwrap_err()
+                .code,
+            "cloud_allocation_retained_state"
+        );
+        let root = tempfile::tempdir().unwrap();
+        let provider = allocation_fixture(&api, root.path(), false).await;
+        let operation = api
+            .control
+            .queue_allocation("ws-bob", "prepared-fixture", now)
+            .await
+            .unwrap();
+        assert_eq!(
+            api.control
+                .queue_allocation("ws-bob", "prepared-fixture", now)
+                .await
+                .unwrap(),
+            operation
+        );
+        assert_eq!(
+            api.control
+                .queue_allocation("ws-bob", "different-image", now)
+                .await
+                .unwrap_err()
+                .code,
+            "cloud_allocation_identity_conflict"
+        );
+        let payload: String = sqlx::query_scalar(
+            "SELECT payload::text FROM zuse_rust_jobs WHERE kind='workspace-allocate'",
+        )
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        assert!(!payload.contains("rust_boot_"));
+        assert_eq!(
+            api.control
+                .allocate_once(&provider, now)
+                .await
+                .unwrap_err()
+                .code,
+            "cloud_provider_outcome_unknown"
+        );
+        allocation_due(&api).await;
+        assert!(
+            api.control
+                .allocate_once(&provider, chrono::Utc::now().timestamp_millis())
+                .await
+                .unwrap()
+        );
+        assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+        // An assigned source disappearing must not cause another create.
+        let retained = provider.machine.lock().unwrap().take().unwrap();
+        allocation_due(&api).await;
+        assert_eq!(
+            api.control
+                .allocate_once(&provider, chrono::Utc::now().timestamp_millis())
+                .await
+                .unwrap_err()
+                .code,
+            "cloud_allocation_machine_missing"
+        );
+        assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+        *provider.machine.lock().unwrap() = Some(retained);
+        allocation_due(&api).await;
+        assert_eq!(
+            api.control
+                .allocate_once(&provider, chrono::Utc::now().timestamp_millis())
+                .await
+                .unwrap_err()
+                .code,
+            "cloud_provider_outcome_unknown"
+        );
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let online: bool = sqlx::query_scalar("SELECT runtime_state='online' FROM api_cloud_workspaces WHERE workspace_id='ws-bob'").fetch_one(&api.pool).await.unwrap();
+                if online { break; }
+                if let Some(status) = provider.child.lock().await.as_mut().unwrap().try_wait().unwrap() {
+                    panic!("Allocated guest exited {status}: {}", std::fs::read_to_string(root.path().join("allocated-guest.log")).unwrap());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.unwrap_or_else(|error|panic!("Allocated guest not ready: {error}: {}",std::fs::read_to_string(root.path().join("allocated-guest.log")).unwrap()));
+        let client = api.client().await;
+        let mut transcript = client
+            .client
+            .subscribe(
+                zuse_rpc::methods::WATCH_DOC_MESSAGES,
+                json!({"chatId":"session-bob"}),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let snapshot = transcript.recv().await.unwrap();
+                if snapshot.to_string().contains("Cloud runtime fixture reply") {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        allocation_due(&api).await;
+        assert!(
+            api.control
+                .allocate_once(&provider, chrono::Utc::now().timestamp_millis())
+                .await
+                .unwrap()
+        );
+        let record: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(a) FROM zuse_rust_allocations a WHERE operation_id=$1",
+        )
+        .bind(operation)
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        assert_eq!(record["phase"], "ready");
+        assert!(record["sealed_boot_token"].is_null());
+        assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.launches.load(Ordering::SeqCst), 1);
+        let receipt: Value = sqlx::query_scalar(
+            "SELECT request_config FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
+        )
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        assert_eq!(receipt["runtimeBootstrapReceipt"]["workspaceId"], "ws-bob");
+        assert_eq!(
+            receipt["rustStorageEnrollment"]["sourceSandboxId"],
+            "allocated-guest"
+        );
+        assert_eq!(receipt["rustCompletedLaunchCommandId"], "original-launch");
+        drop(transcript);
+        client.closed.cancel();
+        drop(client);
+        stop_guest(provider.child.lock().await.as_mut().unwrap()).await;
+        api.finish().await;
+    }
+    #[tokio::test]
+    #[ignore = "requires isolated PostgreSQL and ZUSE_CLOUD_TEST_GUEST_BIN"]
+    async fn rust_cloud_allocation_delete_race_preserves_provider_receipt_without_attaching_guest()
+    {
+        let api = GuestApi::start().await;
+        let root = tempfile::tempdir().unwrap();
+        let provider = allocation_fixture(&api, root.path(), true).await;
+        let operation = api
+            .control
+            .queue_allocation(
+                "ws-bob",
+                "prepared-fixture",
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            api.control
+                .allocate_once(&provider, chrono::Utc::now().timestamp_millis())
+                .await
+                .unwrap_err()
+                .code,
+            "cloud_allocation_fenced"
+        );
+        let row: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+        )
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        assert_eq!(row["desired_state"], "deleted");
+        assert!(row["provider_sandbox_id"].is_null());
+        let machine: String = sqlx::query_scalar(
+            "SELECT machine_id FROM zuse_rust_allocations WHERE operation_id=$1",
+        )
+        .bind(operation)
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        assert_eq!(machine, "allocated-guest");
+        assert_eq!(provider.launches.load(Ordering::SeqCst), 0);
+        api.finish().await;
     }
 
     struct GuestApi {

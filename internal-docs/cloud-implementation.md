@@ -11,7 +11,7 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Boxd transport; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input delivery. Remaining: allocation, images, grants, context/attachment delivery, and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| B: real cloud chat | Boxd transport and durable prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input delivery. Remaining: authenticated HTTP creation/admission, image selection/builds, provider grants, context/attachment delivery, and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Pending: Stripe/Polar writes, ledger/export, provider credentials, images, machine administration | Pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
@@ -122,6 +122,8 @@ preparation and provider grants must complete in the allocation/image workflow.
 `0003_command_mailbox.sql`
 add only Rust coordination tables.
 They neither replace original `api_*` tables nor assign any resource to Rust.
+`0004_allocations.sql` additionally stores initial allocation intents, encrypted
+short-lived boot grants and provider receipts; it does not transfer ownership.
 Apply them explicitly to an isolated test database first. Jobs require a matching
 Rust owner and generation before claim; enqueue belongs to the same transaction as
 the eventual lifecycle intent. Reconcilers must additionally fence provider effects
@@ -519,3 +521,77 @@ payload layout moved there; dependency-wide lint limitations remain as recorded.
 This chunk does not enable production writes or charges. Allocation/image preparation,
 provider grants, attachment/context import, billing, workspace lifecycle/archives,
 client integration, full GPUI parity and migration still require their listed work.
+
+
+### Prepared-image allocation worker
+
+The authority can now admit initial allocation for an already Rust-owned, queued
+personal workspace with an existing sealed launch intent and an approved prepared
+Boxd snapshot. This operator path is deliberately separate from the pending public
+creation endpoint: it does not bypass the future endpoint's account/image access,
+entitlement, allowance and spend-reservation checks. Connected-provider accounts,
+organizations and retained/recovery storage are rejected by this initial path.
+
+Admission atomically records migration `0004_allocations.sql`'s operation, sealed
+30-minute boot grant, original workspace generation, fresh storage incarnation,
+negotiated Rust protocols and durable allocation job. Retries retain the same image,
+operation, machine name and boot grant. No provider credential or raw boot token
+enters the job payload or public projection. An image change for an existing
+operation is rejected. The worker finds a deterministic machine name before create;
+Boxd's existing name lookup/uniqueness supports recovery of an uncertain create.
+After a provider ID is recorded, a missing machine never triggers another create.
+
+Provider allocation receipts are retained even if deletion or ownership fencing
+wins before attachment. Each workspace projection rechecks owner generation,
+operation and live job lease. Allocation authorizes the boot grant and machine
+before launch; the installed launcher starts the existing guest whose lifetime data
+lock serializes repeated starts. Readiness requires the actual enrolled storage and
+original launch receipt, not successful process creation. A completed allocation
+purges its sealed boot token. Provider errors remain visible as status codes without
+overwriting an already-online runtime or a concurrent deletion. No automatic
+machine destruction runs here.
+
+Build the API binary, explicitly apply migration 0004 to the intended database,
+and keep write activation separately controlled. Operator commands are:
+
+```sh
+# Requires ZUSE_CLOUD_RUNTIME_WRITES=true and the original encryption/mint configuration.
+# The workspace must already be a newly queued Rust-owned row, with a sealed launch intent.
+zuse-cloud-api allocate --workspace-id <new-workspace-id> --snapshot <approved-prepared-snapshot>
+# Uses server-held BOXD_API_KEY and optional BOXD_ORG; no provider credentials reach the guest.
+zuse-cloud-api worker
+zuse-cloud-api worker --once
+```
+
+`compose.yaml` includes the worker behind the explicit `allocation` profile. API
+serving remains independently configurable and never starts a worker implicitly.
+`infra/cloud/launch-runtime.sh` is installed into the guest base image. The prepared
+image must supply the Rust binary, `zuse` user, prepared checkout at
+`/home/zuse/workspace` and selected provider tools; repository preparation, signed
+image selection and credential grant provisioning still need their inventory work.
+Do not point this operator path at legacy runtime images. The Dockerfiles remain
+unbuilt here because this VM has no Docker daemon.
+
+Acceptance: a real guest process launched through the installed shell script enrolls
+against Axum/PostgreSQL, streams the original sealed launch's response and publishes
+its original command/chat/session identities. The provider fixture loses both create
+and launch responses; recovery creates once and completes through the existing
+machine. It also removes the assigned provider machine temporarily and proves no
+replacement is allocated. A deletion during provider creation preserves its receipt
+for cleanup without attaching or launching a guest. The provider itself remains a
+local fixture; live Boxd image/runtime/grant acceptance is not claimed.
+
+Archive, deletion and migration must carry or purge allocation records and durable
+jobs. In particular, deletion must inspect allocation receipts for machines created
+before attachment; `api_cloud_workspaces.provider_sandbox_id` alone is insufficient.
+Recovery capture must exclude launcher boot files and reusable provider credentials.
+Full pause/resume, archive/restore, billing and public creation integration remain
+required before production rollout.
+
+
+Final allocation-chunk verification: all five cloud fixture/unit tests and all
+13 PostgreSQL/HTTP/gateway/engine/process scenarios pass (18 checks). The two
+allocation scenarios passed again after the final control-flow cleanup. The API
+binary builds and exposes `allocate`/`worker`; cloud/API strict Clippy, Rust
+formatting, launcher shell syntax and diff checks pass. No live provider, production
+database, charge export, owner transfer or Docker build was performed.
