@@ -94,6 +94,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
     }
     if state.runtime.is_some() {
         app = app
+            .route("/v1/cloud/workspaces/{id}/delete", post(workspace_delete))
             .route(
                 "/v1/cloud/workspaces/{id}/archive/{operation}/{object}",
                 get(archive_object_get)
@@ -951,4 +952,31 @@ async fn archive_object_put(
         )
         .await?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn workspace_delete(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_lifecycle::ActionRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_cloud_workspace_action"))?;
+    if body.workspace_id != id {
+        return Err(ApiError::bad_request("workspace_id_mismatch"));
+    }
+    let access = state.access(&headers, AccessKind::Content).await?;
+    state.store.workspace(&access, &id).await?;
+    let control = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    let value = control
+        .delete_workspace(
+            &id,
+            &access,
+            body.command_id.as_deref(),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
+    Ok(([("x-zuse-reconcile-cloud-workspace", id)], Json(value)).into_response())
 }

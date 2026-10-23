@@ -19,6 +19,8 @@ use subtle::ConstantTimeEq;
 
 pub mod allocation;
 pub mod creation;
+pub mod deletion;
+mod effects;
 pub mod grants;
 pub mod lifecycle;
 pub mod mailbox;
@@ -172,7 +174,7 @@ impl RuntimeControl {
         }
     }
     pub async fn ready(&self) -> Result<(), ApiError> {
-        let ready: bool = sqlx::query_scalar("SELECT to_regclass('zuse_rust_control_owners') IS NOT NULL AND to_regclass('api_cloud_workspace_launch_intents') IS NOT NULL AND to_regclass('zuse_rust_gateway_leases') IS NOT NULL AND to_regclass('zuse_rust_mailbox_commands') IS NOT NULL AND to_regclass('zuse_rust_lifecycle_operations') IS NOT NULL")
+        let ready: bool = sqlx::query_scalar("SELECT to_regclass('zuse_rust_control_owners') IS NOT NULL AND to_regclass('api_cloud_workspace_launch_intents') IS NOT NULL AND to_regclass('zuse_rust_gateway_leases') IS NOT NULL AND to_regclass('zuse_rust_mailbox_commands') IS NOT NULL AND to_regclass('zuse_rust_lifecycle_operations') IS NOT NULL AND to_regclass('zuse_rust_deletions') IS NOT NULL AND to_regclass('zuse_rust_provider_creates') IS NOT NULL")
             .fetch_one(&self.pool).await?;
         if !ready {
             return Err(ApiError::unavailable("cloud_runtime_schema_not_ready"));

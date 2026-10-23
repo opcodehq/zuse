@@ -117,6 +117,16 @@ impl RuntimeControl {
             .bind(format!("cloud-create:{owner}"))
             .execute(&mut *tx)
             .await?;
+        let tombstones: bool =
+            sqlx::query_scalar("SELECT to_regclass('zuse_rust_deletions') IS NOT NULL")
+                .fetch_one(&mut *tx)
+                .await?;
+        if tombstones {
+            let deleted:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zuse_rust_deletions WHERE account_id=$1 AND idempotency_digest=$2 AND (expires_at IS NULL OR expires_at>$3))").bind(owner).bind(self.delete_idempotency(owner,&body.idempotency_key)).bind(now).fetch_one(&mut *tx).await?;
+            if deleted {
+                return Err(ApiError::conflict("cloud_workspace_deleted"));
+            }
+        }
         let prior:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE account_id=$1 AND idempotency_key=$2").bind(owner).bind(&body.idempotency_key).fetch_optional(&mut *tx).await?;
         if let Some(row) = prior {
             if row["request_config"]["rustCreateRequestDigest"] != digest {

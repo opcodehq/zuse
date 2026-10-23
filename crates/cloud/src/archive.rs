@@ -57,6 +57,8 @@ pub fn status(row: &Value) -> CloudArchiveStatus {
                         || *s == "archive-restore-image-required"
                         || s.starts_with("cloud_restore_")
                         || s.starts_with("cloud_archive_restore_")
+                        || s.starts_with("cloud_delete_")
+                        || state == "deleting" && s.starts_with("cloud_")
                         || matches!(
                             *s,
                             "archive-source-missing"

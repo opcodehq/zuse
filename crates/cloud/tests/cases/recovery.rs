@@ -12,6 +12,12 @@ struct ArchiveObjects {
 }
 #[async_trait]
 impl Objects for ArchiveObjects {
+    fn supports_purge(&self) -> bool {
+        self.inner.supports_purge()
+    }
+    async fn purge_prefix(&self, prefix: &str) -> Result<bool, ApiError> {
+        self.inner.purge_prefix(prefix).await
+    }
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
         self.inner.get(key).await
     }

@@ -245,6 +245,7 @@ impl RuntimeControl {
         job: &jobs::Job,
         now: i64,
     ) -> Result<(), ApiError> {
+        let _effects = effects::Guard::acquire(&job.resource_id)?;
         let (workspace, operation) = self.allocation_state(job).await?;
         if operation["phase"] == "ready" {
             jobs::finish(&self.pool, job, "workspace", clock_ms()).await?;
@@ -267,10 +268,25 @@ impl RuntimeControl {
                 self.save_allocation(job, "creating", None, false).await?;
                 let machine = match provider.find(name).await.map_err(provider_error)? {
                     Some(machine) => machine,
-                    None => provider
-                        .create(required(&operation, "snapshot_id")?, name)
-                        .await
-                        .map_err(provider_error)?,
+                    None => {
+                        effects::creating(
+                            &self.pool,
+                            &job.resource_id,
+                            required(&operation, "operation_id")?,
+                            name,
+                        )
+                        .await?;
+                        let result = provider
+                            .create(required(&operation, "snapshot_id")?, name)
+                            .await;
+                        effects::created(
+                            &self.pool,
+                            required(&operation, "operation_id")?,
+                            &result,
+                        )
+                        .await?;
+                        result.map_err(provider_error)?
+                    }
                 };
                 if machine.name != name || machine.id.is_empty() {
                     return Err(ApiError::conflict("cloud_allocation_identity_conflict"));

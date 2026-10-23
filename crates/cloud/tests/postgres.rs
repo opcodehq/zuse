@@ -132,6 +132,10 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(zuse_cloud::runtime::deletion::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
     (admin, pool, schema)
 }
 
@@ -1016,6 +1020,7 @@ mod runtime_engine {
     mod recovery_acceptance {
         use super::*;
         include!("cases/recovery.rs");
+        include!("cases/deletion.rs");
     }
     use super::*;
     use async_trait::async_trait;
@@ -2387,6 +2392,9 @@ for line in sys.stdin:
                 sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustNativeTranscriptEnabled}','true') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
             }
             let mut control = RuntimeControl::from_pool(pool.clone(), master, signer);
+            if projections {
+                control = control.with_creation_accounts(vec!["user-bob".into()]);
+            }
             let mut store = Store::from_pool(pool.clone());
             if let Some(objects) = &projection_objects {
                 control = control.with_transcript_objects(objects.clone());
@@ -4654,6 +4662,28 @@ struct ProjectionObjects {
 }
 #[async_trait]
 impl zuse_cloud::objects::Objects for ProjectionObjects {
+    fn supports_purge(&self) -> bool {
+        true
+    }
+    async fn purge_prefix(&self, prefix: &str) -> Result<bool, ApiError> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(ApiError::unavailable("cloud_object_purge_failed"));
+        }
+        let mut map = self.bytes.lock().unwrap();
+        let keys: Vec<String> = map
+            .keys()
+            .filter(|k| k.starts_with(prefix))
+            .take(100)
+            .cloned()
+            .collect();
+        if keys.is_empty() {
+            return Ok(true);
+        }
+        for key in keys {
+            map.remove(&key);
+        }
+        Ok(false)
+    }
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
         self.gets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self.bytes.lock().unwrap().get(key).cloned())

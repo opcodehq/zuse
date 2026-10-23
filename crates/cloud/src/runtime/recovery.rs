@@ -478,11 +478,16 @@ struct Reader {
     objects: Arc<dyn Objects>,
     workspace: String,
     operation: String,
+    pool: PgPool,
+    job: jobs::Job,
 }
 #[async_trait]
 impl zuse_cloud_runtime::recovery::Objects for Reader {
     async fn get(&self, name: &str) -> anyhow::Result<Vec<u8>> {
         anyhow::ensure!(valid_object(name), "archive_object_invalid");
+        // Cancellation/deletion stops additional privileged chunk reads, not only the final barrier write.
+        let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_cloud_workspaces w JOIN zuse_rust_control_owners o ON o.resource_kind='workspace' AND o.resource_id=w.workspace_id AND o.backend='rust' AND o.generation=$2 WHERE w.workspace_id=$1 AND w.desired_state='archived' AND w.state NOT IN ('deleting','deleted') AND w.request_config->'recoveryArchive'->>'id'=$3 AND EXISTS(SELECT 1 FROM zuse_rust_jobs j WHERE j.job_id=$4 AND j.lease_token=$5 AND j.state='running' AND j.lease_expires_at>$6))").bind(&self.workspace).bind(self.job.generation).bind(&self.operation).bind(&self.job.id).bind(&self.job.lease_token).bind(clock_ms()).fetch_one(&self.pool).await?;
+        anyhow::ensure!(allowed, "archive_verification_fenced");
         self.objects
             .get_archive(&object_key(&self.workspace, &self.operation, name))
             .await
@@ -581,6 +586,7 @@ impl RuntimeControl {
         job: &jobs::Job,
         now: i64,
     ) -> Result<(), ApiError> {
+        let effects = effects::Guard::acquire(&job.resource_id)?;
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT generation FROM zuse_rust_control_owners WHERE resource_kind='workspace' AND resource_id=$1 AND backend='rust' FOR UPDATE").bind(&job.resource_id).fetch_optional(&mut *tx).await?;
         let (row, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;
@@ -743,12 +749,21 @@ impl RuntimeControl {
                     objects: self.transcript_objects.as_ref().ok_or_else(failed)?.clone(),
                     workspace: job.resource_id.clone(),
                     operation: op_id.into(),
+                    pool: self.pool.clone(),
+                    job: job.clone(),
                 };
                 tx.commit().await?;
                 let handle = tokio::runtime::Handle::current();
+                let pool = self.pool.clone();
+                let resource = job.resource_id.clone();
+                let expected_generation = job.generation;
                 let task = tokio::task::spawn_blocking(move || {
                     handle.block_on(async move {
-                        let temp = tempfile::tempdir()?;
+                        // Keep the execution guard through TempDir destruction, even if the job lease is revoked.
+                        let guard=effects;
+                        let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_cloud_workspaces w JOIN zuse_rust_control_owners o ON o.resource_id=w.workspace_id AND o.resource_kind='workspace' AND o.backend='rust' AND o.generation=$2 WHERE w.workspace_id=$1 AND w.desired_state='archived' AND w.state NOT IN ('deleting','deleted'))").bind(&resource).bind(expected_generation).fetch_one(&pool).await?;
+                        anyhow::ensure!(allowed,"archive_verification_fenced");
+                        let temp = guard.temp()?;
                         let root = temp.path();
                         let home = root.join("home");
                         let data = root.join("data");

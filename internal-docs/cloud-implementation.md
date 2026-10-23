@@ -14,7 +14,7 @@ completed UI images in the final user-facing report.
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
-| E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Remaining: archived files, permanent deletion and existing-workspace/archive migration | Retained-machine, browser archive and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
+| E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Backend permanent deletion and 30-day tombstones added. Remaining: Delete UI, local mirror cleanup, archived files and existing-workspace/archive migration | Retained-machine, browser archive and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Archived cloud transcript screens added to native/browser settings; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive workflow pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
 
@@ -51,6 +51,7 @@ With `ZUSE_CLOUD_RUNTIME_WRITES=true`, these routes are additionally registered:
   account-authority ciphertext, including the Codex compatibility envelope).
 - `POST /v1/cloud/workspaces/:id/runtime/storage/enroll` (prepare/commit activation barrier).
 - `POST /v1/cloud/workspaces/:id/{pause,archive,unarchive,resume}` (original action body/public workspace response).
+- `POST /v1/cloud/workspaces/:id/delete` (explicit deletion, durable cleanup, original action body and reconcile header).
 - `POST /v1/cloud/workspaces/:id/runtime/lifecycle` (scoped directive and quiescence/resume receipts).
 - `POST /v1/cloud/workspaces/:id/ready` (`agent-started` receipt for Rust guests).
 - `POST /v1/cloud/workspaces/:id/gateway/ticket`.
@@ -1048,7 +1049,7 @@ ZUSE_CLOUD_TEST_GUEST_BIN="$PWD/target/debug/zuse-cloud-runtime" \
 ```
 
 Remaining before production recovery enablement: complete retained and replacement-resource
-billing, full explicit-delete purge, source-image publication and live-provider
+billing, Delete UI/local mirror cleanup, source-image publication and live-provider
 continuation acceptance. Ordinary storage admission still refuses populated unbound
 storage; the separately authorized restore-adoption path is described below. Recovery
 remains default-off. Expiry alone never authorizes destruction: explicit recovery
@@ -1093,8 +1094,9 @@ returns to Active without starting the engine. Cleanup confirms the helper has
 stopped and the retained source is paused before restoring its bearer. Unarchive
 after the barrier lets retirement finish. Interactive resume now durably requests
 replacement restoration. Its implementation and remaining production gates are
-described below; this policy must remain off until live acceptance passes. Delayed work is fenced by deletion state; full permanent-delete
-purge and tombstones remain outstanding.
+described below; this policy must remain off until live acceptance passes. Delayed work is fenced by deletion state; the permanent-delete backend and
+tombstone implementation is described below. Delete UI and local mirror cleanup
+remain outstanding.
 
 Backup running observations feed the original idempotent usage outbox as
 `billable=false` telemetry. This does not transfer billing/settlement/export
@@ -1174,8 +1176,8 @@ Runtime checks additionally reject missing grants, wrong archive digest, machine
 generation and enrollment identities before creating a storage marker.
 
 Production recovery is still default-off. Live Boxd image/build acceptance,
-supported agent-native SDK continuation, provider resource settlement, full Delete
-purge/tombstones and existing legacy-workspace/archive migration remain required.
+supported agent-native SDK continuation, provider resource settlement, Delete UI/local mirror cleanup and existing legacy-workspace/archive migration
+remain required.
 This implementation does not convert a legacy Python runtime database into a
 Rust engine profile.
 
@@ -1194,3 +1196,79 @@ An expired pre-enrollment grant is renewed only while no runtime bootstrap recei
 exists. Acceptance expires the grant both during allocation and after installation,
 then verifies the same replacement enrolls and continues without creating another
 machine or replaying the original turn.
+
+### Permanent deletion backend and content-free tombstones
+
+Migration `0008_delete.sql` adds durable deletion operations, original deletion
+columns when absent and a provider-create outcome journal. Writable-runtime
+readiness requires it. Startup never applies it. Before rolling out this worker,
+drain older workers that do not use the execution guard or create journal.
+The API remains read-only unless explicitly enabled; this does not enable cloud
+recovery or transfer any billing/export ownership.
+
+The original `POST /v1/cloud/workspaces/:id/delete` contract checks authenticated
+ownership/edit permission. Current runtime writes remain personal and Boxd-only;
+organization and other-provider rollout remain separate gates. Admission commits
+an irreversible deleted intent, advances generation/epoch/destruction fence,
+revokes bootstrap/runtime credentials and gateway leases, and cancels old workspace
+jobs before returning `deleting`. A repeat request requeues failed cleanup for
+the same operation. No entitlement is required to delete, and no archive deadline
+implicitly deletes history.
+
+The durable worker progresses through provider cleanup, object purge and metadata
+cleanup. Public workspace responses include the operation ID/phase and actual
+status; `deleted` is written only after all stages finish. It resolves immutable
+source, allocation and replacement receipts, preserves a discovered exact machine
+ID before destruction, checks other workspace/persistent-machine references, and
+reconciles lost delete replies by inspecting that ID. An uncertain create without
+a visible receipt remains a retryable error rather than a claim that cleanup
+finished. Shared machines are retained with an actionable error.
+
+A shared-volume execution guard covers allocation/restore effects and privileged
+verification through temporary-directory destruction. Delete waits for this guard
+before purging. A create outcome journal survives transaction rollback and records
+machines returned after Delete admission. Old workers cannot attach or launch
+against the advanced generation. Privileged verification checks ownership, intent
+and its job lease before every object read; cancellation/deletion stops further
+chunk downloads. Its temporary data remains guarded even if the outer job future
+is cancelled, then is removed before deletion completes.
+
+All workers handling these resources must use the same private TMPDIR-backed
+scratch volume (the provided Compose worker volume). Multiple worker hosts require
+the same shared filesystem/lock namespace; do not run independent scratch volumes
+for a shared workspace ownership pool. Cleanup removes only the hashed workspace's
+verification directory. Empty lock metadata remains available for fencing.
+
+R2 purge uses bounded ListObjectsV2 pages and scoped DeleteObject requests, then
+requires a fresh empty listing. Every listed key is checked against the exact
+`workspaces/<encoded-workspace>/` prefix before any deletion from that page. URL
+encoding preserves literal percent/Unicode keys. Malformed XML, redirects,
+unsupported purge adapters and out-of-scope listings fail without reporting
+completion. The implementation follows [ListObjectsV2](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html)
+and [R2's supported S3 operations](https://developers.cloudflare.com/r2/api/s3/api/).
+
+Metadata purge removes encrypted transcript pointers, launch intents, runtime
+summaries, public conversation rows/receipts, mailbox envelopes, encrypted boot
+grants and Rust allocation/lifecycle/recovery/restore records. It clears the
+workspace key, runtime credentials, Git branch names and request context. The
+remaining workspace record contains opaque identity/billing references, dates and
+fences, without transcript/files/secrets. Required project/build/workspace IDs
+remain because existing financial usage has foreign keys; usage, subscriptions
+and provider settlement history are preserved. The original create idempotency key
+is replaced with generated metadata; a keyed digest prevents a delayed create
+retry during the tombstone window. Tombstones disappear from API reads after
+30 days. Content-free billing references are retained rather than deleting usage.
+
+Verified with **25 integrated PostgreSQL/HTTP/packaged-guest tests** and **11 cloud
+unit tests**. Focused deletion covers live verification, late allocation receipts,
+partial replacement cleanup, failed object purge/retry, lost provider-delete replies,
+30-day tombstones, unrelated workspace/object preservation and create replay
+fencing. S3 listing/delete signatures match botocore 1.42.97 fixtures. The HTTP
+object tests cover multiple pages, partial delete failures, malformed XML,
+percent/Unicode names and malicious listing scope. Recovery acceptance also passes
+with the additional per-object cancellation checks.
+
+This is the server deletion workflow. Desktop/browser Delete UX, ownership-manifest
+cleanup of local mirrors, existing-archive migration and live provider/R2 acceptance
+remain required before the archive milestone is complete. Images for UI acceptance
+will be saved under `.context/` when those controls are implemented.

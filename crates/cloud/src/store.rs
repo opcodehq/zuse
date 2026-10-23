@@ -91,7 +91,7 @@ impl Store {
         access: &Access,
         project: Option<&str>,
     ) -> Result<Vec<Value>, ApiError> {
-        let rows: Vec<Value> = sqlx::query_scalar("SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE account_id=$1 AND ($2::text IS NULL OR project_id=$2) ORDER BY created_at, workspace_id")
+        let rows: Vec<Value> = sqlx::query_scalar("SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE account_id=$1 AND ($2::text IS NULL OR project_id=$2) AND (state<>'deleted' OR (to_jsonb(w)->>'deletion_tombstone_expires_at')::bigint>(extract(epoch from clock_timestamp())*1000)::bigint) ORDER BY created_at, workspace_id")
             .bind(&access.owner_id).bind(project).fetch_all(&self.pool).await?;
         let mut visible = Vec::new();
         for row in rows {
@@ -106,7 +106,7 @@ impl Store {
     }
 
     pub async fn workspace(&self, access: &Access, id: &str) -> Result<Workspace, ApiError> {
-        let row: Option<Value> = sqlx::query_scalar("SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE account_id=$1 AND workspace_id=$2")
+        let row: Option<Value> = sqlx::query_scalar("SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE account_id=$1 AND workspace_id=$2 AND (state<>'deleted' OR (to_jsonb(w)->>'deletion_tombstone_expires_at')::bigint>(extract(epoch from clock_timestamp())*1000)::bigint)")
             .bind(&access.owner_id).bind(id).fetch_optional(&self.pool).await?;
         let row = row.ok_or_else(|| ApiError::not_found("cloud_workspace_not_found"))?;
         access.workspace_permission(&access.owner_id, &row["request_config"])?;
@@ -153,8 +153,16 @@ impl Workspace {
             ("created_at", "createdAt"),
             ("updated_at", "updatedAt"),
             ("last_activity_at", "lastActivityAt"),
+            ("deleted_at", "deletedAt"),
+            (
+                "deletion_tombstone_expires_at",
+                "deletionTombstoneExpiresAt",
+            ),
         ] {
             out[to] = row[from].clone();
+        }
+        if let Some(operation) = config.get("rustDeleteOperation") {
+            out["deletion"] = json!({"operationId":operation["id"],"phase":operation["phase"]});
         }
         out["imageGeneration"] = row["build_id"].clone();
         out["rpcProtocol"] = json!(match config["runtimeRpcProtocol"].as_str() {

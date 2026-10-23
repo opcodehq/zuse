@@ -11,6 +11,13 @@ pub trait Objects: Send + Sync {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError>;
     /// An existing object must contain exactly the same bytes.
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError>;
+    fn supports_purge(&self) -> bool {
+        false
+    }
+    /// Delete one bounded page. True only after an empty, scoped listing proves completion.
+    async fn purge_prefix(&self, _prefix: &str) -> Result<bool, ApiError> {
+        Err(ApiError::unavailable("cloud_object_purge_unsupported"))
+    }
     async fn get_archive(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
         self.get(key).await
     }
@@ -99,8 +106,24 @@ impl R2 {
         }
         // Encode literal percent signs again: reference object names already contain encodeURIComponent segments.
         let path = format!("/{}/{}", self.bucket, encode(key, true));
+        self.request_path(method, &path, "", body, limit).await
+    }
+    async fn request_path(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        query: &str,
+        body: Option<&[u8]>,
+        limit: usize,
+    ) -> Result<reqwest::Response, ApiError> {
+        if body.is_some_and(|b| b.len() > limit) {
+            return Err(failed());
+        }
         let mut url = self.endpoint.clone();
-        url.set_path(&path);
+        url.set_path(path);
+        if !query.is_empty() {
+            url.set_query(Some(query));
+        }
         if url.path() != path {
             return Err(failed());
         }
@@ -111,12 +134,13 @@ impl R2 {
         let date = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         let bytes = body.unwrap_or_default();
         let digest = hex(&Sha256::digest(bytes));
-        let authorization = sign(
+        let authorization = sign_query(
             &self.access,
             &self.secret,
             "auto",
             method.as_str(),
-            &path,
+            path,
+            query,
             &host,
             &date,
             &digest,
@@ -163,12 +187,29 @@ fn hmac(key: &[u8], body: &str) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn sign(
     access: &str,
     secret: &str,
     region: &str,
     method: &str,
     path: &str,
+    host: &str,
+    date: &str,
+    digest: &str,
+    immutable: bool,
+) -> String {
+    sign_query(
+        access, secret, region, method, path, "", host, date, digest, immutable,
+    )
+}
+fn sign_query(
+    access: &str,
+    secret: &str,
+    region: &str,
+    method: &str,
+    path: &str,
+    query: &str,
     host: &str,
     date: &str,
     digest: &str,
@@ -187,7 +228,7 @@ fn sign(
             "host;x-amz-content-sha256;x-amz-date",
         )
     };
-    let canonical = format!("{method}\n{path}\n\n{headers}\n{signed}\n{digest}");
+    let canonical = format!("{method}\n{path}\n{query}\n{headers}\n{signed}\n{digest}");
     let scope = format!("{}/{region}/s3/aws4_request", &date[..8]);
     let to_sign = format!(
         "AWS4-HMAC-SHA256\n{date}\n{scope}\n{}",
@@ -217,6 +258,97 @@ async fn bounded(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8
 }
 #[async_trait]
 impl Objects for R2 {
+    fn supports_purge(&self) -> bool {
+        true
+    }
+    async fn purge_prefix(&self, prefix: &str) -> Result<bool, ApiError> {
+        use futures::{StreamExt, TryStreamExt};
+        let segments: Vec<_> = prefix.split('/').collect();
+        if segments.len() != 3
+            || segments[0] != "workspaces"
+            || segments[1].is_empty()
+            || segments[2] != ""
+            || matches!(segments[1], "." | "..")
+        {
+            return Err(ApiError::unavailable("cloud_object_purge_scope_invalid"));
+        }
+        let query = format!(
+            "encoding-type=url&list-type=2&max-keys=100&prefix={}",
+            encode(prefix, false)
+        );
+        let response = self
+            .request_path(
+                reqwest::Method::GET,
+                &format!("/{}/", self.bucket),
+                &query,
+                None,
+                1024 * 1024,
+            )
+            .await?;
+        if !response.status().is_success() {
+            return Err(failed());
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Page {
+            is_truncated: bool,
+            name: String,
+            prefix: String,
+            encoding_type: String,
+            #[serde(default, rename = "Contents")]
+            contents: Vec<Entry>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Entry {
+            #[serde(rename = "Key")]
+            key: String,
+        }
+        let bytes = bounded(response, 1024 * 1024).await?;
+        let page: Page = quick_xml::de::from_reader(bytes.as_slice()).map_err(|_| failed())?;
+        if page.name != self.bucket
+            || page.encoding_type != "url"
+            || percent_encoding::percent_decode_str(&page.prefix)
+                .decode_utf8()
+                .map_err(|_| failed())?
+                != prefix
+        {
+            return Err(failed());
+        }
+        if page.contents.len() > 100 || page.contents.is_empty() && page.is_truncated {
+            return Err(failed());
+        }
+        if page.contents.is_empty() {
+            return Ok(true);
+        }
+        let keys: Vec<String> = page
+            .contents
+            .into_iter()
+            .map(|e| {
+                let key = percent_encoding::percent_decode_str(&e.key)
+                    .decode_utf8()
+                    .map_err(|_| failed())?
+                    .into_owned();
+                if !key.starts_with(prefix) {
+                    return Err(ApiError::unavailable("cloud_object_purge_scope_invalid"));
+                }
+                Ok(key)
+            })
+            .collect::<Result<_, ApiError>>()?;
+        futures::stream::iter(keys)
+            .map(|key| async move {
+                let response = self.request(reqwest::Method::DELETE, &key, None, 0).await?;
+                if !response.status().is_success()
+                    && response.status() != reqwest::StatusCode::NOT_FOUND
+                {
+                    return Err(failed());
+                }
+                Ok(())
+            })
+            .buffer_unordered(8)
+            .try_collect::<Vec<_>>()
+            .await?;
+        Ok(false)
+    }
     async fn get_archive(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
         let response = self
             .request(reqwest::Method::GET, key, None, 6 * 1024 * 1024)
@@ -392,6 +524,95 @@ mod tests {
                 .put_archive("too-large", &vec![0; 6 * 1024 * 1024 + 1])
                 .await
                 .is_err()
+        );
+        server.abort();
+    }
+    #[test]
+    fn list_and_delete_signatures_match_the_independent_s3_sdk() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/r2-delete-signatures.json"))
+                .unwrap();
+        for row in fixture["vectors"].as_array().unwrap() {
+            let value = |key: &str| row[key].as_str().unwrap();
+            assert_eq!(
+                sign_query(
+                    "ACCESS",
+                    "SECRET",
+                    "auto",
+                    value("method"),
+                    value("path"),
+                    value("query"),
+                    value("host"),
+                    value("date"),
+                    value("digest"),
+                    false
+                ),
+                value("authorization")
+            );
+        }
+    }
+    #[tokio::test]
+    async fn scoped_purge_retries_pages_and_refuses_unsafe_or_malformed_listings() {
+        use axum::{
+            Router,
+            extract::{Path, Query},
+            http::StatusCode,
+            routing::get,
+        };
+        use std::{
+            collections::HashMap,
+            sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+        let map = Arc::new(std::sync::Mutex::new(HashMap::<String, Vec<u8>>::new()));
+        let mode = Arc::new(AtomicUsize::new(0));
+        let fail = Arc::new(AtomicBool::new(true));
+        let prefix = "workspaces/one%2Ftwo/";
+        for i in 0..102 {
+            map.lock()
+                .unwrap()
+                .insert(format!("{prefix}{i:03} % é"), vec![1]);
+        }
+        map.lock()
+            .unwrap()
+            .insert("workspaces/one%2Ftwo-lookalike/keep".into(), vec![2]);
+        let app=Router::new().route("/bucket/",get({let map=map.clone();let mode=mode.clone();move|Query(query):Query<HashMap<String,String>>|{let map=map.clone();let mode=mode.clone();async move{
+            assert_eq!(query["list-type"],"2");assert_eq!(query["encoding-type"],"url");assert_eq!(query["max-keys"],"100");
+            let prefix=&query["prefix"];
+            if mode.load(Ordering::SeqCst)==2{return (StatusCode::OK,"<Error><Code>AccessDenied</Code></Error>".to_owned())}
+            let mut keys:Vec<_>=map.lock().unwrap().keys().filter(|k|k.starts_with(prefix)).cloned().collect();keys.sort();let more=keys.len()>100;keys.truncate(100);
+            if mode.load(Ordering::SeqCst)==1{keys.push("workspaces/another-account/keep".into());}
+            let entries=keys.iter().map(|k|format!("<Contents><Key>{}</Key></Contents>",encode(k,false))).collect::<String>();
+            (StatusCode::OK,format!("<ListBucketResult><Name>bucket</Name><Prefix>{}</Prefix><EncodingType>url</EncodingType><IsTruncated>{more}</IsTruncated>{entries}</ListBucketResult>",encode(prefix,false)))
+        }}})).route("/{*key}",axum::routing::delete({let map=map.clone();let fail=fail.clone();move|Path(key):Path<String>|{let map=map.clone();let fail=fail.clone();async move{
+            let key=key.strip_prefix("bucket/").unwrap();
+            if fail.swap(false,Ordering::SeqCst){return StatusCode::SERVICE_UNAVAILABLE}
+            map.lock().unwrap().remove(key);StatusCode::NO_CONTENT
+        }}}));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut client = R2::new("https://fixture.invalid/", "bucket", "access", "secret").unwrap();
+        client.endpoint = endpoint.parse().unwrap();
+        assert!(client.purge_prefix("workspaces/").await.is_err());
+        mode.store(2, Ordering::SeqCst);
+        assert!(client.purge_prefix(prefix).await.is_err());
+        assert_eq!(map.lock().unwrap().len(), 103);
+        mode.store(1, Ordering::SeqCst);
+        assert!(client.purge_prefix(prefix).await.is_err());
+        assert_eq!(map.lock().unwrap().len(), 103);
+        mode.store(0, Ordering::SeqCst);
+        assert!(client.purge_prefix(prefix).await.is_err());
+        for _ in 0..5 {
+            if client.purge_prefix(prefix).await.unwrap() {
+                break;
+            }
+        }
+        assert!(client.purge_prefix(prefix).await.unwrap());
+        assert_eq!(map.lock().unwrap().len(), 1);
+        assert!(
+            map.lock()
+                .unwrap()
+                .contains_key("workspaces/one%2Ftwo-lookalike/keep")
         );
         server.abort();
     }

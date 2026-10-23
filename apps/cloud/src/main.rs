@@ -112,6 +112,12 @@ async fn main() -> Result<()> {
                         anyhow::bail!("{}", error.code);
                     }
                 }
+                if let Err(error) = runtime.delete_once(&*provider, now_ms()).await {
+                    tracing::warn!(code = error.code, "Deletion stage deferred");
+                    if once {
+                        anyhow::bail!("{}", error.code);
+                    }
+                }
                 if once {
                     runtime
                         .recovery_once(&*provider, now_ms())

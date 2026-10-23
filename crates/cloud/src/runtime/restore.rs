@@ -208,6 +208,7 @@ impl RuntimeControl {
         job: &jobs::Job,
         now: i64,
     ) -> Result<(), ApiError> {
+        let _effects = effects::Guard::acquire(&job.resource_id)?;
         let mut tx = self.pool.begin().await?;
         let (row, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;
         active_job(&mut tx, job).await?;
@@ -244,9 +245,15 @@ impl RuntimeControl {
             {
                 Some(m) => m,
                 None => {
-                    AllocationProvider::create(provider, required(&restore, "snapshot_id")?, name)
-                        .await
-                        .map_err(|_| failed())?
+                    effects::creating(&self.pool, &job.resource_id, operation, name).await?;
+                    let result = AllocationProvider::create(
+                        provider,
+                        required(&restore, "snapshot_id")?,
+                        name,
+                    )
+                    .await;
+                    effects::created(&self.pool, operation, &result).await?;
+                    result.map_err(|_| failed())?
                 }
             };
             if machine.name != name || machine.id.is_empty() || machine.id == a.source_sandbox_id {

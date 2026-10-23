@@ -394,7 +394,7 @@ fn runtime_auth(row: &Value, credential: &str, now: i64) -> Result<(), ApiError>
     }
     Ok(())
 }
-fn destruction_fence(row: &Value) -> i64 {
+pub(super) fn destruction_fence(row: &Value) -> i64 {
     let config = &row["request_config"];
     [
         config["destructionFence"].as_i64(),
