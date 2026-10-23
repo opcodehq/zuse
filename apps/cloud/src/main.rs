@@ -252,6 +252,24 @@ async fn main() -> Result<()> {
             let mut store = Store::connect_read_only(&config.database_url)
                 .await?
                 .configure_transcripts()?;
+            store =
+                store.with_project_templates(zuse_cloud::projects::template_versions_from_env()?);
+            let project_accounts = env::var("ZUSE_CLOUD_PROJECT_WRITE_ACCOUNTS")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if !project_accounts.is_empty() {
+                store = store.with_project_control(
+                    zuse_cloud::projects::ProjectControl::connect(
+                        &config.database_url,
+                        project_accounts,
+                    )
+                    .await?,
+                );
+            }
             let billing_accounts = env::var("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")
                 .unwrap_or_default()
                 .split(',')

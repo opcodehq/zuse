@@ -20,3 +20,5 @@ pub mod billing;
 
 pub mod objects;
 pub mod transcript;
+
+pub mod projects;

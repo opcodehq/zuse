@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -1966,3 +1966,59 @@ Remaining image work includes provider presence inspection, build/promotion,
 supersession, grace expiry, provider deletion/retry and their administration UI.
 This adds storage settlement to C; it does not complete the image lifecycle,
 remaining usage providers, live billing acceptance or migration/cutover.
+
+
+### Owned repository catalog management
+
+Added the pinned `GET/POST /v1/cloud/projects` and
+`DELETE /v1/cloud/projects/:id` contracts with shared Rust wire types. Connect
+normalizes repository identity/URLs, validates branch/environment values, checks
+existing cloud entitlement and stores the original configuration-digest format.
+The repository identity remains case-insensitive; reconnect preserves its original
+project ID and creation time. Included retries return the original accepted row.
+Concurrent retries serialize across the account and retain the original repository
+advisory lock. Conflicting removed-row keys return an actionable conflict.
+
+Remove only sets `included=false`. Existing project records, branches, workspace
+rows, machines, chats, image builds and billing history remain intact. Reconnecting
+the same repository reuses that project. Listing uses one read-only repeatable-read
+snapshot, includes active compatible builds and latest build status, and recognizes
+repository layouts from imported snapshots. Environment values, secret bindings,
+private build settings and build logs never enter this public projection.
+
+Reads use existing Content authorization. Writes require Administration, which
+permits organization admins and denies ordinary/billing members. Every query is
+scoped to the selected owner. An organization cannot remove a personal project
+by guessing its ID. Secret bindings retain the reference vault-required error;
+secret-like environment keys are refused without echoing their values.
+
+Writes remain default-off. `ZUSE_CLOUD_PROJECT_WRITE_ACCOUNTS` configures a
+separate writer pool; every mutation also requires the share-locked
+`zuse_rust_control_owners` row with `resource_kind=project-catalog`, the original
+owner ID and `backend=rust`. Fence/forward the old project writer before assigning
+this marker. Billing or workspace ownership does not confer project permissions.
+The catalog pool stays read-only.
+
+`ZUSE_CLOUD_PROVIDER_TEMPLATE_VERSIONS` is a JSON provider-to-current-full-template
+version map for public build compatibility. Missing versions never advertise an
+unverified compatible build. Connection-specific full versions retain their
+original `:connection:<id>` compatibility rule. This read model does not enable
+unimplemented execution adapters or relax Rust runtime negotiation.
+
+Acceptance passes against isolated PostgreSQL through the actual Axum routes:
+concurrent connect retries, original ID/creation-time preservation on reconnect,
+latest failed versus active compatible builds, private metadata exclusion, personal
+and organization isolation, admin/member/billing permissions, expired entitlement,
+writer ownership handoff, secret validation and retained workspace bytes after
+removal. The configuration digest matches an independently generated Node
+`crypto`/`JSON.stringify` value. Receipt: `.context/cloud-projects-tests.log`.
+All thirty cloud library checks also pass, covering billing/settlement/export,
+provider wire adapters, signed WorkOS identity, immutable objects and credential
+transport after the shared Store/wire changes:
+`.context/cloud-projects-regressions.log`. The API executable also builds:
+`.context/cloud-projects-api-build.log`.
+
+Image preparation/rebuild execution, account image configuration/status, live
+account provider/connection resolution, GitHub enrollment and repository
+administration UI remain open. This implements repository catalog operations,
+not all image parity.

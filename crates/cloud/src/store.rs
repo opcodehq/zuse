@@ -8,6 +8,8 @@ use std::{str::FromStr, time::Duration};
 
 #[derive(Clone)]
 pub struct Store {
+    pub(crate) projects: Option<std::sync::Arc<crate::projects::ProjectControl>>,
+    pub(crate) project_templates: std::sync::Arc<std::collections::BTreeMap<String, String>>,
     pub(crate) billing: Option<std::sync::Arc<crate::billing::BillingControl>>,
     pub(crate) pool: PgPool,
     pub(crate) transcripts: Option<std::sync::Arc<crate::transcript::Reader>>,
@@ -43,6 +45,8 @@ impl Store {
         Ok(Self {
             pool,
             billing: None,
+            projects: None,
+            project_templates: Default::default(),
             transcripts: None,
         })
     }
@@ -51,6 +55,8 @@ impl Store {
         Self {
             pool,
             billing: None,
+            projects: None,
+            project_templates: Default::default(),
             transcripts: None,
         }
     }

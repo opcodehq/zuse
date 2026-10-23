@@ -50,7 +50,10 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(origins.as_ref().clone())
         .allow_methods(
-            if state.runtime.is_some() || state.store.billing_writes_enabled() {
+            if state.runtime.is_some()
+                || state.store.billing_writes_enabled()
+                || state.store.project_writes_enabled()
+            {
                 vec![Method::GET, Method::POST, Method::PUT, Method::DELETE]
             } else {
                 vec![Method::GET]
@@ -66,6 +69,16 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .route("/v1/cloud/context", get(context))
+        .route(
+            "/v1/cloud/projects",
+            get(project_list)
+                .post(project_connect)
+                .layer(DefaultBodyLimit::max(160_000)),
+        )
+        .route(
+            "/v1/cloud/projects/{id}",
+            axum::routing::delete(project_remove),
+        )
         .route("/v1/billing/entitlements", get(entitlements))
         .route("/v1/billing/portal", post(billing_portal))
         .route("/v1/billing/prepaid", get(prepaid_balance))
@@ -1179,4 +1192,52 @@ async fn prepaid_checkout(
 }
 async fn prepaid_complete() -> Response {
     ([(header::CONTENT_TYPE,"text/html; charset=utf-8"),(header::CACHE_CONTROL,"no-store"),(header::CONTENT_SECURITY_POLICY,"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"),(header::REFERRER_POLICY,"no-referrer")],"<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width, initial-scale=1'><title>Zuse credits</title><body style='font-family:system-ui;max-width:480px;margin:80px auto;padding:24px'><h1>Thanks for your purchase</h1><p>Your balance will update once payment is confirmed. Return to Zuse and refresh Cloud to see your credits.</p><p>Credits apply automatically to future Zuse invoices, including subscriptions.</p></body></html>").into_response()
+}
+
+async fn project_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<zuse_protocol::cloud_projects::ProjectList>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    Ok(Json(state.store.project_list(&access.owner_id).await?))
+}
+async fn project_connect(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_projects::ProjectConnectRequest>, JsonRejection>,
+) -> Result<
+    (
+        StatusCode,
+        Json<zuse_protocol::cloud_projects::CloudProject>,
+    ),
+    ApiError,
+> {
+    let access = state.access(&headers, AccessKind::Administration).await?;
+    let Json(request) = body.map_err(|_| ApiError::bad_request("invalid_request"))?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .store
+                .project_connect(
+                    &access.owner_id,
+                    request,
+                    chrono::Utc::now().timestamp_millis(),
+                )
+                .await?,
+        ),
+    ))
+}
+async fn project_remove(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<zuse_protocol::cloud_projects::CloudProject>, ApiError> {
+    let access = state.access(&headers, AccessKind::Administration).await?;
+    Ok(Json(
+        state
+            .store
+            .project_remove(&access.owner_id, &id, chrono::Utc::now().timestamp_millis())
+            .await?,
+    ))
 }
