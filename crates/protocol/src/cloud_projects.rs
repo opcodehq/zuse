@@ -141,6 +141,7 @@ pub struct CloudImageBuild {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudAccountImage {
+    pub storage: Option<CloudImageStorage>,
     pub state: String,
     pub generation: Option<String>,
     pub provider_id: Option<String>,
@@ -151,4 +152,18 @@ pub struct CloudAccountImage {
     pub builds: Vec<CloudImageBuild>,
     pub built_at: Option<i64>,
     pub updated_at: i64,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageDeleteRequest {
+    pub snapshot_id: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudImageStorage {
+    pub snapshot_id: String,
+    pub state: String,
+    pub monthly_cost_micros: i64,
+    pub billing_enabled: bool,
+    pub last_error: Option<String>,
 }

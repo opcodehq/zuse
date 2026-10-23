@@ -7,6 +7,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use zuse_cloud_runtime::image::{ImageManifest, ImagePlan, ImageRepository};
 use zuse_protocol::cloud_projects::{GithubCatalog, ImageBuildMode, ImageBuildRequest};
+pub(crate) mod deletion;
 pub mod github;
 pub mod worker;
 pub const MIGRATION: &str = include_str!("../migrations/0007_images.sql");
@@ -337,11 +338,22 @@ impl Store {
         self.image_status(&access.owner_id, true).await
     }
     pub async fn image_status(&self, account: &str, logs: bool) -> Result<Value, ApiError> {
-        let rows:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(b) FROM ((SELECT * FROM api_cloud_project_builds WHERE account_id=$1 AND provider='boxd' ORDER BY created_at DESC,build_id DESC LIMIT 12) UNION (SELECT * FROM api_cloud_project_builds WHERE account_id=$1 AND provider='boxd' AND state='ready' ORDER BY updated_at DESC,build_id DESC LIMIT 1) UNION (SELECT * FROM api_cloud_project_builds WHERE account_id=$1 AND provider='boxd' AND state IN ('queued','building','sanitizing') ORDER BY created_at DESC LIMIT 1)) b ORDER BY created_at DESC,build_id DESC").bind(account).fetch_all(&self.pool).await?;
+        let rows:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(b) FROM ((SELECT * FROM api_cloud_project_builds WHERE account_id=$1 AND provider='boxd' ORDER BY created_at DESC,build_id DESC LIMIT 12) UNION (SELECT * FROM api_cloud_project_builds WHERE account_id=$1 AND provider='boxd' AND state='ready' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE s.account_id=api_cloud_project_builds.account_id AND s.provider IN ('box','boxd') AND s.snapshot_id=api_cloud_project_builds.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY updated_at DESC,build_id DESC LIMIT 1) UNION (SELECT * FROM api_cloud_project_builds WHERE account_id=$1 AND provider='boxd' AND state IN ('queued','building','sanitizing') ORDER BY created_at DESC LIMIT 1)) b ORDER BY created_at DESC,build_id DESC").bind(account).fetch_all(&self.pool).await?;
         let projects:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(p) FROM api_cloud_projects p WHERE account_id=$1 AND included=true ORDER BY project_id").bind(account).fetch_all(&self.pool).await?;
+        let ids = rows
+            .iter()
+            .filter_map(|r| r["snapshot_id"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        let snapshots:Vec<Value>=sqlx::query_scalar("SELECT COALESCE(to_jsonb(s)->'record',jsonb_build_object('snapshotId',s.snapshot_id,'state',s.state,'accountId',s.account_id)) FROM api_cloud_snapshots s WHERE account_id=$1 AND provider IN ('box','boxd') AND (state IN ('retained','deleting') OR snapshot_id=ANY($2)) ORDER BY (to_jsonb(s)->>'created_at')::bigint DESC").bind(account).bind(ids).fetch_all(&self.pool).await?;
         let active = rows
             .iter()
-            .filter(|r| r["state"] == "ready")
+            .filter(|r| {
+                r["state"] == "ready"
+                    && !snapshots.iter().any(|s| {
+                        s["snapshotId"] == r["snapshot_id"]
+                            && matches!(s["state"].as_str(), Some("deleting" | "deleted"))
+                    })
+            })
             .max_by_key(|r| r["updated_at"].as_i64().unwrap_or(0));
         let building = rows.iter().find(|r| {
             matches!(
@@ -417,6 +429,19 @@ impl Store {
         }
         if failed {
             result["errorCode"] = latest.unwrap()["last_error_code"].clone();
+        }
+        if let Some(storage) = snapshots
+            .iter()
+            .find(|s| s["state"] == "retained")
+            .or_else(|| snapshots.iter().find(|s| s["state"] == "deleting"))
+        {
+            let enabled = crate::billing::SnapshotSettlementConfig::from_env()
+                .map_err(|_| unavailable())?
+                .is_some_and(|c| now() >= c.cutover_at_ms);
+            result["storage"] = json!({"snapshotId":storage["snapshotId"],"state":storage["state"],"monthlyCostMicros":1_700_000,"billingEnabled":enabled});
+            if storage["lastError"].is_string() {
+                result["storage"]["lastError"] = storage["lastError"].clone();
+            }
         }
         Ok(result)
     }

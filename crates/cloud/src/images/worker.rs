@@ -246,7 +246,7 @@ sudo -n -u zuse env -i HOME=/home/zuse PATH=/usr/local/bin:/usr/bin:/bin /usr/lo
         Ok(())
     }
 }
-fn provider_error(error: ProviderError) -> ApiError {
+pub(super) fn provider_error(error: ProviderError) -> ApiError {
     ApiError::unavailable(match error {
         ProviderError::Rejected => "image_provider_rejected",
         ProviderError::Conflict => "image_provider_identity_conflict",
@@ -261,12 +261,13 @@ impl ImageControl {
         provider: &dyn ImageProvider,
         issuer: Option<&dyn GrantIssuer>,
     ) -> Result<bool, ApiError> {
+        let deletion_work = self.delete_once(provider).await?;
         let at = now();
         let token = uuid::Uuid::new_v4().to_string();
         let accounts = self.accounts.iter().cloned().collect::<Vec<_>>();
         let row=sqlx::query("WITH candidate AS(SELECT j.job_id FROM zuse_rust_jobs j JOIN zuse_rust_image_operations op ON op.build_id=j.resource_id JOIN zuse_rust_control_owners o ON o.resource_kind='image-build' AND o.resource_id=j.resource_id AND o.backend='rust' AND o.generation=j.resource_generation WHERE j.kind='image-build' AND EXISTS(SELECT 1 FROM zuse_rust_control_owners a WHERE a.resource_kind='project-catalog' AND a.resource_id=op.account_id AND a.backend='rust') AND EXISTS(SELECT 1 FROM zuse_rust_control_owners a WHERE a.resource_kind='image-catalog' AND a.resource_id=op.account_id AND a.backend='rust') AND op.account_id=ANY($1) AND j.state IN ('pending','running') AND j.due_at<=$2 AND (j.lease_expires_at IS NULL OR j.lease_expires_at<=$2) ORDER BY j.due_at,j.created_at FOR UPDATE OF j SKIP LOCKED LIMIT 1) UPDATE zuse_rust_jobs j SET state='running',lease_token=$3,lease_expires_at=$2+300000,attempts=attempts+1,updated_at=$2 FROM candidate WHERE j.job_id=candidate.job_id RETURNING j.*").bind(accounts).bind(at).bind(&token).fetch_optional(&self.pool).await?;
         let Some(row) = row else {
-            return Ok(false);
+            return Ok(deletion_work);
         };
         let job = jobs::Job {
             id: row.try_get("job_id")?,
@@ -459,6 +460,7 @@ impl ImageControl {
                     let rows:Vec<Value>=sqlx::query_scalar("SELECT record FROM api_cloud_snapshots WHERE account_id=$1 AND provider='box' AND state='deleting' ORDER BY created_at LIMIT 1 FOR UPDATE").bind(&op.account).fetch_all(&mut *tx).await?;
                     if let Some(record)=rows.first(){
                         let id=text(record,"snapshotId")?;
+                        if super::deletion::snapshot_in_use(&mut tx,&op.account,id).await?{return Err(ApiError::conflict("cloud_snapshot_in_use"));}
                         if record["accountId"]!=op.account||id==op.snapshot.as_deref().unwrap_or(""){return Err(ApiError::conflict("image_snapshot_identity_mismatch"));}
                         if let Some(snapshot)=provider.snapshot(id).await.map_err(provider_error)?{if snapshot.id!=id{return Err(ApiError::conflict("image_snapshot_identity_mismatch"));}provider.delete_snapshot(id).await.map_err(provider_error)?;}
                         sqlx::query("UPDATE api_cloud_snapshots SET state='deleted',record=record||$3 WHERE provider='box' AND snapshot_id=$1 AND account_id=$2 AND state='deleting'").bind(id).bind(&op.account).bind(json!({"state":"deleted","deletedAtMs":now()})).execute(&mut *tx).await?;
@@ -473,6 +475,7 @@ impl ImageControl {
             if error.code == "image_provider_outcome_unknown"
                 || error.code == "image_provider_unavailable"
                 || error.code == "cloud_snapshot_busy"
+                || error.code == "cloud_snapshot_in_use"
             {
                 return Err(error);
             }
@@ -621,7 +624,10 @@ async fn reserve(
     crate::billing::require_capacity(tx, &op.account, at).await
 }
 
-async fn snapshot_guard(tx: &mut Transaction<'_, Postgres>, account: &str) -> Result<(), ApiError> {
+pub(super) async fn snapshot_guard(
+    tx: &mut Transaction<'_, Postgres>,
+    account: &str,
+) -> Result<(), ApiError> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
         .bind(format!("snapshot:{account}"))
         .execute(&mut **tx)

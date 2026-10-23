@@ -73,6 +73,10 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/v1/cloud/github", get(github_catalog))
         .route("/v1/cloud/image", get(image_status))
         .route(
+            "/v1/cloud/image/delete",
+            post(image_delete).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
             "/v1/cloud/image/build",
             post(image_build).layer(DefaultBodyLimit::max(4096)),
         )
@@ -1346,5 +1350,29 @@ async fn image_build(
                 )
                 .await?,
         ),
+    ))
+}
+
+async fn image_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_projects::ImageDeleteRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let access = state.access(&headers, AccessKind::Administration).await?;
+    let Json(request) = body.map_err(|_| ApiError::bad_request("invalid_image_delete_request"))?;
+    state
+        .store
+        .images
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_image_writes_disabled"))?
+        .delete_image(
+            &access.owner_id,
+            &request.snapshot_id,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(state.store.image_status(&access.owner_id, true).await?),
     ))
 }

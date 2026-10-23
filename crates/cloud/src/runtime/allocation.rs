@@ -133,6 +133,12 @@ impl RuntimeControl {
             }
             return Ok(operation);
         }
+        crate::images::deletion::snapshot_read_guard(
+            tx,
+            required(&row, "account_id")?,
+            Some(snapshot),
+        )
+        .await?;
         let mut config = row["request_config"].clone();
         if row["provider_sandbox_id"].is_string()
             || row["runtime_credential_hash"].is_string()

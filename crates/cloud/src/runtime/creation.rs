@@ -134,6 +134,7 @@ impl RuntimeControl {
             }
             return Ok((create_response(row), false));
         }
+        crate::images::deletion::snapshot_read_guard(&mut tx, owner, None).await?;
         let entitled:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_entitlements WHERE account_id=$1 AND kind='cloud-workspace' AND (status IN ('active','grace') OR (status='ended' AND paid_through>$2)) AND (paid_through IS NULL OR paid_through>$2))").bind(owner).bind(now).fetch_one(&mut *tx).await?;
         if !entitled {
             return Err(ApiError::forbidden("cloud_entitlement_required"));

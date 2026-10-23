@@ -932,6 +932,8 @@ impl RuntimeControl {
             if row["desired_state"] == "archived" {
                 return Err(ApiError::conflict("cloud_workspace_unarchive_required"));
             }
+            crate::images::deletion::snapshot_read_guard(tx, required(row, "account_id")?, None)
+                .await?;
             lifecycle::require_resume_capacity(tx, row, now).await?;
             if op["phase"] == "restoring" {
                 sqlx::query("UPDATE zuse_rust_jobs SET state='pending',attempts=0,due_at=$3,last_error_code=NULL,updated_at=$3 WHERE kind=$1 AND resource_id=$2 AND resource_generation=$4 AND payload->>'operationId'=$5 AND state='failed'")

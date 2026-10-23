@@ -15,6 +15,8 @@ struct State {
     events: Vec<String>,
     lost_create: bool,
     lost_capture: bool,
+    lost_delete: bool,
+    unavailable_delete: bool,
     corrupt: bool,
 }
 #[derive(Default)]
@@ -155,8 +157,15 @@ impl ImageProvider for Provider {
     }
     async fn delete_snapshot(&self, id: &str) -> Result<(), ProviderError> {
         let mut s = self.0.lock().unwrap();
+        if s.unavailable_delete {
+            return Err(ProviderError::Unavailable);
+        }
         s.snapshots.retain(|_, v| v.id != id);
         s.events.push("delete-failed-snapshot".into());
+        if s.lost_delete {
+            s.lost_delete = false;
+            return Err(ProviderError::OutcomeUnknown);
+        }
         Ok(())
     }
 }
@@ -589,6 +598,231 @@ async fn image_build_retries_verifies_promotes_and_preserves_last_ready() {
             .iter()
             .all(|b| b["state"] == "failed")
     );
+    if std::env::var_os("ZUSE_CLOUD_IMAGES_UI_FIXTURE_FILE").is_none() {
+        let image = store.image_status("user-alice", true).await.unwrap();
+        let id = image["storage"]["snapshotId"].as_str().unwrap().to_owned();
+        assert_eq!(
+            http(
+                &store,
+                "POST",
+                "/v1/cloud/image/delete",
+                Some("organization:org-team"),
+                Some(json!({"snapshotId":id}))
+            )
+            .await
+            .0,
+            axum::http::StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            control
+                .delete_image("user-alice", "foreign-snapshot", now())
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "cloud_snapshot_not_found"
+        );
+        assert_eq!(
+            control
+                .delete_image("user-alice", &id, now())
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "cloud_image_build_in_progress"
+        );
+        sqlx::query("UPDATE api_cloud_project_builds SET state='failed' WHERE state='queued'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE api_cloud_project_builds SET settings=settings||'{\"providerConnectionId\":\"customer-provider\"}'::jsonb WHERE build_id=$1").bind(original.as_str()).execute(&pool).await.unwrap();
+        assert_eq!(
+            control
+                .delete_image("user-alice", &id, now())
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "cloud_image_provider_connection_required"
+        );
+        sqlx::query("UPDATE api_cloud_project_builds SET settings=settings-'providerConnectionId' WHERE build_id=$1").bind(original.as_str()).execute(&pool).await.unwrap();
+        sqlx::raw_sql(crate::runtime::allocation::MIGRATION)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO zuse_rust_allocations(operation_id,workspace_id,generation,snapshot_id,machine_name,storage_incarnation_id,boot_expires_at,phase,created_at,updated_at) VALUES('held-allocation','ws-alice',1,$1,'held-source','original-storage',9999999999999,'creating',0,0)").bind(&id).execute(&pool).await.unwrap();
+        assert_eq!(
+            control
+                .delete_image("user-alice", &id, now())
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "cloud_snapshot_in_use"
+        );
+        sqlx::query("UPDATE zuse_rust_allocations SET machine_id='retained-original-machine',phase='allocated'").execute(&pool).await.unwrap();
+        let retained: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-alice'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let start = now() - 3_600_000;
+        sqlx::query("UPDATE api_cloud_snapshots SET record=record||$2 WHERE snapshot_id=$1")
+            .bind(&id)
+            .bind(json!({"retainedAtMs":start,"checkpointAtMs":start,"remainder":123}))
+            .execute(&pool)
+            .await
+            .unwrap();
+        // A concurrent admission intent holds the shared source fence through commit.
+        let mut admission = pool.begin().await.unwrap();
+        super::deletion::snapshot_read_guard(&mut admission, "user-alice", Some(&id))
+            .await
+            .unwrap();
+        let copy = control.clone();
+        let deleting = id.clone();
+        let cutoff = now();
+        let mut task =
+            tokio::spawn(async move { copy.delete_image("user-alice", &deleting, cutoff).await });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut task)
+                .await
+                .is_err()
+        );
+        admission.commit().await.unwrap();
+        task.await.unwrap().unwrap();
+        let pending = store.image_status("user-alice", true).await.unwrap();
+        assert_eq!(pending["storage"]["state"], "deleting");
+        assert!(pending.get("generation").is_none());
+        assert!(
+            store
+                .launch_projects("user-alice")
+                .await
+                .unwrap()
+                .iter()
+                .all(|p| p["prepared"] == false)
+        );
+        let mut new_admission = pool.begin().await.unwrap();
+        assert_eq!(
+            super::deletion::snapshot_read_guard(&mut new_admission, "user-alice", Some(&id))
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "cloud_snapshot_unavailable"
+        );
+        new_admission.rollback().await.unwrap();
+        control
+            .admit(&owner, request("build-during-cleanup"), None, now())
+            .await
+            .unwrap();
+        provider.0.lock().unwrap().corrupt = false;
+        provider.0.lock().unwrap().unavailable_delete = true;
+        assert!(control.work_once(&provider, None).await.unwrap());
+        let phase:String=sqlx::query_scalar("SELECT record->>'phase' FROM zuse_rust_image_operations WHERE build_id=(SELECT build_id FROM api_cloud_project_builds WHERE idempotency_key='account-image:update:build-during-cleanup')").fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            phase, "prepare",
+            "Cleanup errors must not starve new image builds"
+        );
+        let failed = store.image_status("user-alice", true).await.unwrap();
+        assert_eq!(failed["storage"]["state"], "deleting");
+        assert_eq!(failed["storage"]["lastError"], "image_provider_unavailable");
+        assert_eq!(provider.0.lock().unwrap().snapshots.len(), 1);
+        {
+            let mut state = provider.0.lock().unwrap();
+            state.unavailable_delete = false;
+            state.lost_delete = true;
+        }
+        sqlx::query("UPDATE api_cloud_snapshots SET record=record||'{\"nextAttemptAtMs\":0}'::jsonb WHERE snapshot_id=$1").bind(&id).execute(&pool).await.unwrap();
+        assert!(control.work_once(&provider, None).await.unwrap());
+        let mutations = provider
+            .0
+            .lock()
+            .unwrap()
+            .events
+            .iter()
+            .filter(|e| e.as_str() == "delete-failed-snapshot")
+            .count();
+        sqlx::query("UPDATE api_cloud_snapshots SET record=record||'{\"nextAttemptAtMs\":0}'::jsonb WHERE snapshot_id=$1").bind(&id).execute(&pool).await.unwrap();
+        assert!(control.work_once(&provider, None).await.unwrap());
+        assert_eq!(
+            provider
+                .0
+                .lock()
+                .unwrap()
+                .events
+                .iter()
+                .filter(|e| e.as_str() == "delete-failed-snapshot")
+                .count(),
+            mutations
+        );
+        assert!(provider.0.lock().unwrap().snapshots.is_empty());
+        control
+            .delete_image("user-alice", &id, now() + 1)
+            .await
+            .unwrap();
+        let record: Value =
+            sqlx::query_scalar("SELECT record FROM api_cloud_snapshots WHERE snapshot_id=$1")
+                .bind(&id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(record["state"], "deleted");
+        assert_eq!(record["stoppedAtMs"], cutoff);
+        assert_eq!(record["checkpointAtMs"], start);
+        assert_eq!(record["remainder"], 123);
+        assert!(
+            store
+                .image_status("user-alice", false)
+                .await
+                .unwrap()
+                .get("storage")
+                .is_none()
+        );
+        let after: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-alice'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(after, retained);
+        sqlx::query("ALTER TABLE api_provider_usage_events ADD COLUMN occurred_at bigint")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let billing =
+            crate::billing::BillingControl::from_pool(pool.clone(), vec!["user-alice".into()]);
+        let config = crate::billing::SnapshotSettlementConfig {
+            cutover_at_ms: start,
+        };
+        let report = billing
+            .settle_snapshot_storage_once(config, now() + 1000)
+            .await
+            .unwrap();
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        let cost:i64=sqlx::query_scalar("SELECT COALESCE(SUM(provider_cost_micros),0)::bigint FROM api_cloud_billing_usage WHERE resource_kind='snapshot' AND resource_id=$1").bind(&id).fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            cost,
+            ((i128::from(cutoff - start) * 1_700_000 + 123) / 2_592_000_000) as i64
+        );
+        let ledger: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM api_cloud_billing_ledger")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        billing
+            .settle_snapshot_storage_once(config, now() + 2000)
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM api_cloud_billing_ledger")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            ledger
+        );
+        drain(&control, &provider).await;
+        assert!(provider.0.lock().unwrap().machines.is_empty());
+    }
     if let Ok(path) = std::env::var("ZUSE_CLOUD_IMAGES_UI_FIXTURE_FILE") {
         let retained: Value = sqlx::query_scalar(
             "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-alice'",

@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status APIs and durable Boxd capture/read-back/promotion/retirement worker, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status/delete APIs, durable Boxd capture/read-back/promotion/retirement/cleanup worker and shared image deletion confirmation, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray, archived cloud transcript screens and shared Cloud repositories/image controls added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -2270,3 +2270,62 @@ These checks use actual HTTP/RPC and PostgreSQL, with a deterministic provider.
 They do not establish live Boxd or Mac acceptance. Image deletion controls, custom
 snapshot import/selection, other provider administration, complete settings routes
 and live migration/cutover remain open. No milestone is marked complete here.
+
+
+## Retained image deletion and source fencing
+
+The pinned `POST /v1/cloud/image/delete` contract now admits account-owned saved
+image deletion under administration, image catalog and billing ownership checks.
+The existing snapshot record becomes the durable cleanup outbox. Admission records
+one storage cutoff and preserves the checkpoint/fractional remainder for the billing
+owner. Repeating admission does not move that cutoff. The image worker retries
+unavailable cleanup, reconciles uncertain deletion through provider inspection and
+marks Deleted only after successful deletion or confirmed absence. Error codes and
+Deleting state remain visible until cleanup completes. Deferred cleanup does not
+starve new image builds. Builds/history and workspace data are retained.
+
+Create/allocation and archive restore admission share the snapshot lifecycle fence
+with deletion and promotion. An accepted allocation or restore pins its source
+while its target machine ID is uncertain. Both explicit deletion and superseded
+image cleanup respect those pins. New launches exclude deleting/deleted images.
+Restore selection also understands account images containing multiple repository
+caches and the original `box` snapshot registry alias for Rust `boxd` execution.
+
+The shared native/browser panel shows saved image storage and its actual billing
+activation, a focused confirmation dialog, contained Escape/Enter/Space shortcuts,
+and real cleanup progress/errors. Cancelling sends no mutation. Confirmation uses
+the exact reviewed snapshot ID; account changes clear the dialog and pending
+callbacks. The dialog explains that workspace data is preserved and another image
+is needed for new launches.
+
+Verification:
+
+- Three focused checks pass, including real PostgreSQL/Axum authorization, busy
+  builds, unresolved allocation pins, concurrent admission fencing, transient
+  provider failure, lost delete response without a repeated physical mutation,
+  idempotent cutoff, retained history and unchanged workspace contents. Connected-
+  provider images refuse the platform credential path until their original
+  provider connection adapter is available. Original
+  storage settlement charges through the cutoff once and preserves fractional
+  accounting; new builds advance while old deletion is unavailable.
+  `.context/cloud-image-delete-final-tests.log`.
+- Authenticated create/idempotency/capacity regression passes:
+  `.context/cloud-image-delete-creation-regression.log`.
+- Packaged guest/archive acceptance restores a retired workspace into a fresh
+  generation and continues its original conversation:
+  `.context/cloud-image-delete-restore-regression.log`.
+- Compiled browser -> host -> Axum/PostgreSQL -> deterministic provider: Escape
+  cancels, keyboard confirmation admits one deletion, polling observes removal,
+  history remains, redelivery is safe and no `CloudEnvironment` call occurs.
+  `.context/cloud-image-delete-browser-acceptance.json` and corresponding proof.
+- Native Linux: actual Build -> Ready -> cancel -> keyboard-confirmed Delete ->
+  Not built, with history preserved. `.context/cloud-image-delete-native-acceptance.json`.
+  The UI fixture completed successfully, confirming the original workspace row was
+  unchanged and no build machines remained: `.context/cloud-image-delete-ui-api.log`.
+- Native/browser and API builds pass. UI artifacts:
+  `.context/cloud-image-delete-browser.png`, `.context/cloud-image-delete-native.png`.
+
+Provider compute in these tests is deterministic; live Boxd and Mac acceptance
+remain open. Custom snapshot import/selection, provider administration, complete
+UI parity and migration/cutover remain on the milestone checklist. This chunk does
+not complete Milestone C or authorize production ownership changes.

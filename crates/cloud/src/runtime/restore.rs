@@ -69,6 +69,8 @@ impl RuntimeControl {
         {
             return Err(fenced());
         }
+        crate::images::deletion::snapshot_read_guard(tx, required(row, "account_id")?, None)
+            .await?;
         lifecycle::require_resume_capacity(tx, row, now).await?;
         let ready: bool =
             sqlx::query_scalar("SELECT to_regclass('zuse_rust_restores') IS NOT NULL")
@@ -78,7 +80,7 @@ impl RuntimeControl {
             return Err(ApiError::unavailable("cloud_restore_schema_not_ready"));
         }
         // Reuse an approved native image from this account and project, never an arbitrary snapshot ID.
-        let snapshot:Option<String>=sqlx::query_scalar("SELECT b.snapshot_id FROM api_cloud_project_builds b WHERE b.account_id=$1 AND b.project_id=$2 AND b.provider=$3 AND b.state='ready' AND b.settings->>'runtimeRpcProtocol'='zuse-rpc-v1' AND b.settings->>'rustRuntimeStorageFormat'='zuse-rust-engine-v1' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE s.provider=b.provider AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY b.updated_at DESC LIMIT 1 FOR SHARE").bind(required(row,"account_id")?).bind(required(row,"project_id")?).bind(required(row,"provider")?).fetch_optional(&mut **tx).await?;
+        let snapshot:Option<String>=sqlx::query_scalar("SELECT b.snapshot_id FROM api_cloud_project_builds b WHERE b.account_id=$1 AND (b.project_id=$2 OR b.settings->'rustRuntimeRepositoryLayouts' ? $2) AND b.provider=$3 AND b.state='ready' AND b.settings->>'runtimeRpcProtocol'='zuse-rpc-v1' AND b.settings->>'rustRuntimeStorageFormat'='zuse-rust-engine-v1' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE (s.provider=b.provider OR (b.provider='boxd' AND s.provider='box')) AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY b.updated_at DESC LIMIT 1 FOR SHARE").bind(required(row,"account_id")?).bind(required(row,"project_id")?).bind(required(row,"provider")?).fetch_optional(&mut **tx).await?;
         let snapshot =
             snapshot.ok_or_else(|| ApiError::conflict("cloud_restore_image_required"))?;
         let previous = row["request_config"]["runtimeGeneration"]

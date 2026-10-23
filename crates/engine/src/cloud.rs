@@ -21,6 +21,7 @@ pub fn handles(method: &str) -> bool {
         method,
         LIST | READ
             | zuse_protocol::methods::CLOUD_IMAGE
+            | zuse_protocol::methods::CLOUD_IMAGE_DELETE
             | zuse_protocol::methods::CLOUD_IMAGE_BUILD
             | zuse_protocol::methods::CLOUD_PROJECTS
             | zuse_protocol::methods::CLOUD_PROJECT_CONNECT
@@ -371,6 +372,7 @@ impl CloudApi {
                 json!({"accountId":account,"organizationId":org,"data":value})
             }
             zuse_protocol::methods::CLOUD_IMAGE
+            | zuse_protocol::methods::CLOUD_IMAGE_DELETE
             | zuse_protocol::methods::CLOUD_IMAGE_BUILD
             | zuse_protocol::methods::CLOUD_PROJECTS
             | zuse_protocol::methods::CLOUD_PROJECT_CONNECT
@@ -389,6 +391,18 @@ impl CloudApi {
                             &token,
                             &["v1", "cloud", "image"],
                             None,
+                            org.as_deref(),
+                            &[],
+                        )
+                        .await?
+                    }
+                    zuse_protocol::methods::CLOUD_IMAGE_DELETE => {
+                        let request: zuse_protocol::cloud_projects::ImageDeleteRequest =
+                            serde_json::from_value(params)?;
+                        self.request_scoped(
+                            &token,
+                            &["v1", "cloud", "image", "delete"],
+                            Some(serde_json::to_value(request)?),
                             org.as_deref(),
                             &[],
                         )

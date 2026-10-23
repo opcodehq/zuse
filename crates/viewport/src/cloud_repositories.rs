@@ -47,6 +47,7 @@ pub struct RepositoryPanel {
 impl EventEmitter<Request> for RepositoryPanel {}
 impl RepositoryPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        images::bind_keys(cx);
         let search = cx.new(|cx| TextInput::new("Search repositories…", window, cx));
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
         Self {
@@ -124,7 +125,7 @@ impl RepositoryPanel {
         if self.owner.as_ref() != Some(&pending.owner) {
             return;
         }
-        if matches!(pending.kind, "image" | "image-build") {
+        if matches!(pending.kind, "image" | "image-build" | "image-delete") {
             self.receive_image(pending, result, cx);
             return;
         }
@@ -204,7 +205,7 @@ impl RepositoryPanel {
     fn repository_busy(&self) -> bool {
         self.pending
             .values()
-            .any(|p| !matches!(p.kind, "image" | "image-build"))
+            .any(|p| !matches!(p.kind, "image" | "image-build" | "image-delete"))
     }
     fn can_manage(&self) -> bool {
         self.owner.as_ref().is_some_and(|(_, org)| {
@@ -229,7 +230,7 @@ impl RepositoryPanel {
     }
 }
 impl Render for RepositoryPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.loaded && self.owner.is_some() {
             self.refresh(cx);
         }
@@ -486,6 +487,9 @@ impl Render for RepositoryPanel {
         if let Some(notice) = &self.notice {
             view = view.child(div().px_3().py_2().text_size(px(11.)).child(notice.clone()));
         }
-        column().gap_4().child(view).child(self.render_image(cx))
+        column()
+            .gap_4()
+            .child(view)
+            .child(self.render_image(window, cx))
     }
 }
