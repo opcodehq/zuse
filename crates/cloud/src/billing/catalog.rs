@@ -11,7 +11,7 @@ const MAX_SAFE: i64 = 9_007_199_254_740_991;
 #[derive(Clone)]
 pub struct BillingControl {
     pub(super) pool: PgPool,
-    accounts: Arc<HashSet<String>>,
+    pub(super) accounts: Arc<HashSet<String>>,
     pub(super) payments: Option<Arc<super::PaymentProviders>>,
 }
 impl BillingControl {
@@ -69,6 +69,11 @@ impl BillingControl {
             return Err(ApiError::bad_request("invalid_billing_cap"));
         }
         let mut tx = self.owned_transaction(owner).await?;
+        // Serialize cap edits with subscription renewal, which carries this cap forward.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,68130))")
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
         let p = period(&mut tx, owner, now, true).await?;
         let id = p["period_id"].as_str().ok_or_else(invalid)?;
         let prior:Option<i64>=sqlx::query_scalar("SELECT overage_cap_micros FROM api_cloud_billing_cap_commands WHERE period_id=$1 AND idempotency_key=$2").bind(id).bind(&request.idempotency_key).fetch_optional(&mut *tx).await?;

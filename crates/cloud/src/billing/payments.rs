@@ -1,7 +1,9 @@
 //! Provider-owned billing management. Existing customers and subscriptions keep their identity.
 use super::BillingControl;
+pub mod events;
 use crate::{error::ApiError, store::Store};
 use async_trait::async_trait;
+pub use events::{PaymentEvent, Subscription};
 use reqwest::{Client, Url};
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -11,6 +13,17 @@ use zeroize::Zeroizing;
 pub trait PortalProvider: Send + Sync {
     fn provider_id(&self) -> &'static str;
     async fn portal(&self, owner: &str, customer: Option<&str>) -> Result<String, ApiError>;
+    fn verify_event(
+        &self,
+        _headers: &axum::http::HeaderMap,
+        _body: &[u8],
+        _now: i64,
+    ) -> Result<Option<PaymentEvent>, ApiError> {
+        Err(unavailable())
+    }
+    async fn subscription(&self, _id: &str) -> Result<Subscription, ApiError> {
+        Err(unavailable())
+    }
 }
 #[derive(Clone)]
 pub struct PaymentProviders {
@@ -57,6 +70,7 @@ impl PaymentProviders {
                 providers.push(Arc::new(StripePortal {
                     http: ProviderHttp::new("https://api.stripe.com/v1/", secret)?,
                     return_url,
+                    events: events::EventConfig::from_env("STRIPE", "PRICE")?,
                     configuration: std::env::var("STRIPE_PORTAL_CONFIGURATION_ID")
                         .ok()
                         .filter(|s| !s.is_empty()),
@@ -73,6 +87,7 @@ impl PaymentProviders {
                     _ => anyhow::bail!("Invalid Polar environment"),
                 };
                 providers.push(Arc::new(PolarPortal {
+                    events: events::EventConfig::from_env("POLAR", "PRODUCT")?,
                     http: ProviderHttp::new(origin, secret)?,
                 }));
             }
@@ -147,6 +162,7 @@ impl ProviderHttp {
     }
 }
 struct StripePortal {
+    events: Option<events::EventConfig>,
     http: ProviderHttp,
     return_url: String,
     configuration: Option<String>,
@@ -155,6 +171,29 @@ struct StripePortal {
 impl PortalProvider for StripePortal {
     fn provider_id(&self) -> &'static str {
         "stripe"
+    }
+    fn verify_event(
+        &self,
+        headers: &axum::http::HeaderMap,
+        body: &[u8],
+        now: i64,
+    ) -> Result<Option<PaymentEvent>, ApiError> {
+        self.events
+            .as_ref()
+            .ok_or_else(unavailable)?
+            .stripe_event(headers, body, now)
+    }
+    async fn subscription(&self, id: &str) -> Result<Subscription, ApiError> {
+        let value = ProviderHttp::json(
+            self.http
+                .request(reqwest::Method::GET, &["subscriptions", id])?
+                .query(&[("expand[]", "customer")]),
+        )
+        .await?;
+        self.events
+            .as_ref()
+            .ok_or_else(unavailable)?
+            .stripe_subscription(id, &value)
     }
     async fn portal(&self, owner: &str, customer: Option<&str>) -> Result<String, ApiError> {
         let id = customer.filter(|s| !s.is_empty()).ok_or_else(unavailable)?;
@@ -188,12 +227,35 @@ impl PortalProvider for StripePortal {
     }
 }
 struct PolarPortal {
+    events: Option<events::EventConfig>,
     http: ProviderHttp,
 }
 #[async_trait]
 impl PortalProvider for PolarPortal {
     fn provider_id(&self) -> &'static str {
         "polar"
+    }
+    fn verify_event(
+        &self,
+        headers: &axum::http::HeaderMap,
+        body: &[u8],
+        now: i64,
+    ) -> Result<Option<PaymentEvent>, ApiError> {
+        self.events
+            .as_ref()
+            .ok_or_else(unavailable)?
+            .polar_event(headers, body, now)
+    }
+    async fn subscription(&self, id: &str) -> Result<Subscription, ApiError> {
+        let value = ProviderHttp::json(
+            self.http
+                .request(reqwest::Method::GET, &["subscriptions", id])?,
+        )
+        .await?;
+        self.events
+            .as_ref()
+            .ok_or_else(unavailable)?
+            .polar_subscription(id, &value)
     }
     async fn portal(&self, owner: &str, _customer: Option<&str>) -> Result<String, ApiError> {
         let session = ProviderHttp::json(

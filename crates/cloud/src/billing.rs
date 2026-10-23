@@ -3,7 +3,7 @@ mod catalog;
 mod payments;
 use crate::error::ApiError;
 pub use catalog::BillingControl;
-pub use payments::{PaymentProviders, PortalProvider};
+pub use payments::{PaymentEvent, PaymentProviders, PortalProvider, Subscription};
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 

@@ -68,6 +68,14 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/v1/cloud/context", get(context))
         .route("/v1/billing/entitlements", get(entitlements))
         .route("/v1/billing/portal", post(billing_portal))
+        .route(
+            "/v1/billing/webhook",
+            post(billing_webhook).layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route(
+            "/v1/billing/webhook/{provider}",
+            post(billing_webhook_provider).layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
         .route("/v1/cloud/billing/summary", get(billing_summary))
         .route("/v1/cloud/billing/usage", get(billing_usage))
         .route(
@@ -1056,5 +1064,36 @@ async fn billing_portal(
     let access = state.access(&headers, AccessKind::Billing).await?;
     Ok(Json(
         json!({"portalUrl":state.store.billing_portal(&access.owner_id).await?}),
+    ))
+}
+
+async fn billing_webhook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        state
+            .store
+            .billing_webhook(None, &headers, &body, chrono::Utc::now().timestamp_millis())
+            .await?,
+    ))
+}
+async fn billing_webhook_provider(
+    State(state): State<AppState>,
+    Path(provider): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        state
+            .store
+            .billing_webhook(
+                Some(&provider),
+                &headers,
+                &body,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
     ))
 }

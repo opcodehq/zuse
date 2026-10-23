@@ -40,6 +40,7 @@ async fn stripe_portal_verifies_original_customer_before_any_session() {
     let origin = format!("http://{}/v1/", listener.local_addr().unwrap());
     let task = tokio::spawn(axum::serve(listener, app).into_future());
     let stripe = StripePortal {
+        events: None,
         http: ProviderHttp {
             client: Client::new(),
             origin: Url::parse(&origin).unwrap(),
@@ -84,6 +85,7 @@ async fn polar_portal_uses_original_external_owner_and_rejects_unsafe_links() {
         .into_future(),
     );
     let polar = PolarPortal {
+        events: None,
         http: ProviderHttp {
             client: Client::new(),
             origin: Url::parse(&origin).unwrap(),

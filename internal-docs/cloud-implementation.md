@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar billing portals and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout/subscription writes, settlement/export, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar billing portals, signed cloud subscription lifecycle processing and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout/persistent subscription writes, settlement/export, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -1590,3 +1590,66 @@ Receipts: `.context/cloud-portal-native-acceptance.json`,
 `.context/cloud-portal-browser-acceptance.json` and `.context/cloud-portal-ui-api.log`.
 Native/browser builds and the mutation retry-classification test pass. Screenshots:
 `.context/cloud-portal-native.png` and `.context/cloud-portal-browser.png`.
+
+### Signed cloud subscription lifecycle events
+
+Rust now serves the original `/v1/billing/webhook` and provider-specific
+`/v1/billing/webhook/{provider}` contracts. Stripe signs the exact raw request body
+and timestamp; Polar binds the delivery ID, timestamp and raw body. Verification
+rejects stale/future signatures, accepts rotated v1 signatures and preserves the
+reference Polar literal-secret format alongside Standard Webhooks encoded keys.
+Raw delivery bodies and reusable keys are never stored in event receipts.
+
+Signed payloads only identify the subscription. The adapter fetches current
+provider state before changing entitlements. Stripe requires one recognized base
+price, matching customer/account metadata and the original local customer link.
+Polar uses its original customer external identity and product mapping. Unlinked
+subscriptions remain deferred without consuming the event. Unknown events are
+ignored without starting workspace compute.
+
+Subscription delivery serializes before the canonical fetch. Account writes hold
+the independent Rust billing ownership marker, and period renewal shares an
+account lock with spend-cap updates. Entitlement changes, event deduplication and
+period changes commit together. Existing entitlement IDs/creation times, provider
+subscription IDs, period IDs, negotiated price/markup, caps and settled ledger
+charges remain intact. New entitlements and periods use the reference deterministic
+IDs and policy. Renewal carries the previous cap. Pending/past-due subscriptions
+put billing on hold; an ended subscription retains its paid window and only ends
+billing when that window has elapsed. A competing provider or subscription cannot
+replace an existing period's owner.
+
+Persistent-machine subscription events return a retryable unavailable response
+without recording successful processing: their machine provisioning/recovery
+workflow is still pending. Prepaid event processing, financial settlement, metered
+exports and checkout remain open. This change does not activate production writes,
+transfer webhook ownership or replace original-account/live-provider acceptance.
+
+Verification uses an isolated PostgreSQL schema, the actual Axum routes and real
+Stripe/Polar HTTP adapters against a local provider server. Signed API delivery
+covers redelivery/concurrency, current-state reconciliation of delayed events,
+renewal, payment failure, cancellation before/after paid-through, legacy Polar
+subscriptions, wrong customer/account metadata, ownership fencing, deferred
+unlinked subscriptions and atomic rollback on period-owner conflict. The provider
+fixture exposes only subscription GETs; no charge or customer-creation operations
+occur. Financial ledger totals and existing pricing/caps/identities are checked
+after processing. Receipt: `.context/cloud-events-acceptance.log`.
+
+The verifier follows [Stripe's signing implementation](https://github.com/stripe/stripe-node/blob/master/src/Webhooks.ts)
+and the [reference Polar SDK verifier](https://github.com/polarsource/polar-js/blob/main/src/webhooks.ts).
+No new UI is introduced by this backend workflow.
+
+Webhook configuration uses the original `STRIPE_WEBHOOK_SECRET`,
+`STRIPE_PRICE_CLOUD_WORKSPACE_STANDARD_V1`, `STRIPE_PRICE_PERSISTENT_STANDARD_V1`,
+`POLAR_WEBHOOK_SECRET`, `POLAR_PRODUCT_CLOUD_WORKSPACE_STANDARD_V1` and
+`POLAR_PRODUCT_PERSISTENT_STANDARD_V1` variables. The deprecated
+`POLAR_PRODUCT_SANDBOX_STANDARD_V1` cloud-product fallback remains supported.
+A configured webhook requires at least one offer mapping; duplicate product/price
+mappings fail configuration. The billing allowlist and explicit ownership marker
+remain required for processing an account's events.
+
+Final focused verification: six billing library checks pass, including the signed
+HTTP/provider/PostgreSQL lifecycle workflow. Three existing integration checks pass
+for portal ownership, usage/cap administration and billed workspace creation.
+Receipts: `.context/cloud-events-acceptance.log`,
+`.context/cloud-events-billing-regression.log`; API application checking passes in
+`.context/cloud-events-api-check.log`.
