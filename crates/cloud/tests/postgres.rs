@@ -114,6 +114,10 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(zuse_cloud::runtime::lifecycle::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
     (admin, pool, schema)
 }
 
@@ -3375,6 +3379,417 @@ for line in sys.stdin:
         assert_eq!(runtime_post_for_url(&url,credential,&json!({"phase":"agent-started","launchCommandId":"unrelated-command","sessionHeadVersion":0})).await.0,409);
         sqlx::query("UPDATE api_cloud_workspaces SET state='archived',desired_state='archived' WHERE workspace_id='ws-bob'").execute(&api.pool).await.unwrap();
         assert_eq!(runtime_post_for_url(&url,credential,&json!({"phase":"agent-started","launchCommandId":"original-launch","sessionHeadVersion":0})).await.0,401);
+        api.finish().await;
+    }
+    struct RetainedFixture {
+        state: std::sync::Mutex<zuse_cloud::providers::MachineState>,
+        pauses: AtomicUsize,
+        wakes: AtomicUsize,
+        launches: AtomicUsize,
+        fail_pause: std::sync::atomic::AtomicBool,
+    }
+    #[async_trait]
+    impl zuse_cloud::runtime::lifecycle::RetainedProvider for RetainedFixture {
+        async fn inspect_retained(
+            &self,
+            id: &str,
+        ) -> Result<Option<zuse_cloud::providers::Machine>, zuse_cloud::providers::ProviderError>
+        {
+            assert_eq!(id, "machine-bob");
+            Ok(Some(zuse_cloud::providers::Machine {
+                id: id.into(),
+                name: "original-machine".into(),
+                state: self.state.lock().unwrap().clone(),
+                vcpu: None,
+                memory_bytes: None,
+            }))
+        }
+        async fn pause_retained(
+            &self,
+            id: &str,
+        ) -> Result<(), zuse_cloud::providers::ProviderError> {
+            assert_eq!(id, "machine-bob");
+            self.pauses.fetch_add(1, Ordering::SeqCst);
+            if self.fail_pause.load(Ordering::SeqCst) {
+                return Err(zuse_cloud::providers::ProviderError::Unavailable);
+            }
+            *self.state.lock().unwrap() = zuse_cloud::providers::MachineState::Paused;
+            Ok(())
+        }
+        async fn wake_retained(
+            &self,
+            id: &str,
+            _: &zuse_cloud::providers::MachineState,
+        ) -> Result<(), zuse_cloud::providers::ProviderError> {
+            assert_eq!(id, "machine-bob");
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+            *self.state.lock().unwrap() = zuse_cloud::providers::MachineState::Running;
+            Ok(())
+        }
+        async fn launch_retained(
+            &self,
+            d: &zuse_protocol::cloud_lifecycle::Directive,
+            workspace: &str,
+            _: &str,
+        ) -> Result<(), zuse_cloud::providers::ProviderError> {
+            assert_eq!(d.source_machine_id, "machine-bob");
+            assert_eq!(d.storage_incarnation_id, "packaged-storage");
+            assert_eq!(workspace, "ws-bob");
+            assert_eq!(d.generation, 2);
+            self.launches.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    #[ignore = "requires isolated localhost PostgreSQL and built guest"]
+    async fn rust_cloud_archive_quiesces_retains_and_lazily_resumes_original_machine() {
+        use zuse_cloud::providers::MachineState;
+        let api = GuestApi::start_options(true, true, false).await;
+        sqlx::raw_sql(include_str!("fixtures/creation.sql"))
+            .execute(&api.pool)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query("INSERT INTO api_cloud_billing_periods(period_id,account_id,status,period_start,period_end,included_provider_cost_micros,markup_basis_points,overage_cap_micros) VALUES('retained-period','user-bob','active',$1,$2,1000,500,500)").bind(now-1000).bind(now+86_400_000).execute(&api.pool).await.unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("runtime");
+        let checkout = temp.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        std::fs::write(checkout.join(".env"), "RETAINED_USER_FILE=yes").unwrap();
+        std::fs::write(checkout.join("dirty.txt"), "original changes").unwrap();
+        let boot = temp.path().join("boot");
+        std::fs::write(&boot, "packaged-guest-boot").unwrap();
+        let log = temp.path().join("guest.log");
+        let mut child = guest_command(&api, &data, &checkout, Some(&boot), &log)
+            .spawn()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(20),async {
+            loop {
+                if let Some(status)=child.try_wait().unwrap(){panic!("Guest failed {status}: {}",std::fs::read_to_string(&log).unwrap());}
+                let complete:bool=sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM api_cloud_workspace_launch_intents WHERE workspace_id='ws-bob')").fetch_one(&api.pool).await.unwrap();
+                if complete {break;}tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.unwrap();
+        let already_ready = runtime_post_for_url(
+            &format!("{}/v1/cloud/workspaces/ws-bob/resume", api.origin),
+            "bob",
+            &json!({"workspaceId":"ws-bob","commandId":"already-online","recoverRuntime":false}),
+        )
+        .await;
+        assert_eq!(already_ready.0, 200, "{}", already_ready.1);
+        let client = api.client().await;
+        let mut transcript = client
+            .client
+            .subscribe(
+                zuse_rpc::methods::WATCH_DOC_MESSAGES,
+                json!({"chatId":"session-bob"}),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if transcript
+                    .recv()
+                    .await
+                    .unwrap()
+                    .to_string()
+                    .contains("Cloud runtime fixture reply")
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        drop(transcript);
+        let terminal = client
+            .client
+            .call(
+                zuse_rpc::methods::OPEN_TERMINAL,
+                json!({"chatId":"session-bob","cols":80,"rows":24}),
+            )
+            .await
+            .unwrap();
+        let pid_file = checkout.join("terminal.pid");
+        client.client.call(zuse_rpc::methods::WRITE_TERMINAL,json!({"terminalId":terminal["id"],"data":format!("echo $$ > '{}'; exec sleep 300\n",pid_file.display())})).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !pid_file.exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let terminal_pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let endpoint = format!("{}/v1/cloud/workspaces/ws-bob/archive", api.origin);
+        let body = json!({"workspaceId":"ws-bob","commandId":"archive-once"});
+        assert_eq!(runtime_post_for_url(&endpoint, "alice", &body).await.0, 404);
+        sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustStorageEnrollment,capabilities}',$1) WHERE workspace_id='ws-bob'").bind(json!(["rust-rpc-v1","rust-session-commands-v1"])).execute(&api.pool).await.unwrap();
+        assert_eq!(runtime_post_for_url(&endpoint, "bob", &body).await.0, 409);
+        sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustStorageEnrollment,capabilities}',$1) WHERE workspace_id='ws-bob'").bind(json!(["rust-rpc-v1","rust-session-commands-v1","rust-workspace-lifecycle-v1"])).execute(&api.pool).await.unwrap();
+        let (status, archiving) = runtime_post_for_url(&endpoint, "bob", &body).await;
+        assert_eq!(status, 200, "{archiving}");
+        assert_eq!(archiving["state"], "archiving");
+        let archive_at = chrono::Utc::now().timestamp_millis();
+        let provider = RetainedFixture {
+            state: std::sync::Mutex::new(MachineState::Running),
+            pauses: AtomicUsize::new(0),
+            wakes: AtomicUsize::new(0),
+            launches: AtomicUsize::new(0),
+            fail_pause: std::sync::atomic::AtomicBool::new(false),
+        };
+        // No guest receipt yet: an early worker must leave the provider alone.
+        api.control
+            .lifecycle_once(&provider, archive_at)
+            .await
+            .unwrap();
+        assert_eq!(provider.pauses.load(Ordering::SeqCst), 0);
+        let status = tokio::time::timeout(Duration::from_secs(20), child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            status.success(),
+            "{}",
+            std::fs::read_to_string(&log).unwrap()
+        );
+        client.closed.cancel();
+        drop(client);
+        assert_eq!(
+            unsafe { libc::kill(terminal_pid, 0) },
+            -1,
+            "The checkout terminal must stop before quiescence is acknowledged"
+        );
+        let original: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+        )
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            original["request_config"]["rustLifecycleOperation"]["phase"],
+            "quiesced"
+        );
+        assert_eq!(
+            original["archive_delete_at"].as_i64().unwrap()
+                - original["archive_requested_at"].as_i64().unwrap(),
+            zuse_protocol::cloud::ARCHIVE_RETENTION_MS
+        );
+        let retry = runtime_post_for_url(&endpoint, "bob", &body).await;
+        assert_eq!(retry.0, 200);
+        assert_eq!(
+            runtime_post_for_url(
+                &format!("{}/v1/cloud/workspaces/ws-bob/pause", api.origin),
+                "bob",
+                &body
+            )
+            .await
+            .0,
+            409
+        );
+        // Provider failure is visible and leaves the original machine recoverable.
+        provider.fail_pause.store(true, Ordering::SeqCst);
+        sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE kind='workspace-lifecycle'")
+            .execute(&api.pool)
+            .await
+            .unwrap();
+        assert!(
+            api.control
+                .lifecycle_once(&provider, chrono::Utc::now().timestamp_millis())
+                .await
+                .is_err()
+        );
+        let state: String = sqlx::query_scalar(
+            "SELECT state FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
+        )
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        assert_eq!(state, "archiving");
+        provider.fail_pause.store(false, Ordering::SeqCst);
+        sqlx::query("UPDATE zuse_rust_jobs SET state='failed',attempts=max_attempts WHERE kind='workspace-lifecycle'").execute(&api.pool).await.unwrap();
+        assert_eq!(runtime_post_for_url(&endpoint, "bob", &body).await.0, 200);
+        let attempts: i32 = sqlx::query_scalar(
+            "SELECT attempts FROM zuse_rust_jobs WHERE kind='workspace-lifecycle'",
+        )
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        assert_eq!(attempts, 0);
+        for _ in 0..2 {
+            sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE kind='workspace-lifecycle'")
+                .execute(&api.pool)
+                .await
+                .unwrap();
+            api.control
+                .lifecycle_once(&provider, chrono::Utc::now().timestamp_millis())
+                .await
+                .unwrap();
+        }
+        let archived: Value = reqwest::Client::new()
+            .get(format!(
+                "{}/v1/cloud/workspaces/ws-bob/archive-status",
+                api.origin
+            ))
+            .bearer_auth("bob")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(archived["archived"], true);
+        assert_eq!(archived["machineRetained"], true);
+        assert_eq!(archived["backupVerified"], false);
+        assert_eq!(archived["lifecyclePhase"], "paused");
+        assert!(archived["operationId"].is_string());
+        // Expiry is not a retirement authorization, and reading does not schedule a wake.
+        assert!(
+            !api.control
+                .lifecycle_once(
+                    &provider,
+                    archive_at + zuse_protocol::cloud::ARCHIVE_RETENTION_MS + 1
+                )
+                .await
+                .unwrap()
+        );
+        let counts = (
+            provider.wakes.load(Ordering::SeqCst),
+            provider.launches.load(Ordering::SeqCst),
+        );
+        assert_eq!(counts, (0, 0));
+        let (status, paused) = runtime_post_for_url(
+            &format!("{}/v1/cloud/workspaces/ws-bob/unarchive", api.origin),
+            "bob",
+            &json!({"workspaceId":"ws-bob","commandId":"unarchive-once"}),
+        )
+        .await;
+        assert_eq!(status, 200, "{paused}");
+        assert_eq!(paused["state"], "paused");
+        assert_eq!(paused["desiredState"], "paused");
+        assert_eq!(provider.wakes.load(Ordering::SeqCst), 0);
+        // Re-archive asleep starts a new ten-day window without launching anything.
+        let (status, _) = runtime_post_for_url(
+            &endpoint,
+            "bob",
+            &json!({"workspaceId":"ws-bob","commandId":"archive-again"}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let deadline: i64 = sqlx::query_scalar(
+            "SELECT archive_delete_at FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
+        )
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        assert!(deadline > original["archive_delete_at"].as_i64().unwrap());
+        runtime_post_for_url(
+            &format!("{}/v1/cloud/workspaces/ws-bob/unarchive", api.origin),
+            "bob",
+            &json!({"workspaceId":"ws-bob","commandId":"unarchive-again"}),
+        )
+        .await;
+        sqlx::query("UPDATE api_cloud_billing_periods SET status='billing-hold'")
+            .execute(&api.pool)
+            .await
+            .unwrap();
+        let resume = format!("{}/v1/cloud/workspaces/ws-bob/resume", api.origin);
+        let resume_body = json!({"workspaceId":"ws-bob","commandId":"resume-once"});
+        assert_eq!(
+            runtime_post_for_url(&resume, "bob", &resume_body).await.0,
+            403
+        );
+        assert_eq!(provider.wakes.load(Ordering::SeqCst), 0);
+        sqlx::query("UPDATE api_cloud_billing_periods SET status='active'")
+            .execute(&api.pool)
+            .await
+            .unwrap();
+        let resumed = runtime_post_for_url(&resume, "bob", &resume_body).await;
+        assert_eq!(resumed.0, 200, "{}", resumed.1);
+        for _ in 0..2 {
+            sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE kind='workspace-lifecycle'")
+                .execute(&api.pool)
+                .await
+                .unwrap();
+            api.control
+                .lifecycle_once(&provider, chrono::Utc::now().timestamp_millis())
+                .await
+                .unwrap();
+        }
+        assert_eq!(provider.wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.launches.load(Ordering::SeqCst), 1);
+        let mut resumed = guest_command(&api, &data, &checkout, None, &log)
+            .spawn()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(20),async {loop {
+            if let Some(status)=resumed.try_wait().unwrap(){panic!("Resume failed {status}: {}",std::fs::read_to_string(&log).unwrap());}
+            let ready:bool=sqlx::query_scalar("SELECT state='ready' AND request_config->'rustLifecycleOperation'->>'phase'='ready' FROM api_cloud_workspaces WHERE workspace_id='ws-bob'").fetch_one(&api.pool).await.unwrap();if ready {break;}tokio::time::sleep(Duration::from_millis(25)).await;
+        }}).await.unwrap();
+        let client = api.client().await;
+        let mut messages = client
+            .client
+            .subscribe(
+                zuse_rpc::methods::WATCH_DOC_MESSAGES,
+                json!({"chatId":"session-bob"}),
+            )
+            .await
+            .unwrap();
+        let history = tokio::time::timeout(Duration::from_secs(5), messages.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(history.to_string().contains("Original guest prompt"));
+        assert!(history.to_string().contains("Cloud runtime fixture reply"));
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("dirty.txt")).unwrap(),
+            "original changes"
+        );
+        assert_eq!(
+            std::fs::read_to_string(checkout.join(".env")).unwrap(),
+            "RETAINED_USER_FILE=yes"
+        );
+        let final_row: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+        )
+        .fetch_one(&api.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            final_row["provider_sandbox_id"],
+            original["provider_sandbox_id"]
+        );
+        assert_eq!(
+            final_row["wrapped_transcript_key"],
+            original["wrapped_transcript_key"]
+        );
+        assert_eq!(final_row["chat_id"], original["chat_id"]);
+        assert_eq!(
+            final_row["request_config"]["runtimeCredentialKeyThumbprint"],
+            original["request_config"]["runtimeCredentialKeyThumbprint"]
+        );
+        client.client.call(zuse_rpc::methods::RELAY_COMMAND,json!({"chatId":"session-bob","entry":{"id":"continue-after-archive","issuedBy":"cloud-ui","issuedAt":chrono::Utc::now().timestamp_millis(),"status":"pending","payload":{"kind":"run","messageId":"archive-continued-message","request":{"prompt":"Continue the original conversation after archive","harness":"mock","model":"fixture","cwd":checkout,"sandbox":"workspace-write","autoApprove":false}}}})).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if messages
+                    .recv()
+                    .await
+                    .unwrap()
+                    .to_string()
+                    .contains("Continue the original conversation after archive")
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        drop(messages);
+        client.closed.cancel();
+        drop(client);
+        stop_guest(&mut resumed).await;
         api.finish().await;
     }
 }

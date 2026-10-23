@@ -20,6 +20,7 @@ use subtle::ConstantTimeEq;
 pub mod allocation;
 pub mod creation;
 pub mod grants;
+pub mod lifecycle;
 pub mod mailbox;
 
 pub struct RuntimeConfig {
@@ -149,7 +150,7 @@ impl RuntimeControl {
         }
     }
     pub async fn ready(&self) -> Result<(), ApiError> {
-        let ready: bool = sqlx::query_scalar("SELECT to_regclass('zuse_rust_control_owners') IS NOT NULL AND to_regclass('api_cloud_workspace_launch_intents') IS NOT NULL AND to_regclass('zuse_rust_gateway_leases') IS NOT NULL AND to_regclass('zuse_rust_mailbox_commands') IS NOT NULL")
+        let ready: bool = sqlx::query_scalar("SELECT to_regclass('zuse_rust_control_owners') IS NOT NULL AND to_regclass('api_cloud_workspace_launch_intents') IS NOT NULL AND to_regclass('zuse_rust_gateway_leases') IS NOT NULL AND to_regclass('zuse_rust_mailbox_commands') IS NOT NULL AND to_regclass('zuse_rust_lifecycle_operations') IS NOT NULL")
             .fetch_one(&self.pool).await?;
         if !ready {
             return Err(ApiError::unavailable("cloud_runtime_schema_not_ready"));
@@ -406,10 +407,13 @@ impl RuntimeControl {
     ) -> Result<Value, ApiError> {
         use zuse_protocol::cloud::CloudStoragePhase;
         if request.capabilities.as_ref().is_some_and(|caps| {
-            caps.len() > 2
-                || caps
-                    .iter()
-                    .any(|cap| !matches!(cap.as_str(), "rust-rpc-v1" | "rust-session-commands-v1"))
+            caps.len() > 3
+                || caps.iter().any(|cap| {
+                    !matches!(
+                        cap.as_str(),
+                        "rust-rpc-v1" | "rust-session-commands-v1" | "rust-workspace-lifecycle-v1"
+                    )
+                })
         }) {
             return Err(ApiError::bad_request("invalid_runtime_capabilities"));
         }
@@ -616,7 +620,7 @@ impl RuntimeControl {
             return Err(ApiError::conflict("workspace_rpc_protocol_mismatch"));
         }
         let permission = access.workspace_permission(&access.owner_id, &row["request_config"])?;
-        if blocked(&row) || row["desired_state"] == "archived" || row["state"] == "failed" {
+        if blocked(&row) || row["desired_state"] != "ready" || row["state"] == "failed" {
             return Err(ApiError::conflict("cloud_workspace_unavailable"));
         }
         // Organization execution requires the runtime access callback, ported separately.
@@ -639,7 +643,7 @@ impl RuntimeControl {
     ) -> Result<crate::gateway::Grant, ApiError> {
         let mut tx = self.pool.begin().await?;
         let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
-        if blocked(&row) || row["desired_state"] == "archived" {
+        if blocked(&row) || row["desired_state"] != "ready" {
             return Err(ApiError::unauthorized("workspace_gateway_rejected"));
         }
         let owner = required(&row, "account_id")?;
@@ -722,7 +726,7 @@ impl RuntimeControl {
     ) -> Result<(), ApiError> {
         let mut tx = self.pool.begin().await?;
         let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
-        if blocked(&row) || row["desired_state"] == "archived" || (generation, epoch) != fence {
+        if blocked(&row) || row["desired_state"] != "ready" || (generation, epoch) != fence {
             return Err(ApiError::unauthorized("workspace_runtime_fenced"));
         }
         let leased:Option<String>=sqlx::query_scalar("INSERT INTO zuse_rust_gateway_leases (workspace_id,owner_token,expires_at) VALUES ($1,$2,(extract(epoch from clock_timestamp())*1000)::bigint+10000) ON CONFLICT (workspace_id) DO UPDATE SET owner_token=EXCLUDED.owner_token,expires_at=EXCLUDED.expires_at WHERE zuse_rust_gateway_leases.expires_at<=(extract(epoch from clock_timestamp())*1000)::bigint OR zuse_rust_gateway_leases.owner_token=$2 RETURNING owner_token")
@@ -759,7 +763,7 @@ impl RuntimeControl {
         }
         let mut tx = self.pool.begin().await?;
         let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
-        if !enrollment_matches(&row) || blocked(&row) || row["desired_state"] == "archived" {
+        if !enrollment_matches(&row) || blocked(&row) || row["desired_state"] != "ready" {
             return Err(ApiError::unauthorized("workspace_runtime_revoked"));
         }
         let mut config = row["request_config"].clone();

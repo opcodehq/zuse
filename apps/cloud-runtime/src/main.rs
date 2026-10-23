@@ -230,6 +230,20 @@ async fn run() -> Result<()> {
             let key = identity.open_transcript_key(&bootstrap.sealed_transcript_key)?;
             zuse_cloud_runtime::mailbox::CommandKey::parse(&key)?
         };
+        let resume = if bootstrap.launch_intent.is_none() {
+            let directive = authority
+                .lifecycle(
+                    &bootstrap,
+                    zuse_protocol::cloud_lifecycle::RuntimeRequest::Query,
+                )
+                .await?;
+            if let Some(d) = &directive {
+                zuse_cloud_runtime::lifecycle::activate(&core, &bootstrap, d)?;
+            }
+            directive
+        } else {
+            None
+        };
         adopt(
             &core,
             &bootstrap,
@@ -270,6 +284,16 @@ async fn run() -> Result<()> {
                     Err(error) => return Err(error),
                 }
             }
+        }
+        if let Some(d) = resume {
+            authority
+                .lifecycle(
+                    &bootstrap,
+                    zuse_protocol::cloud_lifecycle::RuntimeRequest::Resumed {
+                        operation_id: d.operation_id,
+                    },
+                )
+                .await?;
         }
         tracing::info!("Cloud runtime enrolled; serving workspace gateway");
         credentials.send_replace(
@@ -312,7 +336,30 @@ async fn run() -> Result<()> {
     }
     .await;
     cancel.cancel();
+    let current = identity.bootstrap().cloned().unwrap_or(bootstrap);
+    let shutdown = match authority
+        .lifecycle(
+            &current,
+            zuse_protocol::cloud_lifecycle::RuntimeRequest::Query,
+        )
+        .await
+    {
+        Ok(Some(d))
+            if matches!(
+                d.action,
+                zuse_protocol::cloud_lifecycle::Action::Pause
+                    | zuse_protocol::cloud_lifecycle::Action::Archive
+            ) && d.phase == "quiescing" =>
+        {
+            Some(zuse_cloud_runtime::lifecycle::hold(&core, &current, d))
+        }
+        _ => None,
+    };
     core.shutdown().await;
+    if let Some(shutdown) = shutdown {
+        shutdown?.acknowledge(&core, &authority, &current).await?;
+        return Ok(());
+    }
     result
 }
 async fn adopt(

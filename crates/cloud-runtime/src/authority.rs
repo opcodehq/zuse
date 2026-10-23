@@ -48,6 +48,34 @@ impl Authority {
             origin: parsed,
         })
     }
+    pub async fn lifecycle(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+        request: zuse_protocol::cloud_lifecycle::RuntimeRequest,
+    ) -> Result<Option<zuse_protocol::cloud_lifecycle::Directive>> {
+        let response = self
+            .post(
+                &bootstrap.workspace_id,
+                &["runtime", "lifecycle"],
+                &bootstrap.runtime_credential,
+                &serde_json::to_value(request)?,
+            )
+            .await?;
+        let directive: Option<zuse_protocol::cloud_lifecycle::Directive> =
+            serde_json::from_value(response["directive"].clone())?;
+        if let Some(d) = &directive {
+            ensure!(
+                d.generation == bootstrap.runtime_generation
+                    && Some(d.storage_incarnation_id.as_str())
+                        == bootstrap
+                            .runtime_storage
+                            .as_ref()
+                            .map(|v| v.storage_incarnation_id.as_str()),
+                "runtime_lifecycle_identity_mismatch"
+            );
+        }
+        Ok(directive)
+    }
     pub fn origin(&self) -> String {
         self.origin.origin().ascii_serialization()
     }
@@ -273,8 +301,13 @@ impl Authority {
                 .storage_incarnation_id
                 .clone(),
             enrollment_id: enrollment.map(str::to_owned),
-            capabilities: enrollment
-                .map(|_| vec!["rust-rpc-v1".into(), "rust-session-commands-v1".into()]),
+            capabilities: enrollment.map(|_| {
+                vec![
+                    "rust-rpc-v1".into(),
+                    "rust-session-commands-v1".into(),
+                    zuse_protocol::cloud_lifecycle::CAPABILITY.into(),
+                ]
+            }),
         };
         let response = self
             .post(

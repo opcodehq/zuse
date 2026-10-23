@@ -83,6 +83,26 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
     if state.runtime.is_some() {
         app = app
             .route(
+                "/v1/cloud/workspaces/{id}/pause",
+                post(workspace_pause).layer(DefaultBodyLimit::max(4096)),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/archive",
+                post(workspace_archive).layer(DefaultBodyLimit::max(4096)),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/unarchive",
+                post(workspace_unarchive).layer(DefaultBodyLimit::max(4096)),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/resume",
+                post(workspace_resume).layer(DefaultBodyLimit::max(4096)),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/runtime/lifecycle",
+                post(runtime_lifecycle).layer(DefaultBodyLimit::max(4096)),
+            )
+            .route(
                 "/v1/cloud/workspaces/{id}/runtime/providers/{provider}/grant",
                 post(provider_grant).layer(DefaultBodyLimit::max(24 * 1024)),
             )
@@ -693,6 +713,89 @@ async fn provider_grant(
                 credential,
                 provider,
                 body,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
+}
+
+async fn workspace_action(
+    state: AppState,
+    headers: HeaderMap,
+    request: zuse_protocol::cloud_lifecycle::ActionRequest,
+    action: zuse_protocol::cloud_lifecycle::Action,
+) -> Result<Response, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    state
+        .store
+        .workspace(&access, &request.workspace_id)
+        .await?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    let workspace = runtime
+        .lifecycle_action(
+            &request.workspace_id,
+            &access,
+            action,
+            request.command_id.as_deref(),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
+    let mut response = Json(workspace).into_response();
+    response.headers_mut().insert(
+        "x-zuse-reconcile-cloud-workspace",
+        HeaderValue::from_str(&request.workspace_id)
+            .map_err(|_| ApiError::bad_request("invalid_workspace_id"))?,
+    );
+    Ok(response)
+}
+macro_rules! lifecycle_action_route {
+    ($name:ident, $action:ident) => {
+        async fn $name(
+            State(state): State<AppState>,
+            Path(id): Path<String>,
+            headers: HeaderMap,
+            body: Result<Json<zuse_protocol::cloud_lifecycle::ActionRequest>, JsonRejection>,
+        ) -> Result<Response, ApiError> {
+            let Json(request) =
+                body.map_err(|_| ApiError::bad_request("invalid_cloud_workspace_action"))?;
+            if id != request.workspace_id {
+                return Err(ApiError::bad_request("workspace_id_mismatch"));
+            }
+            workspace_action(
+                state,
+                headers,
+                request,
+                zuse_protocol::cloud_lifecycle::Action::$action,
+            )
+            .await
+        }
+    };
+}
+lifecycle_action_route!(workspace_pause, Pause);
+lifecycle_action_route!(workspace_archive, Archive);
+lifecycle_action_route!(workspace_unarchive, Unarchive);
+lifecycle_action_route!(workspace_resume, Resume);
+async fn runtime_lifecycle(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_lifecycle::RuntimeRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(request) =
+        body.map_err(|_| ApiError::bad_request("invalid_runtime_lifecycle_request"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(
+        runtime
+            .lifecycle_runtime(
+                &id,
+                runtime_bearer(&headers)?,
+                request,
                 chrono::Utc::now().timestamp_millis(),
             )
             .await?,

@@ -28,7 +28,7 @@ enum Command {
         #[arg(long)]
         snapshot: String,
     },
-    /// Reconcile prepared-image allocations independently of API viewers.
+    /// Reconcile allocations and retained-machine lifecycle independently of API viewers.
     Worker {
         #[arg(long, default_value_t = false)]
         once: bool,
@@ -77,6 +77,12 @@ async fn main() -> Result<()> {
             loop {
                 if let Err(error) = runtime.allocate_once(&provider, now_ms()).await {
                     tracing::warn!(code = error.code, "Allocation stage deferred");
+                    if once {
+                        anyhow::bail!("{}", error.code);
+                    }
+                }
+                if let Err(error) = runtime.lifecycle_once(&provider, now_ms()).await {
+                    tracing::warn!(code = error.code, "Retained lifecycle stage deferred");
                     if once {
                         anyhow::bail!("{}", error.code);
                     }
@@ -159,5 +165,9 @@ async fn writable_runtime() -> Result<Arc<RuntimeControl>> {
             error.code
         )
     })?;
+    runtime
+        .lifecycle_ready()
+        .await
+        .map_err(|error| anyhow::anyhow!("{}; apply migration 0005_lifecycle.sql", error.code))?;
     Ok(runtime)
 }

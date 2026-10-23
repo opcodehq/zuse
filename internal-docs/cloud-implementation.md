@@ -11,10 +11,10 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
-| E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
+| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Cached archived transcript/files, backup/retirement/restore/delete and migration remain | Retained guest-process acceptance passed; live provider and recovery acceptance pending |
 | F: complete GPUI parity | Existing partial UI; complete reference comparison pending | Pending |
 | G: migration/cutover | Read-only inspection added; ownership handoff, guest conversion, archive migration and live cutover pending | Pending |
 
@@ -28,8 +28,9 @@ catalog reads and durable job primitives. Shared archive contracts live in
 
 The API defaults to **read-only**, including PostgreSQL session enforcement for
 catalog reads. Explicitly enabled runtime control uses a separate writable pool and
-requires a matching Rust workspace owner/generation in each transaction. It never
-wakes machines, transfers ownership, exports charges or reconciles checkouts.
+requires a matching Rust workspace owner/generation in each transaction. Catalog reads never
+wake machines. The explicitly configured worker allocates or resumes compute only
+for durable admitted intent. It does not transfer ownership or export charges.
 It serves only implemented routes:
 
 - `GET /healthz`, `GET /readyz`.
@@ -49,6 +50,8 @@ With `ZUSE_CLOUD_RUNTIME_WRITES=true`, these routes are additionally registered:
 - `POST /v1/cloud/workspaces/:id/runtime/providers/:provider/grant` (original
   account-authority ciphertext, including the Codex compatibility envelope).
 - `POST /v1/cloud/workspaces/:id/runtime/storage/enroll` (prepare/commit activation barrier).
+- `POST /v1/cloud/workspaces/:id/{pause,archive,unarchive,resume}` (original action body/public workspace response).
+- `POST /v1/cloud/workspaces/:id/runtime/lifecycle` (scoped directive and quiescence/resume receipts).
 - `POST /v1/cloud/workspaces/:id/ready` (`agent-started` receipt for Rust guests).
 - `POST /v1/cloud/workspaces/:id/gateway/ticket`.
 - `GET /v1/cloud/workspaces/:id/gateway` (authenticated WebSocket upgrade).
@@ -129,6 +132,9 @@ add only Rust coordination tables.
 They neither replace original `api_*` tables nor assign any resource to Rust.
 `0004_allocations.sql` additionally stores initial allocation intents, encrypted
 short-lived boot grants and provider receipts; it does not transfer ownership.
+`0005_lifecycle.sql` records retained-machine lifecycle operations with immutable
+source machine, runtime generation and storage incarnation. Runtime-control
+readiness requires this migration; startup still never applies migrations.
 Apply them explicitly to an isolated test database first. Jobs require a matching
 Rust owner and generation before claim; enqueue belongs to the same transaction as
 the eventual lifecycle intent. Reconcilers must additionally fence provider effects
@@ -744,3 +750,59 @@ checks). API/guest builds, scoped strict Clippy, Rust formatting and diff checks
 pass. The creation allowlist and authority delegation remain off by default.
 Complete billing, image preparation, archive/restore/delete, UI parity and live
 migration acceptance remain required by the milestone ledger.
+
+
+### Retained-machine archive and pause/resume
+
+`runtime/lifecycle.rs` implements the original action routes for Rust-owned personal
+Boxd workspaces with committed storage and an enrolled
+`rust-workspace-lifecycle-v1` capability. Admission records a durable operation,
+command identity and job in one transaction. Reusing a command for a different
+action conflicts. Source machine, runtime generation and storage incarnation are
+fixed; lifecycle never enters initial allocation or creates replacement compute.
+
+Pause/archive fence gateway attachment and renewal and stop mailbox leasing.
+The fenced guest persists held queues for the root thread and its child/tab
+conversations, marks archived family metadata, and retires the engine. Final
+fallible snapshots cover retained conversation handles and workspace registry
+before the authenticated quiescence receipt. The worker cannot pause compute
+before that receipt. The explicit worker polls provider state, pauses only the
+recorded machine and reports archived/paused only after the provider confirms
+paused or stopped. Provider failure retains the source and records a retryable
+error. Missing quiescence produces `cloud_runtime_quiesce_failed` and retains the
+machine; old runtimes are rejected before admission.
+
+Archive records a fresh ten-day retention deadline; re-archive while asleep starts
+a new window. Expiry has no destruction path. No recovery flag is enabled by this
+implementation. Unarchive clears the archive timestamps and returns Active with
+`state=paused, desiredState=paused`; it creates no provider job and never wakes
+compute. Explicit interactive Resume checks the existing entitlement and billing
+capacity before admission and again before provider effects. The worker wakes or
+starts the same source machine, launches with retained identity and no fresh boot
+token, and awaits the original family's validated guest receipt before declaring
+it online. Held queues require explicit user continuation.
+
+Archive status exposes the persisted operation ID and `lifecyclePhase` independently
+of recovery archive phase and verification counts. Retention never implies that an
+archive backup was verified or compute retired. Reads do not enqueue work.
+
+Remaining: encrypted cached archived transcript/file/diff projections; automatic
+interactive mailbox wake; stopped/uncertain command fencing during runtime
+replacement; durable quiescence-receipt replay across a guest crash; recovery
+capture and verification; retirement barrier, replacement-machine restore,
+permanent deletion, original-archive migration and usage settlement for retained
+resources. Live Boxd hibernate/wake/launcher acceptance remains external; this
+chunk does not claim those full archive deliverables or UI acceptance.
+
+
+Verified this chunk with 31 passing checks: seven cloud unit tests, sixteen
+isolated PostgreSQL/HTTP/WebSocket/native-guest scenarios and eight runtime
+unit/identity checks. The new archive scenario exercises a live PTY, capability
+rejection, account isolation, command replay/conflict, pause failure and explicit
+retry, ten-day expiry without retirement, asleep unarchive/re-archive, billing
+hold, same-machine resume, retained dirty/`.env` bytes, original keys and continued
+conversation history. Both service binaries build; strict scoped lint, formatting
+and shell syntax checks pass. A launcher smoke check confirms retained identity
+is required and no fresh boot token or administrative provider key reaches the
+guest. Live provider, recovery, browser and native desktop UI acceptance remain
+pending. No UI changed in this chunk, so no new screenshots are claimed.

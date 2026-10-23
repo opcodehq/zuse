@@ -23,3 +23,6 @@ pub mod engine;
 pub mod repository;
 
 pub mod grants;
+
+#[cfg(feature = "engine")]
+pub mod lifecycle;

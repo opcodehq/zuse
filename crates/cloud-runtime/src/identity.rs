@@ -248,6 +248,7 @@ impl Identity {
             capabilities: Some(vec![
                 "rust-rpc-v1".into(),
                 "rust-session-commands-v1".into(),
+                zuse_protocol::cloud_lifecycle::CAPABILITY.into(),
             ]),
             rpc_protocol: Some(zuse_protocol::cloud_gateway::RUST_RPC.into()),
         }

@@ -33,7 +33,14 @@ pub fn status(row: &Value) -> CloudArchiveStatus {
             row["archive_requested_at"].as_i64(),
             row["archive_delete_at"].as_i64(),
         ),
-        operation_id: valid.map(|a| a.id.clone()),
+        operation_id: valid.map(|a| a.id.clone()).or_else(|| {
+            config["rustLifecycleOperation"]["id"]
+                .as_str()
+                .map(str::to_owned)
+        }),
+        lifecycle_phase: config["rustLifecycleOperation"]["phase"]
+            .as_str()
+            .map(str::to_owned),
         phase: valid.map(|a| a.phase.clone()),
         verified_chunks: valid.map_or(0, |a| a.verified_chunks),
         total_chunks: valid

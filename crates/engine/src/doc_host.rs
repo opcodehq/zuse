@@ -1197,8 +1197,13 @@ impl DocHost {
     }
 
     /// Keep pre-archive queued rows held until an explicit send resumes them.
-    pub(crate) fn pause_chat_queue(&self, chat_id: &str) -> Result<(), EngineError> {
-        self.open(chat_id)?.set_queue_paused(true);
+    pub fn pause_chat_queue(&self, chat_id: &str) -> Result<(), EngineError> {
+        let handle = self.open(chat_id)?;
+        handle.queue_paused.store(true, Ordering::Release);
+        handle.doc.set_queue_paused(true)?;
+        handle
+            .queue_changes
+            .send_modify(|version| *version = version.wrapping_add(1));
         Ok(())
     }
 
@@ -6270,6 +6275,11 @@ impl DocHost {
         self.inner.store.save_snapshot(&handle.chat_id, &bytes)?;
         handle.snapshot_bytes.store(bytes.len(), Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Explicit fallible snapshot barrier for a retained handle after worker shutdown.
+    pub fn flush_chat_checked(&self, handle: &ChatDocHandle) -> Result<(), EngineError> {
+        self.persist_fork(handle)
     }
 
     /// Persist every open doc now (shutdown path; bypasses the debounce).

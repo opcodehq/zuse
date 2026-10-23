@@ -172,6 +172,8 @@ pub struct CloudArchiveStatus {
     pub operation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phase: Option<ArchivePhase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle_phase: Option<String>,
     pub verified_chunks: usize,
     pub total_chunks: usize,
     #[serde(skip_serializing_if = "Option::is_none")]

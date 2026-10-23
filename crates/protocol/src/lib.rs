@@ -72,3 +72,5 @@ pub mod plugin_setup;
 pub mod plugin_state;
 
 pub mod cloud_auth;
+
+pub mod cloud_lifecycle;
