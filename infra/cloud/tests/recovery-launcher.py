@@ -1,0 +1,73 @@
+"""Exercise the installed launcher contract without provider credentials or compute."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import time
+
+
+def wait_for(predicate):
+    deadline = time.monotonic() + 10
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("recovery launcher did not reach expected state")
+        time.sleep(0.05)
+
+
+with tempfile.TemporaryDirectory(prefix="zuse-recovery-launcher-") as directory:
+    root = Path(directory)
+    launcher = root / "launch-rust-recovery"
+    shutil.copyfile(Path(__file__).resolve().parents[1] / "launch-recovery.sh", launcher)
+    launcher.chmod(0o700)
+    helper = root / "helper"
+    helper.write_text('''#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == recover && "$ZUSE_ARCHIVE_CONFIG" == '{}' ]]
+[[ -z "${BOXD_API_KEY:-}" && -z "${CLOUD_DATA_ENCRYPTION_KEY:-}" ]]
+echo invoked >>"$TEST_ROOT/invocations"
+if [[ "${TEST_LONG:-}" == yes ]]; then
+  sleep 60 &
+  echo "$!" >"$TEST_ROOT/child"
+  wait
+fi
+printf '%s\\n' workspace_archive_uploaded
+''')
+    helper.chmod(0o700)
+    env = dict(os.environ, ZUSE_RECOVERY_STATUS_ROOT=str(root), ZUSE_RUNTIME_BINARY=str(helper),
+               TEST_ROOT=str(root), BOXD_API_KEY="must-be-removed", CLOUD_DATA_ENCRYPTION_KEY="must-be-removed")
+
+    def launch(operation, *args, **extra):
+        subprocess.run([str(launcher), operation, *args], env=dict(env, **extra), check=True)
+
+    def config(operation):
+        state = root / operation
+        state.mkdir()
+        (state / "config.json").write_text("{}")
+        return state
+
+    state = config("complete")
+    launch("complete")
+    wait_for(lambda: (state / "uploaded").exists())
+    launch("complete", "--foreground")
+    assert (root / "invocations").read_text().splitlines() == ["invoked"]
+
+    config("cancel-before-start")
+    launch("cancel-before-start", "--cancel")
+    launch("cancel-before-start", "--foreground")
+    assert (root / "invocations").read_text().splitlines() == ["invoked"]
+
+    state = config("cancel-running")
+    launch("cancel-running", TEST_LONG="yes")
+    wait_for(lambda: (root / "child").exists())
+    child = int((root / "child").read_text())
+    launch("cancel-running", "--cancel")
+    # A killed child can briefly remain a zombie until the VM init reaps it.
+    def stopped():
+        status = Path(f"/proc/{child}/stat")
+        return not status.exists() or status.read_text().split()[2] == "Z"
+    wait_for(stopped)
+    assert (state / "cancelled").exists() and not (state / "uploaded").exists()
+    launch("cancel-running", "--foreground")
+    assert len((root / "invocations").read_text().splitlines()) == 2
+print("recovery launcher: upload, idempotency, pre-start cancellation and process-group cancellation passed")

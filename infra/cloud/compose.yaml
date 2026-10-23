@@ -22,6 +22,10 @@ services:
       context: ../..
       dockerfile: infra/cloud/Dockerfile
     command: [worker]
+    environment:
+      TMPDIR: /var/lib/zuse/recovery
+    volumes:
+      - recovery-scratch:/var/lib/zuse/recovery
     restart: unless-stopped
     init: true
     env_file:
@@ -32,3 +36,6 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
+
+volumes:
+  recovery-scratch:

@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 pub const MIGRATION: &str = include_str!("../migrations/0001_control_plane.sql");
 
+#[derive(Clone)]
 pub struct Job {
     pub id: String,
     pub kind: String,
@@ -90,4 +91,18 @@ pub async fn retry(
     let result = sqlx::query("UPDATE zuse_rust_jobs SET state=CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'pending' END,due_at=$4,lease_token=NULL,lease_expires_at=NULL,last_error_code=$5,updated_at=$3 WHERE job_id=$1 AND lease_token=$2 AND state='running' AND lease_expires_at > $3")
         .bind(&job.id).bind(&job.lease_token).bind(now).bind(now.saturating_add(backoff)).bind(error_code).execute(pool).await?;
     Ok(result.rows_affected() == 1)
+}
+
+/// Heartbeat a long verification without changing its delivery token or resource ownership.
+pub async fn extend(
+    pool: &PgPool,
+    job: &Job,
+    owner_kind: &str,
+    now: i64,
+    lease_ms: i64,
+) -> Result<bool, sqlx::Error> {
+    if !(1000..=300000).contains(&lease_ms) {
+        return Err(sqlx::Error::Protocol("invalid_job_lease".into()));
+    }
+    Ok(sqlx::query("UPDATE zuse_rust_jobs j SET lease_expires_at=$4,updated_at=$3 WHERE job_id=$1 AND lease_token=$2 AND state='running' AND lease_expires_at>$3 AND EXISTS(SELECT 1 FROM zuse_rust_control_owners o WHERE o.resource_kind=$5 AND o.resource_id=j.resource_id AND o.backend='rust' AND o.generation=j.resource_generation)").bind(&job.id).bind(&job.lease_token).bind(now).bind(now+lease_ms).bind(owner_kind).execute(pool).await?.rows_affected()==1)
 }

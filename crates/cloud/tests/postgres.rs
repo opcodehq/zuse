@@ -124,6 +124,10 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(zuse_cloud::runtime::recovery::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
     (admin, pool, schema)
 }
 
@@ -1005,6 +1009,10 @@ async fn runtime_post_for_url(url: &str, token: &str, body: &Value) -> (u16, Val
 
 #[cfg(feature = "runtime-acceptance")]
 mod runtime_engine {
+    mod recovery_acceptance {
+        use super::*;
+        include!("cases/recovery.rs");
+    }
     use super::*;
     use async_trait::async_trait;
     use futures::{StreamExt, stream::BoxStream};

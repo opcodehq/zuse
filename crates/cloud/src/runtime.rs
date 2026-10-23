@@ -22,6 +22,7 @@ pub mod creation;
 pub mod grants;
 pub mod lifecycle;
 pub mod mailbox;
+pub mod recovery;
 pub mod transcript;
 
 pub struct RuntimeConfig {
@@ -30,6 +31,8 @@ pub struct RuntimeConfig {
     idle_ms: i64,
     creation_accounts: Vec<String>,
     legacy_auth_url: Option<String>,
+    recovery_enabled: bool,
+    recovery_workspaces: Vec<String>,
 }
 impl RuntimeConfig {
     pub fn from_env() -> anyhow::Result<Option<Self>> {
@@ -61,6 +64,14 @@ impl RuntimeConfig {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned)
                 .collect(),
+            recovery_enabled: env::var("CLOUD_WORKSPACE_RECOVERY_ENABLED").as_deref() == Ok("true"),
+            recovery_workspaces: env::var("CLOUD_WORKSPACE_RECOVERY_WORKSPACE_IDS")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect(),
             idle_ms,
             master: MasterKey::parse(&encryption)
                 .map_err(|_| anyhow::anyhow!("Invalid cloud data encryption key"))?,
@@ -78,6 +89,8 @@ pub struct RuntimeControl {
     creation_accounts: Vec<String>,
     grant_issuer: Option<Arc<dyn grants::GrantIssuer>>,
     transcript_objects: Option<Arc<dyn crate::objects::Objects>>,
+    recovery_enabled: bool,
+    recovery_workspaces: Vec<String>,
     pub(crate) mailbox_changes: tokio::sync::broadcast::Sender<()>,
 }
 
@@ -128,6 +141,8 @@ impl RuntimeControl {
         let mut control = Self::from_pool(pool, config.master, config.signer);
         control.transcript_objects = crate::objects::R2::from_env()?;
         control.idle_ms = config.idle_ms;
+        control.recovery_enabled = config.recovery_enabled;
+        control.recovery_workspaces = config.recovery_workspaces;
         control.creation_accounts = config.creation_accounts;
         if let Some(url) = config.legacy_auth_url {
             control.grant_issuer = Some(Arc::new(
@@ -147,6 +162,8 @@ impl RuntimeControl {
             master,
             signer,
             idle_ms: 10 * 60 * 1000,
+            recovery_enabled: false,
+            recovery_workspaces: vec![],
             creation_accounts: vec![],
             grant_issuer: None,
             transcript_objects: None,
@@ -158,6 +175,9 @@ impl RuntimeControl {
             .fetch_one(&self.pool).await?;
         if !ready {
             return Err(ApiError::unavailable("cloud_runtime_schema_not_ready"));
+        }
+        if self.recovery_enabled {
+            self.recovery_ready().await?;
         }
         if self.transcript_objects.is_some() {
             let ready: bool = sqlx::query_scalar(
@@ -424,7 +444,7 @@ impl RuntimeControl {
     ) -> Result<Value, ApiError> {
         use zuse_protocol::cloud::CloudStoragePhase;
         if request.capabilities.as_ref().is_some_and(|caps| {
-            caps.len() > 4
+            caps.len() > 5
                 || caps.iter().any(|cap| {
                     !matches!(
                         cap.as_str(),
@@ -432,6 +452,7 @@ impl RuntimeControl {
                             | "rust-session-commands-v1"
                             | "rust-workspace-lifecycle-v1"
                             | "rust-transcript-projection-v1"
+                            | "rust-full-state-recovery-v1"
                     )
                 })
         }) {

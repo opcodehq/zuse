@@ -62,7 +62,7 @@ impl RetainedProvider for Boxd {
 fn provider_error(_: ProviderError) -> ApiError {
     ApiError::unavailable("cloud_retained_provider_failed")
 }
-fn deleted(row: &Value) -> bool {
+pub(super) fn deleted(row: &Value) -> bool {
     row["desired_state"] == "deleted"
         || matches!(row["state"].as_str(), Some("deleting" | "deleted"))
         || row["request_config"]["cloudMailboxLifecyclePending"]["action"] == "delete"
@@ -155,6 +155,14 @@ impl RuntimeControl {
             != crate::access::Permission::Edit
         {
             return Err(ApiError::forbidden("workspace_access_denied"));
+        }
+        if self
+            .recovery_action(&mut tx, &row, action, &command, now)
+            .await?
+        {
+            let (row, _, _) = locked_workspace(&mut tx, id).await?;
+            tx.commit().await?;
+            return Ok(crate::store::Workspace { row }.public());
         }
         let prior:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(o) FROM zuse_rust_lifecycle_operations o WHERE workspace_id=$1 AND command_id=$2").bind(id).bind(&command).fetch_optional(&mut *tx).await?;
         if let Some(prior) = prior {

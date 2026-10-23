@@ -41,6 +41,33 @@ pub async fn serve(
             .bootstrap()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("runtime_not_enrolled"))?;
+        // Archive can win before the first gateway attaches, or between reconnects.
+        // A denied socket has no live lease for the authority to fence, so inspect
+        // durable lifecycle intent before retrying the connection.
+        match authority
+            .lifecycle(
+                &bootstrap,
+                zuse_protocol::cloud_lifecycle::RuntimeRequest::Query,
+            )
+            .await
+        {
+            Ok(Some(d))
+                if matches!(
+                    d.action,
+                    zuse_protocol::cloud_lifecycle::Action::Pause
+                        | zuse_protocol::cloud_lifecycle::Action::Archive
+                ) && d.phase == "quiescing" =>
+            {
+                bail!("runtime_quiescence_requested")
+            }
+            Err(error) if retryable(&error) => {
+                wait(&cancel, backoff).await;
+                backoff = (backoff * 2).min(10);
+                continue;
+            }
+            Err(error) => return Err(error),
+            _ => {}
+        }
         let connection_started = std::time::Instant::now();
         let grant = authority.gateway(&bootstrap);
         let link_cancel = cancel.child_token();

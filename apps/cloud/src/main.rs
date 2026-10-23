@@ -69,31 +69,57 @@ async fn main() -> Result<()> {
         }
         Command::Worker { once } => {
             let runtime = writable_runtime().await?;
-            let provider = zuse_cloud::providers::boxd::Boxd::new(
-                env::var("BOXD_API_KEY").context("Allocation worker requires BOXD_API_KEY")?,
-                env::var("BOXD_ORG").ok(),
-            )
-            .map_err(|_| anyhow::anyhow!("Invalid Boxd worker configuration"))?;
+            let provider = Arc::new(
+                zuse_cloud::providers::boxd::Boxd::new(
+                    env::var("BOXD_API_KEY").context("Allocation worker requires BOXD_API_KEY")?,
+                    env::var("BOXD_ORG").ok(),
+                )
+                .map_err(|_| anyhow::anyhow!("Invalid Boxd worker configuration"))?,
+            );
+            let recovery_task = if once {
+                None
+            } else {
+                let recovery_runtime = runtime.clone();
+                let recovery_provider = provider.clone();
+                Some(tokio::spawn(async move {
+                    loop {
+                        if let Err(error) = recovery_runtime
+                            .recovery_once(&*recovery_provider, now_ms())
+                            .await
+                        {
+                            tracing::warn!(code = error.code, "Recovery stage deferred");
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    }
+                }))
+            };
             loop {
-                if let Err(error) = runtime.allocate_once(&provider, now_ms()).await {
+                if let Err(error) = runtime.allocate_once(&*provider, now_ms()).await {
                     tracing::warn!(code = error.code, "Allocation stage deferred");
                     if once {
                         anyhow::bail!("{}", error.code);
                     }
                 }
-                if let Err(error) = runtime.lifecycle_once(&provider, now_ms()).await {
+                if let Err(error) = runtime.lifecycle_once(&*provider, now_ms()).await {
                     tracing::warn!(code = error.code, "Retained lifecycle stage deferred");
                     if once {
                         anyhow::bail!("{}", error.code);
                     }
                 }
                 if once {
+                    runtime
+                        .recovery_once(&*provider, now_ms())
+                        .await
+                        .map_err(|e| anyhow::anyhow!("{}", e.code))?;
                     break;
                 }
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => break,
                     _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {},
                 }
+            }
+            if let Some(task) = recovery_task {
+                task.abort();
             }
         }
         Command::Serve => {

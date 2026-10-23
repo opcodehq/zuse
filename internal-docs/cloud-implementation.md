@@ -14,7 +14,7 @@ completed UI images in the final user-facing report.
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
-| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Encrypted transcript contracts, R2 transport, journaled native guest projections, cached read transport and native/browser archived transcript views and a packaged full-state recovery helper added; archive object routes, retirement orchestration, authorized replacement enrollment, archived files, permanent deletion and migration remain | Retained guest-process, rendered browser and packaged recovery-helper acceptance passed; end-to-end machine retirement, replacement-runtime continuation and live-provider recovery acceptance pending |
+| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Encrypted transcript contracts, R2 transport, journaled native guest projections, cached read transport and native/browser archived transcript views and a packaged full-state recovery helper added; scoped archive object routes, durable privileged verification and exact-source retirement added; authorized replacement enrollment, archived files, permanent deletion and migration remain | Retained guest-process, rendered browser and packaged recovery-helper acceptance passed; packaged capture and retirement orchestration pass isolated acceptance; replacement-runtime continuation and live-provider recovery acceptance pending |
 | F: complete GPUI parity | Archived cloud transcript screens added to native/browser settings; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive workflow pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
 
@@ -58,6 +58,7 @@ With `ZUSE_CLOUD_RUNTIME_WRITES=true`, these routes are additionally registered:
 - `POST /v1/cloud/workspaces/:id/commands`, `GET .../commands/:commandId`,
   `DELETE .../commands/:commandId`, `GET .../commands/watch?afterRevision=...`.
 - `GET /v1/cloud/workspaces/:id/data-key` (authorized editor only).
+- `GET/PUT /v1/cloud/workspaces/:id/archive/:operation/:object` (original operation-scoped capabilities, immutable ciphertext; no user bearer fallback).
 - `POST /v1/cloud/workspaces/:id/runtime/transcript-checkpoint` and `.../transcript-message-page` (encrypted projection publication; requires R2 configuration).
 - `GET /v1/cloud/workspaces/:id/sessions/:sessionId/transcript-checkpoint` and `.../transcript-message-page` (registered when transcript storage/key configuration is present; available in read-only mode).
 - `POST /v1/cloud/workspaces/:id/runtime/commands/lease` and `.../ack`.
@@ -100,6 +101,8 @@ Configuration:
 | `RELAY_MINT_PRIVATE_JWK` | Existing Ed25519 mint key required for runtime writes |
 | `API_ISSUER` | Runtime ticket/gateway origin, defaults `https://api-rust.zuse.sh`; plaintext HTTP is allowed only for loopback acceptance |
 | `ZUSE_CLOUD_LEGACY_AUTH_URL` | Optional exact HTTPS origin of the existing account authority API; no default, credentials are never redirected |
+| `CLOUD_WORKSPACE_RECOVERY_ENABLED` | Defaults false; admits expired enrolled Rust archives only when explicitly true |
+| `CLOUD_WORKSPACE_RECOVERY_WORKSPACE_IDS` | Optional comma-separated recovery admission allowlist |
 | `CLOUD_WORKSPACE_IDLE_TIMEOUT_MS` | Existing idle policy; defaults ten minutes, preserves earlier runtime-operation deadlines |
 
 Organization access rechecks membership and separates content/admin/billing roles.
@@ -146,8 +149,9 @@ Archive expiry is ten days and never implies history deletion. Legacy deadlines
 are preserved or shortened to that window. A verified manifest/chunk count and a
 persisted retirement phase are required to report backup verification. This status
 reader alone cannot authorize machine deletion. Full backup/restore helpers,
-verification, signed capabilities, source-machine fencing and explicit-delete purge
-are still pending. Recovery stays disabled until provider acceptance passes.
+privileged verification, signed capabilities and source-machine fencing are implemented
+for enrolled Rust guests; authorized replacement enrollment and explicit-delete purge
+remain pending. Recovery stays disabled until provider acceptance passes.
 
 ## Focused verification
 
@@ -1043,14 +1047,85 @@ ZUSE_CLOUD_TEST_GUEST_BIN="$PWD/target/debug/zuse-cloud-runtime" \
   cargo test --locked -p zuse-cloud-runtime --features engine -- --include-ignored
 ```
 
-Remaining before any retirement enablement: original archive object/capability
-routes and their persisted operations; cancellation/deletion fencing; privileged
-verification wired to a durable source-machine retirement barrier; exact-machine
-provider destruction and retry; recovery usage attribution; compatible replacement
-allocation and authorized storage adoption with fresh runtime enrollment; live
-provider continuation acceptance. The transcript R2 adapter's current 4 MiB bound
-also needs an isolated archive-object path supporting the original encrypted
-chunk wire limit (6 MiB), while retaining transcript limits. Ordinary storage
-admission still refuses a populated unbound replacement; the restore helper does
-not bypass it. Recovery remains default-off and retention expiry still never
-requests machine destruction.
+Remaining before production recovery enablement: compatible replacement allocation,
+authorized storage adoption with fresh runtime enrollment, complete retained and
+replacement-resource billing, full explicit-delete purge, source-image publication
+and live-provider continuation acceptance. Ordinary storage admission still refuses
+a populated unbound replacement; the restore helper does not bypass it. Recovery
+remains default-off. Expiry alone never authorizes destruction: explicit recovery
+policy and the persisted verified barrier are both required.
+
+### Durable capture, verification and retirement
+
+Migration `0006_recovery.sql` adds pinned recovery operations and the existing
+observation/usage-outbox tables if absent. Startup never applies it. Apply it
+explicitly before enabling recovery. The default-off policy admits only expired,
+quiesced, broker-authenticated Boxd workspaces with the
+`rust-full-state-recovery-v1` enrollment capability. Other workspaces retain their
+machines. Admission pins source machine, account/chat/session, storage incarnation
+and writer generation; it revokes the source runtime bearer and gateway lease
+before a maintenance wake. Native retained storage keeps its enrollment generation
+during capture; replacement enrollment must acquire a new authorized identity.
+
+A dedicated worker uses durable leased jobs independently of allocation/resume.
+The installed recovery launcher isolates one helper process group per operation,
+keeps configuration out of argv/logs, and persists cancellation before stopping
+the group. Upload grants cannot read. Original archive read grants can only read
+the selected restoring operation. R2 archive transport supports the original
+6 MiB ciphertext wire limit without raising transcript limits. Manifest publication
+is immutable and occurs after chunk upload. The worker Compose service mounts a
+private disk-backed scratch volume for full database verification and sets TMPDIR
+to it; the API's small request tmpfs is insufficient for workspace extraction.
+Provision that volume with capacity for reconstructed workspaces. Container builds
+include the native engine's compiler/runtime dependencies. Docker image build and
+provider image publication remain unverified in this VM (no Docker daemon).
+
+After capture, the worker stops the helper and pauses the source. A separate
+privileged verifier reads back all objects, authenticates/extracts the archive and
+validates SQLite and original identities. It renews the job lease during that work.
+Only a fresh owner/generation/operation/lease check can commit the verified digest
+and retirement phase. Exact-source deletion runs on a later delivery after that
+barrier is durable; uncertain deletion responses reconcile by inspecting the same
+source. A second shared-machine check blocks retirement if another live workspace
+references it. History, encrypted archive and data key remain after retirement.
+
+Unarchive before the barrier revokes the verifier delivery, cancels capture and
+returns to Active without starting the engine. Cleanup confirms the helper has
+stopped and the retained source is paused before restoring its bearer. Unarchive
+after the barrier lets retirement finish. Interactive resume then returns
+`archive-restore-required`; replacement allocation/enrollment and continued agent
+execution are the next required implementation, so this policy must remain off
+for production. Delayed work is fenced by deletion state; full permanent-delete
+purge and tombstones remain outstanding.
+
+Backup running observations feed the original idempotent usage outbox as
+`billable=false` telemetry. This does not transfer billing/settlement/export
+ownership or implement retained-resource/replacement billing.
+
+Isolated acceptance uses the packaged guest, real HTTP object routes and PostgreSQL
+with a deterministic machine provider. It covers multi-chunk ciphertext larger
+than the transcript limit, write-only capabilities, corrupt read-back retaining
+the source, committed-barrier checks inside the provider deletion callback, lost
+delete-response reconciliation, cached transcript after retirement and unarchive
+during an in-flight verifier. The deletion-race test injects a deletion fence; it
+does not claim the permanent Delete workflow exists. All **20 PostgreSQL/HTTP/
+packaged-guest regression tests pass**, including the
+three recovery scenarios and the existing cloud-chat, mailbox, allocation,
+archive/resume and encrypted-transcript workflows. Immediate archive during guest
+startup now checks durable lifecycle intent before gateway reconnect, including
+when there was no connected socket to fence. Launcher acceptance covers
+idempotent capture and cancellation before/during execution. Live Boxd acceptance
+and source-image publication remain required.
+
+```sh
+python3 infra/cloud/tests/recovery-launcher.py
+ZUSE_CLOUD_TEST_DATABASE_URL=postgres://localhost/isolated_cloud_test \
+ZUSE_CLOUD_TEST_GUEST_BIN="$PWD/target/debug/zuse-cloud-runtime" \
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3 \
+  cargo test --locked -p zuse-cloud --features runtime-acceptance \
+  --test postgres recovery_acceptance -- --ignored --test-threads=1
+```
+
+Additional focused checks: **9 cloud unit tests** and **19 runtime checks** pass,
+including R2 signing and immutable 5 MiB archive transfers while transcript reads
+and writes retain their 4 MiB limit.

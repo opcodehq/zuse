@@ -9,6 +9,7 @@ use crate::{
 };
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{DefaultBodyLimit, Path, Query, State, WebSocketUpgrade, rejection::JsonRejection},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware,
@@ -49,7 +50,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(origins.as_ref().clone())
         .allow_methods(if state.runtime.is_some() {
-            vec![Method::GET, Method::POST, Method::DELETE]
+            vec![Method::GET, Method::POST, Method::PUT, Method::DELETE]
         } else {
             vec![Method::GET]
         })
@@ -93,6 +94,12 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
     }
     if state.runtime.is_some() {
         app = app
+            .route(
+                "/v1/cloud/workspaces/{id}/archive/{operation}/{object}",
+                get(archive_object_get)
+                    .put(archive_object_put)
+                    .layer(DefaultBodyLimit::max(crate::runtime::recovery::WIRE_LIMIT)),
+            )
             .route(
                 "/v1/cloud/workspaces/{id}/runtime/transcript-checkpoint",
                 post(transcript_upload)
@@ -883,3 +890,65 @@ macro_rules! transcript_write_route {
 }
 transcript_write_route!(transcript_upload, false);
 transcript_write_route!(transcript_page_upload, true);
+
+async fn archive_object_get(
+    State(state): State<AppState>,
+    Path((id, operation, object)): Path<(String, String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::unauthorized("workspace_archive_capability_invalid"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    let bytes = runtime
+        .archive_object(
+            &id,
+            &operation,
+            &object,
+            token,
+            None,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?
+        .ok_or_else(|| ApiError::not_found("workspace_archive_object_missing"))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/plain"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+async fn archive_object_put(
+    State(state): State<AppState>,
+    Path((id, operation, object)): Path<(String, String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::unauthorized("workspace_archive_capability_invalid"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    runtime
+        .archive_object(
+            &id,
+            &operation,
+            &object,
+            token,
+            Some(body.to_vec()),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}

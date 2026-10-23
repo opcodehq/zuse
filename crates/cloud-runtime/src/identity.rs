@@ -250,6 +250,7 @@ impl Identity {
                 "rust-session-commands-v1".into(),
                 zuse_protocol::cloud_lifecycle::CAPABILITY.into(),
                 "rust-transcript-projection-v1".into(),
+                "rust-full-state-recovery-v1".into(),
             ]),
             rpc_protocol: Some(zuse_protocol::cloud_gateway::RUST_RPC.into()),
         }

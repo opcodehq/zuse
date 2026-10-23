@@ -6,15 +6,15 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-runtime-acceptance = ["zuse-cloud-runtime/engine", "dep:zuse-engine", "dep:zuse-providers", "dep:zuse-rpc", "dep:tempfile", "dep:tokio-util", "dep:zuse-cloud-runtime"]
+runtime-acceptance = ["zuse-cloud-runtime/engine", "dep:zuse-engine", "dep:zuse-providers", "dep:zuse-rpc", "dep:tokio-util"]
 
 [dependencies]
 zuse-cloud-projection.workspace = true
 zuse-engine = { workspace = true, optional = true }
-zuse-cloud-runtime = { path = "../cloud-runtime", optional = true }
+zuse-cloud-runtime = { path = "../cloud-runtime", features = ["engine"] }
 zuse-providers = { workspace = true, optional = true }
 zuse-rpc = { workspace = true, optional = true }
-tempfile = { workspace = true, optional = true }
+tempfile.workspace = true
 tokio-util = { workspace = true, features = ["rt"], optional = true }
 anyhow.workspace = true
 async-trait.workspace = true

@@ -11,6 +11,12 @@ pub trait Objects: Send + Sync {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError>;
     /// An existing object must contain exactly the same bytes.
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError>;
+    async fn get_archive(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
+        self.get(key).await
+    }
+    async fn put_archive(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError> {
+        self.put(key, bytes).await
+    }
 }
 pub struct R2 {
     http: reqwest::Client,
@@ -82,11 +88,12 @@ impl R2 {
         method: reqwest::Method,
         key: &str,
         body: Option<&[u8]>,
+        limit: usize,
     ) -> Result<reqwest::Response, ApiError> {
         if key.is_empty()
             || key.len() > 2048
             || key.split('/').any(|s| s == "." || s == "..")
-            || body.is_some_and(|b| b.len() > MAX_OBJECT_BYTES)
+            || body.is_some_and(|b| b.len() > limit)
         {
             return Err(failed());
         }
@@ -137,7 +144,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 /// S3 path encoding deliberately preserves slash and never normalizes object names.
-fn encode(value: &str, slash: bool) -> String {
+pub(crate) fn encode(value: &str, slash: bool) -> String {
     value
         .as_bytes()
         .iter()
@@ -195,16 +202,13 @@ fn sign(
         hex(&hmac(&key, &to_sign))
     )
 }
-async fn bounded(mut response: reqwest::Response) -> Result<Vec<u8>, ApiError> {
-    if response
-        .content_length()
-        .is_some_and(|n| n > MAX_OBJECT_BYTES as u64)
-    {
+async fn bounded(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>, ApiError> {
+    if response.content_length().is_some_and(|n| n > limit as u64) {
         return Err(failed());
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| failed())? {
-        if bytes.len() + chunk.len() > MAX_OBJECT_BYTES {
+        if bytes.len() + chunk.len() > limit {
             return Err(failed());
         }
         bytes.extend_from_slice(&chunk);
@@ -213,18 +217,50 @@ async fn bounded(mut response: reqwest::Response) -> Result<Vec<u8>, ApiError> {
 }
 #[async_trait]
 impl Objects for R2 {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
-        let response = self.request(reqwest::Method::GET, key, None).await?;
+    async fn get_archive(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
+        let response = self
+            .request(reqwest::Method::GET, key, None, 6 * 1024 * 1024)
+            .await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
         if !response.status().is_success() {
             return Err(failed());
         }
-        Ok(Some(bounded(response).await?))
+        Ok(Some(bounded(response, 6 * 1024 * 1024).await?))
+    }
+    async fn put_archive(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError> {
+        let response = self
+            .request(reqwest::Method::PUT, key, Some(bytes), 6 * 1024 * 1024)
+            .await?;
+        if response.status() == reqwest::StatusCode::PRECONDITION_FAILED {
+            if self.get_archive(key).await?.as_deref() == Some(bytes) {
+                return Ok(());
+            }
+            return Err(ApiError::conflict("cloud_archive_object_collision"));
+        }
+        if !response.status().is_success() {
+            return Err(failed());
+        }
+        Ok(())
+    }
+
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
+        let response = self
+            .request(reqwest::Method::GET, key, None, MAX_OBJECT_BYTES)
+            .await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(failed());
+        }
+        Ok(Some(bounded(response, MAX_OBJECT_BYTES).await?))
     }
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError> {
-        let response = self.request(reqwest::Method::PUT, key, Some(bytes)).await?;
+        let response = self
+            .request(reqwest::Method::PUT, key, Some(bytes), MAX_OBJECT_BYTES)
+            .await?;
         if response.status() == reqwest::StatusCode::PRECONDITION_FAILED {
             if self.get(key).await?.as_deref() == Some(bytes) {
                 return Ok(());
@@ -319,6 +355,7 @@ mod tests {
                 }
             }),
         );
+        let app = app.layer(axum::extract::DefaultBodyLimit::max(6 * 1024 * 1024));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -335,6 +372,27 @@ mod tests {
         assert!(client.get("redirect").await.is_err());
         assert!(client.get("../outside").await.is_err());
         assert!(objects.lock().unwrap().contains_key("bucket/a/%2F/é"));
+        let large = vec![b'x'; 5 * 1024 * 1024];
+        assert!(client.put("transcript-large", &large).await.is_err());
+        client.put_archive("archive-large", &large).await.unwrap();
+        client.put_archive("archive-large", &large).await.unwrap();
+        assert_eq!(
+            client.get_archive("archive-large").await.unwrap().unwrap(),
+            large
+        );
+        assert!(client.get("archive-large").await.is_err());
+        assert!(
+            client
+                .put_archive("archive-large", b"conflict")
+                .await
+                .is_err()
+        );
+        assert!(
+            client
+                .put_archive("too-large", &vec![0; 6 * 1024 * 1024 + 1])
+                .await
+                .is_err()
+        );
         server.abort();
     }
 }
