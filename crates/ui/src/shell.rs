@@ -543,6 +543,7 @@ pub fn apply_keymap(
 /// The settings sections (feature-inventory §1.5 routes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsSection {
+    Cloud,
     Devices,
     /// Which harnesses the composer offers (enable/disable toggles) —
     /// labeled "Providers".
@@ -565,12 +566,13 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 12] = [
+    pub const ALL: [SettingsSection; 13] = [
         SettingsSection::General,
         SettingsSection::Harnesses,
         SettingsSection::Defaults,
         SettingsSection::Plugins,
         SettingsSection::Devices,
+        SettingsSection::Cloud,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Voice,
@@ -609,6 +611,7 @@ impl SettingsSection {
     /// Stable name shared by `ui-settings.json` and `ZUSE_OPEN_ROUTE`.
     fn slug(self) -> &'static str {
         match self {
+            SettingsSection::Cloud => "cloud",
             SettingsSection::Devices => "devices",
             SettingsSection::Harnesses => "providers",
             SettingsSection::Defaults => "defaults",
@@ -628,6 +631,7 @@ impl SettingsSection {
     /// Inverse of [`Self::slug`], plus the pages' former names.
     fn from_slug(slug: &str) -> Option<Self> {
         Some(match slug {
+            "cloud" => SettingsSection::Cloud,
             "devices" => SettingsSection::Devices,
             "providers" | "harnesses" => SettingsSection::Harnesses,
             "defaults" | "default-models" => SettingsSection::Defaults,
@@ -649,6 +653,7 @@ impl SettingsSection {
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
+            SettingsSection::Cloud => "Cloud",
             SettingsSection::Devices => "Remote access",
             SettingsSection::Harnesses => "Providers",
             SettingsSection::Defaults => "Default models",
@@ -2148,6 +2153,7 @@ pub struct Shell {
     pending_pull_request: Option<(String, Option<String>)>,
     pull_request_cache:
         std::rc::Rc<std::cell::RefCell<crate::pull_request_detail::PullRequestCache>>,
+    cloud_billing_page: Option<Entity<settings::cloud_billing::CloudBillingPage>>,
     devices_page: Option<Entity<DevicesPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
@@ -2677,6 +2683,7 @@ impl Shell {
             pull_request_pane: Default::default(),
             pending_pull_request: None,
             pull_request_cache: Default::default(),
+            cloud_billing_page: None,
             devices_page: None,
             archived_page: None,
             appearance_page: None,
@@ -5746,6 +5753,19 @@ impl Shell {
                     .into_any_element()
             }
 
+            SettingsSection::Cloud => {
+                if self.cloud_billing_page.is_none() {
+                    let state = self.state.clone();
+                    self.cloud_billing_page = Some(
+                        cx.new(|cx| settings::cloud_billing::CloudBillingPage::new(state, cx)),
+                    );
+                }
+                self.cloud_billing_page
+                    .as_ref()
+                    .unwrap()
+                    .clone()
+                    .into_any_element()
+            }
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     let state = self.state.clone();
@@ -8129,6 +8149,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let section_icon = |item: SettingsSection| match item {
+            SettingsSection::Cloud => icons::CLOUD,
             SettingsSection::Devices => icons::SETTINGS_REMOTE,
             SettingsSection::Harnesses => icons::SETTINGS_PROVIDERS,
             SettingsSection::Defaults => icons::SETTINGS_DEFAULTS,

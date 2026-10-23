@@ -8,6 +8,7 @@ use std::{str::FromStr, time::Duration};
 
 #[derive(Clone)]
 pub struct Store {
+    pub(crate) billing: Option<std::sync::Arc<crate::billing::BillingControl>>,
     pub(crate) pool: PgPool,
     pub(crate) transcripts: Option<std::sync::Arc<crate::transcript::Reader>>,
 }
@@ -41,6 +42,7 @@ impl Store {
             .map_err(|_| anyhow::anyhow!("Cannot connect to cloud PostgreSQL"))?;
         Ok(Self {
             pool,
+            billing: None,
             transcripts: None,
         })
     }
@@ -48,6 +50,7 @@ impl Store {
     pub fn from_pool(pool: PgPool) -> Self {
         Self {
             pool,
+            billing: None,
             transcripts: None,
         }
     }

@@ -8,6 +8,7 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Section {
     General,
+    Cloud,
     Providers,
     Defaults,
     Devices,
@@ -17,17 +18,19 @@ pub(super) enum Section {
     Archived,
 }
 impl Section {
-    const NAV: [Self; 7] = [
+    const NAV: [Self; 8] = [
         Self::General,
         Self::Providers,
         Self::Defaults,
         Self::Plugins,
         Self::Devices,
+        Self::Cloud,
         Self::Shortcuts,
         Self::Archived,
     ];
     fn title(self) -> &'static str {
         match self {
+            Self::Cloud => "Cloud",
             Self::General => "General",
             Self::Providers => "Providers",
             Self::Defaults => "Default models",
@@ -40,6 +43,7 @@ impl Section {
     }
     fn icon(self) -> &'static str {
         match self {
+            Self::Cloud => "cloud",
             Self::General => "settings-general",
             Self::Providers => "settings-providers",
             Self::Defaults => "settings-defaults",
@@ -52,6 +56,7 @@ impl Section {
     }
     fn description(self) -> &'static str {
         match self {
+            Self::Cloud => "Cloud usage, monthly allowance and overage cap.",
             Self::General => "Workspace defaults and your personal app preferences.",
             Self::Providers => {
                 "Verify what’s installed, signed in, and which subscription each provider runs on."
@@ -71,6 +76,9 @@ impl WorkspaceView {
         self.completion_preset_menu = false;
         self.default_permission_menu = false;
         self.model_picker = false;
+        if section == Section::Cloud {
+            self.refresh_billing(false);
+        }
         if section == Section::General {
             self.refresh_worktree_settings();
             self.refresh_title_settings();
@@ -238,6 +246,7 @@ impl WorkspaceView {
                 .child(self.providers_settings(cx))
                 .child(self.usage_settings(cx))
                 .into_any_element(),
+            Section::Cloud => self.billing_settings(cx),
             Section::Devices => self.pairing_settings(cx),
             Section::Plugins => self.cloud_settings(cx),
             Section::Usage => self.usage_settings(cx),

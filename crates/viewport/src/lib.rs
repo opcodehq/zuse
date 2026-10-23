@@ -8,6 +8,7 @@ mod attachment_tests;
 pub mod branding;
 mod browser;
 mod cloud;
+mod cloud_billing;
 mod cloud_history;
 mod composer_alerts;
 mod connection;
@@ -81,6 +82,8 @@ use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 pub struct WorkspaceView {
     cloud_archive: cloud_history::ArchiveView,
     cloud: cloud::Cloud,
+    billing: cloud_billing::Billing,
+    billing_cap: Entity<input::TextInput>,
     cloud_branch: Entity<input::TextInput>,
     cloud_model: Entity<input::TextInput>,
     cached_only: bool,
@@ -432,6 +435,8 @@ impl WorkspaceView {
             input,
             cloud_archive: Default::default(),
             cloud: Default::default(),
+            billing: Default::default(),
+            billing_cap: cx.new(|cx| input::TextInput::new("Monthly cap in dollars", window, cx)),
             cloud_branch,
             cloud_model,
             cached_only: false,
@@ -690,6 +695,9 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if self.receive_billing(&frame, cx) {
+            return;
+        }
         if self.receive_cloud(&frame, cx) {
             return;
         }

@@ -49,11 +49,13 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
     let gateway_origins = origins.clone();
     let cors = CorsLayer::new()
         .allow_origin(origins.as_ref().clone())
-        .allow_methods(if state.runtime.is_some() {
-            vec![Method::GET, Method::POST, Method::PUT, Method::DELETE]
-        } else {
-            vec![Method::GET]
-        })
+        .allow_methods(
+            if state.runtime.is_some() || state.store.billing_writes_enabled() {
+                vec![Method::GET, Method::POST, Method::PUT, Method::DELETE]
+            } else {
+                vec![Method::GET]
+            },
+        )
         .allow_headers([
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
@@ -65,6 +67,12 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/readyz", get(ready))
         .route("/v1/cloud/context", get(context))
         .route("/v1/billing/entitlements", get(entitlements))
+        .route("/v1/cloud/billing/summary", get(billing_summary))
+        .route("/v1/cloud/billing/usage", get(billing_usage))
+        .route(
+            "/v1/cloud/billing/cap",
+            post(billing_cap).layer(DefaultBodyLimit::max(4096)),
+        )
         .route("/v1/cloud/workspaces", get(workspaces))
         .route("/v1/cloud/workspaces/{id}", get(workspace))
         .route(
@@ -980,4 +988,62 @@ async fn workspace_delete(
         )
         .await?;
     Ok(([("x-zuse-reconcile-cloud-workspace", id)], Json(value)).into_response())
+}
+
+async fn billing_summary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<zuse_protocol::cloud_billing::BillingSummary>, ApiError> {
+    let access = state.access(&headers, AccessKind::Billing).await?;
+    Ok(Json(
+        state
+            .store
+            .billing_summary(&access.owner_id, chrono::Utc::now().timestamp_millis())
+            .await?,
+    ))
+}
+#[derive(Deserialize)]
+struct BillingUsageQuery {
+    cursor: Option<String>,
+    limit: Option<f64>,
+}
+async fn billing_usage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<BillingUsageQuery>,
+) -> Result<Json<zuse_protocol::cloud_billing::BillingUsagePage>, ApiError> {
+    let access = state.access(&headers, AccessKind::Billing).await?;
+    let limit = query.limit.unwrap_or(50.);
+    if !limit.is_finite() {
+        return Err(ApiError::bad_request("invalid_billing_limit"));
+    }
+    Ok(Json(
+        state
+            .store
+            .billing_usage(
+                &access.owner_id,
+                query.cursor.as_deref(),
+                limit.trunc().clamp(1., 100.) as usize,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
+}
+async fn billing_cap(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_billing::BillingCapRequest>, JsonRejection>,
+) -> Result<Json<zuse_protocol::cloud_billing::BillingSummary>, ApiError> {
+    let access = state.access(&headers, AccessKind::Billing).await?;
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_billing_cap"))?;
+    Ok(Json(
+        state
+            .store
+            .billing_set_cap(
+                &access.owner_id,
+                body,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
 }

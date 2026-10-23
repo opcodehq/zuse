@@ -286,6 +286,8 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | LIST_ACCOUNT_DEVICES
         | CLOUD_ACCOUNT_STATUS
         | CLOUD_CONTEXT
+        | CLOUD_BILLING_SUMMARY
+        | CLOUD_BILLING_USAGE
         | CLOUD_WORKSPACES
         | CLOUD_HISTORY
         | AUTH_STATUS
@@ -344,6 +346,7 @@ mod retry_tests {
             CLOUD_DELETE,
             CLOUD_CLEANUP_MIRROR,
             CLOUD_CREATE,
+            CLOUD_BILLING_CAP,
             CLOUD_ENVIRONMENT,
             CLOUD_RPC,
             "FutureMethod",
@@ -396,3 +399,8 @@ pub const SELECT_PLUGIN_WORKSPACE: &str = "SelectPluginWorkspace";
 /// User-owned Git workflow; only the workspace read may reconnect automatically.
 pub const GET_GIT_WORKSPACE: &str = "GetGitWorkspace";
 pub const GIT_WORKSPACE_ACTION: &str = "GitWorkspaceAction";
+
+/// Account-scoped cloud administration; handled by the host authority.
+pub const CLOUD_BILLING_SUMMARY: &str = "CloudBillingSummary";
+pub const CLOUD_BILLING_USAGE: &str = "CloudBillingUsage";
+pub const CLOUD_BILLING_CAP: &str = "CloudBillingSetCap";

@@ -22,6 +22,13 @@ struct TestIdentity;
 #[async_trait]
 impl Identity for TestIdentity {
     async fn verify(&self, token: &str) -> Result<Principal, ApiError> {
+        let token = if token == "dev-user"
+            && std::env::var_os("ZUSE_CLOUD_BILLING_UI_FIXTURE_FILE").is_some()
+        {
+            "alice"
+        } else {
+            token
+        };
         let token =
             if token == "dev-user" && std::env::var_os("ZUSE_CLOUD_UI_FIXTURE_FILE").is_some() {
                 "bob"
@@ -5035,6 +5042,230 @@ async fn encrypted_transcript_publication_and_archived_reads_preserve_original_c
     assert_eq!(
         request(&read_app, read, "bob", None).await.0,
         StatusCode::NOT_FOUND
+    );
+    pool.close().await;
+    sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn cloud_billing_summary_usage_and_owned_cap_workflow() {
+    let (admin, pool, schema) = fixture().await;
+    sqlx::raw_sql(include_str!("fixtures/billing.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    for (id, owner) in [
+        ("p-alice", "user-alice"),
+        ("p-team", "organization:org-team"),
+    ] {
+        sqlx::query("INSERT INTO api_cloud_billing_periods VALUES($1,$2,'stripe','sub-preserved','active','USD',$3,$4,40000000,35000000,500,25000000,$3)").bind(id).bind(owner).bind(now-1000).bind(now+3600000).execute(&pool).await.unwrap();
+    }
+    sqlx::raw_sql("INSERT INTO api_cloud_billing_ledger VALUES('cost','p-alice','provider-cost',40000000),('charge','p-alice','overage-charge',5250000); INSERT INTO api_cloud_billing_meter_reconciliations VALUES('p-alice','stripe',123),('p-alice','polar',999); INSERT INTO api_cloud_billing_usage VALUES('z-entry','p-alice','workspace','cloud-one','boxd','execution-one',10,20,2,4096,36000000,'confirmed',50),('y-entry','p-alice','snapshot','snap-one','boxd',NULL,10,20,0,0,4000000,'corrected',60);").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO api_cloud_billing_reservations VALUES('p-alice','workspace','active','boxd',10,20,2,4096,2000000,$1),('p-alice','workspace','expired','boxd',10,20,2,4096,99999999,0)").bind(now+3600000).execute(&pool).await.unwrap();
+    let store = Store::from_pool(pool.clone()).with_billing_control(
+        zuse_cloud::billing::BillingControl::from_pool(
+            pool.clone(),
+            vec!["user-alice".into(), "organization:org-team".into()],
+        ),
+    );
+    let state = AppState {
+        store,
+        identity: Arc::new(TestIdentity),
+        organizations_enabled: true,
+        organization_ids: Arc::new(vec!["org-team".into()]),
+        runtime: None,
+        gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
+    };
+    let app = router(state.clone(), vec![]);
+    let path = "/v1/cloud/billing/summary";
+    assert_eq!(
+        request(&app, path, "", None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(&app, path, "member", Some("organization:org-team"))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(&app, path, "billing", Some("organization:org-team"))
+            .await
+            .1["providerCostMicros"],
+        0
+    );
+    assert_eq!(
+        request(&app, path, "bob", None).await.1["error"],
+        "cloud_billing_subscription_required"
+    );
+    let (status, summary) = request(&app, path, "alice", None).await;
+    assert_eq!(status, StatusCode::OK, "{summary}");
+    assert_eq!(summary["providerCostMicros"], 42000000);
+    assert_eq!(summary["storageCostMicros"], 4000000);
+    assert_eq!(summary["overageChargeMicros"], 7350000);
+    assert_eq!(summary["currentInvoiceEstimateMicros"], 47350000);
+    assert_eq!(summary["usageProvisional"], true);
+    assert_eq!(summary["lastProviderReconciledAt"], 60);
+    assert_eq!(summary["lastBillingReconciledAt"], 123);
+    assert!(summary.get("lastPolarReconciledAt").is_none());
+    let (status, page) = request(&app, "/v1/cloud/billing/usage?limit=2", "alice", None).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["items"].as_array().unwrap().len(), 2);
+    assert_eq!(page["items"][1]["resourceKind"], "other");
+    assert_eq!(page["items"][1]["usageKind"], "snapshot-storage");
+    assert_eq!(page["nextCursor"], "y-entry");
+    let next = request(
+        &app,
+        "/v1/cloud/billing/usage?cursor=y-entry&limit=2",
+        "alice",
+        None,
+    )
+    .await
+    .1;
+    assert_eq!(next["items"].as_array().unwrap().len(), 1);
+    assert_eq!(next["items"][0]["entryId"], "reservation:workspace:active");
+    assert_eq!(next["items"][0]["status"], "provisional");
+    assert!(next.get("nextCursor").is_none());
+    let cap = "/v1/cloud/billing/cap";
+    let body = json!({"overageCapMicros":6000000,"idempotencyKey":"first"});
+    assert_eq!(
+        runtime_post(&app, cap, "alice", &body).await.1["error"],
+        "cloud_billing_owner_not_rust"
+    );
+    sqlx::query("INSERT INTO zuse_rust_control_owners VALUES('billing','user-alice','rust',1,$1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, updated) = runtime_post(&app, cap, "alice", &body).await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["overageCapMicros"], 6000000);
+    assert_eq!(updated["overageChargeMicros"], 6000000);
+    assert_eq!(updated["status"], "billing-hold");
+    assert_eq!(
+        runtime_post(
+            &app,
+            cap,
+            "alice",
+            &json!({"overageCapMicros":8000000,"idempotencyKey":"second"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        runtime_post(&app, cap, "alice", &body).await.1["overageCapMicros"],
+        8000000,
+        "Old retries must not rewind the cap"
+    );
+    assert_eq!(
+        runtime_post(
+            &app,
+            cap,
+            "alice",
+            &json!({"overageCapMicros":9000000,"idempotencyKey":"first"})
+        )
+        .await
+        .1["error"],
+        "billing_cap_idempotency_conflict"
+    );
+    assert_eq!(
+        runtime_post(
+            &app,
+            cap,
+            "alice",
+            &json!({"overageCapMicros":5000000,"idempotencyKey":"below"})
+        )
+        .await
+        .1["error"],
+        "billing_cap_below_incurred"
+    );
+    for value in [json!(-1), json!(1.5), json!(9007199254740992i64)] {
+        assert_eq!(
+            runtime_post(
+                &app,
+                cap,
+                "alice",
+                &json!({"overageCapMicros":value,"idempotencyKey":"invalid"})
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let a = json!({"overageCapMicros":10000000,"idempotencyKey":"concurrent"});
+    let b = json!({"overageCapMicros":11000000,"idempotencyKey":"concurrent"});
+    let (a, b) = tokio::join!(
+        runtime_post(&app, cap, "alice", &a),
+        runtime_post(&app, cap, "alice", &b)
+    );
+    assert!(
+        (a.0 == StatusCode::OK && b.0 == StatusCode::CONFLICT)
+            || (b.0 == StatusCode::OK && a.0 == StatusCode::CONFLICT)
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM api_cloud_billing_ledger")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+    let row: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(p) FROM api_cloud_billing_periods p WHERE period_id='p-alice'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row["provider_subscription_id"], "sub-preserved");
+    assert_eq!(row["billing_provider"], "stripe");
+    if let Ok(path) = std::env::var("ZUSE_CLOUD_BILLING_UI_FIXTURE_FILE") {
+        sqlx::raw_sql("INSERT INTO api_cloud_billing_usage SELECT 'u-extra-'||lpad(n::text,3,'0'),'p-alice','workspace','history-'||n,'boxd',NULL,10,20,2,4096,0,'confirmed',60 FROM generate_series(1,52) n").execute(&pool).await.unwrap();
+        assert_eq!(
+            runtime_post(
+                &app,
+                cap,
+                "alice",
+                &json!({"overageCapMicros":25000000,"idempotencyKey":"ui-start"})
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(axum::serve(listener, app.clone()).into_future());
+        let file = std::path::Path::new(&path);
+        std::fs::write(file, origin).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(900), async {
+            while !file.with_extension("done").exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Billing UI acceptance timed out");
+        let cap: i64 = sqlx::query_scalar(
+            "SELECT overage_cap_micros FROM api_cloud_billing_periods WHERE period_id='p-alice'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(cap, 31000000);
+        server.abort();
+    }
+    let legacy = router(
+        AppState {
+            store: Store::from_pool(pool.clone()),
+            ..state
+        },
+        vec![],
+    );
+    assert_eq!(
+        runtime_post(&legacy, cap, "alice", &body).await.1["error"],
+        "cloud_billing_writes_disabled"
     );
     pool.close().await;
     sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))

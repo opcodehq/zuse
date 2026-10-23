@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates and native/browser Cloud usage controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -122,6 +122,70 @@ and `.context/native-cloud-entry-build.log`. Screenshots:
 This does not complete Milestone B or F: cached native reopen, integrated
 sidebar/window routing, full model/branch controls, first-launch attachments,
 startup queues and remaining administration remain open.
+
+
+
+## Cloud billing usage and cap administration
+
+Implemented the pinned reference `/v1/cloud/billing/summary`, `/usage` and `/cap`
+contracts with shared Rust wire types and host-authority RPC. Reads use one
+repeatable-read snapshot and existing periods, ledger entries, live reservations,
+storage usage and reconciliation receipts. They neither initialize billing periods
+nor export charges. Summary math retains the ledger's settled overage amount and
+adds reservation charges; it does not reprice corrected historical usage. Snapshot
+usage retains the legacy `other` plus `snapshot-storage` public classification.
+Usage cursors retain reference entry-ID ordering and bounded page sizes.
+
+Cap changes validate exact safe integer USD micros, reject a limit below incurred
+overage, lock the current period, and reuse the original cap-command table for
+idempotency. Repeating an old request returns current state without rewinding a
+newer cap. Conflicting concurrent retries cannot both apply. No Stripe/Polar
+customer or subscription identity, ledger entry or invoice is rewritten.
+
+Writes are disabled by default. `ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS` creates a
+separate writer pool for listed account owners; the catalog pool stays read-only.
+Each write additionally requires the existing `zuse_rust_control_owners` row with
+`resource_kind='billing'`, `resource_id` equal to the owner, and `backend='rust'`.
+It holds that row's shared lock until commit. Workspace lifecycle ownership does
+not confer billing ownership. Deployment must fence/forward the old billing writer
+before transferring this marker; the migration/cutover work remains open.
+
+Native and browser Settings → Cloud now show allowance, invoice estimate, storage,
+provisional usage, cap editing, refresh and paginated history using existing settings
+components. Requests go through the host authority, including from a cloud window.
+Account/organization changes clear state and cancel pending UI work; returned scope
+must match the admitted scope. Cap retries retain their idempotency key until the
+amount changes or the server confirms success. Monetary input uses exact decimal
+conversion rather than floating-point arithmetic. Errors and success are shown
+above the controls, before the history list. Billing never acquires a workspace
+execution connection.
+
+Verified:
+
+- PostgreSQL/HTTP: personal isolation, organization billing/admin authorization,
+  reservations and expiry, storage classification, pagination, settled-charge
+  preservation, cap validation, concurrent conflicting retries and unchanged
+  subscription IDs/ledger. `.context/cloud-billing-postgres.log`.
+- Native Linux: real summary, edit $25 to $31, rejected below-incurred cap,
+  visible feedback and another history page. Receipt:
+  `.context/cloud-billing-native-acceptance.json`; image:
+  `.context/cloud-billing-native-saved.png`.
+- Compiled browser → host → API → PostgreSQL: paginated usage, cap $27 then $31,
+  below-incurred rejection and saved data after reload. The observed request trace
+  contains no `CloudEnvironment`. Receipts:
+  `.context/cloud-billing-browser-acceptance.json`,
+  `.context/cloud-billing-browser-wire-proof.json`; image:
+  `.context/cloud-billing-browser-saved.png`. Integrated fixture:
+  `.context/cloud-billing-ui-api.log`; driver:
+  `scripts/acceptance/cloud-billing.mjs` with the explicit billing UI fixture env.
+- Native build and compiled wasm screens passed; exact decimal cap conversion
+  passes `.context/cloud-billing-money-tests.log`.
+
+This closes the usage/cap workflow only. Period creation/renewal, checkout/portal,
+subscription/payment-failure processing, prepaid credits, provider settlement,
+webhook deduplication, metered exports and the rest of cloud administration still
+require implementation. Live Stripe/Polar, original-account and Mac acceptance are
+not established by these fixture tests. No production writes were enabled.
 
 
 ## Current service

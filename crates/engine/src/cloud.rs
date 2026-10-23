@@ -22,6 +22,9 @@ pub fn handles(method: &str) -> bool {
         LIST | READ
             | zuse_protocol::methods::CLOUD_CONTEXT
             | zuse_protocol::methods::CLOUD_CREATE
+            | zuse_protocol::methods::CLOUD_BILLING_SUMMARY
+            | zuse_protocol::methods::CLOUD_BILLING_USAGE
+            | zuse_protocol::methods::CLOUD_BILLING_CAP
             | UNARCHIVE
             | DELETE
             | CLEANUP_MIRROR
@@ -96,6 +99,16 @@ impl CloudApi {
         }
     }
     async fn request(&self, token: &str, path: &[&str], body: Option<Value>) -> Result<Value> {
+        self.request_scoped(token, path, body, None, &[]).await
+    }
+    async fn request_scoped(
+        &self,
+        token: &str,
+        path: &[&str],
+        body: Option<Value>,
+        organization: Option<&str>,
+        query: &[(String, String)],
+    ) -> Result<Value> {
         let mut url = self.origin.clone();
         url.path_segments_mut()
             .map_err(|_| anyhow::anyhow!("Cloud service configuration is invalid."))?
@@ -106,21 +119,18 @@ impl CloudApi {
         } else {
             self.http.get(url)
         };
+        let request = request.query(query);
+        let request = if let Some(org) = organization {
+            request.header("x-zuse-workspace", format!("organization:{org}"))
+        } else {
+            request
+        };
         let mut response = request
             .bearer_auth(token)
             .send()
             .await
             .map_err(|_| anyhow::anyhow!("Cloud service is unavailable. Try again."))?;
-        ensure!(
-            response.status().is_success(),
-            "{}",
-            match response.status().as_u16() {
-                401 => "Sign in to access cloud workspaces.",
-                403 => "You do not have access to this workspace.",
-                409 => "The workspace is busy. Wait for its current operation to finish.",
-                _ => "Cloud service is unavailable. Try again.",
-            }
-        );
+        let status = response.status();
         let mut bytes = Vec::new();
         while let Some(chunk) = response
             .chunk()
@@ -132,6 +142,38 @@ impl CloudApi {
                 "Cloud response is too large."
             );
             bytes.extend_from_slice(&chunk);
+        }
+        if !status.is_success() {
+            if path.starts_with(&["v1", "cloud", "billing"]) {
+                let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                let message = match value["error"].as_str() {
+                    Some("cloud_billing_subscription_required") => {
+                        "An active cloud billing period is required."
+                    }
+                    Some("billing_cap_below_incurred") => {
+                        "The cap cannot be lower than overage already incurred."
+                    }
+                    Some("billing_cap_idempotency_conflict") => {
+                        "This cap request was already used with a different amount. Refresh and retry."
+                    }
+                    Some("cloud_billing_owner_not_rust" | "cloud_billing_writes_disabled") => {
+                        "Cloud billing changes are still managed by the original service."
+                    }
+                    Some("invalid_billing_cap") => "Enter a valid nonnegative monthly cap.",
+                    _ => "Cloud billing is unavailable. Refresh and try again.",
+                };
+                anyhow::bail!("{message}");
+            }
+            ensure!(
+                status.is_success(),
+                "{}",
+                match status.as_u16() {
+                    401 => "Sign in to access cloud workspaces.",
+                    403 => "You do not have access to this workspace.",
+                    409 => "The workspace is busy. Wait for its current operation to finish.",
+                    _ => "Cloud service is unavailable. Try again.",
+                }
+            );
         }
         Ok(serde_json::from_slice(&bytes)?)
     }
@@ -152,6 +194,44 @@ impl CloudApi {
             .await
             .map_err(|_| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
         let result = match method {
+            zuse_protocol::methods::CLOUD_BILLING_SUMMARY
+            | zuse_protocol::methods::CLOUD_BILLING_USAGE
+            | zuse_protocol::methods::CLOUD_BILLING_CAP => {
+                let mut query = Vec::new();
+                let mut body = None;
+                let operation = match method {
+                    zuse_protocol::methods::CLOUD_BILLING_USAGE => {
+                        let request: zuse_protocol::cloud_billing::BillingUsageRequest =
+                            serde_json::from_value(params)?;
+                        if let Some(cursor) = request.cursor {
+                            query.push(("cursor".into(), cursor));
+                        }
+                        query.push((
+                            "limit".into(),
+                            request.limit.unwrap_or(50).clamp(1, 100).to_string(),
+                        ));
+                        "usage"
+                    }
+                    zuse_protocol::methods::CLOUD_BILLING_CAP => {
+                        let request: zuse_protocol::cloud_billing::BillingCapRequest =
+                            serde_json::from_value(params)?;
+                        body = Some(serde_json::to_value(request)?);
+                        "cap"
+                    }
+                    _ => "summary",
+                };
+                let org = auth.state().org_id().map(str::to_owned);
+                let value = self
+                    .request_scoped(
+                        &token,
+                        &["v1", "cloud", "billing", operation],
+                        body,
+                        org.as_deref(),
+                        &query,
+                    )
+                    .await?;
+                json!({"accountId":account,"organizationId":org,"data":value})
+            }
             zuse_protocol::methods::CLOUD_CONTEXT => {
                 let value = self
                     .request(&token, &["v1", "cloud", "context"], None)

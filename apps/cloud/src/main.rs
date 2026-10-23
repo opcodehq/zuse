@@ -147,10 +147,27 @@ async fn main() -> Result<()> {
                 None => None,
             };
             let runtime_enabled = runtime.is_some();
+            let mut store = Store::connect_read_only(&config.database_url)
+                .await?
+                .configure_transcripts()?;
+            let billing_accounts = env::var("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if !billing_accounts.is_empty() {
+                store = store.with_billing_control(
+                    zuse_cloud::billing::BillingControl::connect(
+                        &config.database_url,
+                        billing_accounts,
+                    )
+                    .await?,
+                );
+            }
             let state = AppState {
-                store: Store::connect_read_only(&config.database_url)
-                    .await?
-                    .configure_transcripts()?,
+                store,
                 identity: WorkosIdentity::new(&config)?,
                 organizations_enabled: config.organizations_enabled,
                 organization_ids: Arc::new(config.organization_ids),
