@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources and snapshot/storage settlement, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -1917,3 +1917,52 @@ honor the same configured Boxd cluster.
 Remaining scope includes other provider usage sources, snapshot/storage
 settlement, live provider acceptance and billing writer migration. No production
 flags or ownership have been transferred.
+
+
+### Retained-image storage settlement
+
+The billing worker now settles the reference Box retained-image records under
+`CLOUD_SNAPSHOT_BILLING_CUTOVER_AT`. An absent cutover disables storage billing.
+Storage-only execution requires the original billing account allowlist and Rust
+writer marker, without Boxd or payment-provider credentials. No production flags
+or ownership have been transferred.
+
+The existing immutable `boat-snapshot-2026-10-v1` schedule remains $1.70 per
+30-day month. Integer rational arithmetic carries the original sub-micro-USD
+remainder between checkpoints. Ongoing retention settles after an hour; a stopped
+or deleted image also settles its final partial interval. Existing period bounds,
+cutover, checkpoint and stopped timestamps determine the billed interval. Period
+gaps retain the reference remainder reset, and uncovered trailing time stays
+pending. Existing finalized execution aliases are recognized without another
+ledger/export write.
+
+Settlement uses the original snapshot account advisory lock and defers while any
+unexpired shared/exclusive image lease exists. It also holds the billing writer
+marker and account lock. Snapshot checkpoints, fractional remainder, usage,
+provider receipts, finalizations, ledger deltas, reservations, cent outboxes and
+nonbillable telemetry commit together. Original event and entry IDs are preserved.
+Imported customer-owned builds are excluded; other record fields and unrelated
+accounts remain unchanged. No execution transport or machine wake is acquired.
+
+The same confirmed-usage ledger routine now accepts both Boxd machine and Box
+snapshot identities. Boxd retains its original per-period entry IDs and provider
+cost evidence. Storage exports use `resource_kind=snapshot`, `measurement=confirmed`
+and `cost_source=approved-storage-schedule`; the existing billing usage interface
+continues exposing the compatible `other`/`snapshot-storage` classification.
+
+Sixteen billing tests pass, including actual PostgreSQL settlement over two
+periods, retained/deleted images, imported legacy finalization, BYOK and account
+ownership exclusions, a live shared lease, concurrent retries, exact cent outboxes
+and preservation of unknown checkpoint fields. An interrupted checkpoint rolls
+back its usage/ledger/outbox/finalization; retry settles once. The arithmetic test
+compares 720 hourly checkpoints with the original monthly cost and exercises
+fractional micro-USD remainders. The original immutable price trigger is also
+verified. Receipt: `.context/cloud-storage-tests.log`. The API executable builds
+(`.context/cloud-storage-api-build.log`), five storage configuration guards pass
+(`.context/cloud-storage-cli.json`), and the eight Boxd/export command guards still
+pass (`.context/cloud-storage-cli-regression.json`).
+
+Remaining image work includes provider presence inspection, build/promotion,
+supersession, grace expiry, provider deletion/retry and their administration UI.
+This adds storage settlement to C; it does not complete the image lifecycle,
+remaining usage providers, live billing acceptance or migration/cutover.

@@ -75,7 +75,8 @@ async fn main() -> Result<()> {
         Command::BillingWorker { once } => {
             let settings = zuse_cloud::billing::MeterExportConfig::from_env()?;
             let settlement = zuse_cloud::billing::BoxdSettlementConfig::from_env()?;
-            if !settings.enabled() && settlement.is_none() {
+            let storage = zuse_cloud::billing::SnapshotSettlementConfig::from_env()?;
+            if !settings.enabled() && settlement.is_none() && storage.is_none() {
                 println!(
                     "{}",
                     serde_json::to_string(&zuse_cloud::billing::ExportReport::default())?
@@ -131,6 +132,16 @@ async fn main() -> Result<()> {
                 control = control.with_payment_providers(providers);
             }
             loop {
+                if let Some(config) = storage {
+                    match control.settle_snapshot_storage_once(config, now_ms()).await {
+                        Ok(report) => println!("{}", serde_json::to_string(&report)?),
+                        Err(error) if once => anyhow::bail!("{}", error.code),
+                        Err(error) => {
+                            tracing::warn!(code = error.code, "Snapshot storage settlement failed")
+                        }
+                    }
+                }
+
                 if let (Some(provider), Some(config)) = (&provider, settlement) {
                     match control.settle_boxd_once(provider, config, now_ms()).await {
                         Ok(report) => println!("{}", serde_json::to_string(&report)?),

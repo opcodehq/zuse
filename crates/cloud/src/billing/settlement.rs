@@ -208,11 +208,19 @@ impl BillingControl {
             return Ok(false);
         }
         for ((period, (a, b)), cost) in periods.iter().zip(segments).zip(costs) {
+            let period_id = period["period_id"].as_str().ok_or_else(invalid)?;
+            let entry = format!("boxd:{event}:{period_id}");
+            let segment_event = format!("{event}:{period_id}");
             settle_segment(
                 &mut tx,
                 resource,
-                machine,
-                event,
+                UsageIdentity {
+                    provider: "boxd",
+                    entry: &entry,
+                    event: &segment_event,
+                    execution: event,
+                    machine: Some(machine),
+                },
                 period,
                 a,
                 b,
@@ -337,11 +345,17 @@ fn deltas(
     })
     .collect()
 }
-async fn settle_segment(
+pub(super) struct UsageIdentity<'a> {
+    pub provider: &'a str,
+    pub entry: &'a str,
+    pub event: &'a str,
+    pub execution: &'a str,
+    pub machine: Option<&'a str>,
+}
+pub(super) async fn settle_segment(
     tx: &mut Transaction<'_, Postgres>,
     resource: &Value,
-    machine: &str,
-    event: &str,
+    identity: UsageIdentity<'_>,
     p: &Value,
     start: i64,
     end: i64,
@@ -358,18 +372,19 @@ async fn settle_segment(
     if !matches!(provider, "stripe" | "polar") {
         return Err(invalid());
     }
-    let entry = format!("boxd:{event}:{period}");
-    let segment_event = format!("{event}:{period}");
+    let entry = identity.entry;
     let (before,charged):(i64,i64)=sqlx::query_as("SELECT COALESCE(SUM(amount_micros) FILTER(WHERE kind='provider-cost'),0)::bigint,COALESCE(SUM(amount_micros) FILTER(WHERE kind='overage-charge'),0)::bigint FROM api_cloud_billing_ledger WHERE period_id=$1").bind(period).fetch_one(&mut **tx).await?;
     let deltas = deltas(p, before, charged, cost)?;
-    let inserted=sqlx::query("INSERT INTO api_cloud_billing_usage(entry_id,period_id,account_id,resource_kind,resource_id,provider,provider_event_id,provider_execution_id,started_at,ended_at,vcpu_count,memory_mib,provider_cost_micros,status,created_at) VALUES($1,$2,$3,$4,$5,'boxd',$6,$7,$8,$9,$10,$11,$12,'confirmed',$13) ON CONFLICT DO NOTHING")
-        .bind(&entry).bind(period).bind(owner).bind(kind).bind(id).bind(&segment_event).bind(event).bind(start).bind(end).bind(i64::from(vcpu)).bind(i64::try_from(memory/1_048_576).map_err(|_|invalid())?).bind(cost).bind(now).execute(&mut **tx).await?.rows_affected();
+    let inserted=sqlx::query("INSERT INTO api_cloud_billing_usage(entry_id,period_id,account_id,resource_kind,resource_id,provider,provider_event_id,provider_execution_id,started_at,ended_at,vcpu_count,memory_mib,provider_cost_micros,status,created_at) VALUES($1,$2,$3,$4,$5,$14,$6,$7,$8,$9,$10,$11,$12,'confirmed',$13) ON CONFLICT DO NOTHING")
+        .bind(&entry).bind(period).bind(owner).bind(kind).bind(id).bind(identity.event).bind(identity.execution).bind(start).bind(end).bind(i64::from(vcpu)).bind(i64::try_from(memory/1_048_576).map_err(|_|invalid())?).bind(cost).bind(now).bind(identity.provider).execute(&mut **tx).await?.rows_affected();
     if inserted == 0 {
         return Ok(());
     }
-    let receipt = format!("{event}:cost:{start}:{end}:{cost}");
-    sqlx::query("INSERT INTO api_provider_usage_events(provider,event_id,type,provider_resource_id,payload,received_at,expires_at) VALUES('boxd',$1,'boxd.usage.cost',$2,$3,$4,$5) ON CONFLICT DO NOTHING")
-        .bind(receipt).bind(machine).bind(json!({"machineId":machine,"startedAtMs":start,"endedAtMs":end,"costMicro":cost,"currency":"usd","complete":true})).bind(now).bind(now+90*DAY).execute(&mut **tx).await?;
+    if let Some(machine) = identity.machine {
+        let receipt = format!("{}:cost:{start}:{end}:{cost}", identity.execution);
+        sqlx::query("INSERT INTO api_provider_usage_events(provider,event_id,type,provider_resource_id,payload,received_at,expires_at) VALUES('boxd',$1,'boxd.usage.cost',$2,$3,$4,$5) ON CONFLICT DO NOTHING")
+            .bind(receipt).bind(machine).bind(json!({"machineId":machine,"startedAtMs":start,"endedAtMs":end,"costMicro":cost,"currency":"usd","complete":true})).bind(now).bind(now+90*DAY).execute(&mut **tx).await?;
+    }
     sqlx::query("DELETE FROM api_cloud_billing_reservations WHERE period_id=$1 AND resource_kind=$2 AND resource_id=$3").bind(period).bind(kind).bind(id).execute(&mut **tx).await?;
     for (k, amount) in std::iter::once(("provider-cost", cost)).chain(deltas) {
         if amount == 0 && k != "provider-cost" {
@@ -381,7 +396,7 @@ async fn settle_segment(
             format!("ledger:{k}:{entry}")
         };
         let metadata = if k == "provider-cost" {
-            json!({"provider":"boxd","resourceKind":kind,"resourceId":id})
+            json!({"provider":identity.provider,"resourceKind":kind,"resourceId":id})
         } else {
             json!({})
         };
@@ -409,7 +424,16 @@ async fn settle_segment(
             .ok_or_else(invalid)
     };
     let telemetry_id = format!("provider-cost:{entry}");
-    let payload = json!({"eventId":telemetry_id,"accountId":owner,"eventName":"zuse_cloud_provider_cost_micros","units":cost,"occurredAtMs":end,"billingProvider":provider,"metadata":{"provider":"boxd","resource_kind":kind,"resource_id":id,"billing_period_id":period,"started_at":iso(start)?,"ended_at":iso(end)?,"currency":"USD","measurement":"completed-provider-estimate","cost_source":"provider-current-rates","provider_machine_id":machine,"billable":"false"}});
+    let mut metadata = json!({"provider":identity.provider,"resource_kind":kind,"resource_id":id,"billing_period_id":period,"started_at":iso(start)?,"ended_at":iso(end)?,"currency":"USD","measurement":if identity.provider=="boxd" {"completed-provider-estimate"} else {"confirmed"},"billable":"false"});
+    if identity.provider == "boxd" {
+        metadata["cost_source"] = json!("provider-current-rates");
+        metadata["provider_machine_id"] = json!(identity.machine.unwrap_or(""));
+    }
+    if kind == "snapshot" {
+        metadata["cost_source"] = json!("approved-storage-schedule");
+        metadata["provider_snapshot_id"] = json!(id);
+    }
+    let payload = json!({"eventId":telemetry_id,"accountId":owner,"eventName":"zuse_cloud_provider_cost_micros","units":cost,"occurredAtMs":end,"billingProvider":provider,"metadata":metadata});
     sqlx::query("INSERT INTO api_cloud_usage_outbox(event_id,payload,created_at,next_attempt_at) VALUES($1,$2,$3,$3) ON CONFLICT DO NOTHING").bind(telemetry_id).bind(payload).bind(now).execute(&mut **tx).await?;
     Ok(())
 }
