@@ -9,6 +9,8 @@ publish.workspace = true
 engine = ["dep:zuse-engine", "dep:zuse-doc", "dep:zuse-providers"]
 
 [dependencies]
+tracing.workspace = true
+zuse-cloud-projection.workspace = true
 zuse-providers = { workspace = true, optional = true }
 zuse-engine = { workspace = true, optional = true }
 zuse-doc = { workspace = true, optional = true }

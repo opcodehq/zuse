@@ -8,7 +8,7 @@ use zuse_protocol::{
     cloud_lifecycle::{Action, Directive, RuntimeRequest},
 };
 
-fn family(core: &EngineCore, boot: &CloudRuntimeBootstrap) -> Result<Vec<String>> {
+pub(crate) fn family(core: &EngineCore, boot: &CloudRuntimeBootstrap) -> Result<Vec<String>> {
     let chats = core.workspace.read_chats()?;
     ensure!(
         chats
@@ -66,11 +66,17 @@ impl Shutdown {
         core: &EngineCore,
         authority: &Authority,
         boot: &CloudRuntimeBootstrap,
+        publisher: Option<&crate::projection::Publisher>,
     ) -> Result<()> {
-        for handle in self.handles {
-            core.doc_host.flush_chat_checked(&handle)?;
+        for handle in &self.handles {
+            core.doc_host.flush_chat_checked(handle)?;
         }
         core.workspace.flush_checked()?;
+        if let Some(publisher) = publisher {
+            publisher
+                .finish(core, authority, boot, &self.handles)
+                .await?;
+        }
         authority
             .lifecycle(
                 boot,

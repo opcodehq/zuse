@@ -14053,6 +14053,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "zuse-cloud-projection",
  "zuse-doc",
  "zuse-protocol",
  "zuse-rpc",
@@ -14094,6 +14095,7 @@ dependencies = [
  "tower-http",
  "uuid",
  "zeroize",
+ "zuse-cloud-projection",
  "zuse-cloud-runtime",
  "zuse-doc",
  "zuse-engine",
@@ -14137,6 +14139,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "zuse-cloud-projection"
+version = "0.25.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64 0.22.1",
+ "flate2",
+ "futures",
+ "rand 0.8.7",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "zeroize",
+ "zuse-model",
+ "zuse-protocol",
+]
+
+[[package]]
 name = "zuse-cloud-runtime"
 version = "0.25.0"
 dependencies = [
@@ -14158,8 +14179,10 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "tracing",
  "uuid",
  "zeroize",
+ "zuse-cloud-projection",
  "zuse-doc",
  "zuse-engine",
  "zuse-protocol",

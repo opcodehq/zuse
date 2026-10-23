@@ -217,6 +217,17 @@ async fn run() -> Result<()> {
         lock,
     )?);
     core.sessions.set_ipc_port(ipc.local_addr()?.port());
+    let publisher = if bootstrap.extra.get("nativeTranscriptProjectionEnabled")
+        == Some(&serde_json::Value::Bool(true))
+    {
+        let key = identity.open_transcript_key(&bootstrap.sealed_transcript_key)?;
+        Some(Arc::new(zuse_cloud_runtime::projection::Publisher::open(
+            storage.database_path(),
+            &key,
+        )?))
+    } else {
+        None
+    };
     let result = async {
         storage.commit()?;
         if !retained {
@@ -319,6 +330,16 @@ async fn run() -> Result<()> {
         } else {
             None
         };
+        let projection = publisher.as_ref().map(|publisher| {
+            let publisher = publisher.clone();
+            let core = core.clone();
+            let authority = authority.clone();
+            let updates = updates.clone();
+            let cancel = cancel.clone();
+            tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+                publisher.run(core, authority, updates, cancel).await
+            }))
+        });
         let supervisor =
             supervisor::serve(&authority, &mut identity, rpc, cancel.clone(), credentials);
         tokio::pin!(supervisor);
@@ -332,6 +353,9 @@ async fn run() -> Result<()> {
         };
         cancel.cancel();
         drop(ipc_task);
+        if let Some(mut projection) = projection {
+            let _ = (&mut projection).await;
+        }
         result
     }
     .await;
@@ -357,7 +381,9 @@ async fn run() -> Result<()> {
     };
     core.shutdown().await;
     if let Some(shutdown) = shutdown {
-        shutdown?.acknowledge(&core, &authority, &current).await?;
+        shutdown?
+            .acknowledge(&core, &authority, &current, publisher.as_deref())
+            .await?;
         return Ok(());
     }
     result

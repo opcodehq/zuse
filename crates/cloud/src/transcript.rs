@@ -1,34 +1,21 @@
 //! Original encrypted transcript contracts. Cached reads have no lifecycle/provider dependency.
 use crate::{access::Access, crypto::MasterKey, error::ApiError, objects::Objects, store::Store};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 pub const HEAD_LIMIT: usize = 1024 * 1024;
 pub const PAGE_LIMIT: usize = 4 * 1024 * 1024;
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Cursor {
-    pub epoch: String,
-    pub version: i64,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Upload {
-    pub session_id: String,
-    pub cursor: Cursor,
-    pub ciphertext: String,
-    pub ciphertext_sha256: String,
-    pub before_sequence: Option<i64>,
-}
+pub use zuse_cloud_projection::{Cursor, Upload};
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadQuery {
     pub epoch: Option<String>,
     pub version: Option<String>,
     pub before_sequence: Option<String>,
+    pub format: Option<String>,
 }
 pub struct Reader {
     pub(crate) objects: Arc<dyn Objects>,
@@ -82,33 +69,58 @@ pub fn object_key(
         None => format!("{base}.json"),
     }
 }
-impl Upload {
-    pub fn validate(&self, page: bool) -> Result<(), ApiError> {
-        if self.session_id.is_empty()
-            || self.session_id.len() > 512
-            || self.cursor.epoch.is_empty()
-            || self.cursor.epoch.len() > 512
-            || self
-                .session_id
-                .chars()
-                .chain(self.cursor.epoch.chars())
-                .any(char::is_control)
-            || !safe(self.cursor.version)
-            || self.ciphertext.is_empty()
-            || self.ciphertext.len() > if page { PAGE_LIMIT } else { HEAD_LIMIT }
-            || digest(self.ciphertext.as_bytes()) != self.ciphertext_sha256
-            || page != self.before_sequence.is_some()
-            || self.before_sequence.is_some_and(|n| n < 1 || !safe(n))
-        {
-            return Err(ApiError::bad_request(if page {
-                "invalid_transcript_message_page"
-            } else {
-                "invalid_transcript_checkpoint"
-            }));
-        }
-        Ok(())
+pub fn formatted_key(
+    workspace: &str,
+    session: &str,
+    generation: i64,
+    cursor: &Cursor,
+    page: Option<i64>,
+    native: bool,
+) -> String {
+    let key = object_key(workspace, session, generation, cursor, page);
+    if native {
+        key.replacen(
+            &format!("/generations/{generation}/"),
+            &format!("/generations/{generation}/rust-v1/"),
+            1,
+        )
+    } else {
+        key
     }
 }
+pub fn validate_upload(upload: &Upload, page: bool) -> Result<(), ApiError> {
+    if upload.session_id.is_empty()
+        || upload.session_id.len() > 512
+        || upload.cursor.epoch.is_empty()
+        || upload.cursor.epoch.len() > 512
+        || upload
+            .session_id
+            .chars()
+            .chain(upload.cursor.epoch.chars())
+            .any(char::is_control)
+        || !safe(upload.cursor.version)
+        || upload.ciphertext.is_empty()
+        || upload.ciphertext.len() > if page { PAGE_LIMIT } else { HEAD_LIMIT }
+        || digest(upload.ciphertext.as_bytes()) != upload.ciphertext_sha256
+        || page != upload.before_sequence.is_some()
+        || upload.before_sequence.is_some_and(|n| n < 1 || !safe(n))
+    {
+        return Err(ApiError::bad_request(if page {
+            "invalid_transcript_message_page"
+        } else {
+            "invalid_transcript_checkpoint"
+        }));
+    }
+    if upload
+        .payload_format
+        .as_deref()
+        .is_some_and(|f| f != zuse_cloud_projection::FORMAT)
+    {
+        return Err(ApiError::bad_request("unsupported_transcript_format"));
+    }
+    Ok(())
+}
+
 impl Store {
     pub fn with_transcripts(mut self, objects: Arc<dyn Objects>, master: MasterKey) -> Self {
         self.transcripts = Some(Arc::new(Reader { objects, master }));
@@ -179,12 +191,17 @@ impl Store {
         {
             return Ok(empty);
         }
-        let expected = object_key(id, session, generation, &cursor, None);
+        let native =
+            metadata["object_key"] == formatted_key(id, session, generation, &cursor, None, true);
+        if native && query.format.as_deref() != Some(zuse_cloud_projection::FORMAT) {
+            return Err(ApiError::conflict("cloud_transcript_protocol_mismatch"));
+        }
+        let expected = formatted_key(id, session, generation, &cursor, None, native);
         if metadata["object_key"] != expected {
             return Err(invalid());
         }
         let key = if page {
-            object_key(id, session, generation, &cursor, before)
+            formatted_key(id, session, generation, &cursor, before, native)
         } else {
             expected
         };
@@ -218,14 +235,20 @@ impl Store {
             .master
             .open_transcript_key(&access.owner_id, id, wrapped)
             .map_err(|_| ApiError::unavailable("cloud_transcript_key_unavailable"))?;
-        if page {
-            return Ok(
-                json!({"page":{"cursor":cursor,"beforeSequence":before,"ciphertextSha256":digest(ciphertext.as_bytes()),"ciphertext":ciphertext,"transcriptKey":transcript_key.as_str()}}),
-            );
+        let mut result = if page {
+            json!({"page":{"cursor":cursor,"beforeSequence":before,"ciphertextSha256":digest(ciphertext.as_bytes()),"ciphertext":ciphertext,"transcriptKey":transcript_key.as_str()}})
+        } else {
+            json!({"checkpoint":{"metadata":{"workspaceId":id,"sessionId":session,"runtimeGeneration":generation,"cursor":cursor,"objectKey":key,"ciphertextSha256":metadata["ciphertext_sha256"],"ciphertextBytes":metadata["ciphertext_bytes"],"createdAt":metadata["created_at"]},"ciphertext":ciphertext,"transcriptKey":transcript_key.as_str()}})
+        };
+        if native {
+            if page {
+                result["page"]["payloadFormat"] = json!(zuse_cloud_projection::FORMAT);
+            } else {
+                result["checkpoint"]["metadata"]["payloadFormat"] =
+                    json!(zuse_cloud_projection::FORMAT);
+            }
         }
-        Ok(
-            json!({"checkpoint":{"metadata":{"workspaceId":id,"sessionId":session,"runtimeGeneration":generation,"cursor":cursor,"objectKey":key,"ciphertextSha256":metadata["ciphertext_sha256"],"ciphertextBytes":metadata["ciphertext_bytes"],"createdAt":metadata["created_at"]},"ciphertext":ciphertext,"transcriptKey":transcript_key.as_str()}}),
-        )
+        Ok(result)
     }
 }
 fn invalid() -> ApiError {

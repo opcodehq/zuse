@@ -11,10 +11,10 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
-| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Encrypted transcript upload/read contracts and direct R2 transport added; Rust guest projections, cached archived UI/files, backup/retirement/restore/delete and migration remain | Retained guest-process acceptance passed; live provider and recovery acceptance pending |
+| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Encrypted transcript contracts, R2 transport, journaled native guest projections and cached read transport added; rendered cached UI/files, backup/retirement/restore/delete and migration remain | Retained guest-process and archived-history acceptance passed; live provider and recovery acceptance pending |
 | F: complete GPUI parity | Existing partial UI; complete reference comparison pending | Pending |
 | G: migration/cutover | Read-only inspection added; ownership handoff, guest conversion, archive migration and live cutover pending | Pending |
 
@@ -855,12 +855,11 @@ pages, and the independent reader decrypts both API responses. The archived read
 scenario removes Rust writer ownership and runtime control, then verifies
 workspace rows and the durable job count stay unchanged.
 
-Remaining: the native Rust timeline/context projection encoder and durable guest
-publication, cached client hydration, full chat catalog/change feeds, archived
-file/diff projections and GPUI/browser read surfaces. No Rust guest archive is
-claimed readable from these endpoints until that producer is wired. Transcript
-checkpoints do not authorize machine retirement; full verified recovery archives
-remain a separate deliverable. Live R2 bucket acceptance is still pending.
+The native guest publisher and cached read transport are implemented below.
+Remaining: rendered client hydration, full chat catalog/change feeds, archived
+file/diff projections and GPUI/browser read surfaces. Transcript checkpoints do
+not authorize machine retirement; full verified recovery archives remain a
+separate deliverable. Live R2 bucket acceptance is still pending.
 
 
 Verification for this port: 26 passing checks (nine cloud unit tests and seventeen
@@ -869,3 +868,46 @@ API build, formatting and diff checks. The original guest binary is unchanged.
 The existing cloud-chat, grants, mailbox, queue and retained-machine archive
 scenarios continue to pass. Live bucket reads/writes and cached UI screenshots
 are not claimed by these fixture/HTTP checks.
+
+
+### Native guest publication and cached history transport
+
+`zuse-cloud-projection` shares the native transcript frame, historical cutoffs,
+chat/model context, queued-message display state and paged history between the
+guest and an engine-free reader exported by `zuse-client::CloudHistoryReader`.
+Native payloads explicitly negotiate `zuse-rust-transcript-v1`; their immutable
+objects use a separate path inside the existing workspace prefix. Unnegotiated
+reads return a protocol mismatch. Original encrypted checkpoint/page formats and
+paths remain supported. Native cursor conflicts fail rather than silently
+acknowledging a stale upload.
+
+Before initial runtime enrollment, opt in a supported workspace with
+`request_config.rustNativeTranscriptEnabled=true` and configured transcript
+storage. Bootstrap then enables the guest publisher. Archive additionally
+requires the enrolled `rust-transcript-projection-v1` capability. Leave this off
+for legacy clients/workspaces until their consumer and populated-workspace
+migration are ready; toggling the flag on a cached bootstrap is not an upgrade.
+
+The publisher samples changed documents and journals encrypted upload batches in
+the original runtime SQLite database with FULL commits. It persists epoch/version,
+content digest, exact ciphertext and upload position before network delivery.
+Retries and guest reopen reuse those bytes. Final archive publication occurs
+after agent/terminal retirement and checked snapshot flush, before the quiescence
+receipt permits provider pause. Storage failure retains the outbox and source
+machine. Read snapshots never replay commands or initialize writable engine
+storage. Their chat flags are historical context: control-plane lifecycle owns
+Active/Archived placement and execution availability.
+
+Verification: 36 checks pass across the codec, cloud API/PostgreSQL/native guest,
+and runtime identity/storage suites. The guest scenario covers failed storage,
+a lost committed upload response, client closure/restart with identical encrypted
+bytes, independent conversation tabs, final archive publication, independent Node
+decryption, archived reads while compute stays asleep, and same-machine resume.
+Codec paging preserves all 150 fixture entries and queue context. Guest/API builds,
+strict scoped lint, client compilation and formatting pass.
+
+Remaining: rendered UI hydration and screenshots; archived files/attachments/
+sidecars/diffs; durable quiescence-receipt recovery; full verified machine backup,
+retirement, replacement restore and deletion; legacy cursor/import migration and
+live provider/R2 acceptance. This is a working native projection path, not full
+archive or UI completion.

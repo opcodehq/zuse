@@ -192,6 +192,19 @@ impl RuntimeControl {
             require_resume_capacity(&mut tx, &row, now).await?;
             return Ok(crate::store::Workspace { row }.public());
         }
+        if config["rustNativeTranscriptEnabled"] == true {
+            if self.transcript_objects.is_none() {
+                return Err(ApiError::unavailable("cloud_transcript_store_unavailable"));
+            }
+            if !config["rustStorageEnrollment"]["capabilities"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v == "rust-transcript-projection-v1"))
+            {
+                return Err(ApiError::conflict(
+                    "cloud_lifecycle_runtime_update_required",
+                ));
+            }
+        }
         let pending = config["rustLifecycleOperation"]["phase"]
             .as_str()
             .is_some_and(|p| !matches!(p, "paused" | "ready"));

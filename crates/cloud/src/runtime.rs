@@ -390,6 +390,9 @@ impl RuntimeControl {
         }
         if rpc_protocol == zuse_protocol::cloud_gateway::RUST_RPC {
             response["commandMailboxEnabled"] = json!(config["rustCommandMailboxEnabled"] == true);
+            response["nativeTranscriptProjectionEnabled"] = json!(
+                self.transcript_objects.is_some() && config["rustNativeTranscriptEnabled"] == true
+            );
             if let Some(plan) = config.get("rustRepositoryCheckout") {
                 response["rustRepositoryCheckout"] = plan.clone();
             }
@@ -421,11 +424,14 @@ impl RuntimeControl {
     ) -> Result<Value, ApiError> {
         use zuse_protocol::cloud::CloudStoragePhase;
         if request.capabilities.as_ref().is_some_and(|caps| {
-            caps.len() > 3
+            caps.len() > 4
                 || caps.iter().any(|cap| {
                     !matches!(
                         cap.as_str(),
-                        "rust-rpc-v1" | "rust-session-commands-v1" | "rust-workspace-lifecycle-v1"
+                        "rust-rpc-v1"
+                            | "rust-session-commands-v1"
+                            | "rust-workspace-lifecycle-v1"
+                            | "rust-transcript-projection-v1"
                     )
                 })
         }) {

@@ -26,3 +26,6 @@ pub mod grants;
 
 #[cfg(feature = "engine")]
 pub mod lifecycle;
+
+#[cfg(feature = "engine")]
+pub mod projection;

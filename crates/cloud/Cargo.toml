@@ -9,6 +9,7 @@ publish.workspace = true
 runtime-acceptance = ["zuse-cloud-runtime/engine", "dep:zuse-engine", "dep:zuse-providers", "dep:zuse-rpc", "dep:tempfile", "dep:tokio-util", "dep:zuse-cloud-runtime"]
 
 [dependencies]
+zuse-cloud-projection.workspace = true
 zuse-engine = { workspace = true, optional = true }
 zuse-cloud-runtime = { path = "../cloud-runtime", optional = true }
 zuse-providers = { workspace = true, optional = true }

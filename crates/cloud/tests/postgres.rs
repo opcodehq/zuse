@@ -2288,6 +2288,7 @@ for line in sys.stdin:
         server: tokio::task::JoinHandle<()>,
         lost_ack_release: Arc<Notify>,
         grant_issuer: Option<Arc<GrantFixtureIssuer>>,
+        projection_objects: Option<Arc<ProjectionObjects>>,
     }
     impl GuestApi {
         async fn start() -> Self {
@@ -2297,16 +2298,21 @@ for line in sys.stdin:
             Self::start_options(mailbox, true, mailbox).await
         }
         async fn start_options(mailbox: bool, launch_prompt: bool, withhold_ack: bool) -> Self {
-            Self::start_options_with_grants(mailbox, launch_prompt, withhold_ack, false).await
+            Self::start_options_with_grants(mailbox, launch_prompt, withhold_ack, false, false)
+                .await
         }
         async fn start_with_grants() -> Self {
-            Self::start_options_with_grants(false, true, false, true).await
+            Self::start_options_with_grants(false, true, false, true, false).await
+        }
+        async fn start_with_projections() -> Self {
+            Self::start_options_with_grants(true, true, false, false, true).await
         }
         async fn start_options_with_grants(
             mailbox: bool,
             launch_prompt: bool,
             withhold_ack: bool,
             grants: bool,
+            projections: bool,
         ) -> Self {
             use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
             use ed25519_dalek::SigningKey;
@@ -2353,14 +2359,30 @@ for line in sys.stdin:
                     release: Notify::new(),
                 })
             });
+            let projection_objects = projections.then(|| Arc::new(ProjectionObjects::default()));
+            if projections {
+                sqlx::raw_sql(include_str!("fixtures/transcript.sql"))
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustNativeTranscriptEnabled}','true') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+            }
             let mut control = RuntimeControl::from_pool(pool.clone(), master, signer);
+            let mut store = Store::from_pool(pool.clone());
+            if let Some(objects) = &projection_objects {
+                control = control.with_transcript_objects(objects.clone());
+                store = store.with_transcripts(
+                    objects.clone(),
+                    MasterKey::parse(&B64.encode([15; 32])).unwrap(),
+                );
+            }
             if let Some(issuer) = &grant_issuer {
                 control = control.with_grant_issuer(issuer.clone());
             }
             let control = Arc::new(control);
             let app = router(
                 AppState {
-                    store: Store::from_pool(pool.clone()),
+                    store,
                     identity: Arc::new(TestIdentity),
                     organizations_enabled: false,
                     organization_ids: Arc::new(vec![]),
@@ -2371,14 +2393,31 @@ for line in sys.stdin:
             );
             let lost_ack_release = Arc::new(Notify::new());
             let fail_first = Arc::new(std::sync::atomic::AtomicBool::new(withhold_ack));
+            let projection_lost_ack = Arc::new(std::sync::atomic::AtomicBool::new(projections));
             let app = app.layer(axum::middleware::from_fn({
                 let release = lost_ack_release.clone();
                 move |request: Request<Body>, next: axum::middleware::Next| {
                     let release = release.clone();
                     let fail = fail_first.clone();
+                    let projection_lost_ack = projection_lost_ack.clone();
                     async move {
+                        let projection = request
+                            .uri()
+                            .path()
+                            .ends_with("/runtime/transcript-checkpoint");
                         let ack = request.uri().path().ends_with("/runtime/commands/ack");
                         let response = next.run(request).await;
+                        if projection
+                            && response.status().is_success()
+                            && projection_lost_ack.swap(false, Ordering::SeqCst)
+                        {
+                            use axum::response::IntoResponse;
+                            return (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                axum::Json(json!({"error":"simulated_lost_projection_ack"})),
+                            )
+                                .into_response();
+                        }
                         if ack
                             && response.status().is_success()
                             && fail.swap(false, Ordering::SeqCst)
@@ -2416,6 +2455,7 @@ for line in sys.stdin:
                 server,
                 lost_ack_release,
                 grant_issuer,
+                projection_objects,
             }
         }
         async fn finish(self) {
@@ -3444,7 +3484,12 @@ for line in sys.stdin:
     #[ignore = "requires isolated localhost PostgreSQL and built guest"]
     async fn rust_cloud_archive_quiesces_retains_and_lazily_resumes_original_machine() {
         use zuse_cloud::providers::MachineState;
-        let api = GuestApi::start_options(true, true, false).await;
+        let api = GuestApi::start_with_projections().await;
+        api.projection_objects
+            .as_ref()
+            .unwrap()
+            .fail
+            .store(true, Ordering::SeqCst);
         sqlx::raw_sql(include_str!("fixtures/creation.sql"))
             .execute(&api.pool)
             .await
@@ -3502,6 +3547,84 @@ for line in sys.stdin:
         .await
         .unwrap();
         drop(transcript);
+        client.closed.cancel();
+        drop(client);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while api
+                .projection_objects
+                .as_ref()
+                .unwrap()
+                .attempts
+                .lock()
+                .unwrap()
+                .is_empty()
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let pending = api
+            .projection_objects
+            .as_ref()
+            .unwrap()
+            .attempts
+            .lock()
+            .unwrap()[0]
+            .clone();
+        stop_guest(&mut child).await;
+        api.projection_objects
+            .as_ref()
+            .unwrap()
+            .fail
+            .store(false, Ordering::SeqCst);
+        child = guest_command(&api, &data, &checkout, None, &log)
+            .spawn()
+            .unwrap();
+        let recovering = zuse_cloud_projection::reader::Reader::new(&api.origin).unwrap();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    panic!(
+                        "Projection recovery failed {status}: {}",
+                        std::fs::read_to_string(&log).unwrap()
+                    );
+                }
+                if let Ok(Some(head)) = recovering.head("bob", "ws-bob", "session-bob").await {
+                    if serde_json::to_string(&head.transcript)
+                        .unwrap()
+                        .contains("Cloud runtime fixture reply")
+                    {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            api.projection_objects
+                .as_ref()
+                .unwrap()
+                .bytes
+                .lock()
+                .unwrap()
+                .get(&pending.0)
+                .unwrap(),
+            &pending.1,
+            "Restart must replay the original encrypted outbox bytes"
+        );
+        let client = api.client().await;
+        client
+            .client
+            .call(
+                zuse_rpc::methods::CREATE_THREAD_SESSION,
+                json!({"chatId":"cached-independent-tab","threadId":"chat-bob"}),
+            )
+            .await
+            .unwrap();
+        client.client.call(zuse_rpc::methods::RELAY_COMMAND,json!({"chatId":"cached-independent-tab","entry":{"id":"independent-archive-run","issuedBy":"cloud-ui","issuedAt":chrono::Utc::now().timestamp_millis(),"status":"pending","payload":{"kind":"run","messageId":"independent-archive-message","request":{"prompt":"Independent cached conversation","harness":"mock","model":"fixture","cwd":checkout,"sandbox":"workspace-write","autoApprove":false}}}})).await.unwrap();
         let terminal = client
             .client
             .call(
@@ -3529,7 +3652,7 @@ for line in sys.stdin:
         assert_eq!(runtime_post_for_url(&endpoint, "alice", &body).await.0, 404);
         sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustStorageEnrollment,capabilities}',$1) WHERE workspace_id='ws-bob'").bind(json!(["rust-rpc-v1","rust-session-commands-v1"])).execute(&api.pool).await.unwrap();
         assert_eq!(runtime_post_for_url(&endpoint, "bob", &body).await.0, 409);
-        sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustStorageEnrollment,capabilities}',$1) WHERE workspace_id='ws-bob'").bind(json!(["rust-rpc-v1","rust-session-commands-v1","rust-workspace-lifecycle-v1"])).execute(&api.pool).await.unwrap();
+        sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustStorageEnrollment,capabilities}',$1) WHERE workspace_id='ws-bob'").bind(json!(["rust-rpc-v1","rust-session-commands-v1","rust-workspace-lifecycle-v1","rust-transcript-projection-v1"])).execute(&api.pool).await.unwrap();
         let (status, archiving) = runtime_post_for_url(&endpoint, "bob", &body).await;
         assert_eq!(status, 200, "{archiving}");
         assert_eq!(archiving["state"], "archiving");
@@ -3646,6 +3769,74 @@ for line in sys.stdin:
         assert_eq!(archived["backupVerified"], false);
         assert_eq!(archived["lifecyclePhase"], "paused");
         assert!(archived["operationId"].is_string());
+        let cache = zuse_cloud_projection::reader::Reader::new(&api.origin).unwrap();
+        let cached = cache
+            .head("bob", "ws-bob", "session-bob")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cached.chat.archived);
+        assert!(cached.queue_paused);
+        let independent = cache
+            .head("bob", "ws-bob", "cached-independent-tab")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(independent.chat.archived);
+        assert!(
+            serde_json::to_string(&independent.transcript)
+                .unwrap()
+                .contains("Independent cached conversation")
+        );
+        let wire:Value=reqwest::Client::new().get(format!("{}/v1/cloud/workspaces/ws-bob/sessions/session-bob/transcript-checkpoint?format=zuse-rust-transcript-v1",api.origin)).bearer_auth("bob").send().await.unwrap().json().await.unwrap();
+        let independent_decoded = decrypt_projection(&wire["checkpoint"]);
+        assert_eq!(
+            independent_decoded["payloadFormat"],
+            zuse_cloud_projection::FORMAT
+        );
+        assert!(
+            independent_decoded["transcript"]
+                .to_string()
+                .contains("Original guest prompt")
+        );
+        let cached_json = serde_json::to_string(&cached.transcript).unwrap();
+        assert!(
+            cached_json.contains("Original guest prompt")
+                && cached_json.contains("Cloud runtime fixture reply")
+        );
+        let root = cache
+            .head("bob", "ws-bob", "chat-bob")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(root.chat.archived);
+        assert!(root.conversations.iter().any(|c| c.id == "session-bob"));
+        let legacy = reqwest::Client::new()
+            .get(format!(
+                "{}/v1/cloud/workspaces/ws-bob/sessions/session-bob/transcript-checkpoint",
+                api.origin
+            ))
+            .bearer_auth("bob")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(legacy.status(), 409);
+        let raw = api
+            .projection_objects
+            .as_ref()
+            .unwrap()
+            .bytes
+            .lock()
+            .unwrap()
+            .values()
+            .find(|bytes| bytes.len() > 10)
+            .cloned()
+            .unwrap();
+        assert!(
+            !String::from_utf8(raw)
+                .unwrap()
+                .contains("Original guest prompt")
+        );
         // Expiry is not a retirement authorization, and reading does not schedule a wake.
         assert!(
             !api.control
@@ -4383,6 +4574,7 @@ async fn authenticated_creation_is_atomic_idempotent_and_honors_existing_billing
 struct ProjectionObjects {
     bytes: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
     gets: std::sync::atomic::AtomicUsize,
+    attempts: std::sync::Mutex<Vec<(String, Vec<u8>)>>,
     fail: std::sync::atomic::AtomicBool,
 }
 #[async_trait]
@@ -4392,6 +4584,10 @@ impl zuse_cloud::objects::Objects for ProjectionObjects {
         Ok(self.bytes.lock().unwrap().get(key).cloned())
     }
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError> {
+        self.attempts
+            .lock()
+            .unwrap()
+            .push((key.into(), bytes.to_vec()));
         if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(ApiError::unavailable("cloud_transcript_store_unavailable"));
         }
