@@ -1,15 +1,18 @@
 //! Reference Cloud → Usage and billing, backed by the host account authority.
-use crate::{composer::ComposerInput, popover, settings::widgets, state::AppState, theme::Theme};
+use crate::{settings::widgets, state::AppState, theme::Theme};
 use gpui::{prelude::*, *};
 use serde_json::{Value, json};
-use zuse_model::cloud_billing::{cap_dollars, cap_micros, usd};
-use zuse_protocol::{
-    cloud_billing::{BillingSummary, BillingUsageItem, BillingUsagePage},
-};
+use zuse_model::cloud_billing::{cap_dollars, cap_micros};
+use zuse_protocol::cloud_billing::{BillingSummary, BillingUsageItem, BillingUsagePage};
 use zuse_rpc::methods;
 type Owner = (String, Option<String>);
 fn active_owner(state: &AppState) -> Option<Owner> {
-    Some((state.cloud_user_id()?.to_owned(), state.cloud_account.as_ref()?["orgId"].as_str().map(str::to_owned)))
+    Some((
+        state.cloud_user_id()?.to_owned(),
+        state.cloud_account.as_ref()?["orgId"]
+            .as_str()
+            .map(str::to_owned),
+    ))
 }
 
 fn request_params(owner: &Owner, mut params: Value) -> Value {
@@ -44,11 +47,16 @@ pub struct CloudBillingPage {
     cursor: Option<String>,
     error: Option<String>,
     notice: Option<String>,
-    cap: Entity<ComposerInput>,
+    cap: Entity<zuse_viewport::input::TextInput>,
+    credit_focus: [FocusHandle; 4],
+    workspaces: Vec<Value>,
+    history_open: bool,
+    workspace_task: Option<Task<()>>,
     cap_request: Option<(i64, String)>,
 }
 impl CloudBillingPage {
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        zuse_viewport::input::bind_keys(cx);
         let repository_panel =
             cx.new(|cx| zuse_viewport::cloud_repositories::RepositoryPanel::new(window, cx));
         cx.subscribe(
@@ -95,8 +103,9 @@ impl CloudBillingPage {
             },
         )
         .detach();
-        let cap = cx
-            .new(|cx| ComposerInput::new("Monthly overage cap in dollars", cx).with_single_line());
+        let cap = cx.new(|cx| {
+            zuse_viewport::input::TextInput::new("Monthly overage cap in dollars", window, cx)
+        });
         cx.observe(&state, |_: &mut Self, _, cx| cx.notify())
             .detach();
         Self {
@@ -123,25 +132,53 @@ impl CloudBillingPage {
             error: None,
             notice: None,
             cap,
+            credit_focus: std::array::from_fn(|_| cx.focus_handle()),
+            workspaces: vec![],
+            history_open: false,
+            workspace_task: None,
             cap_request: None,
         }
     }
     fn sign_in(&mut self, cx: &mut Context<Self>) {
-        if self.account_task.is_some() { return; }
-        if let Some(url) = self.state.read(cx).cloud_account.as_ref()
+        if self.account_task.is_some() {
+            return;
+        }
+        if let Some(url) = self
+            .state
+            .read(cx)
+            .cloud_account
+            .as_ref()
             .and_then(|status| status["login"]["url"].as_str())
-            .filter(|url| url.starts_with("https://")) {
+            .filter(|url| url.starts_with("https://"))
+        {
             cx.open_url(url);
             return;
         }
-        let Some(engine) = self.state.read(cx).engine().map(|engine| engine.controller()) else { return; };
+        let Some(engine) = self
+            .state
+            .read(cx)
+            .engine()
+            .map(|engine| engine.controller())
+        else {
+            return;
+        };
         self.account_error = None;
         self.account_task = Some(cx.spawn(async move |this, cx| {
-            let result = engine.client().call_scoped(methods::CLOUD_ACCOUNT_SIGN_IN, json!({})).await;
+            let result = engine
+                .client()
+                .call_scoped(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}))
+                .await;
             let _ = this.update(cx, |this, cx| {
                 this.account_task = None;
                 match result {
-                    Ok(value) => if let Some(url) = value["url"].as_str().filter(|url| url.starts_with("https://")) { cx.open_url(url); },
+                    Ok(value) => {
+                        if let Some(url) = value["url"]
+                            .as_str()
+                            .filter(|url| url.starts_with("https://"))
+                        {
+                            cx.open_url(url);
+                        }
+                    }
                     Err(error) => this.account_error = Some(error.to_string()),
                 }
                 cx.notify();
@@ -160,6 +197,7 @@ impl CloudBillingPage {
             return;
         };
         if !more {
+            self.load_workspaces(cx);
             self.load_subscriptions(cx);
             self.load_credits(false, cx);
         }
@@ -169,9 +207,10 @@ impl CloudBillingPage {
         let expected = owner.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
             futures::try_join!(
-                engine
-                    .client()
-                    .call_scoped(methods::CLOUD_BILLING_SUMMARY, request_params(&expected, json!({}))),
+                engine.client().call_scoped(
+                    methods::CLOUD_BILLING_SUMMARY,
+                    request_params(&expected, json!({}))
+                ),
                 engine.client().call_scoped(
                     methods::CLOUD_BILLING_USAGE,
                     request_params(&expected, json!({"limit":10,"cursor":cursor}))
@@ -198,7 +237,7 @@ impl CloudBillingPage {
                                 if !more {
                                     this.items.clear();
                                     this.cap.update(cx, |input, cx| {
-                                        input.set_text(cap_dollars(summary.overage_cap_micros), cx)
+                                        input.set_value(cap_dollars(summary.overage_cap_micros), cx)
                                     });
                                 }
                                 for item in page.items {
@@ -233,6 +272,50 @@ impl CloudBillingPage {
             });
         }));
     }
+    fn load_workspaces(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_task.is_some() {
+            return;
+        }
+        let Some(owner) = active_owner(self.state.read(cx)).filter(|(_, org)| org.is_none()) else {
+            return;
+        };
+        let Some(engine) = self
+            .state
+            .read(cx)
+            .engine()
+            .map(|engine| engine.controller())
+        else {
+            return;
+        };
+        let expected = owner.clone();
+        self.workspace_task = Some(cx.spawn(async move |this, cx| {
+            let value = engine
+                .client()
+                .call_scoped(
+                    methods::CLOUD_WORKSPACES,
+                    request_params(&expected, json!({})),
+                )
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if active_owner(this.state.read(cx)).as_ref() != Some(&owner) {
+                    return;
+                }
+                this.workspace_task = None;
+                match value {
+                    Ok(value) if bound(&value, &owner) => {
+                        this.workspaces =
+                            value["workspaces"].as_array().cloned().unwrap_or_default()
+                    }
+                    Err(error) => this.error = Some(error.to_string()),
+                    _ => {
+                        this.error =
+                            Some("Could not load cloud workspaces. Refresh to retry.".into())
+                    }
+                }
+                cx.notify();
+            });
+        }));
+    }
     fn load_subscriptions(&mut self, cx: &mut Context<Self>) {
         if self.subscription_task.is_some() {
             return;
@@ -247,7 +330,10 @@ impl CloudBillingPage {
         let job = gpui_tokio::Tokio::spawn(cx, async move {
             engine
                 .client()
-                .call_scoped(methods::CLOUD_BILLING_ENTITLEMENTS, request_params(&expected, json!({})))
+                .call_scoped(
+                    methods::CLOUD_BILLING_ENTITLEMENTS,
+                    request_params(&expected, json!({})),
+                )
                 .await
         });
         self.subscription_task = Some(cx.spawn(async move |this, cx| {
@@ -284,7 +370,7 @@ impl CloudBillingPage {
             });
         }));
     }
-    fn billing_link(&mut self, cx: &mut Context<Self>) {
+    fn billing_link(&mut self, force_portal: bool, cx: &mut Context<Self>) {
         if self.portal_task.is_some() {
             return;
         }
@@ -294,7 +380,11 @@ impl CloudBillingPage {
         let Some(engine) = self.state.read(cx).engine().map(|e| e.controller()) else {
             return;
         };
-        let Some(subscribed) = self.subscribed else {
+        let subscribed = if force_portal {
+            true
+        } else if let Some(value) = self.subscribed {
+            value
+        } else {
             return;
         };
         self.error = None;
@@ -308,11 +398,14 @@ impl CloudBillingPage {
                     } else {
                         methods::CLOUD_BILLING_CHECKOUT
                     },
-                    request_params(&expected, if subscribed {
-                        json!({})
-                    } else {
-                        json!({"offerId":"cloud-workspace-standard-v1"})
-                    }),
+                    request_params(
+                        &expected,
+                        if subscribed {
+                            json!({})
+                        } else {
+                            json!({"offerId":"cloud-workspace-standard-v1"})
+                        },
+                    ),
                 )
                 .await
         });
@@ -373,11 +466,14 @@ impl CloudBillingPage {
                     } else {
                         methods::CLOUD_PREPAID_BALANCE
                     },
-                    request_params(&expected, if buy {
-                        json!({"amountCents":amount})
-                    } else {
-                        json!({})
-                    }),
+                    request_params(
+                        &expected,
+                        if buy {
+                            json!({"amountCents":amount})
+                        } else {
+                            json!({})
+                        },
+                    ),
                 )
                 .await
         });
@@ -428,7 +524,7 @@ impl CloudBillingPage {
         if self.task.is_some() {
             return;
         }
-        let Some(amount) = cap_micros(self.cap.read(cx).text()) else {
+        let Some(amount) = cap_micros(&self.cap.read(cx).value(cx)) else {
             self.error =
                 Some("Enter a nonnegative dollar amount with up to six decimal places.".into());
             cx.notify();
@@ -456,7 +552,10 @@ impl CloudBillingPage {
                 .client()
                 .call_scoped(
                     methods::CLOUD_BILLING_CAP,
-                    request_params(&expected, json!({"overageCapMicros":amount,"idempotencyKey":key})),
+                    request_params(
+                        &expected,
+                        json!({"overageCapMicros":amount,"idempotencyKey":key}),
+                    ),
                 )
                 .await
         });
@@ -472,7 +571,7 @@ impl CloudBillingPage {
                         match serde_json::from_value::<BillingSummary>(value["data"].clone()) {
                             Ok(summary) => {
                                 this.cap.update(cx, |input, cx| {
-                                    input.set_text(cap_dollars(summary.overage_cap_micros), cx)
+                                    input.set_value(cap_dollars(summary.overage_cap_micros), cx)
                                 });
                                 this.summary = Some(summary);
                                 this.cap_request = None;
@@ -502,6 +601,7 @@ impl Render for CloudBillingPage {
         let active = active_owner(self.state.read(cx));
         if self.owner != active {
             self.owner = active;
+            self.tab = Default::default();
             self.loaded = false;
             self.task = None;
             self.portal_task = None;
@@ -512,12 +612,15 @@ impl Render for CloudBillingPage {
             self.credit_amount = 2500;
             self.credit_error = None;
             self.summary = None;
+            self.workspaces.clear();
+            self.history_open = false;
+            self.workspace_task = None;
             self.items.clear();
             self.cursor = None;
             self.error = None;
             self.notice = None;
             self.cap_request = None;
-            self.cap.update(cx, |i, cx| i.set_text("", cx));
+            self.cap.update(cx, |i, cx| i.set_value("".into(), cx));
         }
         if !self.loaded {
             self.load(false, cx);
@@ -529,36 +632,99 @@ impl Render for CloudBillingPage {
         let busy = self.task.is_some();
         let mut body = widgets::page_column().child(widgets::section_title_with_action(
             &theme,
-            "Cloud",
+            "Cloud workspaces (Beta)",
             None,
-            "Manage repositories, images and billing for the selected account.",
-            Some(
-                widgets::action_button(&theme, widgets::ActionTone::Quiet)
-                    .child(if busy { "Loading…" } else { "Refresh" })
-                    .id("refresh-cloud-billing")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.notice = None;
-                        this.load(false, cx);
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-            ),
+            "Connect GitHub and your coding agents, then keep work running when this app is closed.",
+            None,
         ));
         if self.owner.is_none() {
             if self.state.read(cx).cloud_account.is_some() {
                 let pending = self.account_task.is_some();
-                let login = self.state.read(cx).cloud_account.as_ref().is_some_and(|value| value["login"].is_object());
-                let error = self.account_error.as_deref().or_else(|| self.state.read(cx).cloud_account.as_ref().and_then(|value|value["error"].as_str()));
-                body = body.child(zuse_viewport::cloud_settings::account_gate(
-                    zuse_viewport::cloud_settings::sign_in_button("cloud-account-sign-in",
-                        if pending { "Signing in…" } else if login { "Continue sign-in" } else { "Sign in" })
+                let login = self
+                    .state
+                    .read(cx)
+                    .cloud_account
+                    .as_ref()
+                    .is_some_and(|value| value["login"].is_object());
+                let error = self.account_error.as_deref().or_else(|| {
+                    self.state
+                        .read(cx)
+                        .cloud_account
+                        .as_ref()
+                        .and_then(|value| value["error"].as_str())
+                });
+                body = body.child(
+                    zuse_viewport::cloud_settings::account_gate(
+                        zuse_viewport::cloud_settings::sign_in_button(
+                            "cloud-account-sign-in",
+                            if pending {
+                                "Signing in…"
+                            } else if login {
+                                "Continue sign-in"
+                            } else {
+                                "Sign in"
+                            },
+                        )
                         .when(pending, |view| view.opacity(0.6))
-                        .on_click(cx.listener(|this, _, _, cx| this.sign_in(cx))), error));
+                        .on_click(cx.listener(|this, _, _, cx| this.sign_in(cx))),
+                        error,
+                    )
+                    .mt(px(20.)),
+                );
             }
             return body.into_any_element();
         }
-        body = body.child(div().mt(px(20.)).mb(px(16.)).child(
-            zuse_viewport::cloud_settings::tabs(
+        use zuse_viewport::cloud_billing_view as view;
+        let data = view::Data {
+            subscribed: self.subscribed,
+            pending: view::Pending {
+                loading: busy || self.subscription_task.is_some(),
+                subscription: self.portal_task.is_some(),
+                credits: self.credit_task.is_some(),
+                cap: busy && self.cap_request.is_some(),
+            },
+            summary: self.summary.as_ref(),
+            usage: &self.items,
+            credits: self.credits.as_ref(),
+            credit_amount: self.credit_amount,
+            error: self.error.as_deref(),
+            credit_error: self.credit_error.as_deref(),
+            more: self.cursor.is_some(),
+            history_open: self.history_open,
+            workspaces: &self.workspaces,
+            personal: self.owner.as_ref().is_some_and(|(_, org)| org.is_none()),
+        };
+        let action = |this: &mut Self, action, _window: &mut Window, cx: &mut Context<Self>| {
+            match action {
+                view::Action::Refresh => this.load(false, cx),
+                view::Action::RefreshCredits => this.load_credits(false, cx),
+                view::Action::Subscription => this.billing_link(false, cx),
+                view::Action::ManageSubscription => this.billing_link(true, cx),
+                view::Action::SaveCap => this.save(cx),
+                view::Action::SelectCredit(amount) => this.credit_amount = amount,
+                view::Action::BuyCredits => this.load_credits(true, cx),
+                view::Action::MoreUsage => this.load(true, cx),
+                view::Action::ToggleUsageHistory => this.history_open = !this.history_open,
+            }
+            cx.notify();
+        };
+        let mut content = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .mt(px(20.))
+            .child(view::hosting(
+                &data,
+                if data.personal {
+                    "Personal workspace"
+                } else {
+                    "Organization workspace"
+                },
+                cx,
+                action,
+            ));
+        if self.subscribed == Some(true) {
+            content = content.child(zuse_viewport::cloud_settings::tabs(
                 self.tab,
                 &self.tab_focus,
                 cx,
@@ -569,184 +735,22 @@ impl Render for CloudBillingPage {
                     }
                     cx.notify();
                 },
-            ),
-        ));
-        if self.tab == zuse_viewport::cloud_settings::Tab::Setup {
-            body = body.child(self.repository_panel.clone());
-        } else {
-            if self.owner.is_some() {
-                body = body.child(widgets::group(&theme, "Subscription", if self.subscribed==Some(false){"$40 per month includes $35 of compute. Additional compute has a 5% markup."}else{"Manage your existing subscription, invoices and payment method with your billing provider."})
-                .child(widgets::card_row(&theme, false)
-                    .child(div().flex_1().child(widgets::row_title(&theme, if self.subscribed==Some(false){"Cloud subscription"}else{"Billing portal"})))
-                    .child(widgets::action_button(&theme, widgets::ActionTone::Quiet)
-                        .id("open-cloud-billing-portal")
-                        .child(if self.portal_task.is_some() { "Opening…" } else if self.subscribed==Some(false){"Subscribe to Cloud"}else if self.subscribed.is_none(){"Loading…"}else{ "Manage billing" })
-                        .on_click(cx.listener(|this, _, _, cx| this.billing_link(cx))))));
-            }
-            if self.owner.is_some() {
-                let enabled = self.credits.as_ref().is_some_and(|v| v.available)
-                    && self.credit_task.is_none();
-                let mut amounts = div().flex().gap(px(6.)).flex_1();
-                for amount in zuse_protocol::cloud_billing::PREPAID_CREDIT_AMOUNTS {
-                    amounts = amounts.child(
-                        widgets::action_button(
-                            &theme,
-                            if self.credit_amount == amount {
-                                widgets::ActionTone::Solid
-                            } else {
-                                widgets::ActionTone::Quiet
-                            },
-                        )
-                        .id(("credit-amount", amount as usize))
-                        .role(Role::RadioButton)
-                        .aria_selected(self.credit_amount == amount)
-                        .child(SharedString::from(zuse_model::cloud_billing::cents(amount)))
-                        .when(!enabled, |view| view.opacity(0.5))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if enabled {
-                                this.credit_amount = amount;
-                                cx.notify();
-                            }
-                        })),
-                    );
-                }
-                let balance = self
-                    .credits
-                    .as_ref()
-                    .map(|v| {
-                        format!(
-                            "Balance: {}",
-                            zuse_model::cloud_billing::cents(v.credit_cents)
-                        )
-                    })
-                    .unwrap_or_else(|| "Loading balance…".into());
-                let mut credits=widgets::group(&theme,"Prepaid credits","Applies automatically to future Zuse invoices, including subscriptions. Unused credit rolls forward. Your usage allowance and spending cap stay the same.")
-                .child(widgets::card_row(&theme,false).child(div().flex_1().child(widgets::row_title(&theme,balance)))
-                    .child(widgets::action_button(&theme,widgets::ActionTone::Quiet).id("refresh-prepaid-credits").child("Refresh").on_click(cx.listener(|this,_,_,cx|this.load_credits(false,cx)))))
-                .child(widgets::card_row(&theme,false).child(amounts)
-                    .child(widgets::action_button(&theme,widgets::ActionTone::Solid).id("buy-prepaid-credits").child(if self.credit_task.is_some(){"Loading…"}else{"Buy credits"}).when(!enabled,|view|view.opacity(0.5)).on_click(cx.listener(|this,_,_,cx|this.load_credits(true,cx)))));
-                if let Some(balance) = &self.credits {
-                    if balance.debit_cents > 0 {
-                        credits = credits.child(widgets::card_row(&theme, false).child(
-                            widgets::row_title(
-                                &theme,
-                                format!(
-                                    "Outstanding balance: {}",
-                                    zuse_model::cloud_billing::cents(balance.debit_cents)
-                                ),
-                            ),
-                        ));
-                    }
-                    if !balance.available {
-                        credits = credits.child(widgets::card_row(&theme, false).child(
-                            widgets::row_title(
-                                &theme,
-                                "Credit purchases are not enabled for this workspace yet.",
-                            ),
-                        ));
-                    }
-                }
-                if let Some(error) = &self.credit_error {
-                    credits = credits.child(
-                        widgets::card_row(&theme, false)
-                            .child(widgets::row_title(&theme, error.clone())),
-                    );
-                }
-                body = body.child(credits);
-            }
-            if let Some(error) = &self.error {
-                body = body.child(
-                    div()
-                        .text_color(theme.text_muted)
-                        .child(SharedString::from(error.clone())),
-                );
-            }
-            if let Some(notice) = &self.notice {
-                body = body.child(
-                    div()
-                        .text_color(theme.text_muted)
-                        .child(SharedString::from(notice.clone())),
-                );
-            }
-            if let Some(summary) = &self.summary {
-                let status = match summary.status {
-                    zuse_protocol::cloud_billing::BillingStatus::BillingHold => "Billing hold",
-                    zuse_protocol::cloud_billing::BillingStatus::Ended => "Ended",
-                    zuse_protocol::cloud_billing::BillingStatus::Grace => "Grace",
-                    zuse_protocol::cloud_billing::BillingStatus::Manual => "Manual",
-                    _ => "Active",
-                };
-                let description = format!(
-                    "{} per month includes {} of compute. Additional compute markup: {}%.",
-                    usd(summary.base_price_micros),
-                    usd(summary.included_provider_cost_micros),
-                    summary.markup_basis_points as f64 / 100.
-                );
-                let row = |title: String, description: String| {
-                    widgets::card_row(&theme, false).child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(widgets::row_title(&theme, title))
-                            .child(
-                                div()
-                                    .text_color(theme.text_muted)
-                                    .text_size(px(12.))
-                                    .child(description),
-                            ),
-                    )
-                };
-                body=body.child(widgets::group(&theme,"Usage and billing",description)
-                .child(row(format!("{} of {} included used",usd(summary.included_used_micros),usd(summary.included_provider_cost_micros)),format!("{} remaining · {} overage · {} invoice estimate before tax",usd(summary.included_remaining_micros),usd(summary.overage_charge_micros),usd(summary.current_invoice_estimate_micros))))
-                .child(row(status.into(),if summary.usage_provisional{"Usage includes provisional reservations and may change after reconciliation.".into()}else{"Usage reconciled with the provider.".into()}))
-                .child(widgets::card_row(&theme,false).child(div().flex_1().child(widgets::row_title(&theme,"Monthly overage cap")).child(div().text_color(theme.text_muted).text_size(px(12.)).child("New billable operations are blocked when this pre-tax limit is reached.")))
-                    .child(div().w(px(110.)).child(popover::dialog_field(self.cap.clone().into_any_element())))
-                    .child(widgets::action_button(&theme, widgets::ActionTone::Solid).child(if busy{"Saving…"}else{"Save"}).id("save-cloud-cap").on_click(cx.listener(|this,_,_,cx|this.save(cx))))));
-                let mut usage = widgets::group(
-                    &theme,
-                    "Recent usage",
-                    format!(
-                        "Retained image storage: {}",
-                        usd(summary.storage_cost_micros)
-                    ),
-                );
-                for item in &self.items {
-                    usage = usage.child(row(
-                        format!(
-                            "{} {}",
-                            item.usage_kind.as_deref().unwrap_or(&item.resource_kind),
-                            item.resource_id
-                        ),
-                        format!(
-                            "{} · {} · {}",
-                            item.provider,
-                            usd(item.provider_cost_micros),
-                            item.status
-                        ),
-                    ));
-                }
-                if self.items.is_empty() {
-                    usage = usage.child(row(
-                        "No completed sandbox runs in this billing period.".into(),
-                        String::new(),
-                    ));
-                }
-                if self.cursor.is_some() {
-                    usage = usage.child(
-                        widgets::action_button(&theme, widgets::ActionTone::Quiet)
-                            .child("Load more")
-                            .id("more-cloud-usage")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.load(true, cx);
-                                cx.notify();
-                            })),
-                    );
-                }
-                body = body.child(usage);
-            } else if self.owner.is_none() {
-                body = body.child(widgets::row_title(&theme, "Sign in to view cloud billing."));
-            }
+            ));
         }
+        if self.tab == zuse_viewport::cloud_settings::Tab::Setup {
+            if self.subscribed == Some(true) {
+                content = content.child(self.repository_panel.clone());
+            }
+        } else {
+            content = content.child(view::usage(
+                &data,
+                self.cap.clone().into_any_element(),
+                &self.credit_focus,
+                cx,
+                action,
+            ));
+        }
+        body = body.child(content);
         div()
             .id("cloud-billing-settings")
             .size_full()

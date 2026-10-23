@@ -654,7 +654,7 @@ impl SettingsSection {
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
-            SettingsSection::Cloud => "Cloud",
+            SettingsSection::Cloud => "Cloud workspaces",
             SettingsSection::Devices => "Remote access",
             SettingsSection::Harnesses => "Providers",
             SettingsSection::Defaults => "Default models",

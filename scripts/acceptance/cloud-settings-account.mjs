@@ -35,31 +35,33 @@ try{
  await update({state:user('avery')});
  await until(s=>s.events.some(e=>e.method==='CloudProjects'&&e.expectedAccountId==='avery'),'Signed-in cloud repositories must bind to General account');
  await sleep(250);stage='signed-in';page.screenshot('cloud-account-signed-in-setup.png');
- await click(528,163);await sleep(200);page.screenshot('cloud-account-signed-in-usage.png');
- await click(416,163);page.run(['press','End']);await sleep(100);
+ await click(528,331);await sleep(200);page.screenshot('cloud-account-signed-in-usage.png');
+ await click(416,331);page.run(['press','End']);await sleep(100);
  assert.ok((await status()).events.some(e=>e.method==='CloudBillingSummary'&&e.owner==='avery'));
  // Preserve the focused Usage tab and verify its roving keyboard focus in compact layout.
  page.run(['set','viewport','760','900']);await sleep(200);page.screenshot('cloud-account-compact-usage.png');
  const png=fs.readFileSync('.context/cloud-account-compact-usage.png').toString('base64');
- const focus=page.evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${png}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const x=c.getContext('2d');x.drawImage(i,0,0);const p=x.getImageData(0,0,i.width,i.height).data;let min=i.width,max=-1;for(let y=130;y<180;y++)for(let col=50;col<300;col++){const n=(y*i.width+col)*4;if(p[n+1]>p[n]+35&&p[n+1]>p[n+2]+70){min=Math.min(min,col);max=Math.max(max,col);}}return {min,max};})()`);
+ const focus=page.evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${png}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const x=c.getContext('2d');x.drawImage(i,0,0);const p=x.getImageData(0,0,i.width,i.height).data;let min=i.width,max=-1;for(let y=310;y<350;y++)for(let col=50;col<300;col++){const n=(y*i.width+col)*4;if(p[n+1]>p[n]+35&&p[n+1]>p[n+2]+70){min=Math.min(min,col);max=Math.max(max,col);}}return {min,max};})()`);
  assert.ok(focus.min>=176&&focus.max<=288&&focus.max>focus.min,'End must focus the selected Usage tab');
  page.run(['set','viewport','1280','1000']);await sleep(200);
  // Hold requests for A, sign out, then deliver those old responses.
- await update({holdCloud:true});await click(1078,211);await sleep(100);
+ const prior=(await status()).events.filter(e=>e.method==='CloudBillingSummary').length;
+ await update({holdCloud:true});await click(416,331);await click(528,331);await sleep(100);
  const before=(await status()).events.filter(e=>e.method==='CloudBillingSummary').length;
  const held=(await status()).events.filter(e=>e.method==='CloudBillingSummary').at(-1).id;
- assert.ok(before>0);await update({state:{user:null,login:null,error:null}});await sleep(200);
+ assert.ok(before>prior,'Usage navigation starts the held billing refresh');await update({state:{user:null,login:null,error:null}});await sleep(200);
  await update({holdCloud:false});await sleep(200);stage='late-responses';page.screenshot('cloud-account-signed-out-after-late-responses.png');
  const initial=fs.readFileSync('.context/cloud-account-signed-out.png').toString('base64');
  const retired=fs.readFileSync('.context/cloud-account-signed-out-after-late-responses.png').toString('base64');
  const difference=page.evaluate(`(async()=>{const read=async b=>{const i=new Image();i.src='data:image/png;base64,'+b;await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const x=c.getContext('2d');x.drawImage(i,0,0);return x.getImageData(360,149,768,80).data;};const a=await read('${initial}'),b=await read('${retired}');let n=0;for(let i=0;i<a.length;i++)if(a[i]!==b[i])n++;return n;})()`);
  assert.equal(difference,0,'Late responses must leave the signed-out card unchanged');
  // Switching to B must recreate all owner-scoped requests with B's binding.
- await update({state:user('other')});await sleep(250);await click(416,163);
+ await update({state:user('other')});await sleep(250);await click(416,331);
  await until(s=>s.events.some(e=>e.method==='CloudProjects'&&e.expectedAccountId==='other'),'Account replacement must bind fresh repository requests');
  page.screenshot('cloud-account-switched-setup.png');
  await click(70,60);await sleep(200);page.screenshot('cloud-account-general-same-account.png');
  const proof=await status();assert.equal(proof.events.filter(e=>e.blocked).length,0);
+ assert.equal(proof.events.filter(e=>['CloudBillingPortal','CloudBillingCheckout','CloudPrepaidCheckout','CloudBillingSetCap'].includes(e.method)).length,0,'Account navigation does not request billing writes');
  assert.ok(proof.events.filter(e=>e.method?.startsWith('CloudBilling')||e.method==='CloudPrepaidBalance').every(e=>e.expectedAccountId===e.owner),'Billing requests pin the displayed account');
  assert.equal(page.run(['errors']).errors.length,0,'Cloud lifecycle must not produce browser runtime errors');
  assert.ok(proof.events.some(e=>e.cancel===held),'Account replacement cancels its outstanding billing request');

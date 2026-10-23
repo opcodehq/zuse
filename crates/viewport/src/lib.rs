@@ -10,6 +10,7 @@ pub mod branding;
 mod browser;
 mod cloud;
 mod cloud_billing;
+pub mod cloud_billing_view;
 mod cloud_history;
 pub mod cloud_repositories;
 pub mod cloud_settings;
@@ -92,6 +93,7 @@ pub struct WorkspaceView {
     repository_requests: HashMap<u64, u64>,
     billing: cloud_billing::Billing,
     cloud_settings_focus: [FocusHandle; 2],
+    cloud_credit_focus: [FocusHandle; 4],
     billing_cap: Entity<input::TextInput>,
     cloud_branch: Entity<input::TextInput>,
     cloud_sync_path: Entity<input::TextInput>,
@@ -519,7 +521,8 @@ impl WorkspaceView {
             repository_requests: HashMap::new(),
             billing: Default::default(),
             cloud_settings_focus: std::array::from_fn(|_| cx.focus_handle()),
-            billing_cap: cx.new(|cx| input::TextInput::new("Monthly cap in dollars", window, cx)),
+            cloud_credit_focus: std::array::from_fn(|_| cx.focus_handle()),
+            billing_cap: cx.new(|cx| input::TextInput::new("Monthly overage cap in dollars", window, cx)),
             cloud_branch,
             cloud_sync_path,
             cloud_model,
@@ -1681,14 +1684,27 @@ pub fn initialize(cx: &mut App) {
         KeyBinding::new("ctrl-s", SaveFile, Some("Workspace")),
     ]);
 
+    let fonts: &[&[u8]] = &[
+        include_bytes!("../../ui/assets/fonts/Geist.ttf"),
+        include_bytes!("../../ui/assets/fonts/Geist-Italic.ttf"),
+        include_bytes!("../../ui/assets/fonts/Geist-Medium.ttf"),
+        include_bytes!("../../ui/assets/fonts/Geist-MediumItalic.ttf"),
+        include_bytes!("../../ui/assets/fonts/Geist-SemiBold.ttf"),
+        include_bytes!("../../ui/assets/fonts/Geist-SemiBoldItalic.ttf"),
+        include_bytes!("../../ui/assets/fonts/Geist-Bold.ttf"),
+        include_bytes!("../../ui/assets/fonts/Geist-BoldItalic.ttf"),
+        include_bytes!("../../ui/assets/fonts/GeistMono.ttf"),
+        include_bytes!("../../ui/assets/fonts/GeistMono-Italic.ttf"),
+        include_bytes!("../../ui/assets/fonts/GeistMono-Medium.ttf"),
+        include_bytes!("../../ui/assets/fonts/GeistMono-MediumItalic.ttf"),
+        include_bytes!("../../ui/assets/fonts/GeistMono-SemiBold.ttf"),
+        include_bytes!("../../ui/assets/fonts/GeistMono-SemiBoldItalic.ttf"),
+        include_bytes!("../../ui/assets/fonts/GeistMono-Bold.ttf"),
+        include_bytes!("../../ui/assets/fonts/GeistMono-BoldItalic.ttf"),
+    ];
     cx.text_system()
-        .add_fonts(vec![std::borrow::Cow::Borrowed(include_bytes!(
-            "../../ui/assets/fonts/GeistMono.ttf"
-        ))])
-        .expect("bundled monospace font");
-    cx.text_system()
-        .add_fonts(vec![std::borrow::Cow::Borrowed(include_bytes!(
-            "../../ui/assets/fonts/Geist.ttf"
-        ))])
-        .expect("bundled UI font");
+        .add_fonts(
+            fonts.iter().map(|font| std::borrow::Cow::Borrowed(*font)).collect(),
+        )
+        .expect("bundled interface fonts");
 }

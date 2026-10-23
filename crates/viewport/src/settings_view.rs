@@ -30,7 +30,7 @@ impl Section {
     ];
     fn title(self) -> &'static str {
         match self {
-            Self::Cloud => "Cloud",
+            Self::Cloud => "Cloud workspaces",
             Self::General => "General",
             Self::Providers => "Providers",
             Self::Defaults => "Default models",
@@ -56,7 +56,7 @@ impl Section {
     }
     fn description(self) -> &'static str {
         match self {
-            Self::Cloud => "Cloud usage, monthly allowance and overage cap.",
+            Self::Cloud => "Connect GitHub and your coding agents, then keep work running when this app is closed.",
             Self::General => "Workspace defaults and your personal app preferences.",
             Self::Providers => {
                 "Verify what’s installed, signed in, and which subscription each provider runs on."
@@ -288,7 +288,11 @@ impl WorkspaceView {
                                             .text_size(px(20.))
                                             .line_height(px(28.))
                                             .font_weight(FontWeight::MEDIUM)
-                                            .child(section.title()),
+                                            .child(if section == Section::Cloud {
+                                                "Cloud workspaces (Beta)"
+                                            } else {
+                                                section.title()
+                                            }),
                                     )
                                     .child(
                                         s::description_text(section.description())
