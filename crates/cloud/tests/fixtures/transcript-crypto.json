@@ -1,0 +1,33 @@
+{
+  "masterKey": "HBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw",
+  "transcriptKey": "HR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0",
+  "wrappedKey": "{\"version\":1,\"iv\":\"ERERERERERERERER\",\"ciphertext\":\"6P2rGgeA3O_X5Mo7VlV1HQ4L5LGovotnhSiHa9p0kvQdu9jyGjBXJfDp7a7Wg_GH2PuTB2_0dfiD4dk\"}",
+  "head1": {
+    "sessionId": "session-bob",
+    "cursor": {
+      "epoch": "original/epoch !é",
+      "version": 1
+    },
+    "ciphertext": "{\"version\":1,\"compression\":\"gzip\",\"iv\":\"AQEBAQEBAQEBAQEB\",\"ciphertext\":\"zTL1vV1TGvuDvHcFYXoJ8VH9pML84955E8rFjsEKthdyoDhkLjDBlmG9Wb_EX-w2il-L67gm694eemtzYiM6QwipJu7_Wx6ieNMUsEKBiOLH8Qit-mLuzKcM-Fjw2f4duY4rM6AWMYyflicZVSPFXJnLmbs_6qynOny1hhs32NGKK8RfP9CbFa1g95AmKNKOBzw92XRY_HLmTG5Dno1BfqzsdUfxvSQWxAYtiBwrAzv0-7O2LePlQmNTbd5AN-XXhrS5ks5u3fWv7LCgMlWC6pPYeq_5E4ewZxG3Pzje3i3glFclOIzmDX6CDdDku-kNdZMqDMok59W0EHEqIS0O1XEbGl5UqWBLmhrXD8753e0GigF3vG9xl2H9eybba2pWbEgpVpCvnNMEanzFraxOQJ1F58VBez4YY0lvc8JIUvxPSXWfuklptv2qNKEywIQTnwRJ9A\"}",
+    "ciphertextSha256": "4TM16TKz1NNTD6eNQLDV5jVKJ3bue2BHQ-MhtOjdnMM"
+  },
+  "head2": {
+    "sessionId": "session-bob",
+    "cursor": {
+      "epoch": "original/epoch !é",
+      "version": 2
+    },
+    "ciphertext": "{\"version\":1,\"compression\":\"gzip\",\"iv\":\"AgICAgICAgICAgIC\",\"ciphertext\":\"czTA8-TcZKJK9Rm5PJQu2g8qx0dWv5iEdwWj7OToeam-isYUSc2nd71S-GQZQ9HEaUEKpYnZ0pBRJW5EW_vj4uzxOTGuQlNDnxsnSg6ViWouXizJ0yn_Euxd2uP_0Ct8kYR-CGzGDlM-stSx3_LNzjG1L6nj-WMWehYmwz88MrAgTQBH-6Yqt35k6U9DBi1XsB7pt9wrPZ8JVfJnxlXQT1tkP8-q0RtDrZXYlTeVQFFYZ6hA0MqT0Fm_wtkGAZE55ltjGeo6gqVFjvn3_1Nk_TlAGyvaECBpnQmyDh8pRPYKAlcW8UBYGPQCAZ6Dx_6JwE3DBBssQeIaCPJoKo6nNYzqsSao1ViSTDrvt3qKUPc9oq9hnBvJIG25sgryZ4tzO4dvPO-ujEQ_go_xEFAValp2S-US3F3kNUxUBhVhDUrDtNvW0iXcM0qhkmLwQOkQqR7qf5WX_lY\"}",
+    "ciphertextSha256": "7QpdfuD1WZiEAfDT4WEBmGmhIBZ8X8iuDMbRS6BpxUI"
+  },
+  "page": {
+    "sessionId": "session-bob",
+    "cursor": {
+      "epoch": "original/epoch !é",
+      "version": 2
+    },
+    "beforeSequence": 10,
+    "ciphertext": "{\"version\":1,\"compression\":\"gzip\",\"iv\":\"AwMDAwMDAwMDAwMD\",\"ciphertext\":\"TgrBu7vagAH4HIdztE7KFGIWpNM5Snj0PZ5bV9biUvZ0IiNF8JkmPMb6QOTvacsxVhWytprua6ATdxMJXLmf4eP9VefuZFTGRTVlYFO6aN2PpfVQpAYld3RlkdmVO57lqKx3zc8wyZ7YUfLqFURxkAcJnoCYou3JZ8q-76hb0bPNdW87GDQD_jHzn4eBdlPyF255546jXzBbWb88Qwon5B5egEbFo1ezkayvcIxchAhp5-vxxmPkyDOarBy67HqhdX1UeH26DRUsR5BN4sGgtQXTQ5c4c4L5_E-7X-0dSff4LHxGV_2yB0yvPo5lVC5iwHFQf6iFNoG74TQQWUU\"}",
+    "ciphertextSha256": "sYoB7ON7z2ab2Ok5Vt20e_CmgUiA_vWzZ8XMaOMHft8"
+  }
+}

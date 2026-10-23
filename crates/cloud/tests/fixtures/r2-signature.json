@@ -1,0 +1,23 @@
+{
+  "generator": "botocore 1.42.97 S3SigV4Auth; synthetic credentials; fixed UTC",
+  "access": "AKIDEXAMPLE",
+  "secret": "fixture-secret",
+  "vectors": [
+    {
+      "method": "GET",
+      "path": "/bucket/workspaces/odd%252Fid/head.json",
+      "host": "account.r2.cloudflarestorage.com",
+      "date": "20261023T000000Z",
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261023/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=9cc2a5f71508940adc861c7a25be7a15f138253158e5963b0360388ce139ba61"
+    },
+    {
+      "method": "PUT",
+      "path": "/bucket/workspaces/odd%252Fid/head.json",
+      "host": "account.r2.cloudflarestorage.com",
+      "date": "20261023T000000Z",
+      "digest": "9933a460e84512466cdd4719f03357d95d2b1236cc1d6b14cbfa2708f023670d",
+      "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261023/auto/s3/aws4_request, SignedHeaders=host;if-none-match;x-amz-content-sha256;x-amz-date, Signature=4c47c121460617ddb8981e40d300ee82f5c5d1a364cc70285622d199a92c55f7"
+    }
+  ]
+}

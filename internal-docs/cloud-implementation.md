@@ -14,7 +14,7 @@ completed UI images in the final user-facing report.
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
-| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Cached archived transcript/files, backup/retirement/restore/delete and migration remain | Retained guest-process acceptance passed; live provider and recovery acceptance pending |
+| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Encrypted transcript upload/read contracts and direct R2 transport added; Rust guest projections, cached archived UI/files, backup/retirement/restore/delete and migration remain | Retained guest-process acceptance passed; live provider and recovery acceptance pending |
 | F: complete GPUI parity | Existing partial UI; complete reference comparison pending | Pending |
 | G: migration/cutover | Read-only inspection added; ownership handoff, guest conversion, archive migration and live cutover pending | Pending |
 
@@ -58,6 +58,8 @@ With `ZUSE_CLOUD_RUNTIME_WRITES=true`, these routes are additionally registered:
 - `POST /v1/cloud/workspaces/:id/commands`, `GET .../commands/:commandId`,
   `DELETE .../commands/:commandId`, `GET .../commands/watch?afterRevision=...`.
 - `GET /v1/cloud/workspaces/:id/data-key` (authorized editor only).
+- `POST /v1/cloud/workspaces/:id/runtime/transcript-checkpoint` and `.../transcript-message-page` (encrypted projection publication; requires R2 configuration).
+- `GET /v1/cloud/workspaces/:id/sessions/:sessionId/transcript-checkpoint` and `.../transcript-message-page` (registered when transcript storage/key configuration is present; available in read-only mode).
 - `POST /v1/cloud/workspaces/:id/runtime/commands/lease` and `.../ack`.
   Mailbox enqueue/lease additionally require explicit per-workspace
   `request_config.rustCommandMailboxEnabled=true`; leave off until guest delivery
@@ -806,3 +808,64 @@ and shell syntax checks pass. A launcher smoke check confirms retained identity
 is required and no fresh boot token or administrative provider key reaches the
 guest. Live provider, recovery, browser and native desktop UI acceptance remain
 pending. No UI changed in this chunk, so no new screenshots are claimed.
+
+
+### Encrypted cached transcript API and R2
+
+The original transcript-checkpoint/message-page upload and read routes are ported.
+They preserve `api_cloud_transcript_checkpoints`, original object keys, AES-GCM/gzip
+ciphertext envelopes, wrapped transcript keys and public response shapes. Readers
+accept legacy workspace ownership and work in read-only service mode. They check
+workspace sharing, hide deleting/deleted data, verify head byte counts/digests and
+recheck authorization after object I/O before returning the original transcript
+key. Matching epoch/version returns null without an object download; absent old
+pages return null. These reads never create a job, refresh workspace activity,
+allocate compute or use the live gateway.
+
+Runtime publication requires current Rust ownership, enrolled storage and the
+current unexpired runtime bearer. The final quiescing runtime can publish while
+archive is requested; deletion fences reject publication. Objects commit before
+metadata, and immutable collisions reject differing bytes. Head advancement uses
+the original generation/epoch/version ordering; an older or duplicate cursor
+cannot rewind the current pointer. Failed storage writes leave metadata intact.
+PostgreSQL stores pointers and ciphertext metadata, never transcript plaintext.
+
+Configure all four variables, using a bucket scoped to existing transcript data:
+
+| Variable | Purpose |
+| --- | --- |
+| `CLOUD_TRANSCRIPT_R2_ENDPOINT` | HTTPS S3 origin, normally `https://<account-id>.r2.cloudflarestorage.com` |
+| `CLOUD_TRANSCRIPT_R2_BUCKET` | Existing private transcript bucket |
+| `CLOUD_TRANSCRIPT_R2_ACCESS_KEY_ID` | Scoped S3 access key identifier |
+| `CLOUD_TRANSCRIPT_R2_SECRET_ACCESS_KEY` | Scoped S3 secret, kept server-side |
+
+The existing `CLOUD_DATA_ENCRYPTION_KEY` (or legacy vault-key fallback) is also
+required to read original wrapped keys. Partial R2 configuration fails startup;
+enabled readers/writers require the existing checkpoint table in readiness.
+No schema is created or ownership transferred on startup. No public object URLs
+are issued. R2 requests use signed bounded HTTPS with redirects disabled and
+conditional immutable PUT; conflicting existing bytes never overwrite objects.
+The transport follows the [S3 signing contract](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sig-v4-header-based-auth.html)
+and [R2 conditional-write contract](https://developers.cloudflare.com/r2/api/s3/api/).
+
+Focused acceptance verifies independent SDK signing vectors, an actual HTTP
+object adapter, and isolated PostgreSQL/HTTP projection publication/readback.
+Synthetic Node AES-GCM/gzip fixtures preserve original message content and older
+pages, and the independent reader decrypts both API responses. The archived read
+scenario removes Rust writer ownership and runtime control, then verifies
+workspace rows and the durable job count stay unchanged.
+
+Remaining: the native Rust timeline/context projection encoder and durable guest
+publication, cached client hydration, full chat catalog/change feeds, archived
+file/diff projections and GPUI/browser read surfaces. No Rust guest archive is
+claimed readable from these endpoints until that producer is wired. Transcript
+checkpoints do not authorize machine retirement; full verified recovery archives
+remain a separate deliverable. Live R2 bucket acceptance is still pending.
+
+
+Verification for this port: 26 passing checks (nine cloud unit tests and seventeen
+isolated PostgreSQL/HTTP/WebSocket/native guest scenarios), strict scoped lint,
+API build, formatting and diff checks. The original guest binary is unchanged.
+The existing cloud-chat, grants, mailbox, queue and retained-machine archive
+scenarios continue to pass. Live bucket reads/writes and cached UI screenshots
+are not claimed by these fixture/HTTP checks.

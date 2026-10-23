@@ -106,7 +106,9 @@ async fn main() -> Result<()> {
             };
             let runtime_enabled = runtime.is_some();
             let state = AppState {
-                store: Store::connect_read_only(&config.database_url).await?,
+                store: Store::connect_read_only(&config.database_url)
+                    .await?
+                    .configure_transcripts()?,
                 identity: WorkosIdentity::new(&config)?,
                 organizations_enabled: config.organizations_enabled,
                 organization_ids: Arc::new(config.organization_ids),

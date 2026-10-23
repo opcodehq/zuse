@@ -70,6 +70,17 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             "/v1/cloud/workspaces/{id}/archive-status",
             get(archive_status),
         );
+    if state.store.transcripts_enabled() {
+        app = app
+            .route(
+                "/v1/cloud/workspaces/{id}/sessions/{session}/transcript-checkpoint",
+                get(transcript_checkpoint),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/sessions/{session}/transcript-message-page",
+                get(transcript_page),
+            );
+    }
     if state
         .runtime
         .as_ref()
@@ -82,6 +93,16 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
     }
     if state.runtime.is_some() {
         app = app
+            .route(
+                "/v1/cloud/workspaces/{id}/runtime/transcript-checkpoint",
+                post(transcript_upload)
+                    .layer(DefaultBodyLimit::max(crate::transcript::HEAD_LIMIT + 4096)),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/runtime/transcript-message-page",
+                post(transcript_page_upload)
+                    .layer(DefaultBodyLimit::max(crate::transcript::PAGE_LIMIT + 4096)),
+            )
             .route(
                 "/v1/cloud/workspaces/{id}/pause",
                 post(workspace_pause).layer(DefaultBodyLimit::max(4096)),
@@ -801,3 +822,64 @@ async fn runtime_lifecycle(
             .await?,
     ))
 }
+
+async fn transcript_get(
+    state: AppState,
+    id: String,
+    session: String,
+    headers: HeaderMap,
+    query: crate::transcript::ReadQuery,
+    page: bool,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    Ok(Json(
+        state
+            .store
+            .transcript_read(&access, &id, &session, query, page)
+            .await?,
+    ))
+}
+macro_rules! transcript_read_route {
+    ($name:ident,$page:literal) => {
+        async fn $name(
+            State(state): State<AppState>,
+            Path((id, session)): Path<(String, String)>,
+            headers: HeaderMap,
+            Query(query): Query<crate::transcript::ReadQuery>,
+        ) -> Result<Json<Value>, ApiError> {
+            transcript_get(state, id, session, headers, query, $page).await
+        }
+    };
+}
+transcript_read_route!(transcript_checkpoint, false);
+transcript_read_route!(transcript_page, true);
+macro_rules! transcript_write_route {
+    ($name:ident,$page:literal) => {
+        async fn $name(
+            State(state): State<AppState>,
+            Path(id): Path<String>,
+            headers: HeaderMap,
+            body: Result<Json<crate::transcript::Upload>, JsonRejection>,
+        ) -> Result<Json<Value>, ApiError> {
+            let Json(body) =
+                body.map_err(|_| ApiError::bad_request("invalid_transcript_upload"))?;
+            let control = state
+                .runtime
+                .as_ref()
+                .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+            Ok(Json(
+                control
+                    .transcript_upload(
+                        &id,
+                        runtime_bearer(&headers)?,
+                        body,
+                        $page,
+                        chrono::Utc::now().timestamp_millis(),
+                    )
+                    .await?,
+            ))
+        }
+    };
+}
+transcript_write_route!(transcript_upload, false);
+transcript_write_route!(transcript_page_upload, true);

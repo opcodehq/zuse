@@ -8,7 +8,8 @@ use std::{str::FromStr, time::Duration};
 
 #[derive(Clone)]
 pub struct Store {
-    pool: PgPool,
+    pub(crate) pool: PgPool,
+    pub(crate) transcripts: Option<std::sync::Arc<crate::transcript::Reader>>,
 }
 
 /// Private persistence row. Never serialize this object into a response.
@@ -38,11 +39,17 @@ impl Store {
             .connect_with(options)
             .await
             .map_err(|_| anyhow::anyhow!("Cannot connect to cloud PostgreSQL"))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            transcripts: None,
+        })
     }
 
     pub fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            transcripts: None,
+        }
     }
 
     pub async fn ready(&self) -> Result<(), ApiError> {
@@ -50,6 +57,16 @@ impl Store {
             .fetch_one(&self.pool).await?;
         if !present {
             return Err(ApiError::unavailable("cloud_schema_not_ready"));
+        }
+        if self.transcripts.is_some() {
+            let ready: bool = sqlx::query_scalar(
+                "SELECT to_regclass('api_cloud_transcript_checkpoints') IS NOT NULL",
+            )
+            .fetch_one(&self.pool)
+            .await?;
+            if !ready {
+                return Err(ApiError::unavailable("cloud_transcript_schema_not_ready"));
+            }
         }
         Ok(())
     }

@@ -22,6 +22,7 @@ pub mod creation;
 pub mod grants;
 pub mod lifecycle;
 pub mod mailbox;
+pub mod transcript;
 
 pub struct RuntimeConfig {
     master: MasterKey,
@@ -76,6 +77,7 @@ pub struct RuntimeControl {
     idle_ms: i64,
     creation_accounts: Vec<String>,
     grant_issuer: Option<Arc<dyn grants::GrantIssuer>>,
+    transcript_objects: Option<Arc<dyn crate::objects::Objects>>,
     pub(crate) mailbox_changes: tokio::sync::broadcast::Sender<()>,
 }
 
@@ -124,6 +126,7 @@ impl RuntimeControl {
             .await
             .map_err(|_| anyhow::anyhow!("Cannot connect runtime-control database"))?;
         let mut control = Self::from_pool(pool, config.master, config.signer);
+        control.transcript_objects = crate::objects::R2::from_env()?;
         control.idle_ms = config.idle_ms;
         control.creation_accounts = config.creation_accounts;
         if let Some(url) = config.legacy_auth_url {
@@ -146,6 +149,7 @@ impl RuntimeControl {
             idle_ms: 10 * 60 * 1000,
             creation_accounts: vec![],
             grant_issuer: None,
+            transcript_objects: None,
             mailbox_changes: tokio::sync::broadcast::channel(128).0,
         }
     }
@@ -154,6 +158,16 @@ impl RuntimeControl {
             .fetch_one(&self.pool).await?;
         if !ready {
             return Err(ApiError::unavailable("cloud_runtime_schema_not_ready"));
+        }
+        if self.transcript_objects.is_some() {
+            let ready: bool = sqlx::query_scalar(
+                "SELECT to_regclass('api_cloud_transcript_checkpoints') IS NOT NULL",
+            )
+            .fetch_one(&self.pool)
+            .await?;
+            if !ready {
+                return Err(ApiError::unavailable("cloud_transcript_schema_not_ready"));
+            }
         }
         if self.grant_issuer.is_some() {
             let ready: bool =

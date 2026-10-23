@@ -4378,3 +4378,291 @@ async fn authenticated_creation_is_atomic_idempotent_and_honors_existing_billing
         .unwrap();
     admin.close().await;
 }
+
+#[derive(Default)]
+struct ProjectionObjects {
+    bytes: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    gets: std::sync::atomic::AtomicUsize,
+    fail: std::sync::atomic::AtomicBool,
+}
+#[async_trait]
+impl zuse_cloud::objects::Objects for ProjectionObjects {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
+        self.gets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.bytes.lock().unwrap().get(key).cloned())
+    }
+    async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(ApiError::unavailable("cloud_transcript_store_unavailable"));
+        }
+        let mut objects = self.bytes.lock().unwrap();
+        if let Some(old) = objects.get(key) {
+            if old != bytes {
+                return Err(ApiError::conflict("cloud_transcript_object_collision"));
+            }
+        }
+        objects.insert(key.into(), bytes.to_vec());
+        Ok(())
+    }
+}
+fn decrypt_projection(access: &Value) -> Value {
+    use std::io::Write;
+    let mut child = std::process::Command::new("node")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/transcript-crypto.mjs"
+        ))
+        .arg("--decrypt")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            json!({"workspaceId":"ws-bob","sessionId":"session-bob","access":access})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+#[tokio::test]
+#[ignore = "requires isolated localhost PostgreSQL and Node"]
+async fn encrypted_transcript_publication_and_archived_reads_preserve_original_contracts_without_compute()
+ {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+    use ed25519_dalek::SigningKey;
+    use sha2::{Digest, Sha256};
+    use zuse_cloud::{crypto::MasterKey, runtime::RuntimeControl, tickets::TicketSigner};
+    let (admin, pool, schema) = fixture().await;
+    sqlx::raw_sql("CREATE TABLE api_cloud_transcript_checkpoints (workspace_id text NOT NULL,session_id text NOT NULL,runtime_generation bigint NOT NULL,stream_epoch text NOT NULL,stream_version bigint NOT NULL,object_key text NOT NULL,ciphertext_sha256 text NOT NULL,ciphertext_bytes bigint NOT NULL,created_at bigint NOT NULL,PRIMARY KEY(workspace_id,session_id))").execute(&pool).await.unwrap();
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/transcript-crypto.json")).unwrap();
+    let objects = Arc::new(ProjectionObjects::default());
+    let now = chrono::Utc::now().timestamp_millis();
+    let config = json!({"runtimeGeneration":2,"gatewayEpoch":3,"runtimeRpcProtocol":"zuse-rpc-v1","runtimeCredentialExpiresAtMs":now+60_000,"runtimeCredentialKeyThumbprint":"credential-key","runtimeSigningKeyThumbprint":"signing-key","runtimeBootstrapReceipt":{"workspaceId":"ws-bob","generation":2,"gatewayEpoch":3},"rustRuntimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"original-storage"},"rustStorageEnrollment":{"phase":"committed","generation":2,"sourceSandboxId":"machine-bob","storageIncarnationId":"original-storage","credentialKeyThumbprint":"credential-key","signingKeyThumbprint":"signing-key"}});
+    sqlx::query("INSERT INTO zuse_rust_control_owners VALUES('workspace','ws-bob','rust',2,$1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let bearer = "fixture-transcript-runtime";
+    let hash: String = Sha256::digest(bearer.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    sqlx::query("UPDATE api_cloud_workspaces SET state='archiving',desired_state='archived',request_config=$1,runtime_credential_hash=$2,wrapped_transcript_key=$3 WHERE workspace_id='ws-bob'").bind(config).bind(hash).bind(fixture["wrappedKey"].as_str()).execute(&pool).await.unwrap();
+    let signing = SigningKey::from_bytes(&[30; 32]);
+    let jwk = json!({"kty":"OKP","crv":"Ed25519","d":B64.encode([30;32]),"x":B64.encode(signing.verifying_key().as_bytes())});
+    let control = Arc::new(
+        RuntimeControl::from_pool(
+            pool.clone(),
+            MasterKey::parse(fixture["masterKey"].as_str().unwrap()).unwrap(),
+            TicketSigner::from_jwk(&jwk.to_string(), "https://api-rust.zuse.sh").unwrap(),
+        )
+        .with_transcript_objects(objects.clone()),
+    );
+    let state = AppState {
+        store: Store::from_pool(pool.clone()).with_transcripts(
+            objects.clone(),
+            MasterKey::parse(fixture["masterKey"].as_str().unwrap()).unwrap(),
+        ),
+        identity: Arc::new(TestIdentity),
+        organizations_enabled: false,
+        organization_ids: Arc::new(vec![]),
+        runtime: Some(control.clone()),
+        gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
+    };
+    let app = router(state.clone(), vec![]);
+    let upload = "/v1/cloud/workspaces/ws-bob/runtime/transcript-checkpoint";
+    assert_eq!(
+        runtime_post(&app, upload, "wrong", &fixture["head1"])
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let first = runtime_post(&app, upload, bearer, &fixture["head1"]).await;
+    assert_eq!(first.0, StatusCode::OK, "{}", first.1);
+    assert_eq!(first.1["applied"], true);
+    assert_eq!(first.1["archiveRequested"], true);
+    assert_eq!(
+        runtime_post(&app, upload, bearer, &fixture["head1"])
+            .await
+            .1["applied"],
+        false
+    );
+    objects
+        .fail
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        runtime_post(&app, upload, bearer, &fixture["head2"])
+            .await
+            .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let version: i64 =
+        sqlx::query_scalar("SELECT stream_version FROM api_cloud_transcript_checkpoints")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(version, 1);
+    objects
+        .fail
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        runtime_post(&app, upload, bearer, &fixture["head2"])
+            .await
+            .1["applied"],
+        true
+    );
+    assert_eq!(
+        runtime_post(&app, upload, bearer, &fixture["head1"])
+            .await
+            .1["applied"],
+        false
+    );
+    let page_upload = "/v1/cloud/workspaces/ws-bob/runtime/transcript-message-page";
+    assert_eq!(
+        runtime_post(&app, page_upload, bearer, &fixture["page"])
+            .await
+            .1,
+        json!({"applied":true})
+    );
+    let mut stale = fixture["page"].clone();
+    stale["cursor"]["version"] = json!(1);
+    assert_eq!(
+        runtime_post(&app, page_upload, bearer, &stale).await.0,
+        StatusCode::CONFLICT
+    );
+    let mut changed = fixture["head2"].clone();
+    changed["ciphertext"] = json!("changed bytes");
+    changed["ciphertextSha256"] = json!(zuse_cloud::transcript::digest(b"changed bytes"));
+    assert_eq!(
+        runtime_post(&app, upload, bearer, &changed).await.0,
+        StatusCode::CONFLICT
+    );
+    let mut invalid = fixture["head2"].clone();
+    invalid["ciphertextSha256"] = json!("wrong");
+    assert_eq!(
+        runtime_post(&app, upload, bearer, &invalid).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    // Reads keep working after writer ownership is removed, as for unmigrated legacy rows.
+    sqlx::query("DELETE FROM zuse_rust_control_owners WHERE resource_id='ws-bob'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE api_cloud_workspaces SET state='archived',runtime_state='offline' WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+    let before: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let read_app = router(
+        AppState {
+            runtime: None,
+            ..state
+        },
+        vec![],
+    );
+    let read = "/v1/cloud/workspaces/ws-bob/sessions/session-bob/transcript-checkpoint";
+    assert_eq!(
+        request(&read_app, read, "alice", None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request(&read_app, read, "", None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, body) = request(&read_app, read, "bob", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["checkpoint"]["ciphertext"],
+        fixture["head2"]["ciphertext"]
+    );
+    assert_eq!(
+        body["checkpoint"]["transcriptKey"],
+        fixture["transcriptKey"]
+    );
+    let payload = decrypt_projection(&body["checkpoint"]);
+    assert_eq!(
+        payload["projection"]["messages"][0]["content"]["text"],
+        "Latest preserved user text"
+    );
+    let gets = objects.gets.load(std::sync::atomic::Ordering::SeqCst);
+    let caught_up = format!("{read}?epoch=original%2Fepoch%20%21%C3%A9&version=2.0");
+    assert_eq!(
+        request(&read_app, &caught_up, "bob", None).await.1,
+        json!({"checkpoint":null})
+    );
+    assert_eq!(gets, objects.gets.load(std::sync::atomic::Ordering::SeqCst));
+    let page = "/v1/cloud/workspaces/ws-bob/sessions/session-bob/transcript-message-page?epoch=original%2Fepoch%20%21%C3%A9&version=2&beforeSequence=10";
+    let (status, body) = request(&read_app, page, "bob", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        decrypt_projection(&body["page"])["messages"][0]["content"]["text"],
+        "Older preserved user text"
+    );
+    assert_eq!(
+        request(
+            &read_app,
+            &page.replace("beforeSequence=10", "beforeSequence=9"),
+            "bob",
+            None
+        )
+        .await
+        .1,
+        json!({"page":null})
+    );
+    let key = objects
+        .bytes
+        .lock()
+        .unwrap()
+        .keys()
+        .find(|k| k.ends_with("/2.json"))
+        .cloned()
+        .unwrap();
+    objects
+        .bytes
+        .lock()
+        .unwrap()
+        .insert(key, b"corrupt ciphertext".to_vec());
+    assert_eq!(
+        request(&read_app, read, "bob", None).await.1["error"],
+        "cloud_transcript_integrity_failed"
+    );
+    let after: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(before, after);
+    let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM zuse_rust_jobs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(jobs, 0);
+    sqlx::query(
+        "UPDATE api_cloud_workspaces SET desired_state='deleted' WHERE workspace_id='ws-bob'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        request(&read_app, read, "bob", None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    pool.close().await;
+    sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
