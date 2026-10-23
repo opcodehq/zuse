@@ -25,6 +25,8 @@ pub struct CloudBillingPage {
     loaded: bool,
     task: Option<Task<()>>,
     portal_task: Option<Task<()>>,
+    subscription_task: Option<Task<()>>,
+    subscribed: Option<bool>,
     summary: Option<BillingSummary>,
     items: Vec<BillingUsageItem>,
     cursor: Option<String>,
@@ -45,6 +47,8 @@ impl CloudBillingPage {
             loaded: false,
             task: None,
             portal_task: None,
+            subscription_task: None,
+            subscribed: None,
             summary: None,
             items: vec![],
             cursor: None,
@@ -64,6 +68,9 @@ impl CloudBillingPage {
         let Some(engine) = self.state.read(cx).engine().map(|e| e.controller()) else {
             return;
         };
+        if !more {
+            self.load_subscriptions(cx);
+        }
         self.loaded = true;
         self.error = None;
         let cursor = if more { self.cursor.clone() } else { None };
@@ -117,7 +124,14 @@ impl CloudBillingPage {
                             }
                         }
                     }
-                    Ok(Err(error)) => this.error = Some(error.to_string()),
+                    Ok(Err(error)) => {
+                        let message = error.to_string();
+                        if this.subscribed != Some(false)
+                            || message != "An active cloud billing period is required."
+                        {
+                            this.error = Some(message);
+                        }
+                    }
                     _ => {
                         this.error = Some("Could not load cloud billing. Refresh to retry.".into())
                     }
@@ -126,7 +140,57 @@ impl CloudBillingPage {
             });
         }));
     }
-    fn portal(&mut self, cx: &mut Context<Self>) {
+    fn load_subscriptions(&mut self, cx: &mut Context<Self>) {
+        if self.subscription_task.is_some() {
+            return;
+        }
+        let Some(owner) = active_owner(self.state.read(cx)) else {
+            return;
+        };
+        let Some(engine) = self.state.read(cx).engine().map(|e| e.controller()) else {
+            return;
+        };
+        let job = gpui_tokio::Tokio::spawn(cx, async move {
+            engine
+                .client()
+                .call_scoped(methods::CLOUD_BILLING_ENTITLEMENTS, json!({}))
+                .await
+        });
+        self.subscription_task = Some(cx.spawn(async move |this, cx| {
+            let result = job.await;
+            let _ = this.update(cx, |this, cx| {
+                if active_owner(this.state.read(cx)).as_ref() != Some(&owner) {
+                    return;
+                }
+                this.subscription_task = None;
+                match result {
+                    Ok(Ok(value)) if bound(&value, &owner) => {
+                        this.subscribed = zuse_model::cloud_billing::cloud_subscribed(
+                            &value["data"],
+                            chrono::Utc::now().timestamp_millis(),
+                        );
+                        if this.subscribed == Some(false)
+                            && this.error.as_deref()
+                                == Some("An active cloud billing period is required.")
+                        {
+                            this.error = None;
+                        }
+                        if this.subscribed.is_none() {
+                            this.error =
+                                Some("Could not read the subscription. Refresh to retry.".into());
+                        }
+                    }
+                    Ok(Err(e)) => this.error = Some(e.to_string()),
+                    _ => {
+                        this.error =
+                            Some("Could not load the subscription. Refresh to retry.".into())
+                    }
+                }
+                cx.notify();
+            });
+        }));
+    }
+    fn billing_link(&mut self, cx: &mut Context<Self>) {
         if self.portal_task.is_some() {
             return;
         }
@@ -136,11 +200,25 @@ impl CloudBillingPage {
         let Some(engine) = self.state.read(cx).engine().map(|e| e.controller()) else {
             return;
         };
+        let Some(subscribed) = self.subscribed else {
+            return;
+        };
         self.error = None;
         let job = gpui_tokio::Tokio::spawn(cx, async move {
             engine
                 .client()
-                .call_scoped(methods::CLOUD_BILLING_PORTAL, json!({}))
+                .call_scoped(
+                    if subscribed {
+                        methods::CLOUD_BILLING_PORTAL
+                    } else {
+                        methods::CLOUD_BILLING_CHECKOUT
+                    },
+                    if subscribed {
+                        json!({})
+                    } else {
+                        json!({"offerId":"cloud-workspace-standard-v1"})
+                    },
+                )
                 .await
         });
         self.portal_task = Some(cx.spawn(async move |this, cx| {
@@ -152,9 +230,13 @@ impl CloudBillingPage {
                 this.portal_task = None;
                 match result {
                     Ok(Ok(value)) if bound(&value, &owner) => {
-                        if let Some(url) = value["data"]["portalUrl"]
-                            .as_str()
-                            .filter(|url| url.starts_with("https://"))
+                        if let Some(url) = value["data"][if subscribed {
+                            "portalUrl"
+                        } else {
+                            "checkoutUrl"
+                        }]
+                        .as_str()
+                        .filter(|url| url.starts_with("https://"))
                         {
                             cx.open_url(url);
                         } else {
@@ -251,6 +333,8 @@ impl Render for CloudBillingPage {
             self.loaded = false;
             self.task = None;
             self.portal_task = None;
+            self.subscription_task = None;
+            self.subscribed = None;
             self.summary = None;
             self.items.clear();
             self.cursor = None;
@@ -282,13 +366,13 @@ impl Render for CloudBillingPage {
             ),
         ));
         if self.owner.is_some() {
-            body = body.child(widgets::group(&theme, "Subscription", "Manage your existing subscription, invoices and payment method with your billing provider.")
+            body = body.child(widgets::group(&theme, "Subscription", if self.subscribed==Some(false){"$40 per month includes $35 of compute. Additional compute has a 5% markup."}else{"Manage your existing subscription, invoices and payment method with your billing provider."})
                 .child(widgets::card_row(&theme, false)
-                    .child(div().flex_1().child(widgets::row_title(&theme, "Billing portal")))
+                    .child(div().flex_1().child(widgets::row_title(&theme, if self.subscribed==Some(false){"Cloud subscription"}else{"Billing portal"})))
                     .child(widgets::action_button(&theme, widgets::ActionTone::Quiet)
                         .id("open-cloud-billing-portal")
-                        .child(if self.portal_task.is_some() { "Opening…" } else { "Manage billing" })
-                        .on_click(cx.listener(|this, _, _, cx| this.portal(cx))))));
+                        .child(if self.portal_task.is_some() { "Opening…" } else if self.subscribed==Some(false){"Subscribe to Cloud"}else if self.subscribed.is_none(){"Loading…"}else{ "Manage billing" })
+                        .on_click(cx.listener(|this, _, _, cx| this.billing_link(cx))))));
         }
         if let Some(error) = &self.error {
             body = body.child(

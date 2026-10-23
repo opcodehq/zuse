@@ -264,12 +264,14 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         "stripe".into(),
         vec![
             Arc::new(StripePortal {
+                checkout: None,
                 http: http(),
                 events: Some(config("whsec_fixture", "price_cloud")),
                 return_url: "https://api-rust.zuse.sh".into(),
                 configuration: None,
             }),
             Arc::new(PolarPortal {
+                checkout: None,
                 http: http(),
                 events: Some(config("polar_whs_fixture", "product_cloud")),
             }),

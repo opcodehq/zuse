@@ -1,8 +1,10 @@
 //! Provider-owned billing management. Existing customers and subscriptions keep their identity.
 use super::BillingControl;
+mod checkout;
 pub mod events;
 use crate::{error::ApiError, store::Store};
 use async_trait::async_trait;
+pub use checkout::{CheckoutSummary, CustomerPage};
 pub use events::{PaymentEvent, Subscription};
 use reqwest::{Client, Url};
 use serde_json::{Value, json};
@@ -13,6 +15,38 @@ use zeroize::Zeroizing;
 pub trait PortalProvider: Send + Sync {
     fn provider_id(&self) -> &'static str;
     async fn portal(&self, owner: &str, customer: Option<&str>) -> Result<String, ApiError>;
+    fn supports_checkout(&self, _offer: &str) -> bool {
+        false
+    }
+    async fn verify_customer(&self, _owner: &str, _customer: &str) -> Result<(), ApiError> {
+        Err(unavailable())
+    }
+    async fn create_customer(&self, _owner: &str, _key: &str) -> Result<String, ApiError> {
+        Err(unavailable())
+    }
+    async fn customer_page(
+        &self,
+        _owner: &str,
+        _cursor: Option<&str>,
+    ) -> Result<CustomerPage, ApiError> {
+        Err(unavailable())
+    }
+    async fn checkout(
+        &self,
+        _owner: &str,
+        _customer: Option<&str>,
+        _offer: &str,
+        _success: &str,
+    ) -> Result<String, ApiError> {
+        Err(unavailable())
+    }
+    async fn checkout_summary(
+        &self,
+        _owner: &str,
+        _id: &str,
+    ) -> Result<Option<CheckoutSummary>, ApiError> {
+        Err(unavailable())
+    }
     fn verify_event(
         &self,
         _headers: &axum::http::HeaderMap,
@@ -28,6 +62,7 @@ pub trait PortalProvider: Send + Sync {
 #[derive(Clone)]
 pub struct PaymentProviders {
     default: String,
+    checkout: Option<Arc<checkout::CheckoutSettings>>,
     providers: HashMap<String, Arc<dyn PortalProvider>>,
 }
 impl PaymentProviders {
@@ -46,6 +81,7 @@ impl PaymentProviders {
         );
         Ok(Self {
             default,
+            checkout: None,
             providers: registered,
         })
     }
@@ -71,6 +107,7 @@ impl PaymentProviders {
                     http: ProviderHttp::new("https://api.stripe.com/v1/", secret)?,
                     return_url,
                     events: events::EventConfig::from_env("STRIPE", "PRICE")?,
+                    checkout: checkout::ProviderCheckout::from_env("STRIPE", "PRICE")?,
                     configuration: std::env::var("STRIPE_PORTAL_CONFIGURATION_ID")
                         .ok()
                         .filter(|s| !s.is_empty()),
@@ -88,6 +125,7 @@ impl PaymentProviders {
                 };
                 providers.push(Arc::new(PolarPortal {
                     events: events::EventConfig::from_env("POLAR", "PRODUCT")?,
+                    checkout: checkout::ProviderCheckout::from_env("POLAR", "PRODUCT")?,
                     http: ProviderHttp::new(origin, secret)?,
                 }));
             }
@@ -97,7 +135,18 @@ impl PaymentProviders {
         }
         let default = std::env::var("BILLING_DEFAULT_PROVIDER")
             .unwrap_or_else(|_| providers[0].provider_id().into());
-        Ok(Some(Self::new(default, providers)?))
+        let mut configured = Self::new(default, providers)?;
+        if std::env::var("MACHINE_LIVE_CHECKOUT_ENABLED").as_deref() == Ok("true") {
+            let issuer =
+                std::env::var("API_ISSUER").unwrap_or_else(|_| "https://api-rust.zuse.sh".into());
+            let key = Zeroizing::new(std::env::var("RELAY_MINT_PRIVATE_JWK").map_err(|_| {
+                anyhow::anyhow!("Checkout requires the original platform signing key")
+            })?);
+            let signer = crate::tickets::TicketSigner::from_jwk(&key, &issuer)
+                .map_err(|_| anyhow::anyhow!("Invalid checkout signing configuration"))?;
+            configured = configured.with_checkout(signer);
+        }
+        Ok(Some(configured))
     }
 }
 fn unavailable() -> ApiError {
@@ -162,6 +211,7 @@ impl ProviderHttp {
     }
 }
 struct StripePortal {
+    checkout: Option<checkout::ProviderCheckout>,
     events: Option<events::EventConfig>,
     http: ProviderHttp,
     return_url: String,
@@ -169,6 +219,136 @@ struct StripePortal {
 }
 #[async_trait]
 impl PortalProvider for StripePortal {
+    fn supports_checkout(&self, offer: &str) -> bool {
+        self.events.is_some()
+            && self
+                .checkout
+                .as_ref()
+                .is_some_and(|c| c.offers.contains_key(offer))
+    }
+    async fn verify_customer(&self, owner: &str, id: &str) -> Result<(), ApiError> {
+        let value = ProviderHttp::json(
+            self.http
+                .request(reqwest::Method::GET, &["customers", id])?,
+        )
+        .await?;
+        if value["id"] != id || value["deleted"] == true || value["metadata"]["account_id"] != owner
+        {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+    async fn create_customer(&self, owner: &str, key: &str) -> Result<String, ApiError> {
+        let value = ProviderHttp::json(
+            self.http
+                .request(reqwest::Method::POST, &["customers"])?
+                .header("Idempotency-Key", key)
+                .form(&[("metadata[account_id]", owner)]),
+        )
+        .await?;
+        if value["metadata"]["account_id"] != owner {
+            return Err(unavailable());
+        }
+        Ok(checkout::required(&value, "id")?.into())
+    }
+    async fn customer_page(
+        &self,
+        owner: &str,
+        cursor: Option<&str>,
+    ) -> Result<CustomerPage, ApiError> {
+        let mut request = self
+            .http
+            .request(reqwest::Method::GET, &["customers"])?
+            .query(&[("limit", "100")]);
+        if let Some(cursor) = cursor {
+            request = request.query(&[("starting_after", cursor)]);
+        }
+        let value = ProviderHttp::json(request).await?;
+        let data = value["data"].as_array().ok_or_else(unavailable)?;
+        let mut matches = vec![];
+        for customer in data {
+            if customer["metadata"]["account_id"] == owner && customer["deleted"] != true {
+                matches.push(checkout::required(customer, "id")?.into());
+            }
+        }
+        let more = value["has_more"].as_bool().ok_or_else(unavailable)?;
+        let next_cursor = if more {
+            Some(checkout::required(data.last().ok_or_else(unavailable)?, "id")?.into())
+        } else {
+            None
+        };
+        Ok(CustomerPage {
+            matches,
+            next_cursor,
+        })
+    }
+    async fn checkout(
+        &self,
+        owner: &str,
+        customer: Option<&str>,
+        offer: &str,
+        success: &str,
+    ) -> Result<String, ApiError> {
+        let config = self.checkout.as_ref().ok_or_else(unavailable)?;
+        let customer = customer.ok_or_else(unavailable)?;
+        self.verify_customer(owner, customer).await?;
+        let price = config.offers.get(offer).ok_or_else(unavailable)?;
+        let success = success.replace("{CHECKOUT_ID}", "{CHECKOUT_SESSION_ID}");
+        let mut params = vec![
+            ("mode", "subscription"),
+            ("allow_promotion_codes", "true"),
+            ("customer", customer),
+            ("client_reference_id", owner),
+            ("success_url", success.as_str()),
+            ("line_items[0][price]", price.as_str()),
+            ("line_items[0][quantity]", "1"),
+            ("metadata[account_id]", owner),
+            ("metadata[offer_id]", offer),
+            ("subscription_data[metadata][account_id]", owner),
+            ("subscription_data[metadata][offer_id]", offer),
+            (
+                "automatic_tax[enabled]",
+                if config.automatic_tax {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+            ("billing_address_collection", "required"),
+            ("tax_id_collection[enabled]", "true"),
+            ("customer_update[address]", "auto"),
+            ("customer_update[name]", "auto"),
+        ];
+        if offer == checkout::CLOUD_OFFER {
+            if let Some(overage) = &config.overage {
+                params.push(("line_items[1][price]", overage.as_str()));
+            }
+        }
+        let result = ProviderHttp::json(
+            self.http
+                .request(reqwest::Method::POST, &["checkout", "sessions"])?
+                .form(&params),
+        )
+        .await?;
+        let url = checkout::required(&result, "url")?;
+        secure_url(url)?;
+        Ok(url.into())
+    }
+    async fn checkout_summary(
+        &self,
+        owner: &str,
+        id: &str,
+    ) -> Result<Option<CheckoutSummary>, ApiError> {
+        let value = ProviderHttp::json(
+            self.http
+                .request(reqwest::Method::GET, &["checkout", "sessions", id])?,
+        )
+        .await?;
+        if value["id"] != id || value["client_reference_id"] != owner {
+            return Ok(None);
+        }
+        checkout::CheckoutSummary::stripe(&value).map(Some)
+    }
     fn provider_id(&self) -> &'static str {
         "stripe"
     }
@@ -227,11 +407,56 @@ impl PortalProvider for StripePortal {
     }
 }
 struct PolarPortal {
+    checkout: Option<checkout::ProviderCheckout>,
     events: Option<events::EventConfig>,
     http: ProviderHttp,
 }
 #[async_trait]
 impl PortalProvider for PolarPortal {
+    fn supports_checkout(&self, offer: &str) -> bool {
+        self.events.is_some()
+            && self
+                .checkout
+                .as_ref()
+                .is_some_and(|c| c.offers.contains_key(offer))
+    }
+    async fn checkout(
+        &self,
+        owner: &str,
+        _customer: Option<&str>,
+        offer: &str,
+        success: &str,
+    ) -> Result<String, ApiError> {
+        let product = self
+            .checkout
+            .as_ref()
+            .and_then(|c| c.offers.get(offer))
+            .ok_or_else(unavailable)?;
+        let value=ProviderHttp::json(self.http.request(reqwest::Method::POST,&["checkouts",""])?.json(&json!({"products":[product],"external_customer_id":owner,"success_url":success,"metadata":{"account_id":owner,"offer_id":offer},"allow_trial":false}))).await?;
+        let url = checkout::required(&value, "url")?;
+        secure_url(url)?;
+        Ok(url.into())
+    }
+    async fn checkout_summary(
+        &self,
+        owner: &str,
+        id: &str,
+    ) -> Result<Option<CheckoutSummary>, ApiError> {
+        let value = ProviderHttp::json(
+            self.http
+                .request(reqwest::Method::GET, &["checkouts", id])?,
+        )
+        .await?;
+        if value["id"] != id
+            || value["external_customer_id"]
+                .as_str()
+                .or_else(|| value["customer"]["external_id"].as_str())
+                != Some(owner)
+        {
+            return Ok(None);
+        }
+        checkout::CheckoutSummary::polar(&value).map(Some)
+    }
     fn provider_id(&self) -> &'static str {
         "polar"
     }

@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar billing portals, signed cloud subscription lifecycle processing and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout/persistent subscription writes, settlement/export, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, settlement/export, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -1653,3 +1653,76 @@ for portal ownership, usage/cap administration and billed workspace creation.
 Receipts: `.context/cloud-events-acceptance.log`,
 `.context/cloud-events-billing-regression.log`; API application checking passes in
 `.context/cloud-events-api-check.log`.
+
+### Cloud subscription checkout and signed browser receipt
+
+The original `POST /v1/billing/checkout` now uses the host-selected personal or
+organization billing owner. It checks the explicit Rust billing writer marker and
+allowlist, reconciles existing non-ended subscriptions against their original
+provider, preserves entitlement identities and refuses an already subscribed
+account. Organization non-cloud purchases remain forbidden. Persistent-machine
+sales remain unavailable until their provisioning/event workflow is implemented.
+
+Stripe reuses the original customer mapping and verifies remote account metadata.
+New customers use the existing `api_stripe_customers` reservation table and legacy
+`zuse-customer:<owner>` idempotency key. The reservation commits before customer
+creation; a lost response retries the same key. After 23 hours, checkout performs
+bounded, cursor-persisted remote discovery. It only recovers a verified unique
+customer or advances the original reservation generation after proving full remote
+absence. Multiple matches or incomplete pagination remain actionable recovery
+errors; they cannot create another customer. Each retry advances saved recovery.
+
+Stripe checkout retains the reference subscription/base and optional metered
+price lines, account/offer metadata, promotion codes, tax/address collection and
+customer update settings. Subscription-only mode omits the metered line. Missing
+meter configuration cannot sell a metered cloud plan. Polar checkout preserves
+external customer identity, product mapping, metadata and disabled trials.
+
+Success URLs carry an original-format Ed25519 `checkout-receipt+jwt` ticket for the
+account/offer, valid for 24 hours. The unauthenticated return page only looks up an
+order after verifying that ticket and requires the provider's checkout owner to
+match. Missing/expired/wrong-purpose proofs expose only a generic pending page.
+Receipt lookup is bounded to two seconds. Rendered amounts use exact cents, and
+receipt pages set a restrictive CSP, no-store and no-referrer headers. Session URLs
+and signing/provider keys are not logged.
+
+Native/browser Cloud settings read scoped entitlements independently of usage, so
+accounts without a billing period can subscribe. Existing subscribers open Manage
+billing. Both actions use the root host authority, discard foreign-account replies
+and are excluded from automatic transport replay. Refresh reads current entitlement
+state after signed activation. Screens use the existing settings components.
+
+`MACHINE_LIVE_CHECKOUT_ENABLED=true` explicitly enables checkout configuration and
+requires the original `RELAY_MINT_PRIVATE_JWK`; it does not bypass billing writer
+ownership. Provider webhook/offer configuration must also exist. Stripe retains
+`STRIPE_CLOUD_BILLING_MODE`, `STRIPE_CLOUD_OVERAGE_PRICE_ID`,
+`STRIPE_CLOUD_OVERAGE_METER_ID` and `STRIPE_AUTOMATIC_TAX_ENABLED`. Existing provider
+price/product configuration and the legacy Polar cloud-product fallback remain.
+No production flags or ownership markers are changed by this implementation.
+
+Backend acceptance uses the real API, PostgreSQL and provider HTTP adapters. It
+covers existing customer/subscription preservation, organization authorization,
+checkout receipt authorization, lost customer-create responses, paginated recovery,
+verified remote absence, ambiguous remote customers, signed subscription activation
+and duplicate-subscription rejection. Separate transport acceptance covers Polar
+checkout and Stripe subscription-only/tax-disabled parameters. Receipt:
+`.context/cloud-checkout-acceptance.log`.
+
+Live paid-provider acceptance, automatic customer-recovery scheduling, reconciliation
+of uncertain checkout-session creation, full receipt-page visual parity, prepaid
+credits, settlement/export and persistent-machine billing remain open before live
+billing cutover. Source-compatible checkout session creation is never automatically
+replayed; durable customer recovery does not establish checkout-session recovery.
+
+Compiled browser and native Linux acceptance both opened checkout through the real
+host/API/PostgreSQL/provider-HTTP path. A signed activation for that same fixture
+account then made Refresh show Manage billing, its active allowance and the usage
+panel in both clients. The native system URL launcher and browser external link were
+intercepted only for the fixture provider host. No live purchase was made. The
+browser trace confirms no `CloudEnvironment` compute wake. Receipts:
+`.context/cloud-checkout-ui-api.log`, `.context/cloud-checkout-native-acceptance.json`
+and `.context/cloud-checkout-browser-acceptance.json`. Screenshots:
+`.context/cloud-checkout-native.png`, `.context/cloud-checkout-native-activated.png`,
+`.context/cloud-checkout-browser.png` and `.context/cloud-checkout-browser-activated.png`.
+Native and wasm builds pass; billing regression and action-retry checks are recorded
+in `.context/cloud-checkout-regression.log` and `.context/cloud-checkout-retry-tests.log`.

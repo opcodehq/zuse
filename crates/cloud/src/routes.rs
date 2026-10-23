@@ -69,6 +69,11 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/v1/billing/entitlements", get(entitlements))
         .route("/v1/billing/portal", post(billing_portal))
         .route(
+            "/v1/billing/checkout",
+            post(billing_checkout).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route("/v1/billing/checkout/complete", get(checkout_complete))
+        .route(
             "/v1/billing/webhook",
             post(billing_webhook).layer(DefaultBodyLimit::max(1024 * 1024)),
         )
@@ -1096,4 +1101,54 @@ async fn billing_webhook_provider(
             )
             .await?,
     ))
+}
+
+async fn billing_checkout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_billing::BillingCheckoutRequest>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Billing).await?;
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_machine_offer"))?;
+    Ok(Json(
+        json!({"checkoutUrl":state.store.billing_checkout(&access.owner_id,&body.offer_id,chrono::Utc::now().timestamp_millis()).await?}),
+    ))
+}
+#[derive(Deserialize)]
+struct CheckoutReturn {
+    t: Option<String>,
+    checkout_id: Option<String>,
+}
+async fn checkout_complete(
+    State(state): State<AppState>,
+    Query(query): Query<CheckoutReturn>,
+) -> Response {
+    let summary = state
+        .store
+        .checkout_receipt(
+            query.t.as_deref(),
+            query.checkout_id.as_deref(),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await;
+    let (title, detail) = match summary {
+        Some(summary) if summary.status == "paid" => (
+            "Payment confirmed",
+            format!(
+                "{} {}.{:02}. Return to Zuse and refresh Cloud to see your subscription.",
+                summary.currency.to_uppercase(),
+                summary.amount_cents / 100,
+                summary.amount_cents % 100
+            ),
+        ),
+        Some(summary) if summary.status == "failed" => (
+            "Checkout was not completed",
+            "Return to Zuse to start checkout again.".into(),
+        ),
+        _ => (
+            "Payment confirmation pending",
+            "Return to Zuse and refresh Cloud once your payment is confirmed.".into(),
+        ),
+    };
+    ([ (header::CONTENT_TYPE,"text/html; charset=utf-8"),(header::CACHE_CONTROL,"no-store"),(header::CONTENT_SECURITY_POLICY,"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"),(header::REFERRER_POLICY,"no-referrer") ],format!("<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width, initial-scale=1'><title>Zuse checkout</title><body style='font-family:system-ui;max-width:480px;margin:80px auto;padding:24px'><h1>{title}</h1><p>{detail}</p></body></html>")).into_response()
 }

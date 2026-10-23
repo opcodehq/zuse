@@ -25,6 +25,8 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_BILLING_SUMMARY
             | zuse_protocol::methods::CLOUD_BILLING_USAGE
             | zuse_protocol::methods::CLOUD_BILLING_CAP
+            | zuse_protocol::methods::CLOUD_BILLING_ENTITLEMENTS
+            | zuse_protocol::methods::CLOUD_BILLING_CHECKOUT
             | zuse_protocol::methods::CLOUD_BILLING_PORTAL
             | UNARCHIVE
             | DELETE
@@ -145,7 +147,7 @@ impl CloudApi {
             bytes.extend_from_slice(&chunk);
         }
         if !status.is_success() {
-            if path.starts_with(&["v1", "cloud", "billing"]) || path == ["v1", "billing", "portal"]
+            if path.starts_with(&["v1", "cloud", "billing"]) || path.starts_with(&["v1", "billing"])
             {
                 let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
                 let message = match value["error"].as_str() {
@@ -160,6 +162,18 @@ impl CloudApi {
                     }
                     Some("cloud_billing_owner_not_rust" | "cloud_billing_writes_disabled") => {
                         "Cloud billing changes are still managed by the original service."
+                    }
+                    Some("machine_subscription_exists") => {
+                        "This account already has a subscription. Refresh Cloud or open Manage billing."
+                    }
+                    Some("billing_approval_pending") => {
+                        "Checkout is not enabled for this service yet."
+                    }
+                    Some("billing_customer_reconciliation_required") => {
+                        "Stripe customer recovery is still in progress. Retry checkout to continue the saved recovery."
+                    }
+                    Some("billing_subscription_mismatch") => {
+                        "The existing subscription could not be verified. Open Manage billing or contact support."
                     }
                     Some("billing_provider_ambiguous") => {
                         "This account has subscriptions with multiple billing providers. Contact support to select the correct portal."
@@ -202,6 +216,28 @@ impl CloudApi {
             .await
             .map_err(|_| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
         let result = match method {
+            zuse_protocol::methods::CLOUD_BILLING_ENTITLEMENTS
+            | zuse_protocol::methods::CLOUD_BILLING_CHECKOUT => {
+                let org = auth.state().org_id().map(str::to_owned);
+                let (operation, body) = if method == zuse_protocol::methods::CLOUD_BILLING_CHECKOUT
+                {
+                    let request: zuse_protocol::cloud_billing::BillingCheckoutRequest =
+                        serde_json::from_value(params)?;
+                    ("checkout", Some(serde_json::to_value(request)?))
+                } else {
+                    ("entitlements", None)
+                };
+                let value = self
+                    .request_scoped(
+                        &token,
+                        &["v1", "billing", operation],
+                        body,
+                        org.as_deref(),
+                        &[],
+                    )
+                    .await?;
+                json!({"accountId":account,"organizationId":org,"data":value})
+            }
             zuse_protocol::methods::CLOUD_BILLING_PORTAL => {
                 let org = auth.state().org_id().map(str::to_owned);
                 let value = self

@@ -72,3 +72,9 @@ pub struct BillingUsageRequest {
     pub cursor: Option<String>,
     pub limit: Option<u16>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BillingCheckoutRequest {
+    pub offer_id: String,
+}

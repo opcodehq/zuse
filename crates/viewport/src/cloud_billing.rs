@@ -10,6 +10,7 @@ use zuse_protocol::cloud_billing::{BillingSummary, BillingUsageItem, BillingUsag
 pub(super) struct Billing {
     owner: Option<(String, Option<String>)>,
     requests: HashMap<u64, (&'static str, Option<(String, Option<String>)>)>,
+    subscribed: Option<bool>,
     summary: Option<BillingSummary>,
     items: Vec<BillingUsageItem>,
     cursor: Option<String>,
@@ -24,6 +25,12 @@ impl WorkspaceView {
         }
         self.billing.error = None;
         self.billing.notice = None;
+        if !more {
+            let id = self.call(methods::CLOUD_BILLING_ENTITLEMENTS, json!({}));
+            self.billing
+                .requests
+                .insert(id, ("entitlements", self.billing.owner.clone()));
+        }
         let summary = self.call(methods::CLOUD_BILLING_SUMMARY, json!({}));
         self.billing
             .requests
@@ -55,7 +62,21 @@ impl WorkspaceView {
         {
             return;
         }
-        let id = self.call(methods::CLOUD_BILLING_PORTAL, json!({}));
+        let Some(subscribed) = self.billing.subscribed else {
+            return;
+        };
+        let id = self.call(
+            if subscribed {
+                methods::CLOUD_BILLING_PORTAL
+            } else {
+                methods::CLOUD_BILLING_CHECKOUT
+            },
+            if subscribed {
+                json!({})
+            } else {
+                json!({"offerId":"cloud-workspace-standard-v1"})
+            },
+        );
         self.billing
             .requests
             .insert(id, ("portal", self.billing.owner.clone()));
@@ -131,7 +152,11 @@ impl WorkspaceView {
             return true;
         }
         if let Some(error) = frame["err"].as_str() {
-            self.billing.error = Some(error.into());
+            if self.billing.subscribed != Some(false)
+                || error != "An active cloud billing period is required."
+            {
+                self.billing.error = Some(error.into());
+            }
             cx.notify();
             return true;
         }
@@ -147,9 +172,27 @@ impl WorkspaceView {
         }) {
             return true;
         }
-        if kind == "portal" {
+        if kind == "entitlements" {
+            self.billing.subscribed = zuse_model::cloud_billing::cloud_subscribed(
+                &value["data"],
+                chrono::Utc::now().timestamp_millis(),
+            );
+            if self.billing.subscribed == Some(false)
+                && self.billing.error.as_deref()
+                    == Some("An active cloud billing period is required.")
+            {
+                self.billing.error = None;
+            }
+            if self.billing.subscribed.is_none() {
+                self.billing.error =
+                    Some("Could not read the subscription. Refresh to retry.".into());
+            }
+        } else if kind == "portal" {
             if let Some(url) = value["data"]["portalUrl"]
                 .as_str()
+                .or_else(|| value["data"]["checkoutUrl"].as_str())
+                .map(str::to_owned)
+                .as_deref()
                 .filter(|url| url.starts_with("https://"))
             {
                 cx.open_url(url);
@@ -216,10 +259,10 @@ impl WorkspaceView {
         );
         if self.billing.owner.is_some() {
             view = view.child(s::frame()
-                .child(s::header("Subscription", "Manage your existing subscription, invoices and payment method with your billing provider."))
+                .child(s::header("Subscription", if self.billing.subscribed==Some(false){"$40 per month includes $35 of compute. Additional compute has a 5% markup."}else{"Manage your existing subscription, invoices and payment method with your billing provider."}))
                 .child(s::card().child(row().p_3().justify_between()
-                    .child(s::title_text("Billing portal"))
-                    .child(s::button("open-cloud-billing-portal", if self.billing.requests.values().any(|(kind, _)| *kind == "portal") { "Opening…" } else { "Manage billing" })
+                    .child(s::title_text(if self.billing.subscribed==Some(false){"Cloud subscription"}else{"Billing portal"}))
+                    .child(s::button("open-cloud-billing-portal", if self.billing.requests.values().any(|(kind, _)| *kind == "portal") { "Opening…" } else if self.billing.subscribed==Some(false){"Subscribe to Cloud"}else if self.billing.subscribed.is_none(){"Loading…"}else { "Manage billing" })
                         .on_click(cx.listener(|this, _, _, cx| this.open_billing_portal(cx)))))));
         }
         if let Some(error) = &self.billing.error {
@@ -284,7 +327,7 @@ impl WorkspaceView {
                         ),
                     ),
             );
-        } else if !busy && self.billing.error.is_none() {
+        } else if self.billing.owner.is_none() && !busy && self.billing.error.is_none() {
             view = view.child(label("Sign in to view cloud billing."));
         }
         view.into_any_element()

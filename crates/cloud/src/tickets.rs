@@ -183,6 +183,40 @@ impl TicketSigner {
         Ok(claims)
     }
 
+    pub fn checkout(&self, owner: &str, offer: &str, now: i64) -> Result<String, ApiError> {
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.typ = Some("checkout-receipt+jwt".into());
+        jsonwebtoken::encode(&header, &json!({"iss":self.issuer(),"aud":"zuse-checkout-receipt","sub":owner,"offerId":offer,"iat":now/1000,"exp":(now+86400000)/1000}), &self.key)
+            .map_err(|_|ApiError::unavailable("checkout_ticket_sign_failed"))
+    }
+    pub fn verify_checkout(&self, token: &str, now: i64) -> Result<Value, ApiError> {
+        let invalid = || ApiError::unauthorized("invalid_checkout_ticket");
+        if token.len() > 16384 {
+            return Err(invalid());
+        }
+        let mut validation = jsonwebtoken::Validation::new(Algorithm::EdDSA);
+        validation.set_issuer(&[self.issuer()]);
+        validation.set_audience(&["zuse-checkout-receipt"]);
+        validation.validate_exp = false;
+        let decoded = jsonwebtoken::decode::<Value>(token, &self.verify, &validation)
+            .map_err(|_| invalid())?;
+        if decoded.header.typ.as_deref() != Some("checkout-receipt+jwt")
+            || decoded.claims["exp"]
+                .as_i64()
+                .is_none_or(|v| v <= now / 1000)
+            || decoded.claims["iat"]
+                .as_i64()
+                .is_none_or(|v| v > now / 1000)
+            || decoded.claims["sub"].as_str().is_none_or(|s| s.is_empty())
+            || decoded.claims["offerId"]
+                .as_str()
+                .is_none_or(|s| s.is_empty())
+        {
+            return Err(invalid());
+        }
+        Ok(decoded.claims)
+    }
+
     pub fn issuer(&self) -> String {
         self.issuer.origin().ascii_serialization()
     }

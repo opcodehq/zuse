@@ -74,6 +74,14 @@ fn status(value: &str) -> String {
     .into()
 }
 impl EventConfig {
+    #[cfg(test)]
+    pub(super) fn fixture(secret: &str, price: &str) -> Self {
+        Self {
+            secret: Zeroizing::new(secret.into()),
+            offers: HashMap::from([(price.into(), "cloud-workspace-standard-v1".into())]),
+        }
+    }
+
     pub(super) fn from_env(prefix: &str, kind: &str) -> anyhow::Result<Option<Self>> {
         let secret = std::env::var(format!("{prefix}_WEBHOOK_SECRET")).unwrap_or_default();
         if secret.trim().is_empty() {

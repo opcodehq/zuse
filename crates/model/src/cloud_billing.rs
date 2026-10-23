@@ -71,3 +71,12 @@ mod tests {
         assert_eq!(usd(1_005_000), "$1.01");
     }
 }
+
+/// Catalog presentation only; checkout independently reconciles canonical provider state.
+pub fn cloud_subscribed(value: &serde_json::Value, now: i64) -> Option<bool> {
+    Some(value["entitlements"].as_array()?.iter().any(|ent| {
+        ent["offerId"] == "cloud-workspace-standard-v1"
+            && matches!(ent["status"].as_str(), Some("pending" | "active" | "grace"))
+            && ent["paidThrough"].as_i64().is_none_or(|end| end > now)
+    }))
+}
