@@ -322,6 +322,7 @@ async fn checkout_reuses_identities_recovers_customers_and_activates_subscriptio
         .into_future(),
     );
     let stripe = Arc::new(StripePortal {
+        meter_price: None,
         credit_price: None,
         http: ProviderHttp {
             client: Client::new(),
@@ -642,6 +643,7 @@ async fn polar_checkout_and_stripe_subscription_only_preserve_provider_parameter
         "https://polar.example.test/checkout"
     );
     let stripe = StripePortal {
+        meter_price: None,
         credit_price: None,
         http: http(),
         events: None,

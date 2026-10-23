@@ -12,6 +12,7 @@ struct Fixture {
 }
 async fn customer(State(f): State<Arc<Fixture>>, headers: HeaderMap) -> Json<Value> {
     assert_eq!(headers["authorization"], "Bearer fixture-payment-key");
+    assert_eq!(headers["stripe-version"], STRIPE_API_VERSION);
     Json(json!({"id":"cus_original","metadata":{"account_id":f.owner.lock().unwrap().clone()}}))
 }
 async fn portal(
@@ -20,6 +21,7 @@ async fn portal(
     Form(form): Form<HashMap<String, String>>,
 ) -> Json<Value> {
     assert_eq!(headers["authorization"], "Bearer fixture-payment-key");
+    assert_eq!(headers["stripe-version"], STRIPE_API_VERSION);
     assert_eq!(form["customer"], "cus_original");
     assert_eq!(form["return_url"], "https://api-rust.zuse.sh");
     assert_eq!(form["configuration"], "bpc_original");
@@ -39,15 +41,15 @@ async fn stripe_portal_verifies_original_customer_before_any_session() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}/v1/", listener.local_addr().unwrap());
     let task = tokio::spawn(axum::serve(listener, app).into_future());
+    let mut http =
+        ProviderHttp::new("https://api.stripe.com/v1/", "fixture-payment-key".into()).unwrap();
+    http.origin = Url::parse(&origin).unwrap();
     let stripe = StripePortal {
+        meter_price: None,
         credit_price: None,
         checkout: None,
         events: None,
-        http: ProviderHttp {
-            client: Client::new(),
-            origin: Url::parse(&origin).unwrap(),
-            secret: Zeroizing::new("fixture-payment-key".into()),
-        },
+        http,
         return_url: "https://api-rust.zuse.sh".into(),
         configuration: Some("bpc_original".into()),
     };

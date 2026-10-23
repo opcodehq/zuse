@@ -28,6 +28,11 @@ enum Command {
         #[arg(long)]
         snapshot: String,
     },
+    /// Drain existing billing/telemetry outboxes for accounts with explicit Rust export ownership.
+    BillingWorker {
+        #[arg(long, default_value_t = false)]
+        once: bool,
+    },
     /// Reconcile allocations and retained-machine lifecycle independently of API viewers.
     Worker {
         #[arg(long, default_value_t = false)]
@@ -66,6 +71,55 @@ async fn main() -> Result<()> {
                 .await
                 .map_err(|error| anyhow::anyhow!("{}", error.code))?;
             println!("{operation}");
+        }
+        Command::BillingWorker { once } => {
+            let settings = zuse_cloud::billing::MeterExportConfig::from_env()?;
+            if !settings.enabled() {
+                println!(
+                    "{}",
+                    serde_json::to_string(&zuse_cloud::billing::ExportReport::default())?
+                );
+                return Ok(());
+            }
+            let accounts = env::var("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            anyhow::ensure!(
+                !accounts.is_empty(),
+                "Billing worker requires explicit billing account ownership configuration"
+            );
+            let providers = zuse_cloud::billing::PaymentProviders::from_env()?
+                .context("Billing worker requires configured payment providers")?;
+            anyhow::ensure!(
+                !settings.financial
+                    || settings
+                        .meters
+                        .contains_key(providers.default_provider_id()),
+                "Financial export requires the default billing provider's overage meter"
+            );
+            let url = env::var("ZUSE_CLOUD_DATABASE_URL")
+                .context("ZUSE_CLOUD_DATABASE_URL is required")?;
+            let control = zuse_cloud::billing::BillingControl::connect(&url, accounts)
+                .await?
+                .with_payment_providers(providers)
+                .with_meter_exports(settings);
+            loop {
+                match control.export_once(now_ms(), 25).await {
+                    Ok(report) => println!("{}", serde_json::to_string(&report)?),
+                    Err(error) if once => anyhow::bail!("{}", error.code),
+                    Err(error) => {
+                        tracing::warn!(code = error.code, "Billing export maintenance failed")
+                    }
+                }
+                if once {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            }
         }
         Command::Worker { once } => {
             let runtime = writable_runtime().await?;

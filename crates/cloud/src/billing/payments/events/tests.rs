@@ -265,6 +265,7 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         "stripe".into(),
         vec![
             Arc::new(StripePortal {
+                meter_price: None,
                 credit_price: None,
                 checkout: None,
                 http: http(),

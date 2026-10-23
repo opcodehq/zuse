@@ -12,6 +12,7 @@ const MAX_SAFE: i64 = 9_007_199_254_740_991;
 pub struct BillingControl {
     pub(super) pool: PgPool,
     pub(super) effects_pool: PgPool,
+    pub(super) meter_exports: Option<Arc<super::MeterExportConfig>>,
     pub(super) accounts: Arc<HashSet<String>>,
     pub(super) payments: Option<Arc<super::PaymentProviders>>,
 }
@@ -19,6 +20,7 @@ impl BillingControl {
     pub fn from_pool(pool: PgPool, accounts: Vec<String>) -> Self {
         Self {
             effects_pool: pool.clone(),
+            meter_exports: None,
             pool,
             payments: None,
             accounts: Arc::new(accounts.into_iter().collect()),

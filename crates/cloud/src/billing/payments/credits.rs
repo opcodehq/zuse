@@ -1,7 +1,6 @@
 //! Stripe invoice credits with original delivery keys and durable financial receipts.
 use super::*;
 use serde::Serialize;
-use sqlx::Row;
 use zuse_protocol::cloud_billing::{PREPAID_CREDIT_AMOUNTS, PrepaidBalance};
 const PURPOSE: &str = "zuse_prepaid_v1";
 fn reconcile() -> ApiError {
@@ -314,35 +313,12 @@ impl BillingControl {
             purchase_id: &purchase.id,
         })
         .map_err(|_| reconcile())?;
-        let mut tx = self.effects_pool.begin().await?;
-        let row=sqlx::query("INSERT INTO api_stripe_meter_deliveries(delivery_key,payload,first_attempt_at,lease_until) VALUES($1,$2,$3,0) ON CONFLICT(delivery_key) DO UPDATE SET delivery_key=EXCLUDED.delivery_key RETURNING payload,sent_at,first_attempt_at,lease_until").bind(key).bind(&payload).bind(now).fetch_one(&mut *tx).await?;
-        let stored: String = row.try_get("payload")?;
-        if stored != payload {
-            return Err(reconcile());
-        }
-        if row.try_get::<Option<i64>, _>("sent_at")?.is_some() {
-            tx.commit().await?;
-            return Ok(());
-        }
-        let first: i64 = row.try_get("first_attempt_at")?;
-        if now.saturating_sub(first) >= 23 * 3600000 {
-            return Err(reconcile());
-        }
-        if row.try_get::<i64, _>("lease_until")? > now {
-            return Err(ApiError::unavailable("billing_credit_delivery_busy"));
-        }
-        sqlx::query("UPDATE api_stripe_meter_deliveries SET lease_until=$2 WHERE delivery_key=$1")
-            .bind(key)
-            .bind(now + 60000)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        let result = provider
-            .credit_adjustment(&purchase.customer, amount, key, &purchase.id)
-            .await;
-        sqlx::query("UPDATE api_stripe_meter_deliveries SET lease_until=0,sent_at=CASE WHEN $2 THEN $3 ELSE sent_at END WHERE delivery_key=$1").bind(key).bind(result.is_ok()).bind(now).execute(&self.effects_pool).await?;
-        result
+        self.deliver_stripe(key, &payload, now, reconcile, || {
+            provider.credit_adjustment(&purchase.customer, amount, key, &purchase.id)
+        })
+        .await
     }
+
     pub(super) async fn process_credit(
         &self,
         provider: &dyn PortalProvider,

@@ -37,5 +37,22 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
 
+  billing-worker:
+    profiles: [billing]
+    build:
+      context: ../..
+      dockerfile: infra/cloud/Dockerfile
+    command: [billing-worker]
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: .env
+        required: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+
 volumes:
   recovery-scratch:

@@ -2,6 +2,7 @@
 use super::BillingControl;
 mod checkout;
 mod credits;
+mod meter;
 pub use credits::{CreditDispute, CreditEvent, CreditPurchase};
 pub mod events;
 use crate::{error::ApiError, store::Store};
@@ -88,6 +89,23 @@ pub trait PortalProvider: Send + Sync {
     ) -> Result<(), ApiError> {
         Err(unavailable())
     }
+    async fn report_meter(
+        &self,
+        _event: &super::MeterEvent,
+        _customer: Option<&str>,
+    ) -> Result<(), ApiError> {
+        Err(unavailable())
+    }
+    async fn meter_total(
+        &self,
+        _owner: &str,
+        _customer: Option<&str>,
+        _meter: &str,
+        _start: i64,
+        _end: i64,
+    ) -> Result<i64, ApiError> {
+        Err(unavailable())
+    }
     fn verify_event(
         &self,
         _headers: &axum::http::HeaderMap,
@@ -104,9 +122,12 @@ pub trait PortalProvider: Send + Sync {
 pub struct PaymentProviders {
     default: String,
     checkout: Option<Arc<checkout::CheckoutSettings>>,
-    providers: HashMap<String, Arc<dyn PortalProvider>>,
+    pub(super) providers: HashMap<String, Arc<dyn PortalProvider>>,
 }
 impl PaymentProviders {
+    pub fn default_provider_id(&self) -> &str {
+        &self.default
+    }
     pub fn new(default: String, providers: Vec<Arc<dyn PortalProvider>>) -> anyhow::Result<Self> {
         let mut registered = HashMap::new();
         for provider in providers {
@@ -149,6 +170,9 @@ impl PaymentProviders {
                     return_url,
                     events: events::EventConfig::from_env("STRIPE", "PRICE")?,
                     checkout: checkout::ProviderCheckout::from_env("STRIPE", "PRICE")?,
+                    meter_price: std::env::var("STRIPE_CLOUD_OVERAGE_PRICE_ID")
+                        .ok()
+                        .filter(|v| !v.trim().is_empty()),
                     credit_price: std::env::var("STRIPE_PREPAID_CREDIT_PRICE_ID")
                         .ok()
                         .filter(|v| !v.trim().is_empty()),
@@ -207,6 +231,7 @@ fn secure_url(value: &str) -> Result<Url, ApiError> {
     }
     Ok(url)
 }
+const STRIPE_API_VERSION: &str = "2026-09-30.endive";
 struct ProviderHttp {
     client: Client,
     origin: Url,
@@ -214,13 +239,22 @@ struct ProviderHttp {
 }
 impl ProviderHttp {
     fn new(origin: &str, secret: String) -> anyhow::Result<Self> {
+        let origin =
+            secure_url(origin).map_err(|_| anyhow::anyhow!("Invalid billing provider endpoint"))?;
+        let mut headers = reqwest::header::HeaderMap::new();
+        if origin.host_str() == Some("api.stripe.com") {
+            headers.insert(
+                "stripe-version",
+                reqwest::header::HeaderValue::from_static(STRIPE_API_VERSION),
+            );
+        }
         Ok(Self {
             client: Client::builder()
+                .default_headers(headers)
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(15))
                 .build()?,
-            origin: secure_url(origin)
-                .map_err(|_| anyhow::anyhow!("Invalid billing provider endpoint"))?,
+            origin,
             secret: Zeroizing::new(secret),
         })
     }
@@ -255,6 +289,7 @@ impl ProviderHttp {
     }
 }
 struct StripePortal {
+    meter_price: Option<String>,
     credit_price: Option<String>,
     checkout: Option<checkout::ProviderCheckout>,
     events: Option<events::EventConfig>,
@@ -264,6 +299,26 @@ struct StripePortal {
 }
 #[async_trait]
 impl PortalProvider for StripePortal {
+    async fn report_meter(
+        &self,
+        event: &super::MeterEvent,
+        customer: Option<&str>,
+    ) -> Result<(), ApiError> {
+        self.report_usage(event, customer.ok_or_else(unavailable)?)
+            .await
+    }
+    async fn meter_total(
+        &self,
+        owner: &str,
+        customer: Option<&str>,
+        meter: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<i64, ApiError> {
+        self.usage_total(owner, customer.ok_or_else(unavailable)?, meter, start, end)
+            .await
+    }
+
     fn prepaid_available(&self) -> bool {
         self.credit_price.is_some() && self.events.is_some()
     }
@@ -508,6 +563,24 @@ struct PolarPortal {
 }
 #[async_trait]
 impl PortalProvider for PolarPortal {
+    async fn report_meter(
+        &self,
+        event: &super::MeterEvent,
+        _customer: Option<&str>,
+    ) -> Result<(), ApiError> {
+        self.report_usage(event).await
+    }
+    async fn meter_total(
+        &self,
+        owner: &str,
+        _customer: Option<&str>,
+        meter: &str,
+        _start: i64,
+        _end: i64,
+    ) -> Result<i64, ApiError> {
+        self.usage_total(owner, meter).await
+    }
+
     fn supports_checkout(&self, offer: &str) -> bool {
         self.events.is_some()
             && self
@@ -634,3 +707,16 @@ impl Store {
 }
 #[cfg(test)]
 mod tests;
+
+pub(super) fn stripe_meter_command(
+    event: &super::MeterEvent,
+    customer: &str,
+    now: i64,
+) -> Result<(String, String), ApiError> {
+    let command = meter::StripeCommand::new(event, customer, now)?;
+    Ok((
+        command.key().into(),
+        serde_json::to_string(&command)
+            .map_err(|_| ApiError::conflict("billing_meter_reconciliation_required"))?,
+    ))
+}

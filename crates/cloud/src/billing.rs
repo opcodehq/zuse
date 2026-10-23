@@ -1,5 +1,8 @@
-//! Read existing billing capacity without emitting charges or repairing periods.
+//! Ledger-backed billing and explicitly owned provider operations.
 mod catalog;
+mod delivery;
+mod exports;
+pub use exports::{ExportReport, MeterEvent, MeterExportConfig};
 mod payments;
 use crate::error::ApiError;
 pub use catalog::BillingControl;

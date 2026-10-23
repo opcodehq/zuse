@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, settlement/export, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, provider-cost settlement and remaining usage sources, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -1792,3 +1792,66 @@ The adapters follow [Stripe's invoice balance contract](https://docs.stripe.com/
 and [Checkout contract](https://docs.stripe.com/api/checkout/sessions/create).
 Live paid-provider and Mac acceptance remain open. This does not close settlement,
 metered exports, persistent-machine billing, image administration or the rest of C.
+
+### Owned billing and telemetry export worker
+
+`zuse-cloud-api billing-worker [--once]` now drains the existing financial and
+telemetry outboxes through real Stripe/Polar HTTP adapters. The optional Compose
+`billing` profile runs it independently of API viewers and allocation/recovery.
+`CLOUD_BILLING_EXPORT_ENABLED` and `CLOUD_USAGE_EXPORT_ENABLED` are separate,
+default-off flags. Disabled once-mode returns before database/provider setup.
+Enabled mode requires explicit `ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS`, provider
+configuration and the default provider's overage meter for financial exports.
+The worker does not transfer ownership or enable production flags.
+
+Every processed account requires both original Rust billing ownership and a
+separate `zuse_rust_control_owners` marker with `resource_kind='billing-export'`,
+`resource_id` equal to the original owner and `backend='rust'`. Both markers stay
+share-locked through processing. Before transferring this marker, fence the old
+exporter as specified by G; a marker alone cannot stop old implementations that do
+not honor it. Unowned accounts remain untouched, including retry counters.
+
+Financial exports retain the original outbox ID, period, provider, timestamp,
+signed cent amount and idempotency key. They lock their outbox/period, verify the
+period owner/provider/currency and original Stripe customer, and acknowledge only
+a successful provider delivery or existing durable receipt. Failed items retain
+sanitized errors and the original bounded exponential retry schedule. PostgreSQL
+acceptance uses the original bigint counters and composite provider/idempotency
+index. Shadow/default-off runs never emit charges.
+
+Stripe uses the reference SHA-256 `zuse_...` event identifier and byte-compatible
+JSON receipt format in `api_stripe_meter_deliveries`. Credits and meter delivery
+now share that durable lease/receipt implementation. Existing sent receipts skip
+provider effects, even if invoice eligibility has since changed. Old uncertain
+writes stop after 23 hours. New overage writes require the matching subscription
+period/metered price or a matching draft invoice; finalized invoices stay retryable
+without a meter write. Timestamp validation retains the reference 35-day/five-minute
+window. Stripe requests explicitly use `2026-09-30.endive`, matching the reference's
+[stripe-node 23.0.0 API version](https://github.com/stripe/stripe-node/blob/v23.0.0/src/apiVersion.ts).
+
+Polar retains original external customer/event IDs, timestamps, metadata and signed
+unit values. Telemetry only accepts the two reference observation/cost event names
+and `billable=false`; it cannot inject invoice units through the usage queue. The
+worker never obtains a workspace execution connection.
+
+Reconciliation waits for settled outboxes, records attempts fairly (including
+missing meters and failed requests), prevents duplicate concurrent polls, and
+persists authoritative expected/observed totals. Stripe reads all summary pages
+using the reference minute-aligned bounds; Polar reads its original customer meter.
+A mismatch is recorded without automatically emitting corrective financial events.
+
+Twelve billing library checks pass, including isolated PostgreSQL and actual
+Stripe/Polar HTTP adapters. Export acceptance covers lost accepted responses,
+concurrent reconciliation, missing/failing meters, original keys, an independently
+generated JavaScript receipt fixture, draft/finalized invoice handling, old uncertain
+delivery refusal, telemetry separation and ownership fencing. Existing credit,
+checkout and signed subscription workflows still pass after sharing delivery logic.
+Receipts: `.context/cloud-exports-acceptance.log`. The API executable builds and
+disabled/no-ownership command checks pass in `.context/cloud-exports-api-build.log`
+and `.context/cloud-exports-cli.json`. Billing integration regressions are recorded
+in `.context/cloud-exports-regression.log`. No UI changes are introduced here.
+
+Provider report ingestion/cost settlement, additional provider sources, snapshot
+storage settlement, live provider/export acceptance and migration/cutover remain
+open. The worker exports accepted ledger outboxes; it does not turn runtime
+observations into invoice evidence. This does not complete C or G.

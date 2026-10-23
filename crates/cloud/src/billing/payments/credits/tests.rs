@@ -304,6 +304,7 @@ async fn prepaid_credit_funding_refunds_disputes_and_legacy_receipts() {
         secret: Zeroizing::new("fixture-key".into()),
     };
     let stripe = Arc::new(StripePortal {
+        meter_price: None,
         http: http(),
         return_url: "https://api-rust.zuse.sh".into(),
         configuration: None,
