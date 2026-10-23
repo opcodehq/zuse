@@ -2,7 +2,7 @@
 (() => {
   try {localStorage.setItem("zuse.workspace.preferences.v1",JSON.stringify({appearance:"dark"}));} catch {}
   const Native = WebSocket;
-  const proof = window.__cloudLaunch = {methods:[],status:[],forwards:[],creates:[],history:[],uploads:[],imageReads:[],innerMethods:[],staged:[],pauses:[],metadata:[],tools:[],sockets:0};
+  const proof = window.__cloudLaunch = {methods:[],status:[],forwards:[],creates:[],history:[],uploads:[],imageReads:[],innerMethods:[],staged:[],pauses:[],metadata:[],sync:[],tools:[],sockets:0};
   const pending = new Map();
   const fetchOriginal = window.fetch.bind(window);
   window.fetch = async (...args) => {
@@ -23,6 +23,7 @@
           const value = frame.ok ?? frame.item;
           if (!value) return;
           if (method === 'UploadCommit' && value.path) proof.staged.push(value.path);
+          if (method?.startsWith('CloudSync')) proof.sync.push({method,...value});
           if (method === 'CloudContext') proof.projects = value.projects;
           if (method === 'CloudWorkspaces') proof.list = value.workspaces;
           if (method === 'CloudCreate') proof.creates.push(value.workspace.workspace ?? value.workspace);

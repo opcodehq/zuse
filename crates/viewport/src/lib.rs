@@ -88,6 +88,7 @@ pub struct WorkspaceView {
     billing: cloud_billing::Billing,
     billing_cap: Entity<input::TextInput>,
     cloud_branch: Entity<input::TextInput>,
+    cloud_sync_path: Entity<input::TextInput>,
     cloud_model: Entity<input::TextInput>,
     cached_only: bool,
     managed_access: managed_access::ManagedAccess,
@@ -460,6 +461,7 @@ impl WorkspaceView {
         });
         let worktree_settings = worktree_settings::WorktreeSettingsView::new(window, cx);
         let browser = browser::Browser::new(window, cx);
+        let cloud_sync_path = cx.new(|cx| input::TextInput::new("Absolute folder on host", window, cx));
         let cloud_branch = cx.new(|cx| input::TextInput::new("Branch (main)", window, cx));
         let cloud_model = cx.new(|cx| input::TextInput::new("Model (sonnet)", window, cx));
         let view = Self {
@@ -474,6 +476,7 @@ impl WorkspaceView {
             billing: Default::default(),
             billing_cap: cx.new(|cx| input::TextInput::new("Monthly cap in dollars", window, cx)),
             cloud_branch,
+            cloud_sync_path,
             cloud_model,
             cached_only: false,
             requests: transport.requests,

@@ -1216,6 +1216,11 @@ impl Shell {
         } else {
             None
         };
+        let cloud_info = if !takeover && !on_canvas {
+            self.render_cloud_info(&theme, cx)
+        } else {
+            None
+        };
         let inner = div()
             .size_full()
             .flex()
@@ -1248,6 +1253,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap(px(4.))
+                    .children(cloud_info)
                     .children(open_in)
                     .children(session_info_toggle)
                     .children(terminal_toggle),

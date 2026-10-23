@@ -96,6 +96,7 @@ mod thread_search;
 use side_chats::SideChatTab;
 mod tabs;
 mod top_bar;
+mod cloud_info;
 mod voice_stage;
 use voice_stage::VOICE_STAGE_ORB_SCALE;
 
@@ -2083,6 +2084,7 @@ pub struct Shell {
     /// The titlebar's "Open in" menu and the apps it found.
     open_in: open_in::OpenIn,
     branch_menu: top_bar::BranchMenu,
+    cloud_info: cloud_info::CloudInfo,
     /// Host-owned project Actions cached per (device, space).
     project_actions: crate::project_actions::ProjectActionsController,
     /// Diff surfaces by id — each tab its own [`Changes`] viewer with its own
@@ -2636,6 +2638,7 @@ impl Shell {
             right_plus: popover::Popup::default(),
             open_in: open_in::OpenIn::default(),
             branch_menu: top_bar::BranchMenu::default(),
+            cloud_info: cloud_info::CloudInfo::default(),
             project_actions: crate::project_actions::ProjectActionsController::default(),
             diffs: std::collections::HashMap::new(),
             files: std::collections::HashMap::new(),

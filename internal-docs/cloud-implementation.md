@@ -13,9 +13,9 @@ completed UI images in the final user-facing report.
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, app captures/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect, cached reopening with conversation selection, encrypted first-message file delivery, and attached Pause/explicit retained-machine resume added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status/delete APIs, durable Boxd capture/read-back/promotion/retirement/cleanup worker and shared image deletion confirmation, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
-| D: tools/integrations | Shared hosted RPC, scoped browser uploads, chat-owned retained-terminal discovery and verified Git-aware mirror transfer/publication added; browser file/edit/Git and native terminal keyboard/reopen acceptance added; persisted background sync controller added; remaining tools, sync UI/device bridge/org automation pending | Guest text/PNG bytes, image reads, browser file/edit/Git, terminal catalog/detach/reopen and native keyboard input pass with fixture runtime; remaining tool flows pending |
-| E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; registered default/custom-path sync cleanup added; remaining: sync UI and legacy custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
-| F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray, archived cloud transcript screens and shared Cloud repositories/image controls added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
+| D: tools/integrations | Shared hosted RPC, scoped browser uploads, chat-owned retained-terminal discovery and verified Git-aware mirror transfer/publication added; browser file/edit/Git and native terminal keyboard/reopen acceptance added; persisted background sync controller added; native/browser sync controls added; remaining tools, local-mirror terminal/editor selection, device bridge/org automation pending | Guest text/PNG bytes, image reads, browser file/edit/Git, terminal catalog/detach/reopen, native keyboard input, background sync and native/browser sync controls pass with fixture runtime; remaining tool flows pending |
+| E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; registered default/custom-path sync cleanup added; remaining: legacy custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
+| F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray, archived cloud transcript screens, shared Cloud repositories/image controls and top-bar cloud details/sync controls added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
 
 Do not mark a milestone complete from compilation alone. Record tested behavior and remaining gates here.
@@ -2559,12 +2559,10 @@ receiver, normalized destination paths, cache reuse and obsolete-object pruning.
 Final test receipts: `.context/cloud-sync-mirror-verified-tests.log` and
 `.context/cloud-sync-rpc-verified-tests.log`.
 
-This is the transfer/publication layer, not a completed local-sync product flow.
-The account/workspace controller still needs persisted configuration, lifecycle
-cancellation/cleanup fencing, background scheduling, progress/retry presentation,
-default/custom-path management and the native/browser environment controls. Those
-remain on Milestone D/E; do not enable a Sync toggle without those operations.
-No full milestone or live-provider sync acceptance is completed by this layer.
+This transfer/publication layer is now used by the persisted controller and
+native/browser controls described below. Organization support, legacy preference
+import, live-provider acceptance and the other Milestone D/E requirements remain
+open; this layer alone does not complete either milestone.
 
 
 ### Persisted background sync controller
@@ -2599,6 +2597,57 @@ run: `.context/cloud-sync-controller-verified-live.log`. The API fixture also pa
 its original single-allocation/single-turn assertions. All 22 focused cloud tests
 passed (`.context/cloud-sync-controller-verified-tests.log`).
 
-Native/browser Sync controls and visual progress/retry presentation are still pending.
-This supports personal accounts; organization sync, import of legacy custom-path
-preferences, live-provider and Mac acceptance remain open. No full milestone is closed.
+Native/browser sync controls and phase/error/retry presentation are implemented in
+the following section. This supports personal accounts; organization sync, import
+of legacy custom-path preferences, live-provider and Mac acceptance remain open.
+No full milestone is closed.
+
+
+### Cloud details and sync controls
+
+Native and browser cloud views expose the reference top-bar cloud details menu:
+repository, environment, status, creation time, and a Sync to a local directory
+switch. Controls call the host authority and display actual controller phases,
+destination and errors. Disable retains files; Retry requests another copy over
+the existing connection. Errors from rejected destinations stay visible through
+background status refreshes until another user action. Native polling ignores
+results superseded by configuration changes or a different account/workspace.
+
+Native uses the existing popup, menu rows, switch, Hugeicons and system folder
+picker. The local path can be copied. Browser custom paths explicitly name folders
+on the connected host, with a text field and Use folder action. The browser device
+never receives filesystem access merely by enabling this switch. Closing a cloud
+view removes its subscriptions and menu polling; persisted background sync continues.
+
+The real native Linux app verified default-folder copying, subsequent guest edits,
+disable retaining local files, re-enable and the retry action. Receipt:
+`.context/cloud-sync-native-ui-acceptance.json`; screenshot:
+`.context/cloud-sync-native-active.png`. The VM lacks a desktop FileChooser portal,
+so native system-folder selection remains unverified; Mac acceptance remains open.
+
+The browser acceptance scenario is reproducible with
+`ZUSE_CLOUD_SYNC_UI_ACCEPTANCE=1` in `scripts/acceptance/cloud-launch.mjs` against
+the isolated lifecycle fixture. It exercises custom-folder selection, background
+copying, disable/re-enable, client closure, cached reopening, retained settings,
+retry, and refusal of nonempty unowned folders without changing their contents.
+
+Final browser run passed with the compiled GPUI browser, real host, isolated API/
+PostgreSQL and packaged guest. Receipts: `.context/cloud-sync-browser-ui-acceptance.json`,
+`.context/cloud-sync-ui-final-browser.log` and `.context/cloud-sync-ui-final-api.log`.
+The original one-allocation/one-provider-turn and single-ready-per-connect assertions
+remain intact and passed. UI captures: `.context/cloud-sync-browser-final.png` and
+`.context/cloud-sync-browser-error.png`. Final browser and native builds passed;
+`.context/cloud-sync-web-verified-build.log`, `.context/cloud-sync-native-status-build.log`.
+
+A retained ready connection revealed an unseen watch-value bug: a new environment
+subscriber received its initial ready snapshot twice. The stream now consumes the
+watch version with every snapshot. The regression test subscribes after readiness,
+requires no duplicate, then verifies the next real status change is delivered.
+This preserves the single shared connection when sync outlives the viewport.
+The new stream regression and existing interactive-pause guard both passed
+(`.context/cloud-sync-status-tests.log`); the host rebuild passed
+(`.context/cloud-sync-status-host-build.log`).
+
+Remaining: native system-picker/Mac acceptance, local mirror editor/terminal routing,
+legacy custom-path settings import, organizations, SSH actions and the rest of the
+full top-bar/screen parity audit. No milestone closes with these controls.

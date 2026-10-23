@@ -1,5 +1,6 @@
 //! Cloud launch and environment selection. Only interactive connection acquires compute.
 mod uploads;
+mod sync;
 use super::*;
 use crate::assets::icon;
 use crate::shell::{BG, BORDER, MUTED, column, control, label, row};
@@ -7,6 +8,7 @@ use crate::shell::{BG, BORDER, MUTED, column, control, label, row};
 #[derive(Default)]
 pub(super) struct Cloud {
     pub mode: bool,
+    sync: sync::SyncUi,
     pub guest: bool,
     pub picker: Option<&'static str>,
     pub target: Option<Value>,
@@ -118,6 +120,10 @@ impl WorkspaceView {
         for (id, _) in self.cloud.forwards.drain().collect::<Vec<_>>() {
             self.cancel(id);
         }
+        for id in [self.cloud.sync.request, self.cloud.sync.metadata].into_iter().flatten() {
+            self.cancel(id); self.pending.remove(&id);
+        }
+        self.cloud.sync = sync::SyncUi::default();
         self.cloud.child = None;
         self.cloud.events = None;
         self.cloud.pump = None;
@@ -210,6 +216,7 @@ impl WorkspaceView {
                 }
             }
         }
+        if self.receive_cloud_sync(frame) { return true; }
         let Some(id) = frame["id"].as_u64() else {
             return false;
         };
@@ -739,6 +746,7 @@ impl WorkspaceView {
                     )))
                     .when_some(self.cloud.notice.clone(), |v, n| v.child(label(n)))
                     .child(div().flex_1())
+                    .child(self.cloud_details_button(cx))
                     .when(
                         self.cloud.status_request.is_none()
                             || matches!(

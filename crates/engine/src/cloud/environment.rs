@@ -31,6 +31,22 @@ pub struct Environment {
     task: tokio::task::JoinHandle<()>,
 }
 impl Environment {
+    fn updates(self: &Arc<Self>) -> futures::stream::BoxStream<'static, Value> {
+        let receiver = self.status.clone();
+        futures::stream::unfold(
+            (self.clone(), receiver, true),
+            |(environment, mut receiver, first)| async move {
+                if !first && receiver.changed().await.is_err() {
+                    return None;
+                }
+                // A retained connection can already have an unseen ready value.
+                // Consume that version with the initial snapshot as well.
+                let value = serde_json::to_value(receiver.borrow_and_update().clone()).ok()?;
+                Some((value, (environment, receiver, false)))
+            },
+        )
+        .boxed()
+    }
     pub(super) fn ready_client(&self) -> Option<Arc<RpcClient>> {
         (self.status.borrow().state == "ready").then(|| self.client.clone())
     }
@@ -338,18 +354,7 @@ pub async fn handle(auth: &Auth, method: &str, params: Value) -> Result<RpcReply
         let environment = api
             .environments
             .open(api.clone(), auth.clone(), account, workspace);
-        let receiver = environment.status.clone();
-        let stream = futures::stream::unfold(
-            (environment, receiver, true),
-            |(environment, mut receiver, first)| async move {
-                if !first && receiver.changed().await.is_err() {
-                    return None;
-                }
-                let value = serde_json::to_value(receiver.borrow().clone()).ok()?;
-                Some((value, (environment, receiver, false)))
-            },
-        )
-        .boxed();
+        let stream = environment.updates();
         return Ok(RpcReply::Stream(stream));
     }
     let environment = api.environments.get(&account, &workspace).ok_or_else(|| {
@@ -435,6 +440,45 @@ mod tests {
         Json, Router,
         routing::{get, post},
     };
+    #[tokio::test]
+    async fn retained_ready_connection_has_one_initial_status_then_real_changes() {
+        let (client, control) = RpcClient::reconnecting();
+        let (send, status) = watch::channel(Status {
+            workspace_id: "retained".into(),
+            state: "connecting",
+            epoch: 0,
+            message: String::new(),
+        });
+        send.send_replace(Status {
+            workspace_id: "retained".into(),
+            state: "ready",
+            epoch: 1,
+            message: String::new(),
+        });
+        let environment = Arc::new(Environment {
+            client: Arc::new(client),
+            control,
+            status,
+            status_send: send.clone(),
+            retry: Arc::new(Notify::new()),
+            cancel: CancellationToken::new(),
+            task: tokio::spawn(std::future::pending()),
+        });
+        let mut stream = environment.updates();
+        assert_eq!(stream.next().await.unwrap()["state"], "ready");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), stream.next())
+                .await
+                .is_err()
+        );
+        send.send_replace(Status {
+            workspace_id: "retained".into(),
+            state: "blocked",
+            epoch: 1,
+            message: PAUSING_MESSAGE.into(),
+        });
+        assert_eq!(stream.next().await.unwrap()["state"], "blocked");
+    }
     #[tokio::test]
     async fn paused_workspace_requires_interactive_resume() {
         let resumes = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));

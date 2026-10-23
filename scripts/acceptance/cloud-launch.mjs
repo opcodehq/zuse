@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {engine,browser,fixture,artifact,sleep} from './harness.mjs';
 import {beforeCloudTools,afterCloudTools} from './cloud-tools.mjs';
+import {beforeCloudSync,afterCloudSync} from './cloud-sync-ui.mjs';
 let host,page,stage='startup';
 const file=process.env.ZUSE_CLOUD_LAUNCH_UI_FIXTURE_FILE;
 try {
@@ -46,6 +47,7 @@ try {
     }
     page.screenshot('cloud-launch-streamed-chat.png');
     const workspace=page.evaluate('window.__cloudLaunch.creates[0]');
+    if(process.env.ZUSE_CLOUD_SYNC_UI_ACCEPTANCE==='1') { stage='cloud-sync';await beforeCloudSync(page,file,host); }
     if(process.env.ZUSE_CLOUD_TOOLS_ACCEPTANCE==='1') { stage='workspace-tools';await beforeCloudTools(page,file); }
     if(process.env.ZUSE_CLOUD_TOOLS_MANUAL==='1') {
       fs.writeFileSync(file.replace(/\.[^.]+$/,'.tools-ready'),'ready');
@@ -64,6 +66,7 @@ try {
     page.wait('window.__cloudLaunch.status.some(s=>s.state==="ready")');
     page.wait('window.__cloudLaunch.forwards.some(f=>f.reply)');await sleep(2500);
     page.screenshot('cloud-composer-connected.png');
+    if(process.env.ZUSE_CLOUD_SYNC_UI_ACCEPTANCE==='1') { stage='cloud-sync-reopen';await afterCloudSync(page,file,host); }
     if(process.env.ZUSE_CLOUD_TOOLS_ACCEPTANCE==='1') { stage='retained-terminal';await afterCloudTools(page,file); }
     if(process.env.ZUSE_CLOUD_TOOLS_MANUAL==='1') {
       fs.writeFileSync(file.replace(/\.[^.]+$/,'.tools-reconnected'),'ready');
