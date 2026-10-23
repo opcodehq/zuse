@@ -25,6 +25,7 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_BILLING_SUMMARY
             | zuse_protocol::methods::CLOUD_BILLING_USAGE
             | zuse_protocol::methods::CLOUD_BILLING_CAP
+            | zuse_protocol::methods::CLOUD_BILLING_PORTAL
             | UNARCHIVE
             | DELETE
             | CLEANUP_MIRROR
@@ -144,7 +145,8 @@ impl CloudApi {
             bytes.extend_from_slice(&chunk);
         }
         if !status.is_success() {
-            if path.starts_with(&["v1", "cloud", "billing"]) {
+            if path.starts_with(&["v1", "cloud", "billing"]) || path == ["v1", "billing", "portal"]
+            {
                 let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
                 let message = match value["error"].as_str() {
                     Some("cloud_billing_subscription_required") => {
@@ -158,6 +160,12 @@ impl CloudApi {
                     }
                     Some("cloud_billing_owner_not_rust" | "cloud_billing_writes_disabled") => {
                         "Cloud billing changes are still managed by the original service."
+                    }
+                    Some("billing_provider_ambiguous") => {
+                        "This account has subscriptions with multiple billing providers. Contact support to select the correct portal."
+                    }
+                    Some("billing_provider_unavailable") => {
+                        "The billing provider is unavailable. Try opening billing again."
                     }
                     Some("invalid_billing_cap") => "Enter a valid nonnegative monthly cap.",
                     _ => "Cloud billing is unavailable. Refresh and try again.",
@@ -194,6 +202,19 @@ impl CloudApi {
             .await
             .map_err(|_| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
         let result = match method {
+            zuse_protocol::methods::CLOUD_BILLING_PORTAL => {
+                let org = auth.state().org_id().map(str::to_owned);
+                let value = self
+                    .request_scoped(
+                        &token,
+                        &["v1", "billing", "portal"],
+                        Some(json!({})),
+                        org.as_deref(),
+                        &[],
+                    )
+                    .await?;
+                json!({"accountId":account,"organizationId":org,"data":value})
+            }
             zuse_protocol::methods::CLOUD_BILLING_SUMMARY
             | zuse_protocol::methods::CLOUD_BILLING_USAGE
             | zuse_protocol::methods::CLOUD_BILLING_CAP => {

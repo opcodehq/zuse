@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates and native/browser Cloud usage controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar billing portals and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout/subscription writes, settlement/export, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -1540,3 +1540,53 @@ Next implementation focus: finish first-launch attachments/context, startup queu
 remaining native routing/cached reopen using the shared transport, then cloud administration.
 Full live sync and migration remain open; the verified browser create/stream/reopen
 workflow and default mirror cleanup do not close those requirements.
+
+### Existing Stripe and Polar billing portals
+
+The Rust `POST /v1/billing/portal` contract selects the account's original provider
+from non-ended subscriptions. Multiple providers return `billing_provider_ambiguous`;
+accounts without a subscription use `BILLING_DEFAULT_PROVIDER`. Stripe retrieves the
+stored `api_stripe_customers.customer_id`, verifies its original `account_id` metadata
+and creates a portal session for that same customer. It never creates or relinks a
+customer. Polar uses the original external owner identity, including organization
+owners. Both adapters validate HTTPS session links, bound response size/time and
+sanitize provider failures. Session links and reusable provider keys are not logged.
+
+Portal admission requires billing-role authorization and the same separate billing
+writer allowlist/ownership lock as cap changes. This does not transfer writer,
+webhook or export ownership. The catalog connection remains read-only. Native and
+browser Manage billing actions use the host authority and reject replies after an
+account/organization change. Portal creation is never automatically replayed.
+
+Configuration is loaded only when `ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS` enables the
+billing writer. Stripe uses `STRIPE_SECRET_KEY`, optional `STRIPE_ENVIRONMENT`
+(`sandbox`/`production`, checked against the key), optional
+`STRIPE_PORTAL_CONFIGURATION_ID` and `API_ISSUER` as the portal return URL.
+Polar uses `POLAR_ACCESS_TOKEN` and `POLAR_ENVIRONMENT` (`sandbox`/`production`).
+`BILLING_DEFAULT_PROVIDER` selects the default; existing subscriptions override it.
+Missing provider configuration returns an actionable unavailable response; no
+production account or ownership marker is enabled by this change. The adapters use
+[Stripe's portal session contract](https://docs.stripe.com/api/customer_portal/sessions/create)
+and [Polar's customer sessions contract](https://github.com/polarsource/agent-toolkit/blob/main/skills/polar-integration/SKILL.md).
+
+PostgreSQL/HTTP acceptance passes for personal isolation, organization billing-role
+authorization, original Stripe/Polar selection and customer IDs, ownership fencing,
+ambiguous providers, ended subscriptions and unchanged original subscription IDs.
+The Stripe transport test verifies the original customer before session creation;
+the Polar transport test verifies external identity and rejects unsafe links.
+Receipts: `.context/cloud-portal-postgres.log` and
+`.context/cloud-portal-provider-tests.log`. UI acceptance is recorded separately.
+
+Checkout, renewal/cancellation ingestion, payment-failure processing, settlement,
+webhook deduplication and metered exports remain open. Live provider and original
+account verification remain required before billing ownership cutover.
+
+Native Linux and the compiled browser both opened the selected provider portal
+through the actual host/API/PostgreSQL workflow. External URL launch was intercepted
+only for the fixture provider host; no live Stripe/Polar session or subscription was
+modified. Browser observation confirms one click creates one portal session and no
+`CloudEnvironment` compute wake. Native launch reached the system URL opener.
+Receipts: `.context/cloud-portal-native-acceptance.json`,
+`.context/cloud-portal-browser-acceptance.json` and `.context/cloud-portal-ui-api.log`.
+Native/browser builds and the mutation retry-classification test pass. Screenshots:
+`.context/cloud-portal-native.png` and `.context/cloud-portal-browser.png`.

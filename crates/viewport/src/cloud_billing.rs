@@ -45,6 +45,23 @@ impl WorkspaceView {
             ),
         );
     }
+    fn open_billing_portal(&mut self, cx: &mut Context<Self>) {
+        if self.billing.owner.is_none()
+            || self
+                .billing
+                .requests
+                .values()
+                .any(|(kind, _)| *kind == "portal")
+        {
+            return;
+        }
+        let id = self.call(methods::CLOUD_BILLING_PORTAL, json!({}));
+        self.billing
+            .requests
+            .insert(id, ("portal", self.billing.owner.clone()));
+        self.billing.error = None;
+        cx.notify();
+    }
     fn save_billing_cap(&mut self, cx: &mut Context<Self>) {
         if !self.billing.requests.is_empty() {
             return;
@@ -130,7 +147,17 @@ impl WorkspaceView {
         }) {
             return true;
         }
-        if matches!(kind, "summary" | "cap") {
+        if kind == "portal" {
+            if let Some(url) = value["data"]["portalUrl"]
+                .as_str()
+                .filter(|url| url.starts_with("https://"))
+            {
+                cx.open_url(url);
+            } else {
+                self.billing.error =
+                    Some("The billing provider returned an invalid portal link.".into());
+            }
+        } else if matches!(kind, "summary" | "cap") {
             match serde_json::from_value::<BillingSummary>(value["data"].clone()) {
                 Ok(summary) => {
                     self.billing_cap.update(cx, |input, cx| {
@@ -187,6 +214,14 @@ impl WorkspaceView {
                 })),
             ),
         );
+        if self.billing.owner.is_some() {
+            view = view.child(s::frame()
+                .child(s::header("Subscription", "Manage your existing subscription, invoices and payment method with your billing provider."))
+                .child(s::card().child(row().p_3().justify_between()
+                    .child(s::title_text("Billing portal"))
+                    .child(s::button("open-cloud-billing-portal", if self.billing.requests.values().any(|(kind, _)| *kind == "portal") { "Opening…" } else { "Manage billing" })
+                        .on_click(cx.listener(|this, _, _, cx| this.open_billing_portal(cx)))))));
+        }
         if let Some(error) = &self.billing.error {
             view = view.child(label(error.clone()));
         }

@@ -10,13 +10,15 @@ const MAX_SAFE: i64 = 9_007_199_254_740_991;
 /// Dedicated writer connection; the catalog pool stays read-only.
 #[derive(Clone)]
 pub struct BillingControl {
-    pool: PgPool,
+    pub(super) pool: PgPool,
     accounts: Arc<HashSet<String>>,
+    pub(super) payments: Option<Arc<super::PaymentProviders>>,
 }
 impl BillingControl {
     pub fn from_pool(pool: PgPool, accounts: Vec<String>) -> Self {
         Self {
             pool,
+            payments: None,
             accounts: Arc::new(accounts.into_iter().collect()),
         }
     }
@@ -39,6 +41,21 @@ impl BillingControl {
             .map_err(|_| anyhow::anyhow!("Cannot connect cloud billing writer"))?;
         Ok(Self::from_pool(pool, accounts))
     }
+    pub(super) async fn owned_transaction(
+        &self,
+        owner: &str,
+    ) -> Result<Transaction<'_, Postgres>, ApiError> {
+        if !self.accounts.contains(owner) {
+            return Err(ApiError::forbidden("cloud_billing_writes_disabled"));
+        }
+        let mut tx = self.pool.begin().await?;
+        // Independent from workspace lifecycle ownership. Handoff must take this row's exclusive lock.
+        let backend:Option<String>=sqlx::query_scalar("SELECT backend FROM zuse_rust_control_owners WHERE resource_kind='billing' AND resource_id=$1 FOR SHARE").bind(owner).fetch_optional(&mut *tx).await?;
+        if backend.as_deref() != Some("rust") {
+            return Err(ApiError::conflict("cloud_billing_owner_not_rust"));
+        }
+        Ok(tx)
+    }
     async fn set_cap(
         &self,
         owner: &str,
@@ -51,15 +68,7 @@ impl BillingControl {
         {
             return Err(ApiError::bad_request("invalid_billing_cap"));
         }
-        if !self.accounts.contains(owner) {
-            return Err(ApiError::forbidden("cloud_billing_writes_disabled"));
-        }
-        let mut tx = self.pool.begin().await?;
-        // Independent from workspace lifecycle ownership. Handoff must take this row's exclusive lock.
-        let backend:Option<String>=sqlx::query_scalar("SELECT backend FROM zuse_rust_control_owners WHERE resource_kind='billing' AND resource_id=$1 FOR SHARE").bind(owner).fetch_optional(&mut *tx).await?;
-        if backend.as_deref() != Some("rust") {
-            return Err(ApiError::conflict("cloud_billing_owner_not_rust"));
-        }
+        let mut tx = self.owned_transaction(owner).await?;
         let p = period(&mut tx, owner, now, true).await?;
         let id = p["period_id"].as_str().ok_or_else(invalid)?;
         let prior:Option<i64>=sqlx::query_scalar("SELECT overage_cap_micros FROM api_cloud_billing_cap_commands WHERE period_id=$1 AND idempotency_key=$2").bind(id).bind(&request.idempotency_key).fetch_optional(&mut *tx).await?;

@@ -158,13 +158,15 @@ async fn main() -> Result<()> {
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
             if !billing_accounts.is_empty() {
-                store = store.with_billing_control(
-                    zuse_cloud::billing::BillingControl::connect(
-                        &config.database_url,
-                        billing_accounts,
-                    )
-                    .await?,
-                );
+                let mut billing = zuse_cloud::billing::BillingControl::connect(
+                    &config.database_url,
+                    billing_accounts,
+                )
+                .await?;
+                if let Some(providers) = zuse_cloud::billing::PaymentProviders::from_env()? {
+                    billing = billing.with_payment_providers(providers);
+                }
+                store = store.with_billing_control(billing);
             }
             let state = AppState {
                 store,

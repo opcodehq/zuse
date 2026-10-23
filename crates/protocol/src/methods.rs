@@ -347,6 +347,7 @@ mod retry_tests {
             CLOUD_CLEANUP_MIRROR,
             CLOUD_CREATE,
             CLOUD_BILLING_CAP,
+            CLOUD_BILLING_PORTAL,
             CLOUD_ENVIRONMENT,
             CLOUD_RPC,
             "FutureMethod",
@@ -403,4 +404,5 @@ pub const GIT_WORKSPACE_ACTION: &str = "GitWorkspaceAction";
 /// Account-scoped cloud administration; handled by the host authority.
 pub const CLOUD_BILLING_SUMMARY: &str = "CloudBillingSummary";
 pub const CLOUD_BILLING_USAGE: &str = "CloudBillingUsage";
+pub const CLOUD_BILLING_PORTAL: &str = "CloudBillingPortal";
 pub const CLOUD_BILLING_CAP: &str = "CloudBillingSetCap";

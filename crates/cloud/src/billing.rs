@@ -1,7 +1,9 @@
 //! Read existing billing capacity without emitting charges or repairing periods.
 mod catalog;
-pub use catalog::BillingControl;
+mod payments;
 use crate::error::ApiError;
+pub use catalog::BillingControl;
+pub use payments::{PaymentProviders, PortalProvider};
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 

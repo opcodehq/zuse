@@ -5274,3 +5274,179 @@ async fn cloud_billing_summary_usage_and_owned_cap_workflow() {
         .unwrap();
     admin.close().await;
 }
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn billing_portal_preserves_provider_customer_and_owner() {
+    use zuse_cloud::billing::{BillingControl, PaymentProviders, PortalProvider};
+    #[derive(Clone)]
+    struct Provider(
+        &'static str,
+        Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>,
+    );
+    #[async_trait]
+    impl PortalProvider for Provider {
+        fn provider_id(&self) -> &'static str {
+            self.0
+        }
+        async fn portal(&self, owner: &str, customer: Option<&str>) -> Result<String, ApiError> {
+            self.1
+                .lock()
+                .unwrap()
+                .push((owner.into(), customer.map(str::to_owned)));
+            Ok(format!("https://{}.example.test/portal", self.0))
+        }
+    }
+    let (admin, pool, schema) = fixture().await;
+    sqlx::raw_sql("CREATE TABLE api_stripe_customers(account_id text PRIMARY KEY, customer_id text UNIQUE); INSERT INTO api_stripe_customers VALUES('user-alice','cus_original'),('organization:org-team','cus_org'); INSERT INTO zuse_rust_control_owners(resource_kind,resource_id,backend,generation,updated_at) VALUES('billing','user-alice','rust',1,0),('billing','user-bob','rust',1,0),('billing','organization:org-team','rust',1,0);").execute(&pool).await.unwrap();
+    let calls = Arc::new(std::sync::Mutex::new(vec![]));
+    let state = AppState {
+        store: Store::from_pool(pool.clone()).with_billing_control(
+            BillingControl::from_pool(
+                pool.clone(),
+                vec![
+                    "user-alice".into(),
+                    "user-bob".into(),
+                    "organization:org-team".into(),
+                ],
+            )
+            .with_payment_providers(
+                PaymentProviders::new(
+                    "stripe".into(),
+                    vec![
+                        Arc::new(Provider("stripe", calls.clone())),
+                        Arc::new(Provider("polar", calls.clone())),
+                    ],
+                )
+                .unwrap(),
+            ),
+        ),
+        identity: Arc::new(TestIdentity),
+        organizations_enabled: true,
+        organization_ids: Arc::new(vec!["org-team".into()]),
+        runtime: None,
+        gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
+    };
+    let app = router(state.clone(), vec![]);
+    let path = "/v1/billing/portal";
+    assert_eq!(
+        runtime_post(&app, path, "", &json!({})).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let org_request = |token: &str| {
+        Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("authorization", format!("Bearer {token}"))
+            .header("x-zuse-workspace", "organization:org-team")
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        app.clone()
+            .oneshot(org_request("member"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert!(calls.lock().unwrap().is_empty());
+    let response = runtime_post(&app, path, "alice", &json!({})).await;
+    assert_eq!(response.0, StatusCode::OK);
+    assert_eq!(
+        response.1["portalUrl"],
+        "https://stripe.example.test/portal"
+    );
+    let response = runtime_post(&app, path, "bob", &json!({})).await;
+    assert_eq!(response.0, StatusCode::OK);
+    assert_eq!(response.1["portalUrl"], "https://polar.example.test/portal");
+    assert_eq!(
+        app.clone()
+            .oneshot(org_request("billing"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![
+            ("user-alice".into(), Some("cus_original".into())),
+            ("user-bob".into(), None),
+            ("organization:org-team".into(), Some("cus_org".into()))
+        ]
+    );
+    sqlx::query(
+        "UPDATE zuse_rust_control_owners SET backend='legacy' WHERE resource_id='user-alice'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        runtime_post(&app, path, "alice", &json!({})).await.1["error"],
+        "cloud_billing_owner_not_rust"
+    );
+    sqlx::raw_sql("UPDATE zuse_rust_control_owners SET backend='rust' WHERE resource_id='user-alice'; INSERT INTO api_entitlements VALUES('conflict','user-alice','cloud-workspace','cloud-workspace-standard-v1','polar','sub-other','active',9999999999999,NULL,100,100)").execute(&pool).await.unwrap();
+    assert_eq!(
+        runtime_post(&app, path, "alice", &json!({})).await.1["error"],
+        "billing_provider_ambiguous"
+    );
+    assert_eq!(calls.lock().unwrap().len(), 3);
+    sqlx::query("UPDATE api_entitlements SET status='ended' WHERE entitlement_id='conflict'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        runtime_post(&app, path, "alice", &json!({})).await.0,
+        StatusCode::OK
+    );
+    let unchanged: String = sqlx::query_scalar(
+        "SELECT provider_subscription_id FROM api_entitlements WHERE entitlement_id='ent-alice'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unchanged, "sub-preserved");
+    let legacy = router(
+        AppState {
+            store: Store::from_pool(pool.clone()),
+            ..state.clone()
+        },
+        vec![],
+    );
+    assert_eq!(
+        runtime_post(&legacy, path, "alice", &json!({})).await.1["error"],
+        "cloud_billing_writes_disabled"
+    );
+    if let Ok(path) = std::env::var("ZUSE_CLOUD_BILLING_UI_FIXTURE_FILE") {
+        sqlx::raw_sql(include_str!("fixtures/billing.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query("INSERT INTO api_cloud_billing_periods VALUES('p-alice','user-alice','stripe','sub-preserved','active','USD',$1,$2,40000000,35000000,500,25000000,$1)").bind(now-1000).bind(now+3600000).execute(&pool).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(axum::serve(listener, app).into_future());
+        let file = std::path::Path::new(&path);
+        std::fs::write(file, origin).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(900), async {
+            while !file.with_extension("done").exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Portal UI acceptance timed out");
+        assert!(
+            calls.lock().unwrap().len() >= 5,
+            "UI must create a portal session through the actual API"
+        );
+        server.abort();
+    }
+    pool.close().await;
+    sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}

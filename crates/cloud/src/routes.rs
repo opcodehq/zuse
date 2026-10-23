@@ -67,6 +67,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/readyz", get(ready))
         .route("/v1/cloud/context", get(context))
         .route("/v1/billing/entitlements", get(entitlements))
+        .route("/v1/billing/portal", post(billing_portal))
         .route("/v1/cloud/billing/summary", get(billing_summary))
         .route("/v1/cloud/billing/usage", get(billing_usage))
         .route(
@@ -1045,5 +1046,15 @@ async fn billing_cap(
                 chrono::Utc::now().timestamp_millis(),
             )
             .await?,
+    ))
+}
+
+async fn billing_portal(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Billing).await?;
+    Ok(Json(
+        json!({"portalUrl":state.store.billing_portal(&access.owner_id).await?}),
     ))
 }

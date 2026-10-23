@@ -24,6 +24,7 @@ pub struct CloudBillingPage {
     owner: Option<Owner>,
     loaded: bool,
     task: Option<Task<()>>,
+    portal_task: Option<Task<()>>,
     summary: Option<BillingSummary>,
     items: Vec<BillingUsageItem>,
     cursor: Option<String>,
@@ -43,6 +44,7 @@ impl CloudBillingPage {
             owner: None,
             loaded: false,
             task: None,
+            portal_task: None,
             summary: None,
             items: vec![],
             cursor: None,
@@ -124,6 +126,51 @@ impl CloudBillingPage {
             });
         }));
     }
+    fn portal(&mut self, cx: &mut Context<Self>) {
+        if self.portal_task.is_some() {
+            return;
+        }
+        let Some(owner) = active_owner(self.state.read(cx)) else {
+            return;
+        };
+        let Some(engine) = self.state.read(cx).engine().map(|e| e.controller()) else {
+            return;
+        };
+        self.error = None;
+        let job = gpui_tokio::Tokio::spawn(cx, async move {
+            engine
+                .client()
+                .call_scoped(methods::CLOUD_BILLING_PORTAL, json!({}))
+                .await
+        });
+        self.portal_task = Some(cx.spawn(async move |this, cx| {
+            let result = job.await;
+            let _ = this.update(cx, |this, cx| {
+                if active_owner(this.state.read(cx)).as_ref() != Some(&owner) {
+                    return;
+                }
+                this.portal_task = None;
+                match result {
+                    Ok(Ok(value)) if bound(&value, &owner) => {
+                        if let Some(url) = value["data"]["portalUrl"]
+                            .as_str()
+                            .filter(|url| url.starts_with("https://"))
+                        {
+                            cx.open_url(url);
+                        } else {
+                            this.error = Some(
+                                "The billing provider returned an invalid portal link.".into(),
+                            );
+                        }
+                    }
+                    Ok(Err(error)) => this.error = Some(error.to_string()),
+                    _ => this.error = Some("Could not open billing. Try again.".into()),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
     fn save(&mut self, cx: &mut Context<Self>) {
         if self.task.is_some() {
             return;
@@ -203,6 +250,7 @@ impl Render for CloudBillingPage {
             self.owner = active;
             self.loaded = false;
             self.task = None;
+            self.portal_task = None;
             self.summary = None;
             self.items.clear();
             self.cursor = None;
@@ -233,6 +281,15 @@ impl Render for CloudBillingPage {
                     .into_any_element(),
             ),
         ));
+        if self.owner.is_some() {
+            body = body.child(widgets::group(&theme, "Subscription", "Manage your existing subscription, invoices and payment method with your billing provider.")
+                .child(widgets::card_row(&theme, false)
+                    .child(div().flex_1().child(widgets::row_title(&theme, "Billing portal")))
+                    .child(widgets::action_button(&theme, widgets::ActionTone::Quiet)
+                        .id("open-cloud-billing-portal")
+                        .child(if self.portal_task.is_some() { "Opening…" } else { "Manage billing" })
+                        .on_click(cx.listener(|this, _, _, cx| this.portal(cx))))));
+        }
         if let Some(error) = &self.error {
             body = body.child(
                 div()
