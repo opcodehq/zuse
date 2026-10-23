@@ -1321,6 +1321,9 @@ impl WorkspaceView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.submit_cloud_delete(window, cx) {
+            return;
+        }
         if self.browser_input_focused(window, cx) {
             return;
         }

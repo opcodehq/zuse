@@ -81,6 +81,11 @@ impl ArchiveFixture {
 #[ignore = "requires isolated PostgreSQL and packaged guest"]
 async fn permanent_delete_purges_archives_and_ciphertext_then_keeps_a_content_free_thirty_day_tombstone()
  {
+    if std::env::var_os("ZUSE_CLOUD_UI_FIXTURE_FILE").is_some() {
+        cloud_delete_browser_fixture().await;
+        return;
+    }
+
     let f = ArchiveFixture::start().await;
     f.control
         .begin_recovery("ws-bob", chrono::Utc::now().timestamp_millis())
@@ -449,4 +454,50 @@ async fn delete_waits_for_allocation_receipts_and_removes_the_late_machine_witho
     assert_eq!(provider.destroys.load(Ordering::SeqCst), 1);
     assert!(provider.machine.lock().unwrap().is_none());
     api.finish().await;
+}
+
+async fn cloud_delete_browser_fixture() {
+    let file = std::path::PathBuf::from(
+        std::env::var("ZUSE_CLOUD_UI_FIXTURE_FILE").expect("explicit UI fixture file"),
+    );
+    let f = ArchiveFixture::start().await;
+    f.objects.inner.fail.store(true, Ordering::SeqCst);
+    std::fs::write(&file, &f.api.origin).unwrap();
+    let mut failed_once = false;
+    tokio::time::timeout(Duration::from_secs(1800), async {
+        while !file.with_extension("done").exists() {
+            if file.with_extension("retry").exists() {
+                f.objects.inner.fail.store(false, Ordering::SeqCst);
+            }
+            if let Err(error) = f.delete_tick().await {
+                assert_eq!(error.code, "cloud_object_purge_failed");
+                if !failed_once {
+                    failed_once = true;
+                    sqlx::query(
+                        "UPDATE zuse_rust_jobs SET state='failed' WHERE kind='workspace-delete'",
+                    )
+                    .execute(&f.api.pool)
+                    .await
+                    .unwrap();
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(failed_once);
+    assert!(f.deleted().await);
+    assert_eq!(f.machine.wakes.load(Ordering::SeqCst), 0);
+    assert_eq!(&*f.machine.retired.lock().unwrap(), &["machine-bob"]);
+    assert!(
+        !f.objects
+            .inner
+            .bytes
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|k| k.starts_with("workspaces/ws-bob/"))
+    );
+    f.finish().await;
 }

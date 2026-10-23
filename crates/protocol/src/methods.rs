@@ -243,6 +243,7 @@ pub const REVOKE_ACCOUNT_DEVICE: &str = "RevokeAccountDevice";
 pub const CLOUD_WORKSPACES: &str = "CloudWorkspaces";
 pub const CLOUD_HISTORY: &str = "CloudHistory";
 /// Explicit lifecycle mutation. Never automatically retry on reconnect.
+pub const CLOUD_DELETE: &str = "CloudDelete";
 pub const CLOUD_UNARCHIVE: &str = "CloudUnarchive";
 pub const CLOUD_ACCOUNT_STATUS: &str = "CloudAccountStatus";
 pub const CLOUD_ACCOUNT_SIGN_IN: &str = "CloudAccountSignIn";
@@ -334,6 +335,7 @@ mod retry_tests {
             PLUGINS,
             MODEL_CONNECT,
             CLOUD_UNARCHIVE,
+            CLOUD_DELETE,
             "FutureMethod",
         ] {
             assert!(!retryable_read(method, &serde_json::json!({})));

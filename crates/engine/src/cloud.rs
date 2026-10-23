@@ -10,9 +10,10 @@ use zuse_model::cloud::{Head, Workspace};
 
 pub const LIST: &str = zuse_protocol::methods::CLOUD_WORKSPACES;
 pub const READ: &str = zuse_protocol::methods::CLOUD_HISTORY;
+pub const DELETE: &str = zuse_protocol::methods::CLOUD_DELETE;
 pub const UNARCHIVE: &str = zuse_protocol::methods::CLOUD_UNARCHIVE;
 pub fn handles(method: &str) -> bool {
-    matches!(method, LIST | READ | UNARCHIVE)
+    matches!(method, LIST | READ | UNARCHIVE | DELETE)
 }
 pub struct CloudApi {
     origin: reqwest::Url,
@@ -166,7 +167,7 @@ impl CloudApi {
                 head.older_message_sequence = None;
                 json!({"accountId":account,"workspace":workspace,"head":head})
             }
-            UNARCHIVE => {
+            UNARCHIVE | DELETE => {
                 let id = params["workspaceId"]
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Select a workspace."))?;
@@ -176,7 +177,17 @@ impl CloudApi {
                 let value = self
                     .request(
                         &token,
-                        &["v1", "cloud", "workspaces", id, "unarchive"],
+                        &[
+                            "v1",
+                            "cloud",
+                            "workspaces",
+                            id,
+                            if method == DELETE {
+                                "delete"
+                            } else {
+                                "unarchive"
+                            },
+                        ],
                         Some(json!({"workspaceId":id,"commandId":command})),
                     )
                     .await?;

@@ -58,6 +58,25 @@ impl Workspace {
     pub fn archived(&self) -> bool {
         matches!(self.state.as_str(), "archiving" | "archived") || self.desired_state == "archived"
     }
+    pub fn deleting(&self) -> bool {
+        self.desired_state == "deleted" && self.state != "deleted"
+    }
+    pub fn archive_visible(&self) -> bool {
+        self.archived() || self.deleting()
+    }
+    pub fn delete_failed(&self) -> bool {
+        self.deleting() && self.status_code.starts_with("cloud_")
+    }
+    pub fn deletion_label(&self) -> &'static str {
+        match self.status_code.as_str() {
+            _ if self.delete_failed() => "Deletion could not finish. Retry to continue cleanup.",
+            "delete-waiting-for-execution" => "Stopping background work…",
+            "delete-provider-cleanup" => "Removing cloud workspace…",
+            "delete-purging-data" => "Removing saved history and backups…",
+            "delete-clearing-metadata" => "Finishing deletion…",
+            _ => "Deleting cloud thread…",
+        }
+    }
     pub fn label(&self) -> &str {
         self.title
             .as_deref()
@@ -137,6 +156,24 @@ impl ArchivedCloud {
             self.back();
         }
     }
+    pub fn update_workspace(&mut self, mut row: Workspace) {
+        if let Some(old) = self
+            .rows
+            .iter_mut()
+            .find(|r| r.workspace_id == row.workspace_id)
+        {
+            if row.title.is_none() {
+                row.title = old.title.clone();
+            }
+            *old = row;
+        } else {
+            self.rows.push(row);
+        }
+        self.back();
+    }
+    pub fn deleting(&self) -> bool {
+        self.rows.iter().any(Workspace::deleting)
+    }
     pub fn back(&mut self) {
         self.selected = None;
         self.head = None;
@@ -199,5 +236,31 @@ mod tests {
         assert!(state.selected.is_none());
         assert!(!state.busy);
         assert!(state.rows[0].archived());
+    }
+    #[test]
+    fn deleting_rows_keep_progress_and_clear_saved_history_until_the_tombstone_arrives() {
+        let mut state = ArchivedCloud::default();
+        let mut row = workspace("cloud");
+        row.title = Some("Original thread".into());
+        state.list("account".into(), vec![row.clone()]);
+        state.select("cloud").unwrap();
+        row.title = None;
+        row.state = "deleting".into();
+        row.desired_state = "deleted".into();
+        row.status_code = "delete-purging-data".into();
+        state.update_workspace(row.clone());
+        assert!(state.selected.is_none());
+        assert!(state.head.is_none());
+        assert!(state.rows[0].archive_visible());
+        assert!(state.deleting());
+        assert_eq!(state.rows[0].label(), "Original thread");
+        row.status_code = "cloud_object_purge_failed".into();
+        state.list("account".into(), vec![row.clone()]);
+        assert!(state.rows[0].delete_failed());
+        row.state = "deleted".into();
+        row.status_code = "deleted".into();
+        state.list("account".into(), vec![row]);
+        assert!(!state.deleting());
+        assert!(!state.rows[0].archive_visible());
     }
 }

@@ -1309,6 +1309,9 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
+                if this.dismiss_cloud_delete(window, cx) {
+                    return;
+                }
                 if this.thread_dialog.is_some() {
                     this.close_thread_dialog(window, cx);
                     return;

@@ -46,6 +46,8 @@ pub struct ArchivedPage {
     cloud: zuse_model::cloud::ArchivedCloud,
     cloud_loaded: bool,
     cloud_task: Option<Task<()>>,
+    cloud_poll_task: Option<Task<()>>,
+    cloud_delete_confirm: Option<String>,
     cloud_history: Option<Entity<crate::cloud_history::CloudHistory>>,
     cloud_history_sub: Option<Subscription>,
     cloud_owner: Option<String>,
@@ -62,6 +64,8 @@ impl ArchivedPage {
                 page.cloud.clear();
                 page.cloud_loaded = false;
                 page.cloud_task = None;
+                page.cloud_poll_task = None;
+                page.cloud_delete_confirm = None;
                 page.cloud_history = None;
                 page.cloud_history_sub = None;
                 page.cloud_commands.clear();
@@ -81,6 +85,8 @@ impl ArchivedPage {
             cloud: Default::default(),
             cloud_loaded: false,
             cloud_task: None,
+            cloud_poll_task: None,
+            cloud_delete_confirm: None,
             cloud_history: None,
             cloud_history_sub: None,
             cloud_owner: owner,
@@ -97,34 +103,52 @@ impl ArchivedPage {
         };
         self.cloud.loading = true;
         let owner = self.cloud_owner.clone();
-        self.cloud_task = Some(cx.spawn(async move |this, cx| {
-            let result = engine
-                .client()
-                .call(zuse_engine::cloud::LIST, serde_json::json!({}))
-                .await;
-            let _ = this.update(cx, |page, cx| {
-                if page.cloud_owner != owner {
-                    return;
-                }
-                page.cloud.loading = false;
-                page.cloud_loaded = true;
-                match result {
-                    Ok(value) => {
-                        if let (Some(account), Ok(rows)) = (
-                            value["accountId"].as_str(),
-                            serde_json::from_value(value["workspaces"].clone()),
-                        ) {
-                            page.cloud.list(account.into(), rows);
+        self.cloud_poll_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let result = engine
+                    .client()
+                    .call(zuse_engine::cloud::LIST, serde_json::json!({}))
+                    .await;
+                let again = this
+                    .update(cx, |page, cx| {
+                        if page.cloud_owner != owner {
+                            return false;
                         }
-                    }
-                    Err(zuse_rpc::RpcError::Failed(error)) => page.cloud.error = Some(error),
-                    Err(_) => {
-                        page.cloud.error =
-                            Some("Cloud sessions are unavailable. Reconnect and try again.".into())
-                    }
+                        page.cloud.loading = false;
+                        page.cloud_loaded = true;
+                        match result {
+                            Ok(value) => {
+                                if let (Some(account), Ok(rows)) = (
+                                    value["accountId"].as_str(),
+                                    serde_json::from_value(value["workspaces"].clone()),
+                                ) {
+                                    page.cloud.list(account.into(), rows);
+                                }
+                            }
+                            Err(zuse_rpc::RpcError::Failed(error)) => {
+                                page.cloud.error = Some(error);
+                                cx.notify();
+                                return false;
+                            }
+                            Err(_) => {
+                                page.cloud.error = Some(
+                                    "Cloud sessions are unavailable. Refresh to try again.".into(),
+                                );
+                                cx.notify();
+                                return false;
+                            }
+                        }
+                        cx.notify();
+                        page.cloud.deleting()
+                    })
+                    .unwrap_or(false);
+                if !again {
+                    break;
                 }
-                cx.notify();
-            });
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
+            }
         }));
     }
     fn open_cloud(&mut self, row: zuse_model::cloud::Workspace, cx: &mut Context<Self>) {
@@ -240,12 +264,93 @@ impl ArchivedPage {
         }));
         cx.notify();
     }
+    fn delete_cloud(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.cloud.busy {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        self.cloud_delete_confirm = None;
+        self.cloud.busy = true;
+        self.cloud.error = None;
+        let command = self
+            .cloud_commands
+            .entry(format!("delete:{id}"))
+            .or_insert_with(|| uuid::Uuid::new_v4().to_string())
+            .clone();
+        let owner = self.cloud_owner.clone();
+        self.cloud_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    zuse_engine::cloud::DELETE,
+                    serde_json::json!({"workspaceId":id,"commandId":command}),
+                )
+                .await;
+            let _ = this.update(cx, |page, cx| {
+                if page.cloud_owner != owner {
+                    return;
+                }
+                page.cloud.busy = false;
+                match result {
+                    Ok(value) => {
+                        if let Ok(row) = serde_json::from_value(value["workspace"].clone()) {
+                            page.cloud.update_workspace(row);
+                            page.cloud_history = None;
+                            page.cloud_history_sub = None;
+                        }
+                    }
+                    Err(zuse_rpc::RpcError::Failed(error)) => page.cloud.error = Some(error),
+                    Err(_) => {
+                        page.cloud.error = Some(
+                            "Deletion request interrupted. Refresh to check its progress.".into(),
+                        )
+                    }
+                }
+                page.cloud_loaded = false;
+                page.load_cloud(cx);
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+    fn render_cloud_delete_dialog(
+        &mut self,
+        viewport: gpui::Size<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let id = self.cloud_delete_confirm.clone()?;
+        let theme = Theme::of(cx).for_popup();
+        let card = popover::dialog_card(&theme)
+            .child(popover::dialog_title(&theme, "Delete cloud thread?"))
+            .child(div().mt(px(6.)).child(popover::dialog_body(
+                &theme,
+                "This permanently removes all conversations, cloud files and recovery backups for this thread. This cannot be undone."
+            )))
+            .child(
+                div().mt(px(16.)).flex().justify_end().gap(px(8.))
+                    .child(popover::btn_ghost(&theme, "Cancel", "cloud-delete-cancel")
+                        .id("cloud-delete-cancel")
+                        .on_click(cx.listener(|page, _, _, cx| {
+                            page.cloud_delete_confirm = None;
+                            cx.notify();
+                        })))
+                    .child(popover::btn_danger(&theme, "Delete permanently")
+                        .id("cloud-delete-confirm")
+                        .on_click(cx.listener(move |page, _, _, cx| {
+                            page.delete_cloud(id.clone(), cx)
+                        })))
+            )
+            .into_any_element();
+        Some(popover::modal("cloud-delete-dialog", viewport, card))
+    }
     fn cloud_section(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let rows: Vec<_> = self
             .cloud
             .rows
             .iter()
-            .filter(|r| r.archived())
+            .filter(|r| r.archive_visible())
             .cloned()
             .collect();
         if self.cloud_owner.is_none() {
@@ -311,6 +416,9 @@ impl ArchivedPage {
                             let open = row.clone();
                             let id = row.workspace_id.clone();
                             let archived = row.state == "archived";
+                            let delete = id.clone();
+                            let deleting = row.deleting();
+                            let retry = row.delete_failed();
                             widgets::card_row(&theme, index == 0)
                                 .child(
                                     crate::icons::icon(crate::icons::ARCHIVE_MINIMALISTIC)
@@ -332,27 +440,56 @@ impl ArchivedPage {
                                             page.open_cloud(open.clone(), cx)
                                         })),
                                 )
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(theme.text_muted)
-                                        .child("Cloud"),
-                                )
+                                .child(div().text_size(px(11.)).text_color(theme.text_muted).child(
+                                    if deleting {
+                                        row.deletion_label()
+                                    } else {
+                                        "Cloud"
+                                    },
+                                ))
+                                .when(!deleting, |view| {
+                                    view.child(
+                                        widgets::ghost_action(&theme)
+                                            .id(("cloud-restore-row", index))
+                                            .role(gpui::Role::Button)
+                                            .aria_label("Unarchive cloud thread")
+                                            .tab_index(0)
+                                            .opacity(if busy || !archived { 0.45 } else { 1. })
+                                            .child(if archived {
+                                                "Unarchive"
+                                            } else {
+                                                "Archiving…"
+                                            })
+                                            .on_click(cx.listener(move |page, _, _, cx| {
+                                                if archived {
+                                                    page.unarchive_cloud(id.clone(), cx);
+                                                }
+                                            })),
+                                    )
+                                })
                                 .child(
                                     widgets::ghost_action(&theme)
-                                        .id(("cloud-restore-row", index))
+                                        .id(("cloud-delete-row", index))
                                         .role(gpui::Role::Button)
-                                        .aria_label("Unarchive cloud thread")
-                                        .tab_index(0)
-                                        .opacity(if busy || !archived { 0.45 } else { 1. })
-                                        .child(if archived {
-                                            "Unarchive"
+                                        .aria_label(if retry {
+                                            "Retry cloud deletion"
                                         } else {
-                                            "Archiving…"
+                                            "Delete cloud thread"
+                                        })
+                                        .child(if deleting {
+                                            if retry { "Retry delete" } else { "Deleting…" }
+                                        } else {
+                                            "Delete…"
                                         })
                                         .on_click(cx.listener(move |page, _, _, cx| {
-                                            if archived {
-                                                page.unarchive_cloud(id.clone(), cx);
+                                            if page.cloud.busy {
+                                                return;
+                                            }
+                                            if retry {
+                                                page.delete_cloud(delete.clone(), cx);
+                                            } else if !deleting {
+                                                page.cloud_delete_confirm = Some(delete.clone());
+                                                cx.notify();
                                             }
                                         })),
                                 )
@@ -404,6 +541,10 @@ impl ArchivedPage {
     /// first, so it never closes Settings under the dialog (this page
     /// outlives Settings, and the dialog would reopen with it).
     pub(crate) fn dismiss_on_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.cloud_delete_confirm.take().is_some() {
+            cx.notify();
+            return true;
+        }
         if self.delete_all_confirm.take().is_none() {
             return false;
         }
@@ -528,7 +669,9 @@ impl Render for ArchivedPage {
             return history.clone().into_any_element();
         }
         crate::toast::take_error(&mut self.error, cx);
-        let dialog = self.render_delete_all_dialog(window.viewport_size(), cx);
+        let dialog = self
+            .render_cloud_delete_dialog(window.viewport_size(), cx)
+            .or_else(|| self.render_delete_all_dialog(window.viewport_size(), cx));
         let theme = Theme::of(cx).for_settings_surface();
         let now = chrono::Utc::now();
         let (rows, device_names, count): (

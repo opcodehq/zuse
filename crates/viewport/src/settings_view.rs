@@ -242,7 +242,7 @@ impl WorkspaceView {
             Section::Plugins => self.cloud_settings(cx),
             Section::Usage => self.usage_settings(cx),
             Section::Shortcuts => self.shortcuts_settings(),
-            Section::Archived => self.cloud_archive_list(cx),
+            Section::Archived => self.cloud_archive_list(window, cx),
         };
         let content_panel =
             if section == Section::Archived && self.cloud_archive.state.head.is_some() {

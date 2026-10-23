@@ -14,8 +14,8 @@ completed UI images in the final user-facing report.
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
-| E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Backend permanent deletion and 30-day tombstones added. Remaining: Delete UI, local mirror cleanup, archived files and existing-workspace/archive migration | Retained-machine, browser archive and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
-| F: complete GPUI parity | Archived cloud transcript screens added to native/browser settings; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive workflow pass; native visual and full-screen audits pending |
+| E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Remaining: local mirror cleanup, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
+| F: complete GPUI parity | Archived cloud transcript screens added to native/browser settings; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
 
 Do not mark a milestone complete from compilation alone. Record tested behavior and remaining gates here.
@@ -1049,7 +1049,7 @@ ZUSE_CLOUD_TEST_GUEST_BIN="$PWD/target/debug/zuse-cloud-runtime" \
 ```
 
 Remaining before production recovery enablement: complete retained and replacement-resource
-billing, Delete UI/local mirror cleanup, source-image publication and live-provider
+billing, local mirror cleanup, source-image publication and live-provider
 continuation acceptance. Ordinary storage admission still refuses populated unbound
 storage; the separately authorized restore-adoption path is described below. Recovery
 remains default-off. Expiry alone never authorizes destruction: explicit recovery
@@ -1095,7 +1095,7 @@ stopped and the retained source is paused before restoring its bearer. Unarchive
 after the barrier lets retirement finish. Interactive resume now durably requests
 replacement restoration. Its implementation and remaining production gates are
 described below; this policy must remain off until live acceptance passes. Delayed work is fenced by deletion state; the permanent-delete backend and
-tombstone implementation is described below. Delete UI and local mirror cleanup
+tombstone implementation and Delete UI are described below. Local mirror cleanup
 remain outstanding.
 
 Backup running observations feed the original idempotent usage outbox as
@@ -1176,7 +1176,7 @@ Runtime checks additionally reject missing grants, wrong archive digest, machine
 generation and enrollment identities before creating a storage marker.
 
 Production recovery is still default-off. Live Boxd image/build acceptance,
-supported agent-native SDK continuation, provider resource settlement, Delete UI/local mirror cleanup and existing legacy-workspace/archive migration
+supported agent-native SDK continuation, provider resource settlement, local mirror cleanup and existing legacy-workspace/archive migration
 remain required.
 This implementation does not convert a legacy Python runtime database into a
 Rust engine profile.
@@ -1268,7 +1268,38 @@ object tests cover multiple pages, partial delete failures, malformed XML,
 percent/Unicode names and malicious listing scope. Recovery acceptance also passes
 with the additional per-object cancellation checks.
 
-This is the server deletion workflow. Desktop/browser Delete UX, ownership-manifest
-cleanup of local mirrors, existing-archive migration and live provider/R2 acceptance
-remain required before the archive milestone is complete. Images for UI acceptance
-will be saved under `.context/` when those controls are implemented.
+Ownership-manifest cleanup of local mirrors, existing-archive migration and live
+provider/R2 acceptance remain required before the archive milestone is complete.
+
+### Native and browser deletion controls
+
+Archived cloud rows now offer explicit Delete with a permanent-deletion dialog.
+Escape cancels only the dialog; browser keyboard focus starts on Cancel and Tab/Enter
+can confirm. Native and browser clients submit through the host credential broker
+using `CloudDelete`; this mutation is never automatically replayed after uncertain
+delivery. Retry preserves its command identity and the backend deletion operation.
+
+An accepted request keeps the row visible with actual cleanup progress. Metadata
+polling updates provider/object/metadata phases and retryable failures without
+starting compute. Unarchive and saved-history opening are disabled while deletion
+is in progress. A confirmed tombstone removes the archived row; request acceptance
+alone does not. Account switches discard pending view state and cached history.
+
+The compiled GPUI browser passed an actual host/API/PostgreSQL/packaged-guest
+workflow: Escape cancellation with no mutation, Tab/Enter confirmation, failed
+object cleanup with a visible Retry button, retry of the same operation, and
+confirmed tombstone removal. The isolated worker additionally verified exact source
+machine deletion, absence of workspace objects and zero compute wakes. Its machine
+provider and object store are deterministic; this is not live provider acceptance.
+Screenshots: `.context/cloud-delete-confirmation.png`,
+`.context/cloud-delete-retry.png`, `.context/cloud-delete-completed.png`.
+The reusable acceptance driver is `scripts/acceptance/cloud-delete.mjs`; the
+PostgreSQL fixture is enabled only with an explicit `ZUSE_CLOUD_UI_FIXTURE_FILE`.
+Native Linux UI checking and the compiled browser build pass. Native visual
+acceptance on Mac remains pending.
+
+Focused checks also pass for shared archived-state reduction (3 tests), RPC mutation
+retry classification (1 test), and host cloud credential/origin guards (2 tests).
+The broader engine test command hit sandbox disk capacity while linking unrelated
+integration binaries; those generated binaries were removed and the intended
+`--lib cloud::tests` check passed. No broader engine-suite pass is claimed.
