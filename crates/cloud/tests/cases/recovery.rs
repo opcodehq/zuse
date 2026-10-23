@@ -46,6 +46,12 @@ struct RecoveryMachine {
     home: std::path::PathBuf,
     repository: std::path::PathBuf,
     helper: tokio::sync::Mutex<Option<tokio::process::Child>>,
+    replacement: std::sync::Mutex<Option<Machine>>,
+    creates: AtomicUsize,
+    uncertain_create: AtomicBool,
+    uncertain_restore: AtomicBool,
+    uncertain_launch: AtomicBool,
+    runtime: tokio::sync::Mutex<Option<tokio::process::Child>>,
 }
 #[async_trait]
 impl RecoveryProvider for RecoveryMachine {
@@ -96,7 +102,7 @@ impl RecoveryProvider for RecoveryMachine {
         Ok(())
     }
     async fn stop_capture(&self, id: &str, _: &str) -> Result<(), ProviderError> {
-        assert_eq!(id, "machine-bob");
+        assert!(["machine-bob", "replacement-bob"].contains(&id));
         if let Some(mut child) = self.helper.lock().await.take() {
             if child.try_wait().unwrap().is_none() {
                 child.start_kill().unwrap();
@@ -127,6 +133,117 @@ impl RecoveryProvider for RecoveryMachine {
         Ok(())
     }
 }
+#[async_trait]
+impl zuse_cloud::runtime::allocation::AllocationProvider for RecoveryMachine {
+    async fn find(&self, name: &str) -> Result<Option<Machine>, ProviderError> {
+        Ok(self
+            .replacement
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|m| m.id == name || m.name == name)
+            .cloned())
+    }
+    async fn create(&self, snapshot: &str, name: &str) -> Result<Machine, ProviderError> {
+        assert_eq!(snapshot, "approved-rust-snapshot");
+        assert!(self.destroyed.load(Ordering::SeqCst));
+        assert!(self.replacement.lock().unwrap().is_none());
+        self.creates.fetch_add(1, Ordering::SeqCst);
+        for path in [&self.data, &self.home, &self.repository] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        let machine = Machine {
+            id: "replacement-bob".into(),
+            name: name.into(),
+            state: MachineState::Running,
+            vcpu: Some(2),
+            memory_bytes: Some(1024 * 1024 * 1024),
+        };
+        *self.replacement.lock().unwrap() = Some(machine.clone());
+        if self.uncertain_create.swap(false, Ordering::SeqCst) {
+            return Err(ProviderError::OutcomeUnknown);
+        }
+        Ok(machine)
+    }
+    async fn launch(
+        &self,
+        id: &str,
+        launch: &zuse_cloud::runtime::allocation::RuntimeLaunch,
+    ) -> Result<(), ProviderError> {
+        assert_eq!(id, "replacement-bob");
+        assert_eq!(launch.generation, 3);
+        assert_eq!(launch.incarnation, "packaged-storage");
+        let mut runtime = self.runtime.lock().await;
+        if runtime
+            .as_mut()
+            .is_some_and(|p| p.try_wait().unwrap().is_none())
+        {
+            return Ok(());
+        }
+        let boot = self.source.join("fresh-boot");
+        std::fs::write(&boot, launch.boot_token.as_bytes()).unwrap();
+        let child =
+            tokio::process::Command::new(std::env::var_os("ZUSE_CLOUD_TEST_GUEST_BIN").unwrap())
+                .args([
+                    "--workspace-id",
+                    &launch.workspace_id,
+                    "--api-url",
+                    &launch.api_url,
+                    "--generation",
+                    &launch.generation.to_string(),
+                    "--storage-incarnation-id",
+                    &launch.incarnation,
+                    "--ipc-port",
+                    "0",
+                    "--test-harness",
+                ])
+                .arg("--data-dir")
+                .arg(&self.data)
+                .arg("--workspace-root")
+                .arg(&self.repository)
+                .arg("--boot-token-file")
+                .arg(boot)
+                .env_remove("ZUSE_WORKSPACE_RUNTIME_LOCK_FD")
+                .env_remove("ZUSE_RUNTIME_BOOT_TOKEN")
+                .env_remove("ZUSE_RUNTIME_BOOT_TOKEN_FILE")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::fs::File::create(self.source.join("replacement.log")).unwrap())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+        *runtime = Some(child);
+        if self.uncertain_launch.swap(false, Ordering::SeqCst) {
+            return Err(ProviderError::OutcomeUnknown);
+        }
+        Ok(())
+    }
+}
+#[async_trait]
+impl zuse_cloud::runtime::restore::RestoreProvider for RecoveryMachine {
+    async fn restore(&self, id: &str, plan: &CapturePlan) -> Result<(), ProviderError> {
+        assert_eq!(id, "replacement-bob");
+        // The physical targets have the same guest paths, as real replacement VMs do.
+        RecoveryProvider::capture(self, plan).await?;
+        if self.uncertain_restore.swap(false, Ordering::SeqCst) {
+            return Err(ProviderError::OutcomeUnknown);
+        }
+        Ok(())
+    }
+    async fn installed(&self, id: &str, _: &str) -> Result<bool, ProviderError> {
+        assert_eq!(id, "replacement-bob");
+        let mut helper = self.helper.lock().await;
+        if let Some(child) = helper.as_mut() {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "Restore helper failed");
+                return Ok(self
+                    .data
+                    .join(zuse_cloud_runtime::recovery::RESTORE_RECEIPT)
+                    .is_file());
+            }
+        }
+        Ok(false)
+    }
+}
 struct ArchiveFixture {
     api: GuestApi,
     control: Arc<zuse_cloud::runtime::RuntimeControl>,
@@ -139,6 +256,7 @@ impl ArchiveFixture {
         use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
         use ed25519_dalek::SigningKey;
         let api = GuestApi::start_with_projections().await;
+        api.quiesced_lost_ack.store(true, Ordering::SeqCst);
         sqlx::raw_sql(include_str!("../fixtures/creation.sql"))
             .execute(&api.pool)
             .await
@@ -170,15 +288,19 @@ impl ArchiveFixture {
         )
         .await;
         assert_eq!(status.0, 200, "{}", status.1);
-        assert!(
-            tokio::time::timeout(Duration::from_secs(20), guest.wait())
-                .await
-                .unwrap_or_else(|e| panic!(
+        let status = tokio::time::timeout(Duration::from_secs(20), guest.wait())
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
                     "Archive shutdown timed out: {e}: {}",
                     std::fs::read_to_string(&log).unwrap()
-                ))
-                .unwrap()
-                .success()
+                )
+            })
+            .unwrap();
+        assert!(
+            status.success(),
+            "Archive guest failed {status}: {}",
+            std::fs::read_to_string(&log).unwrap()
         );
         let retained = RetainedFixture {
             state: std::sync::Mutex::new(MachineState::Running),
@@ -228,6 +350,12 @@ impl ArchiveFixture {
             home,
             repository: checkout,
             helper: tokio::sync::Mutex::new(None),
+            replacement: std::sync::Mutex::new(None),
+            creates: AtomicUsize::new(0),
+            uncertain_create: AtomicBool::new(false),
+            uncertain_restore: AtomicBool::new(false),
+            uncertain_launch: AtomicBool::new(false),
+            runtime: tokio::sync::Mutex::new(None),
         };
         Self {
             api,
@@ -279,6 +407,9 @@ impl ArchiveFixture {
                 child.start_kill().unwrap();
                 let _ = child.wait().await;
             }
+        }
+        if let Some(mut runtime) = self.machine.runtime.lock().await.take() {
+            stop_guest(&mut runtime).await;
         }
         self.api.finish().await;
     }
@@ -463,4 +594,236 @@ async fn unarchive_and_delete_fence_an_inflight_verifier() {
     assert!(f.tick().await.is_err());
     assert!(f.machine.retired.lock().unwrap().is_empty());
     f.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL and packaged guest"]
+async fn retired_archive_restores_into_fresh_generation_and_continues_original_conversation() {
+    use zuse_cloud_runtime::mailbox::CommandKey;
+    for request_during_retirement in [false, true] {
+        let f = ArchiveFixture::start().await;
+        sqlx::query(
+        "UPDATE api_cloud_workspaces SET project_id='create-project' WHERE workspace_id='ws-bob'",
+    )
+    .execute(&f.api.pool)
+    .await
+    .unwrap();
+        f.control
+            .begin_recovery("ws-bob", chrono::Utc::now().timestamp_millis())
+            .await
+            .unwrap()
+            .unwrap();
+        f.upload().await;
+        f.tick().await.unwrap();
+        if !request_during_retirement {
+            f.tick().await.unwrap();
+            assert_eq!(f.phase().await, "retired");
+        } else {
+            assert_eq!(f.phase().await, "retiring");
+        }
+        assert_eq!(f.machine.creates.load(Ordering::SeqCst), 0);
+        f.unarchive("unarchive-for-restore").await;
+        assert_eq!(f.machine.creates.load(Ordering::SeqCst), 0);
+        let (status, value) = runtime_post_for_url(
+            &format!("{}/v1/cloud/workspaces/ws-bob/resume", f.api.origin),
+            "bob",
+            &json!({"workspaceId":"ws-bob","commandId":"resume-original-archive"}),
+        )
+        .await;
+        assert_eq!(status, 200, "{value}");
+        if request_during_retirement {
+            assert_eq!(f.phase().await, "retiring");
+            assert!(f.machine.source.is_dir());
+            assert_eq!(f.machine.creates.load(Ordering::SeqCst), 0);
+            let unchanged = f.unarchive("repeat-unarchive-after-demand").await;
+            assert_eq!(unchanged["desiredState"], "ready");
+            f.tick().await.unwrap();
+            assert_eq!(f.phase().await, "retired");
+            assert_eq!(f.machine.creates.load(Ordering::SeqCst), 0);
+            f.tick().await.unwrap();
+        }
+        assert_eq!(f.phase().await, "restoring");
+        let unchanged = f.unarchive("repeat-unarchive-during-restore").await;
+        assert_eq!(unchanged["desiredState"], "ready");
+        f.machine.uncertain_create.store(true, Ordering::SeqCst);
+        f.machine.uncertain_restore.store(true, Ordering::SeqCst);
+        f.machine.uncertain_launch.store(true, Ordering::SeqCst);
+        let mut uncertain = 0;
+        let mut expired_before_bootstrap = false;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE kind='workspace-restore'")
+                    .execute(&f.api.pool)
+                    .await
+                    .unwrap();
+                if let Err(error) = f
+                    .control
+                    .restore_once(&f.machine, chrono::Utc::now().timestamp_millis())
+                    .await
+                {
+                    assert_eq!(error.code, "cloud_archive_restore_failed");
+                    uncertain += 1;
+                    if uncertain==1 {
+                        // Resume retries a failed delivery against the same persisted replacement.
+                        sqlx::query("UPDATE zuse_rust_jobs SET state='failed' WHERE kind='workspace-restore'").execute(&f.api.pool).await.unwrap();
+                        let (status,value)=runtime_post_for_url(&format!("{}/v1/cloud/workspaces/ws-bob/resume",f.api.origin),"bob",&json!({"workspaceId":"ws-bob","commandId":"resume-original-archive"})).await;
+                        assert_eq!(status,200,"{value}");
+                        let state:String=sqlx::query_scalar("SELECT state FROM zuse_rust_jobs WHERE kind='workspace-restore'").fetch_one(&f.api.pool).await.unwrap();
+                        assert_eq!(state,"pending");
+                        // Allocation and download can outlast the original unpublished boot window.
+                        sqlx::query("UPDATE zuse_rust_restores SET boot_expires_at=0").execute(&f.api.pool).await.unwrap();
+                    }
+                    assert!(f.machine.source.is_dir());
+                    assert!(
+                        f.objects
+                            .inner
+                            .bytes
+                            .lock()
+                            .unwrap()
+                            .keys()
+                            .any(|k| k.contains("/archives/") && k.ends_with("manifest"))
+                    );
+                }
+                if !expired_before_bootstrap {
+                    let phase:String=sqlx::query_scalar("SELECT phase FROM zuse_rust_restores").fetch_one(&f.api.pool).await.unwrap();
+                    if phase=="restored" {
+                        sqlx::query("UPDATE zuse_rust_restores SET boot_expires_at=0").execute(&f.api.pool).await.unwrap();
+                        sqlx::query("UPDATE api_cloud_workspaces SET runtime_boot_token_expires_at=0 WHERE workspace_id='ws-bob'").execute(&f.api.pool).await.unwrap();
+                        expired_before_bootstrap=true;
+                    }
+                }
+                if let Some(child) = f.machine.runtime.lock().await.as_mut() {
+                    if let Some(status) = child.try_wait().unwrap() {
+                        panic!(
+                            "Restored runtime failed {status}: {}",
+                            std::fs::read_to_string(f.machine.source.join("replacement.log"))
+                                .unwrap()
+                        );
+                    }
+                }
+                if f.phase().await == "restored" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(f.machine.creates.load(Ordering::SeqCst), 1);
+        assert_eq!(uncertain, 3);
+        assert!(expired_before_bootstrap);
+        assert_eq!(
+            std::fs::read_to_string(f.machine.repository.join(".env")).unwrap(),
+            "SAVED_USER_ENV=yes"
+        );
+        let row: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+        )
+        .fetch_one(&f.api.pool)
+        .await
+        .unwrap();
+        assert_eq!(row["provider_sandbox_id"], "replacement-bob");
+        assert_eq!(row["request_config"]["runtimeGeneration"], 3);
+        assert_eq!(
+            row["request_config"]["rustRuntimeStorage"]["storageIncarnationId"],
+            "packaged-storage"
+        );
+        assert_eq!(row["chat_id"], "chat-bob");
+        assert_eq!(row["initial_session_id"], "session-bob");
+        let key_response: Value = reqwest::Client::new()
+            .get(format!(
+                "{}/v1/cloud/workspaces/ws-bob/data-key",
+                f.api.origin
+            ))
+            .bearer_auth("bob")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let key = CommandKey::parse(key_response["encodedKey"].as_str().unwrap()).unwrap();
+        let envelope = encrypted_mailbox_message(
+            &key,
+            "restored-continuation",
+            "Continue the original conversation after restoration",
+        );
+        assert_eq!(
+            runtime_post_for_url(
+                &format!("{}/v1/cloud/workspaces/ws-bob/commands", f.api.origin),
+                "bob",
+                &envelope
+            )
+            .await
+            .0,
+            202
+        );
+        wait_command_state(&f.api, "restored-continuation", "applied").await;
+        let client = f.api.client().await;
+        let mut messages = client
+            .client
+            .subscribe(
+                zuse_rpc::methods::WATCH_DOC_MESSAGES,
+                json!({"chatId":"session-bob"}),
+            )
+            .await
+            .unwrap();
+        let mut last = String::new();
+        let response = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let value = messages.recv().await.unwrap();
+                last = value.to_string();
+                let reset_complete = value["reset"].as_array().is_some_and(|entries| {
+                    entries
+                        .iter()
+                        .filter(|e| e["role"] == "assistant" && e["status"] == "complete")
+                        .count()
+                        >= 2
+                });
+                let new_complete = value["upsert"].as_array().is_some_and(|entries| {
+                    entries.iter().any(|e| {
+                        e["after"] == "message-restored-continuation"
+                            && e["entry"]["role"] == "assistant"
+                            && e["entry"]["status"] == "complete"
+                    })
+                });
+                if reset_complete || new_complete {
+                    break;
+                }
+            }
+        })
+        .await;
+        assert!(
+            response.is_ok(),
+            "Restored response missing: {last}; guest: {}",
+            std::fs::read_to_string(f.machine.source.join("replacement.log")).unwrap()
+        );
+        // The live protocol sends deltas. Reopen the watch to inspect the authoritative full reset.
+        drop(messages);
+        let mut messages = client
+            .client
+            .subscribe(
+                zuse_rpc::methods::WATCH_DOC_MESSAGES,
+                json!({"chatId":"session-bob"}),
+            )
+            .await
+            .unwrap();
+        let history = tokio::time::timeout(Duration::from_secs(5), messages.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .to_string();
+        assert_eq!(history.matches("Original guest prompt").count(), 1);
+        assert_eq!(history.matches("Cloud runtime fixture reply").count(), 2);
+        assert_eq!(
+            history
+                .matches("Continue the original conversation after restoration")
+                .count(),
+            1
+        );
+        drop(messages);
+        client.closed.cancel();
+        drop(client);
+        f.finish().await;
+    }
 }

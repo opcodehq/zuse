@@ -161,6 +161,43 @@ impl Storage {
                 "runtime_storage_binding_mismatch"
             );
             prior
+        } else if let Some(grant) = bootstrap.extra.get("rustRecoveryRestore") {
+            #[cfg(feature = "engine")]
+            {
+                let grant: crate::recovery::RestoreEnrollment =
+                    serde_json::from_value(grant.clone())?;
+                let receipt = &grant.receipt;
+                let restored = receipt
+                    .binding
+                    .rust_storage
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("runtime_storage_migration_required"))?;
+                ensure!(
+                    grant.generation == bootstrap.runtime_generation
+                        && Some(grant.machine_id.as_str())
+                            == bootstrap
+                                .extra
+                                .get("providerSandboxId")
+                                .and_then(|v| v.as_str())
+                        && receipt.binding.workspace_id == bootstrap.workspace_id
+                        && receipt.binding.chat_id == bootstrap.chat_id
+                        && receipt.binding.session_id == bootstrap.initial_session_id
+                        && restored.account_id == bootstrap.zuse_account_id
+                        && restored.storage_incarnation_id == incarnation
+                        && restored.database == relative,
+                    "runtime_restore_grant_mismatch"
+                );
+                crate::recovery::validate_adoption(directory, receipt)?;
+                let mut restored = expected;
+                restored.ready = true;
+                atomic_write(&marker, &serde_json::to_vec(&restored)?)?;
+                restored
+            }
+            #[cfg(not(feature = "engine"))]
+            {
+                let _ = grant;
+                bail!("runtime_storage_migration_required")
+            }
         } else {
             // Legacy databases, snapshots and any unrecognized data require a verified
             // import. Keep all of those bytes; do not create a second empty profile.

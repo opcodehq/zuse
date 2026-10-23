@@ -31,7 +31,11 @@ if [[ "${TEST_LONG:-}" == yes ]]; then
   echo "$!" >"$TEST_ROOT/child"
   wait
 fi
-printf '%s\\n' workspace_archive_uploaded
+if [[ "${TEST_RESTORE:-}" == yes ]]; then
+  printf '%s\\n' workspace_archive_restored
+else
+  printf '%s\\n' workspace_archive_uploaded
+fi
 ''')
     helper.chmod(0o700)
     env = dict(os.environ, ZUSE_RECOVERY_STATUS_ROOT=str(root), ZUSE_RUNTIME_BINARY=str(helper),
@@ -70,4 +74,9 @@ printf '%s\\n' workspace_archive_uploaded
     assert (state / "cancelled").exists() and not (state / "uploaded").exists()
     launch("cancel-running", "--foreground")
     assert len((root / "invocations").read_text().splitlines()) == 2
-print("recovery launcher: upload, idempotency, pre-start cancellation and process-group cancellation passed")
+    state = config("restore")
+    launch("restore", TEST_RESTORE="yes")
+    wait_for(lambda: (state / "restored").exists())
+    launch("restore", "--foreground", TEST_RESTORE="yes")
+    assert len((root / "invocations").read_text().splitlines()) == 3
+print("recovery launcher: upload, idempotency, pre-start cancellation and process-group cancellation and restore receipts passed")

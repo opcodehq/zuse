@@ -89,6 +89,12 @@ async fn main() -> Result<()> {
                         {
                             tracing::warn!(code = error.code, "Recovery stage deferred");
                         }
+                        if let Err(error) = recovery_runtime
+                            .restore_once(&*recovery_provider, now_ms())
+                            .await
+                        {
+                            tracing::warn!(code = error.code, "Restore stage deferred");
+                        }
                         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     }
                 }))
@@ -109,6 +115,10 @@ async fn main() -> Result<()> {
                 if once {
                     runtime
                         .recovery_once(&*provider, now_ms())
+                        .await
+                        .map_err(|e| anyhow::anyhow!("{}", e.code))?;
+                    runtime
+                        .restore_once(&*provider, now_ms())
                         .await
                         .map_err(|e| anyhow::anyhow!("{}", e.code))?;
                     break;

@@ -14,7 +14,7 @@ completed UI images in the final user-facing report.
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
-| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Encrypted transcript contracts, R2 transport, journaled native guest projections, cached read transport and native/browser archived transcript views and a packaged full-state recovery helper added; scoped archive object routes, durable privileged verification and exact-source retirement added; authorized replacement enrollment, archived files, permanent deletion and migration remain | Retained guest-process, rendered browser and packaged recovery-helper acceptance passed; packaged capture and retirement orchestration pass isolated acceptance; replacement-runtime continuation and live-provider recovery acceptance pending |
+| E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Remaining: archived files, permanent deletion and existing-workspace/archive migration | Retained-machine, browser archive and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Archived cloud transcript screens added to native/browser settings; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive workflow pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
 
@@ -150,8 +150,8 @@ are preserved or shortened to that window. A verified manifest/chunk count and a
 persisted retirement phase are required to report backup verification. This status
 reader alone cannot authorize machine deletion. Full backup/restore helpers,
 privileged verification, signed capabilities and source-machine fencing are implemented
-for enrolled Rust guests; authorized replacement enrollment and explicit-delete purge
-remain pending. Recovery stays disabled until provider acceptance passes.
+for enrolled Rust guests. Verified replacement enrollment is implemented; explicit-delete
+purge and existing-workspace migration remain pending. Recovery stays disabled until provider acceptance passes.
 
 ## Focused verification
 
@@ -1025,7 +1025,7 @@ work. A completed receipt is written after validation and fsync. Failed capture,
 upload, verification or restoration leaves the source/archive/partial target
 available; no recovery helper path authorizes retirement.
 
-Verified with all **19 runtime checks passing**, including the packaged binary
+Verified with all **20 runtime checks passing**, including the packaged binary
 against a real loopback HTTP object fixture with separate upload-only and
 read-only capabilities. The filesystem round trip covers a 350-message WAL
 history, held queue, processed-command claim, uncertain journal, attachment,
@@ -1047,11 +1047,10 @@ ZUSE_CLOUD_TEST_GUEST_BIN="$PWD/target/debug/zuse-cloud-runtime" \
   cargo test --locked -p zuse-cloud-runtime --features engine -- --include-ignored
 ```
 
-Remaining before production recovery enablement: compatible replacement allocation,
-authorized storage adoption with fresh runtime enrollment, complete retained and
-replacement-resource billing, full explicit-delete purge, source-image publication
-and live-provider continuation acceptance. Ordinary storage admission still refuses
-a populated unbound replacement; the restore helper does not bypass it. Recovery
+Remaining before production recovery enablement: complete retained and replacement-resource
+billing, full explicit-delete purge, source-image publication and live-provider
+continuation acceptance. Ordinary storage admission still refuses populated unbound
+storage; the separately authorized restore-adoption path is described below. Recovery
 remains default-off. Expiry alone never authorizes destruction: explicit recovery
 policy and the persisted verified barrier are both required.
 
@@ -1092,10 +1091,9 @@ references it. History, encrypted archive and data key remain after retirement.
 Unarchive before the barrier revokes the verifier delivery, cancels capture and
 returns to Active without starting the engine. Cleanup confirms the helper has
 stopped and the retained source is paused before restoring its bearer. Unarchive
-after the barrier lets retirement finish. Interactive resume then returns
-`archive-restore-required`; replacement allocation/enrollment and continued agent
-execution are the next required implementation, so this policy must remain off
-for production. Delayed work is fenced by deletion state; full permanent-delete
+after the barrier lets retirement finish. Interactive resume now durably requests
+replacement restoration. Its implementation and remaining production gates are
+described below; this policy must remain off until live acceptance passes. Delayed work is fenced by deletion state; full permanent-delete
 purge and tombstones remain outstanding.
 
 Backup running observations feed the original idempotent usage outbox as
@@ -1108,9 +1106,9 @@ than the transcript limit, write-only capabilities, corrupt read-back retaining
 the source, committed-barrier checks inside the provider deletion callback, lost
 delete-response reconciliation, cached transcript after retirement and unarchive
 during an in-flight verifier. The deletion-race test injects a deletion fence; it
-does not claim the permanent Delete workflow exists. All **20 PostgreSQL/HTTP/
+does not claim the permanent Delete workflow exists. All **21 PostgreSQL/HTTP/
 packaged-guest regression tests pass**, including the
-three recovery scenarios and the existing cloud-chat, mailbox, allocation,
+four recovery scenarios and the existing cloud-chat, mailbox, allocation,
 archive/resume and encrypted-transcript workflows. Immediate archive during guest
 startup now checks durable lifecycle intent before gateway reconnect, including
 when there was no connected socket to fence. Launcher acceptance covers
@@ -1126,6 +1124,73 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3 \
   --test postgres recovery_acceptance -- --ignored --test-threads=1
 ```
 
-Additional focused checks: **9 cloud unit tests** and **19 runtime checks** pass,
+Additional focused checks: **9 cloud unit tests** and **20 runtime checks** pass,
 including R2 signing and immutable 5 MiB archive transfers while transcript reads
 and writes retain their 4 MiB limit.
+
+### Replacement restoration and fresh runtime enrollment
+
+Migration `0007_restore.sql` preserves the original recovery operation/generation
+and records a separate replacement operation. The source remains retired before
+replacement admission. An interactive Resume takes the owner lock before the
+workspace row, rechecks entitlement/capacity, selects an approved native image for
+the same account/project, and atomically advances the writer generation and
+gateway epoch. Storage incarnation, workspace/chat/conversation identities,
+encrypted mailbox envelopes and execution receipts remain unchanged. Neither
+Unarchive nor cached history reads allocate replacement compute.
+
+Demand arriving during committed retirement is persisted for the recovery worker.
+Retirement commits independently before replacement admission; an unavailable
+image or billing hold cannot roll back its recorded result. A deterministic
+replacement name reconciles uncertain create responses. The replacement helper
+gets only a read-scoped original archive capability and restores through the
+existing authenticated, staged installation journal. Failed or uncertain capture,
+allocation, installation or launch keeps the verified archive and recoverable
+target; the worker never substitutes an empty runtime.
+
+The helper writes a data-local adoption receipt only after installed database and
+original identity validation. That receipt is excluded from subsequent captures.
+The authority then grants a fresh bootstrap bound to the verified digest, original
+storage binding, new generation and exact replacement machine. Storage admission
+requires both receipts to agree, revalidates the installed database, and writes a
+new enrollment marker before the engine opens. A restored populated profile
+without that authority grant remains refused. Old runtime/account credentials are
+not imported; normal broker grants supply fresh provider credentials.
+
+The replacement activates the original archived conversation family and reports a
+normal authenticated Resume receipt. Only online, committed storage enrollment and
+that matching receipt finish the restore. Original engine journals, command
+admission receipts and mailbox lease fencing prevent accepted work from being
+reissued as a new turn. Replacement running observations join the existing usage
+outbox as nonbillable telemetry, without transferring settlement/export ownership.
+
+Isolated acceptance covers both demand-after-retirement and demand-during-retirement,
+with lost create/install/launch responses in each path. It allocates exactly one
+replacement, restores the original `.env`, enrolls generation 3 against the original
+storage identity and continues the original conversation through the durable
+mailbox. A fresh live transcript reset proves one original prompt, one continued
+prompt and their two replies. Repeated Unarchive preserves accepted restoration.
+Runtime checks additionally reject missing grants, wrong archive digest, machine,
+generation and enrollment identities before creating a storage marker.
+
+Production recovery is still default-off. Live Boxd image/build acceptance,
+supported agent-native SDK continuation, provider resource settlement, full Delete
+purge/tombstones and existing legacy-workspace/archive migration remain required.
+This implementation does not convert a legacy Python runtime database into a
+Rust engine profile.
+
+Final restore verification: **21 integrated PostgreSQL/HTTP/packaged-guest tests**,
+**20 runtime checks**, **9 cloud unit checks** and launcher upload/restore acceptance
+pass. Archive fixtures now deterministically lose the first successful quiescence
+acknowledgement, in addition to their existing lost transcript acknowledgement.
+The guest retries final projection publication and the idempotent quiescence
+receipt while retaining storage locks, bounded by its authority credential expiry.
+A transient final-flush response no longer exits before recording quiescence.
+
+Resume requeues a failed restore delivery against the existing operation and
+replacement name. Its fresh boot grant lifetime begins after verified installation,
+so image allocation and archive download do not consume the enrollment window.
+An expired pre-enrollment grant is renewed only while no runtime bootstrap receipt
+exists. Acceptance expires the grant both during allocation and after installation,
+then verifies the same replacement enrolls and continues without creating another
+machine or replaying the original turn.

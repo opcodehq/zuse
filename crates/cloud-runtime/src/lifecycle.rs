@@ -73,18 +73,39 @@ impl Shutdown {
         }
         core.workspace.flush_checked()?;
         if let Some(publisher) = publisher {
-            publisher
-                .finish(core, authority, boot, &self.handles)
-                .await?;
+            loop {
+                match publisher.finish(core, authority, boot, &self.handles).await {
+                    Ok(()) => break,
+                    Err(error)
+                        if crate::supervisor::retryable(&error)
+                            && crate::now_ms() < boot.runtime_credential_expires_at =>
+                    {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
         }
-        authority
-            .lifecycle(
-                boot,
-                RuntimeRequest::Quiesced {
-                    operation_id: self.directive.operation_id,
-                },
-            )
-            .await?;
+        loop {
+            match authority
+                .lifecycle(
+                    boot,
+                    RuntimeRequest::Quiesced {
+                        operation_id: self.directive.operation_id.clone(),
+                    },
+                )
+                .await
+            {
+                Ok(_) => break,
+                Err(error)
+                    if crate::supervisor::retryable(&error)
+                        && crate::now_ms() < boot.runtime_credential_expires_at =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
         Ok(())
     }
 }

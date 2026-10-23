@@ -687,3 +687,124 @@ fn helper_reuses_the_launchers_verified_lock_without_releasing_its_ownership() {
     drop(file);
     assert!(crate::DataLock::acquire(&layout.data, None).is_ok());
 }
+
+#[tokio::test]
+async fn populated_restored_storage_requires_matching_authority_and_installation_receipts() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = layout(&temp.path().join("source"));
+    let db = seed(&source);
+    let objects = Memory::default();
+    let capture = Recovery::acquire(binding(), source, key()).unwrap();
+    let manifest = capture.backup(&objects).await.unwrap();
+    drop(capture);
+    drop(db);
+    let target = layout(&temp.path().join("target"));
+    let restore = Recovery::acquire(binding(), target.clone(), key()).unwrap();
+    restore.restore(&objects).await.unwrap();
+    let original = binding();
+    let native = original.rust_storage.as_ref().unwrap();
+    let database = target.data.join(&native.database);
+    let grant = RestoreEnrollment {
+        receipt: RestoreReceipt {
+            binding: original.clone(),
+            archive_sha256: manifest.archive_sha256,
+        },
+        generation: 3,
+        machine_id: "fresh-machine".into(),
+    };
+    let mut bootstrap:zuse_protocol::cloud::CloudRuntimeBootstrap=serde_json::from_value(json!({
+        "workspaceId":"workspace","zuseAccountId":"account","chatId":"thread","initialSessionId":"session",
+        "runtimeCredential":"fresh-credential","runtimeGeneration":3,"gatewayEpoch":4,"runtimeCredentialExpiresAt":9999999999999i64,
+        "gatewayUrl":"ws://localhost/gateway","gatewayProtocol":"zuse-rust-rpc-v1","sealedTranscriptKey":"authority-key",
+        "providerSandboxId":"fresh-machine","runtimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"original-storage"}
+    })).unwrap();
+    assert!(
+        crate::Storage::prepare(
+            &target.data,
+            &database,
+            &bootstrap,
+            "original-storage",
+            "new-enrollment"
+        )
+        .is_err()
+    );
+    assert!(!target.data.join("rust-runtime-storage.json").exists());
+    let mut wrong = grant.clone();
+    wrong.receipt.archive_sha256 = "0".repeat(64);
+    bootstrap.extra.insert(
+        "rustRecoveryRestore".into(),
+        serde_json::to_value(wrong).unwrap(),
+    );
+    assert!(
+        crate::Storage::prepare(
+            &target.data,
+            &database,
+            &bootstrap,
+            "original-storage",
+            "new-enrollment"
+        )
+        .is_err()
+    );
+    assert!(!target.data.join("rust-runtime-storage.json").exists());
+    let mut wrong = grant.clone();
+    wrong.generation = 2;
+    bootstrap.extra.insert(
+        "rustRecoveryRestore".into(),
+        serde_json::to_value(wrong).unwrap(),
+    );
+    assert!(
+        crate::Storage::prepare(
+            &target.data,
+            &database,
+            &bootstrap,
+            "original-storage",
+            "new-enrollment"
+        )
+        .is_err()
+    );
+    let mut wrong = grant.clone();
+    wrong.machine_id = "other-machine".into();
+    bootstrap.extra.insert(
+        "rustRecoveryRestore".into(),
+        serde_json::to_value(wrong).unwrap(),
+    );
+    assert!(
+        crate::Storage::prepare(
+            &target.data,
+            &database,
+            &bootstrap,
+            "original-storage",
+            "new-enrollment"
+        )
+        .is_err()
+    );
+    bootstrap.extra.insert(
+        "rustRecoveryRestore".into(),
+        serde_json::to_value(grant).unwrap(),
+    );
+    let mut storage = crate::Storage::prepare(
+        &target.data,
+        &database,
+        &bootstrap,
+        "original-storage",
+        "new-enrollment",
+    )
+    .unwrap();
+    assert!(storage.initialized());
+    storage.commit().unwrap();
+    assert_eq!(session(&target.data).read_entries().unwrap().len(), 350);
+    assert_eq!(
+        crate::Storage::enrollment(&target.data).unwrap().as_deref(),
+        Some("new-enrollment")
+    );
+    assert!(
+        crate::Storage::prepare(
+            &target.data,
+            &database,
+            &bootstrap,
+            "original-storage",
+            "different-enrollment"
+        )
+        .is_err()
+    );
+}

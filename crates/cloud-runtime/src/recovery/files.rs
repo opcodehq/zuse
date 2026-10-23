@@ -120,6 +120,7 @@ fn allowed(root: &str, relative: &Path) -> bool {
                 | "cloud-runtime-credential"
                 | "github-broker.json"
                 | "rust-runtime-storage.json"
+                | "rust-recovery-restored.json"
                 | "session.json"
                 | "model-accounts"
         )

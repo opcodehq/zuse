@@ -55,6 +55,14 @@ pub fn status(row: &Value) -> CloudArchiveStatus {
                     s.contains("failed")
                         || s.contains("incomplete")
                         || *s == "archive-restore-image-required"
+                        || s.starts_with("cloud_restore_")
+                        || s.starts_with("cloud_archive_restore_")
+                        || matches!(
+                            *s,
+                            "archive-source-missing"
+                                | "archive-source-shared"
+                                | "cloud_archive_operation_fenced"
+                        )
                 })
                 .map(str::to_owned)
         },

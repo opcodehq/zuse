@@ -23,6 +23,7 @@ pub mod grants;
 pub mod lifecycle;
 pub mod mailbox;
 pub mod recovery;
+pub mod restore;
 pub mod transcript;
 
 pub struct RuntimeConfig {
@@ -425,6 +426,11 @@ impl RuntimeControl {
             {
                 return Err(ApiError::conflict("runtime_storage_enrollment_required"));
             }
+            if let Some(grant) = config.get("rustRecoveryRestore") {
+                self.validate_restore_enrollment(&mut tx, &row, generation)
+                    .await?;
+                response["rustRecoveryRestore"] = grant.clone();
+            }
             response["runtimeStorage"] = serde_json::to_value(storage)
                 .map_err(|_| ApiError::conflict("runtime_storage_enrollment_required"))?;
         }
@@ -504,8 +510,13 @@ impl RuntimeControl {
             None => {
                 if request.phase != CloudStoragePhase::Prepare
                     || config["sessionHeadVersion"].is_number()
+                        && config["rustRecoveryRestore"].is_null()
                 {
                     return Err(ApiError::conflict("runtime_storage_recovery_required"));
+                }
+                if !config["rustRecoveryRestore"].is_null() {
+                    self.validate_restore_enrollment(&mut tx, &row, generation)
+                        .await?;
                 }
                 json!({"enrollmentId":uuid::Uuid::new_v4().to_string(),"phase":"prepared","storageIncarnationId":request.storage_incarnation_id,"credentialKeyThumbprint":credential_key,"signingKeyThumbprint":signing_key,"sourceSandboxId":source,"generation":generation,"preparedAt":now})
             }

@@ -144,6 +144,8 @@ impl RuntimeControl {
             .map(str::to_owned)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let mut tx = self.pool.begin().await?;
+        // Restore admission advances ownership; take its exclusive lock before the workspace row.
+        sqlx::query("SELECT generation FROM zuse_rust_control_owners WHERE resource_kind='workspace' AND resource_id=$1 AND backend='rust' FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?;
         let (row, generation, _) = locked_workspace(&mut tx, id).await?;
         if row["account_id"] != access.owner_id {
             return Err(ApiError::not_found("cloud_workspace_not_found"));
@@ -442,7 +444,7 @@ impl RuntimeControl {
         Ok(())
     }
 }
-async fn require_resume_capacity(
+pub(super) async fn require_resume_capacity(
     tx: &mut Transaction<'_, Postgres>,
     row: &Value,
     now: i64,

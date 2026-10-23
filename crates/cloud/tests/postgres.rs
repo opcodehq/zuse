@@ -128,6 +128,10 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(zuse_cloud::runtime::restore::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
     (admin, pool, schema)
 }
 
@@ -2303,6 +2307,7 @@ for line in sys.stdin:
         lost_ack_release: Arc<Notify>,
         grant_issuer: Option<Arc<GrantFixtureIssuer>>,
         projection_objects: Option<Arc<ProjectionObjects>>,
+        quiesced_lost_ack: Arc<std::sync::atomic::AtomicBool>,
     }
     impl GuestApi {
         async fn start() -> Self {
@@ -2408,19 +2413,46 @@ for line in sys.stdin:
             let lost_ack_release = Arc::new(Notify::new());
             let fail_first = Arc::new(std::sync::atomic::AtomicBool::new(withhold_ack));
             let projection_lost_ack = Arc::new(std::sync::atomic::AtomicBool::new(projections));
+            let quiesced_lost_ack = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let app = app.layer(axum::middleware::from_fn({
                 let release = lost_ack_release.clone();
+                let quiesced_lost_ack = quiesced_lost_ack.clone();
                 move |request: Request<Body>, next: axum::middleware::Next| {
                     let release = release.clone();
                     let fail = fail_first.clone();
                     let projection_lost_ack = projection_lost_ack.clone();
+                    let quiesced_lost_ack = quiesced_lost_ack.clone();
                     async move {
+                        let (request, quiesced) = if quiesced_lost_ack.load(Ordering::SeqCst)
+                            && request.uri().path().ends_with("/runtime/lifecycle")
+                        {
+                            let (parts, body) = request.into_parts();
+                            let bytes = to_bytes(body, 1024 * 1024).await.unwrap();
+                            let value: Value = serde_json::from_slice(&bytes).unwrap();
+                            (
+                                Request::from_parts(parts, Body::from(bytes)),
+                                value["kind"] == "quiesced",
+                            )
+                        } else {
+                            (request, false)
+                        };
                         let projection = request
                             .uri()
                             .path()
                             .ends_with("/runtime/transcript-checkpoint");
                         let ack = request.uri().path().ends_with("/runtime/commands/ack");
                         let response = next.run(request).await;
+                        if quiesced
+                            && response.status().is_success()
+                            && quiesced_lost_ack.swap(false, Ordering::SeqCst)
+                        {
+                            use axum::response::IntoResponse;
+                            return (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                axum::Json(json!({"error":"simulated_lost_quiescence_ack"})),
+                            )
+                                .into_response();
+                        }
                         if projection
                             && response.status().is_success()
                             && projection_lost_ack.swap(false, Ordering::SeqCst)
@@ -2470,6 +2502,7 @@ for line in sys.stdin:
                 lost_ack_release,
                 grant_issuer,
                 projection_objects,
+                quiesced_lost_ack,
             }
         }
         async fn finish(self) {

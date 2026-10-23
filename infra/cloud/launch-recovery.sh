@@ -35,7 +35,7 @@ fi
 exec 9>"$state/runner.lock"
 flock -n 9 || exit 0
 if [[ -f "$state/cancelled" ]]; then exit 0; fi
-if [[ -f "$state/uploaded" ]]; then exit 0; fi
+if [[ -f "$state/uploaded" || -f "$state/restored" ]]; then exit 0; fi
 printf '%s\n' "$$" >"$state/pid"
 trap 'rm -f -- "$state/pid"' EXIT
 export ZUSE_USER_DATA="${ZUSE_USER_DATA:-/home/zuse/.zuse-data}"
@@ -43,8 +43,13 @@ export ZUSE_ARCHIVE_CONFIG="$(cat "$state/config.json")"
 unset BOXD_API_KEY CLOUD_DATA_ENCRYPTION_KEY CLOUD_CREDENTIAL_VAULT_KEY RELAY_MINT_PRIVATE_JWK WORKOS_API_KEY
 binary="${ZUSE_RUNTIME_BINARY:-/usr/local/bin/zuse-cloud-runtime}"
 if "$binary" recover >"$state/result.next"; then
-  grep -qx 'workspace_archive_uploaded' "$state/result.next"
-  mv -- "$state/result.next" "$state/uploaded"
+  if grep -qx 'workspace_archive_uploaded' "$state/result.next"; then
+    mv -- "$state/result.next" "$state/uploaded"
+  elif grep -qx 'workspace_archive_restored' "$state/result.next"; then
+    mv -- "$state/result.next" "$state/restored"
+  else
+    exit 1
+  fi
 else
   printf '%s\n' archive-upload-failed >"$state/failed"
   exit 1

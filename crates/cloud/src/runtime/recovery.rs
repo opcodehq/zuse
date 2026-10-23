@@ -39,7 +39,7 @@ pub fn object_key(workspace: &str, operation: &str, name: &str) -> String {
         name
     )
 }
-fn archive(row: &Value) -> Result<RecoveryArchive, ApiError> {
+pub(super) fn archive(row: &Value) -> Result<RecoveryArchive, ApiError> {
     let a: RecoveryArchive =
         serde_json::from_value(row["request_config"]["recoveryArchive"].clone())
             .map_err(|_| fenced())?;
@@ -69,7 +69,10 @@ fn capability(master: &MasterKey, row: &Value, a: &RecoveryArchive) -> String {
         .to_string(),
     )
 }
-async fn locked_op(tx: &mut Transaction<'_, Postgres>, row: &Value) -> Result<Value, ApiError> {
+pub(super) async fn locked_op(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &Value,
+) -> Result<Value, ApiError> {
     let op:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(o) FROM zuse_rust_recovery_operations o WHERE operation_id=$1 AND workspace_id=$2 FOR UPDATE")
         .bind(row["request_config"]["recoveryArchive"]["id"].as_str()).bind(required(row,"workspace_id")?).fetch_optional(&mut **tx).await?;
     let op = op.ok_or_else(fenced)?;
@@ -79,7 +82,11 @@ async fn locked_op(tx: &mut Transaction<'_, Postgres>, row: &Value) -> Result<Va
         || op["binding"]["chatId"] != row["chat_id"]
         || op["binding"]["sessionId"] != row["initial_session_id"]
         || op["binding"]["rustStorage"]["accountId"] != row["account_id"]
-        || op["generation"] != row["request_config"]["runtimeGeneration"]
+        || op
+            .get("restore_generation")
+            .filter(|v| !v.is_null())
+            .unwrap_or(&op["generation"])
+            != &row["request_config"]["runtimeGeneration"]
         || op["storage_incarnation_id"]
             != row["request_config"]["rustRuntimeStorage"]["storageIncarnationId"]
         || !matches!(
@@ -91,7 +98,7 @@ async fn locked_op(tx: &mut Transaction<'_, Postgres>, row: &Value) -> Result<Va
     }
     Ok(op)
 }
-async fn save(
+pub(super) async fn save(
     tx: &mut Transaction<'_, Postgres>,
     row: &Value,
     a: &RecoveryArchive,
@@ -127,7 +134,7 @@ impl RuntimeControl {
     }
     pub async fn recovery_ready(&self) -> Result<(), ApiError> {
         let ready: bool =
-            sqlx::query_scalar("SELECT to_regclass('zuse_rust_recovery_operations') IS NOT NULL")
+            sqlx::query_scalar("SELECT to_regclass('zuse_rust_recovery_operations') IS NOT NULL AND to_regclass('zuse_rust_restores') IS NOT NULL AND to_regclass('api_cloud_usage_outbox') IS NOT NULL AND to_regclass('api_cloud_runtime_observations') IS NOT NULL")
                 .fetch_one(&self.pool)
                 .await?;
         if !ready {
@@ -140,7 +147,7 @@ impl RuntimeControl {
             && (self.recovery_workspaces.is_empty()
                 || self.recovery_workspaces.iter().any(|s| s == id))
     }
-    fn capture_plan(
+    pub(super) fn capture_plan(
         &self,
         row: &Value,
         a: &RecoveryArchive,
@@ -180,21 +187,20 @@ impl RuntimeControl {
         let (row, generation, _) = locked_workspace(&mut tx, id).await?;
         let config = &row["request_config"];
         if let Ok(mut a) = archive(&row) {
-            if a.phase == ArchivePhase::Restored {
+            if a.phase != ArchivePhase::Restored {
+                let op = locked_op(&mut tx, &row).await?;
+                if matches!(op["phase"].as_str(), Some("uploading" | "verifying")) {
+                    if a.expires_at_ms <= now {
+                        a.expires_at_ms = now + TTL;
+                        sqlx::query("UPDATE zuse_rust_recovery_operations SET expires_at=$2,updated_at=$3 WHERE operation_id=$1").bind(&a.id).bind(a.expires_at_ms).bind(now).execute(&mut *tx).await?;
+                        save(&mut tx, &row, &a, "archive-uploading", now).await?;
+                    }
+                    let plan = self.capture_plan(&row, &a, op["binding"].clone())?;
+                    tx.commit().await?;
+                    return Ok(Some(plan));
+                }
                 return Ok(None);
             }
-            let op = locked_op(&mut tx, &row).await?;
-            if matches!(op["phase"].as_str(), Some("uploading" | "verifying")) {
-                if a.expires_at_ms <= now {
-                    a.expires_at_ms = now + TTL;
-                    sqlx::query("UPDATE zuse_rust_recovery_operations SET expires_at=$2,updated_at=$3 WHERE operation_id=$1").bind(&a.id).bind(a.expires_at_ms).bind(now).execute(&mut *tx).await?;
-                    save(&mut tx, &row, &a, "archive-uploading", now).await?;
-                }
-                let plan = self.capture_plan(&row, &a, op["binding"].clone())?;
-                tx.commit().await?;
-                return Ok(Some(plan));
-            }
-            return Ok(None);
         }
         let due = crate::archive::status(&row)
             .retention_deadline
@@ -487,14 +493,17 @@ impl zuse_cloud_runtime::recovery::Objects for Reader {
         anyhow::bail!("archive_verifier_read_only")
     }
 }
-async fn active_job(tx: &mut Transaction<'_, Postgres>, job: &jobs::Job) -> Result<(), ApiError> {
+pub(super) async fn active_job(
+    tx: &mut Transaction<'_, Postgres>,
+    job: &jobs::Job,
+) -> Result<(), ApiError> {
     let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zuse_rust_jobs WHERE job_id=$1 AND lease_token=$2 AND state='running' AND lease_expires_at>$3 FOR UPDATE)").bind(&job.id).bind(&job.lease_token).bind(clock_ms()).fetch_one(&mut **tx).await?;
     if !active {
         return Err(fenced());
     }
     Ok(())
 }
-async fn defer(
+pub(super) async fn defer(
     tx: &mut Transaction<'_, Postgres>,
     job: &jobs::Job,
     complete: bool,
@@ -573,6 +582,7 @@ impl RuntimeControl {
         now: i64,
     ) -> Result<(), ApiError> {
         let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT generation FROM zuse_rust_control_owners WHERE resource_kind='workspace' AND resource_id=$1 AND backend='rust' FOR UPDATE").bind(&job.resource_id).fetch_optional(&mut *tx).await?;
         let (row, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;
         active_job(&mut tx, job).await?;
         if deleted(&row) || generation != job.generation {
@@ -820,10 +830,33 @@ impl RuntimeControl {
                     sqlx::query("UPDATE zuse_rust_recovery_operations SET phase='retired',updated_at=$2 WHERE operation_id=$1").bind(op_id).bind(now).execute(&mut *tx).await?;
                     save(&mut tx, &row, &a, "archive-retired", now).await?;
                     sqlx::query("UPDATE api_cloud_workspaces SET provider_sandbox_id=NULL,runtime_state='offline',runtime_credential_hash=NULL,runtime_boot_token_hash=NULL,runtime_boot_token_expires_at=NULL,state=CASE WHEN desired_state='archived' THEN 'archived' ELSE 'paused' END,next_action_at=9007199254740991 WHERE workspace_id=$1").bind(&job.resource_id).execute(&mut *tx).await?;
-                    defer(&mut tx, job, true, now).await?;
+                    defer(
+                        &mut tx,
+                        job,
+                        !row["request_config"]["rustRestoreRequested"].is_string(),
+                        now,
+                    )
+                    .await?;
                     tx.commit().await?;
                     return Ok(());
                 }
+            }
+            Some("retired")
+                if row["request_config"]["rustRestoreRequested"].is_string()
+                    && row["desired_state"] == "ready" =>
+            {
+                self.queue_restore_tx(
+                    &mut tx,
+                    &row,
+                    row["request_config"]["rustRestoreRequested"]
+                        .as_str()
+                        .unwrap(),
+                    now,
+                )
+                .await?;
+                defer(&mut tx, job, true, now).await?;
+                tx.commit().await?;
+                return Ok(());
             }
             Some("retired" | "restored") => {
                 defer(&mut tx, job, true, now).await?;
@@ -861,23 +894,44 @@ impl RuntimeControl {
             return Ok(false);
         }
         let op = locked_op(tx, row).await?;
-        if action == Action::Resume
-            && matches!(
-                op["phase"].as_str(),
-                Some("retiring" | "retired" | "restoring" | "restored")
-            )
-        {
-            return Err(ApiError::conflict("archive-restore-required"));
-        }
-        if action != Action::Unarchive && !(action == Action::Archive && op["phase"] == "retired") {
-            return Err(ApiError::conflict("archive-operation-in-progress"));
-        }
         let prior:Option<String>=sqlx::query_scalar("SELECT action FROM zuse_rust_lifecycle_operations WHERE workspace_id=$1 AND command_id=$2").bind(required(row,"workspace_id")?).bind(command).fetch_optional(&mut **tx).await?;
         if let Some(prior) = prior {
             if prior != action.as_str() {
                 return Err(ApiError::conflict("cloud_lifecycle_command_id_reused"));
             }
             return Ok(true);
+        }
+        // Repeated unarchive remains a read-like acknowledgement once interactive restore is accepted.
+        if action == Action::Unarchive
+            && (op["phase"] == "restoring"
+                || row["request_config"]["rustRestoreRequested"].is_string())
+        {
+            return Ok(true);
+        }
+        if action == Action::Resume
+            && matches!(
+                op["phase"].as_str(),
+                Some("retiring" | "retired" | "restoring")
+            )
+        {
+            if row["desired_state"] == "archived" {
+                return Err(ApiError::conflict("cloud_workspace_unarchive_required"));
+            }
+            lifecycle::require_resume_capacity(tx, row, now).await?;
+            if op["phase"] == "restoring" {
+                sqlx::query("UPDATE zuse_rust_jobs SET state='pending',attempts=0,due_at=$3,last_error_code=NULL,updated_at=$3 WHERE kind=$1 AND resource_id=$2 AND resource_generation=$4 AND payload->>'operationId'=$5 AND state='failed'")
+                    .bind(restore::JOB_KIND).bind(required(row,"workspace_id")?).bind(now).bind(row["request_config"]["runtimeGeneration"].as_i64()).bind(row["request_config"]["rustRestoreOperationId"].as_str()).execute(&mut **tx).await?;
+                return Ok(true);
+            }
+            if op["phase"] == "retiring" {
+                sqlx::query("UPDATE api_cloud_workspaces SET desired_state='ready',state='provisioning',request_config=jsonb_set(request_config,'{rustRestoreRequested}',$2),revision=revision+1 WHERE workspace_id=$1").bind(required(row,"workspace_id")?).bind(json!(command)).execute(&mut **tx).await?;
+            } else {
+                self.queue_restore_tx(tx, row, command, now).await?;
+            }
+            return Ok(true);
+        }
+        if action != Action::Unarchive && !(action == Action::Archive && op["phase"] == "retired") {
+            return Err(ApiError::conflict("archive-operation-in-progress"));
         }
         let operation = uuid::Uuid::new_v4().to_string();
         let generation = op["generation"].as_i64().ok_or_else(fenced)?;
@@ -910,20 +964,38 @@ fn clock_ms() -> i64 {
 }
 
 /// Original observed-runtime telemetry. It never settles provider cost or emits a charge.
-async fn observe(
+pub(super) async fn observe(
     tx: &mut Transaction<'_, Postgres>,
     row: &Value,
     op: &Value,
     machine: Option<&Machine>,
     now: i64,
 ) -> Result<(), ApiError> {
-    let source = required(op, "source_machine_id")?;
+    if machine.is_some_and(|m| m.state == MachineState::Running) {
+        sqlx::query("UPDATE zuse_rust_recovery_operations SET running_since=COALESCE(running_since,$2) WHERE operation_id=$1").bind(required(op,"operation_id")?).bind(now).execute(&mut **tx).await?;
+    }
+    observe_runtime(
+        tx,
+        row,
+        required(op, "source_machine_id")?,
+        op["running_since"].as_i64().unwrap_or(now),
+        machine,
+        now,
+    )
+    .await
+}
+pub(super) async fn observe_runtime(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &Value,
+    source: &str,
+    since: i64,
+    machine: Option<&Machine>,
+    now: i64,
+) -> Result<(), ApiError> {
     let running = machine.is_some_and(|m| m.state == MachineState::Running);
-    let since = op["running_since"].as_i64().unwrap_or(now);
     let mut value = json!({"accountId":row["account_id"],"resourceKind":"workspace","resourceId":row["workspace_id"],"provider":row["provider"],"providerSandboxId":source,"observedAtMs":now,"vcpuCount":machine.and_then(|m|m.vcpu).unwrap_or(1),"memoryMib":machine.and_then(|m|m.memory_bytes).unwrap_or(1024*1024*1024)/(1024*1024)});
     if running {
         value["runningSinceMs"] = json!(since);
-        sqlx::query("UPDATE zuse_rust_recovery_operations SET running_since=COALESCE(running_since,$2) WHERE operation_id=$1").bind(required(op,"operation_id")?).bind(now).execute(&mut **tx).await?;
     }
     sqlx::query("INSERT INTO api_cloud_runtime_observations(provider,provider_sandbox_id,observation) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(required(row,"provider")?).bind(source).bind(&value).execute(&mut **tx).await?;
     let previous:Value=sqlx::query_scalar("SELECT observation FROM api_cloud_runtime_observations WHERE provider=$1 AND provider_sandbox_id=$2 FOR UPDATE").bind(required(row,"provider")?).bind(source).fetch_one(&mut **tx).await?;

@@ -42,6 +42,32 @@ pub struct RustStorage {
     pub account_id: String,
     pub storage_incarnation_id: String,
 }
+/// Written only after authenticated installation; authority bootstrap must independently authorize adoption.
+pub const RESTORE_RECEIPT: &str = "rust-recovery-restored.json";
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreReceipt {
+    pub binding: Binding,
+    pub archive_sha256: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreEnrollment {
+    pub receipt: RestoreReceipt,
+    pub generation: i64,
+    pub machine_id: String,
+}
+pub(crate) fn validate_adoption(data: &Path, expected: &RestoreReceipt) -> Result<()> {
+    expected.binding.validate()?;
+    ensure!(
+        expected.binding.rust_storage.is_some(),
+        "recovery_native_storage_required"
+    );
+    let actual: RestoreReceipt =
+        serde_json::from_slice(&std::fs::read(data.join(RESTORE_RECEIPT))?)?;
+    ensure!(actual == *expected, "recovery_adoption_receipt_mismatch");
+    files::validate(data, &expected.binding)
+}
 impl Binding {
     fn validate(&self) -> Result<()> {
         for value in [
@@ -449,6 +475,7 @@ impl Recovery {
                 "recovery_receipt_invalid"
             );
             files::validate_installed(&self.layout, &self.binding)?;
+            self.write_adoption_receipt(&manifest)?;
             return Ok(manifest);
         }
         let archive = self
@@ -468,7 +495,17 @@ impl Recovery {
         files::install(&self.layout, &self.binding, &stage)?;
         files::validate_installed(&self.layout, &self.binding)?;
         write(&receipt, manifest.archive_sha256.as_bytes())?;
+        self.write_adoption_receipt(&manifest)?;
         Ok(manifest)
+    }
+    fn write_adoption_receipt(&self, manifest: &ArchiveManifest) -> Result<()> {
+        write(
+            &self.layout.data.join(RESTORE_RECEIPT),
+            &serde_json::to_vec(&RestoreReceipt {
+                binding: self.binding.clone(),
+                archive_sha256: manifest.archive_sha256.clone(),
+            })?,
+        )
     }
 }
 
