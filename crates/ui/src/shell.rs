@@ -128,6 +128,7 @@ actions!(
         OpenModelPicker,
         NewSession,
         OpenSettings,
+        OpenDevices,
         NextSession,
         PrevSession,
         ArchiveSession
@@ -10478,8 +10479,12 @@ impl Shell {
             let state = self.state.read(cx);
             let (_, identity) =
                 sidebar_account_identity(state.workspace_scope, self.sync_flow, state.auth_user());
-            let cloud = matches!(state.workspace_scope, Some(WorkspaceScope::Synced))
-                && state.auth_user().is_some();
+            let cloud = state
+                .engine()
+                .and_then(|engine| engine.cloud_workspace())
+                .is_some()
+                || (matches!(state.workspace_scope, Some(WorkspaceScope::Synced))
+                    && state.auth_user().is_some());
             let working = state
                 .sidebar_chats(Utc::now(), None)
                 .into_iter()
@@ -12014,6 +12019,20 @@ impl Shell {
                                 .id("onboarding-add-space")
                                 .mt(px(20.0))
                                 .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
+                        )
+                        .child(
+                            div()
+                                .id("onboarding-without-project")
+                                .mt(px(12.))
+                                .cursor_pointer()
+                                .text_size(crate::typography::text_sm())
+                                .text_color(theme.text_muted)
+                                .hover(|view| view.text_color(theme.text))
+                                .child("Start without a project")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.state.update(cx, |state, cx| state.select_space(None, cx));
+                                    this.focus_composer(cx);
+                                })),
                         ),
                 ))
                 .into_any_element()
@@ -14354,6 +14373,9 @@ impl Render for Shell {
             // Native Settings menu item and the platform convention (Cmd+, on
             // macOS, Ctrl+, elsewhere) toggle the modal from any section.
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.toggle_settings(cx)))
+            .on_action(cx.listener(|this, _: &OpenDevices, _, cx| {
+                this.open_settings(SettingsSection::Devices, cx)
+            }))
             .on_action(cx.listener(|this, _: &NextSession, window, cx| {
                 this.cycle_navigation(true, window, cx)
             }))

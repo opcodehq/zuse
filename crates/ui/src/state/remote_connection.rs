@@ -5,6 +5,15 @@ use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 mod tests;
 #[async_trait]
 pub(super) trait Source: Send + Sync {
+    fn controller(&self) -> Option<EngineHandle> {
+        None
+    }
+    fn cloud_workspace(&self) -> Option<String> {
+        None
+    }
+    fn initial_chat(&self) -> Option<String> {
+        None
+    }
     fn cancellation(&self) -> CancellationToken;
     fn closed_message(&self) -> &'static str;
     fn blocked_error(&self, _: &RpcError) -> bool {
@@ -34,6 +43,15 @@ struct RemoteEngine {
 }
 #[async_trait]
 impl EngineBackend for RemoteEngine {
+    fn controller(&self) -> Option<EngineHandle> {
+        self.source.controller()
+    }
+    fn cloud_workspace(&self) -> Option<String> {
+        self.source.cloud_workspace()
+    }
+    fn initial_chat(&self) -> Option<String> {
+        self.source.initial_chat()
+    }
     fn client(&self) -> &RpcClient {
         &self.client
     }

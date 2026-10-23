@@ -11,6 +11,7 @@
 //! in free functions with unit tests; RPC results land in [`Loadable`] slots
 //! rendered as skeletons / inline errors with Retry.
 
+mod cloud;
 mod compact;
 
 use crate::roll_text::{roll_text, rolling};
@@ -773,6 +774,7 @@ struct SettingGroup {
 }
 
 pub struct Pickers {
+    cloud: cloud::Cloud,
     state: Entity<AppState>,
     config: DraftConfig,
     /// Thread-naming binding (Settings → General): the model picker reads and
@@ -1071,6 +1073,7 @@ impl Pickers {
         let space_owner = state.read(cx).selected_space.clone();
         let device_owner = state.read(cx).effective_device_id();
         Self {
+            cloud: Default::default(),
             state,
             space_owner,
             device_owner,
@@ -1584,6 +1587,9 @@ impl Pickers {
             self.effort_dragging = false;
             self.compact_keyboard = false;
             self.compact_motion = compact::CompactMotion::default();
+        }
+        if kind == PickerKind::Device {
+            self.cloud.refresh();
         }
         self.open.open(kind);
         self.focus_on_mount = true;
@@ -2738,6 +2744,7 @@ impl Pickers {
     /// heavy lifting: branch draft, ref cache, and the per-device
     /// harness/model catalogs all invalidate on the project change.
     fn pick_space(&mut self, space_id: String, cx: &mut Context<Self>) {
+        self.leave_cloud(cx);
         self.state.update(cx, |s, cx| {
             s.auto_selected = true;
             s.select_space(Some(space_id), cx);
@@ -2747,6 +2754,7 @@ impl Pickers {
     }
 
     fn pick_no_project(&mut self, cx: &mut Context<Self>) {
+        self.leave_cloud(cx);
         self.state.update(cx, |s, cx| {
             // A late opening chats frame must not auto-open an old session
             // after the user has explicitly chosen the new-session target.
@@ -2758,6 +2766,7 @@ impl Pickers {
     }
 
     fn pick_device(&mut self, device_id: String, cx: &mut Context<Self>) {
+        self.leave_cloud(cx);
         self.state
             .update(cx, |s, cx| s.select_device(device_id, cx));
         self.remember_target(cx);
@@ -2923,13 +2932,20 @@ impl Pickers {
                         .children(rows.into_iter().zip(online).enumerate().map(
                             |(ix, (row, online))| {
                                 let is_local = local.as_deref() == Some(row.device_id.as_str());
-                                let label: SharedString = row.name.clone().into();
-                                let is_selected = match &row.space {
-                                    Some(space) => {
-                                        selected_space.as_deref() == Some(space.id.as_str())
-                                    }
-                                    None => effective.as_deref() == Some(row.device_id.as_str()),
+                                let label: SharedString = if is_local {
+                                    "This computer".into()
+                                } else {
+                                    row.name.clone().into()
                                 };
+                                let is_selected = self.state.read(cx).cloud_project.is_none()
+                                    && match &row.space {
+                                        Some(space) => {
+                                            selected_space.as_deref() == Some(space.id.as_str())
+                                        }
+                                        None => {
+                                            effective.as_deref() == Some(row.device_id.as_str())
+                                        }
+                                    };
                                 let detail = row.detail.clone().map(SharedString::from);
                                 popover::picker_row(
                                     &theme,
@@ -2967,17 +2983,6 @@ impl Pickers {
                                             )
                                         }),
                                 )
-                                // The local device wears a muted right-aligned "You"
-                                // instead of a "(this device)" suffix in the name.
-                                .when(is_local, |el| {
-                                    el.child(
-                                        div()
-                                            .flex_none()
-                                            .text_size(crate::typography::text_xs())
-                                            .text_color(theme.text_muted)
-                                            .child(SharedString::from("You")),
-                                    )
-                                })
                                 // Disconnected glyph, not the word (user request).
                                 .when(!online, |el| {
                                     el.child(
@@ -2999,6 +3004,7 @@ impl Pickers {
             .flex_col()
             .child(self.search_box(&theme))
             .child(body)
+            .child(self.cloud_rows(cx))
             .into_any_element()
     }
 
@@ -3688,7 +3694,7 @@ impl Pickers {
             }
             _ => None,
         };
-        let (device_label, project_label, offline) = {
+        let (mut device_label, mut project_label, mut offline) = {
             let state = self.state.read(cx);
             let device_id = state.effective_device_id();
             let device_label: SharedString = device_id
@@ -3707,11 +3713,28 @@ impl Pickers {
                 .into();
             (device_label, project_label, offline)
         };
+        if self.state.read(cx).effective_device_id() == self.state.read(cx).local_device_id {
+            device_label = "This computer".into();
+        }
+        if let Some(project) = &self.state.read(cx).cloud_project {
+            device_label = SharedString::from("Cloud");
+            project_label = SharedString::from(
+                project["displayName"]
+                    .as_str()
+                    .unwrap_or("Repository")
+                    .to_owned(),
+            );
+            offline = false;
+        }
         let device_chip = self
             .tray_chip(
                 PickerKind::Device,
                 "picker-device",
-                crate::icons::MONITOR,
+                if self.state.read(cx).cloud_project.is_some() {
+                    crate::icons::CLOUD
+                } else {
+                    crate::icons::MONITOR
+                },
                 device_label,
                 &theme,
                 cx,
@@ -3754,6 +3777,9 @@ impl Pickers {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if self.state.read(cx).cloud_project.is_some() {
+            return self.cloud_git_summary(cx);
+        }
         let git = self
             .state
             .read(cx)
@@ -6632,9 +6658,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn side_chat_choices_remain_editable_after_creation(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn side_chat_choices_remain_editable_after_creation(cx: &mut gpui::TestAppContext) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

@@ -11,11 +11,11 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
-| F: complete GPUI parity | Attached browser composer destination menu and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
+| F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
 
 Do not mark a milestone complete from compilation alone. Record tested behavior and remaining gates here.
@@ -50,7 +50,7 @@ another create or prompt execution. This uses a deterministic provider, not live
 or a paid model. Receipts: `.context/cloud-launch-browser-acceptance.json`;
 `.context/cloud-chat-acceptance.log`. UI: `.context/cloud-composer-destination-menu.png`.
 
-Remaining before Milestone B/live rollout: native desktop cloud creation integration,
+Remaining before Milestone B/live rollout: remaining native desktop routing and cached reopen,
 first-launch attachments/context, complete provider/model catalogs, queued startup messages,
 reload-persistent uncertain-create retry state, bounded handling of repeated immediately
 closed connections and retry controls, full startup/reconnect trays, pause/resume UI,
@@ -78,6 +78,50 @@ cancellation and removal of browser routing metadata before delivery to the chil
 First-launch attachments, cached/archived image projections, native desktop file
 selection, and recovery of the parent host transport remain open. This completes
 connected-browser upload delivery, not all attachment or workspace-tool parity.
+
+
+### Native desktop cloud launch
+
+The native composer extends its existing device popover with prepared cloud
+repositories, readiness, recent-workspace Connect actions and Add computer.
+Cloud startup uses the existing attached tray. Launch retains its idempotency key
+and accepted workspace for retry; the native permission selection maps to the
+runtime mode. Read-only launch is refused explicitly because the guest contract
+does not implement it yet. First-launch attachments remain pending.
+
+A cloud window uses the existing native conversation, files, Git and terminal
+controllers through the root host's shared `CloudEnvironment`/`CloudRpc` broker.
+Account controls stay on the root authority. The tunnel retains canonical stream
+frames and cancellation, checks the original account and connection epoch, and
+uses the existing native reconnect supervisor without replaying mutations. Initial
+session selection waits for the guest chat list. Window drafts are scoped to the
+account/workspace; credentials remain with the root host.
+
+Verified on native Linux: the existing device dropdown loaded the prepared
+repository, startup rendered in the attached composer tray, and the guest's original
+conversation appeared. Closing its window and using the refreshed Connect row
+reopened the same history. The real Axum/PostgreSQL/guest acceptance passed with
+one allocation and exactly one provider turn. The provider is deterministic; this
+is not live-provider or Mac acceptance. A native guest terminal opened and showed
+the checkout prompt; keyboard input was not verified in the headless X11 run.
+Fresh profiles can reach the composer through the existing Start without a project
+action, now also available on the initial onboarding screen.
+
+The transport test passed: workspace-scoped forwarding retains null stream items,
+account controls use the root authority, and account changes cancel access. Full
+desktop build passed in the existing Ubuntu environment; Amazon Linux's older
+libc/C++ libraries cannot link the packaged voice dependency. Use that Ubuntu
+build environment for native execution here.
+
+Receipts: `.context/native-cloud-ui-acceptance.json`,
+`.context/native-cloud-acceptance.log`, `.context/native-cloud-ubuntu-scope-tests.log`
+and `.context/native-cloud-entry-build.log`. Screenshots:
+`.context/native-cloud-destination-menu.png`,
+`.context/native-cloud-launch-progress.png`, `.context/native-cloud-reopened.png`.
+
+This does not complete Milestone B or F: cached native reopen, integrated
+sidebar/window routing, full model/branch controls, first-launch attachments,
+startup queues and remaining administration remain open.
 
 
 ## Current service
@@ -1429,6 +1473,6 @@ without a known checkout remain required. It does not claim full local sync pari
 
 
 Next implementation focus: finish first-launch attachments/context, startup queues and
-native desktop integration using the shared transport, then cloud administration.
+remaining native routing/cached reopen using the shared transport, then cloud administration.
 Full live sync and migration remain open; the verified browser create/stream/reopen
 workflow and default mirror cleanup do not close those requirements.

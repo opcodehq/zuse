@@ -44,6 +44,7 @@ use crate::state::{AppState, Indicator};
 use crate::theme::Theme;
 
 mod chip;
+mod cloud;
 pub(crate) mod tray;
 pub use chip::ChipKind;
 use chip::*;
@@ -6230,6 +6231,7 @@ fn slash_error_message(err: &RpcError, skill: bool) -> SharedString {
 }
 
 pub struct Composer {
+    cloud: cloud::Launch,
     pub(crate) state: Entity<AppState>,
     pub(crate) input: Entity<ComposerInput>,
     /// Draft displaced while a queued message occupies the composer.
@@ -6708,6 +6710,7 @@ impl Composer {
             action_task: None,
             advance_task: None,
             send_task: None,
+            cloud: Default::default(),
             unarchive_task: None,
             unarchiving: None,
             interrupting: HashSet::new(),
@@ -8932,6 +8935,9 @@ impl Composer {
         if state.selected_chat.is_some() {
             return false;
         }
+        if state.cloud_project.is_some() {
+            return false;
+        }
         // New-chat canvas: needs a runnable agent. The
         // no-agents check only fires once the catalog is loaded — offline
         // and still-loading states must not block (the harness resolves from
@@ -9049,6 +9055,9 @@ impl Composer {
     /// is on), `Mutate createChat` with the `ChatConfig` + cwd, and the model /
     /// reasoning / options on the Run request itself (§1.7).
     fn send(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
+        if self.send_cloud(text.clone(), cx) {
+            return;
+        }
         if self
             .state
             .read(cx)
