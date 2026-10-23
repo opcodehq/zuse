@@ -5,6 +5,7 @@ const [ipc,ready,assets]=process.argv.slice(2);
 const clients=new Set(),events=[];
 let state={user:null,login:null,error:null},hold=false,failNext=false,loginTimer,cloud=false,holdCloud=false;
 const delayed=[],delayedWrites=[];
+let setup={projects:null,github:null,image:null,imageError:null,projectError:null,failNextBuild:false};
 let billing={subscribed:true,capMicros:25000000,creditCents:2500,debitCents:0,creditAvailable:true,status:'active',usedMicros:5000000,overageMicros:0,usageCount:1,summaryError:null,entitlementError:null,creditError:null,failNextCap:false,writeDelay:450,holdWrites:false,workspaces:[]};
 const summary=()=>({currency:'USD',status:billing.status,periodStart:1790812800000,periodEnd:1793491200000,basePriceMicros:40000000,includedProviderCostMicros:35000000,providerCostMicros:billing.usedMicros,storageCostMicros:0,includedUsedMicros:Math.min(billing.usedMicros,35000000),includedRemainingMicros:Math.max(0,35000000-billing.usedMicros),overageProviderCostMicros:billing.overageMicros,overageChargeMicros:billing.overageMicros,overageCapMicros:billing.capMicros,markupBasisPoints:500,currentInvoiceEstimateMicros:40000000+billing.overageMicros,usageProvisional:false});
 const emit=(client,frame)=>{try{client.send(JSON.stringify(frame));}catch{}};
@@ -22,12 +23,13 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
     if(Object.hasOwn(value,'failNext'))failNext=value.failNext;
     if(Object.hasOwn(value,'cloud'))cloud=value.cloud;
     if(value.billing)billing={...billing,...value.billing};
+    if(value.setup)setup={...setup,...value.setup};
     if(Object.hasOwn(value,'holdCloud'))holdCloud=value.holdCloud;
     if(!holdCloud)for(const [client,frame]of delayed.splice(0))emit(client,frame);
     if(!billing.holdWrites)for(const [client,frame]of delayedWrites.splice(0))emit(client,frame);
     publish();
    }
-   return Response.json({state,events,hold,billing},{headers});
+   return Response.json({state,events,hold,billing,setup},{headers});
   }
   if(url.pathname==='/api/session/check'||url.pathname==='/api/session')return Response.json({ok:true},{headers});
   if(url.pathname==='/api/rpc'||(url.pathname==='/'&&request.headers.get('upgrade')?.toLowerCase()==='websocket')){
@@ -68,16 +70,36 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
     const owner=state.user?.id??null;
     events.push({id:frame.id,method:frame.method,owner,expectedAccountId:frame.params?.expectedAccountId??null,cursor:frame.params?.cursor??null});
     const project={projectId:'project-'+owner,repositoryIdentity:'github.com/'+owner+'/workspace',repositoryUrl:'https://github.com/'+owner+'/workspace',displayName:'Workspace',defaultBranch:'main',visibility:'private',state:'ready',activeBuilds:{},latestBuilds:{},createdAt:1,updatedAt:1};
-    const image={storage:null,state:'none',generation:null,providerId:null,runtimeVersion:null,progressPhase:null,errorCode:null,repositories:[],builds:[],builtAt:null,updatedAt:1};
+    const image={storage:null,state:'not-built',generation:null,providerId:null,runtimeVersion:null,progressPhase:null,errorCode:null,repositories:[],builds:[],builtAt:null,updatedAt:1};
     const offset=frame.params?.cursor==='older'?10:0;
     const usage=Array.from({length:Math.min(10,Math.max(0,billing.usageCount-offset))},(_,i)=>({entryId:'entry-'+owner+'-'+(offset+i),resourceKind:'workspace',usageKind:'compute',resourceId:billing.usageCount===1?'workspace-'+owner:'workspace-'+owner+'-'+(offset+i),provider:'boxd',startedAt:1792663200000,endedAt:1792749600000,vcpuCount:2,memoryMib:4096,providerCostMicros:billing.usageCount===1?5000000:1000000,status:'settled'}));
     if(frame.method==='CloudBillingSummary'&&billing.summaryError){emit(client,{id:frame.id,err:billing.summaryError,done:true});return;}
     if(frame.method==='CloudBillingEntitlements'&&billing.entitlementError){emit(client,{id:frame.id,err:billing.entitlementError,done:true});return;}
     if(frame.method==='CloudPrepaidBalance'&&billing.creditError){emit(client,{id:frame.id,err:billing.creditError,done:true});return;}
-    const data={CloudProjects:{projects:[project]},CloudGithubCatalog:{configured:true,canManageInstallations:true,user:null,installations:[],repositories:[]},CloudImage:image,CloudBillingSummary:summary(),CloudBillingUsage:{items:usage,nextCursor:billing.usageCount>offset+10?'older':null},CloudBillingEntitlements:{entitlements:billing.subscribed?[{offerId:'cloud-workspace-standard-v1',status:'active',paidThrough:1793491200000}]:[]},CloudPrepaidBalance:{available:billing.creditAvailable,creditCents:billing.creditCents,debitCents:billing.debitCents,currency:'USD'}}[frame.method];
-    const value=frame.method==='CloudContext'?{accountId:owner,projects:[]}:frame.method==='CloudWorkspaces'?{accountId:owner,workspaces:billing.workspaces}:{accountId:owner,organizationId:null,data};
+    if(frame.method==='CloudImage'&&setup.imageError){emit(client,{id:frame.id,err:setup.imageError,done:true});return;}
+    if(frame.method==='CloudProjects'&&setup.projectError){emit(client,{id:frame.id,err:setup.projectError,done:true});return;}
+    const data={CloudProjects:{projects:setup.projects??[project]},CloudGithubCatalog:setup.github??{configured:true,canManageInstallations:true,user:null,installations:[],repositories:[]},CloudImage:setup.image??image,CloudBillingSummary:summary(),CloudBillingUsage:{items:usage,nextCursor:billing.usageCount>offset+10?'older':null},CloudBillingEntitlements:{entitlements:billing.subscribed?[{offerId:'cloud-workspace-standard-v1',status:'active',paidThrough:1793491200000}]:[]},CloudPrepaidBalance:{available:billing.creditAvailable,creditCents:billing.creditCents,debitCents:billing.debitCents,currency:'USD'}}[frame.method];
+    const value=frame.method==='CloudContext'?{accountId:owner,projects:[]}:frame.method==='CloudWorkspaces'?{accountId:owner,workspaces:billing.workspaces}:{accountId:owner,organizationId:state.orgId??null,data};
     const response={id:frame.id,ok:value};
     if(holdCloud)delayed.push([client,response]);else emit(client,response);return;
+   }
+   if(cloud&&['CloudProjectConnect','CloudProjectRemove','CloudImageBuild','CloudImageDelete'].includes(frame.method)){
+    const owner=state.user?.id??null,p=frame.params??{},organization=state.orgId??null;
+    events.push({id:frame.id,method:frame.method,owner,expectedAccountId:p.expectedAccountId,expectedOrganizationId:p.expectedOrganizationId,params:p});
+    if(!owner||owner!==p.expectedAccountId||organization!==(p.expectedOrganizationId??null)||(organization&&setup.github?.canManageInstallations===false)){emit(client,{id:frame.id,err:'This account cannot manage cloud settings.',done:true});return;}
+    let data;
+    if(frame.method==='CloudProjectConnect'){
+     const identity=p.repositoryUrl.replace(/^https:\/\//,'').replace(/\.git$/,'');
+     data={projectId:'connected-'+identity.replaceAll('/','-'),repositoryIdentity:identity,repositoryUrl:p.repositoryUrl,displayName:identity.replace('github.com/',''),defaultBranch:p.defaultBranch,visibility:p.visibility,state:'ready',activeBuilds:{},latestBuilds:{},createdAt:1792795200000,updatedAt:1792795200000};
+     setup.projects=[...(setup.projects??[]).filter(v=>v.projectId!==data.projectId),data];if(setup.image)setup.image.state='outdated';
+    }else if(frame.method==='CloudProjectRemove'){
+     data=(setup.projects??[]).find(v=>v.projectId===p.projectId);setup.projects=(setup.projects??[]).filter(v=>v.projectId!==p.projectId);if(setup.image)setup.image.state='outdated';
+    }else if(frame.method==='CloudImageBuild'){
+     const now=1792795200000;const build={buildId:'requested-'+p.idempotencyKey,state:'building',mode:p.mode,active:false,logText:'Preparing repositories and agents…',errorCode:null,providerId:'boxd',runtimeVersion:'runtime-2026-10',progressPhase:'prepare',configurationDigest:'fixture',repositories:(setup.projects??[]).map(p=>({projectId:p.projectId,repositoryIdentity:p.repositoryIdentity,displayName:p.displayName,defaultBranch:p.defaultBranch,sourceCommit:'abc123'})),createdAt:now,updatedAt:now};
+     setup.image={...(setup.image??{}),storage:setup.image?.storage??null,state:'building',generation:setup.image?.generation??null,providerId:'boxd',runtimeVersion:'runtime-2026-10',progressPhase:'prepare',errorCode:null,repositories:[],builds:[build,...(setup.image?.builds??[]).filter(b=>b.buildId!==build.buildId)],builtAt:null,updatedAt:now};data=setup.image;
+     if(setup.failNextBuild){setup.failNextBuild=false;setup.image.state='not-built';writeReply(client,{id:frame.id,err:'Image request was interrupted. Retry to check the same build.',done:true});return;}
+    }else{setup.image={...setup.image,state:'not-built',storage:null};data=setup.image;}
+    writeReply(client,{id:frame.id,ok:{accountId:owner,organizationId:organization,data}});return;
    }
    if(cloud&&['CloudBillingPortal','CloudBillingCheckout','CloudPrepaidCheckout','CloudBillingSetCap'].includes(frame.method)){
     const owner=state.user?.id??null,params=frame.params??{};
@@ -89,7 +111,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
      if(billing.failNextCap){billing.failNextCap=false;writeReply(client,{id:frame.id,err:'Could not confirm the saved cap. Retry to check the request.',done:true});return;}
      data=summary();
     }else{data={checkoutUrl:'https://billing.example.test/'+({CloudBillingPortal:'portal',CloudBillingCheckout:'subscription',CloudPrepaidCheckout:'credits'}[frame.method])};}
-    writeReply(client,{id:frame.id,ok:{accountId:owner,organizationId:null,data}});return;
+    writeReply(client,{id:frame.id,ok:{accountId:owner,organizationId:state.orgId??null,data}});return;
    }
    if(frame.method==='Plugins'){
     emit(client,{id:frame.id,ok:{kind:'snapshot',tenantId:'personal:'+state.user?.id,tenants:[],catalog:[],connections:[],canManage:true,endpoint:'https://fixture.invalid/mcp'}});return;

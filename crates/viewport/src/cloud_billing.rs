@@ -438,11 +438,21 @@ impl WorkspaceView {
                 },
             ));
         }
+        let storage = self.repository_panel.update(cx, |panel, cx| {
+            panel.set_usage(
+                self.billing.tab == crate::cloud_settings::Tab::Usage,
+                self.billing.summary.as_ref().map(|s| s.storage_cost_micros),
+                cx,
+            )
+        });
         if self.billing.tab == crate::cloud_settings::Tab::Setup {
             if self.billing.subscribed == Some(true) {
                 body = body.child(self.repository_panel.clone());
             }
         } else {
+            if storage {
+                body = body.child(self.repository_panel.clone());
+            }
             body = body.child(view::usage(
                 &data,
                 self.billing_cap.clone().into_any_element(),

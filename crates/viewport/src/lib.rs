@@ -343,6 +343,7 @@ impl WorkspaceView {
         })
         .detach();
         let repository_panel = cx.new(|cx| cloud_repositories::RepositoryPanel::new(window, cx));
+        cx.observe(&repository_panel, |_,_,cx|cx.notify()).detach();
         cx.subscribe(
             &repository_panel,
             |this, _, event: &cloud_repositories::Request, _cx| match event {

@@ -1,5 +1,6 @@
 //! Reference account-image readiness and build history for both GPUI targets.
 use super::*;
+mod presentation;
 gpui::actions!(cloud_image_dialog, [CancelImageDelete, ConfirmImageDelete]);
 pub(super) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
@@ -21,9 +22,18 @@ pub(super) struct ImageView {
     failures: u8,
     expanded: BTreeSet<String>,
     settings: BTreeSet<String>,
-    count: usize,
+    history_open: bool,
+    history_focus: Option<FocusHandle>,
+    history_trigger: Option<FocusHandle>,
+    history_handles: BTreeMap<String, FocusHandle>,
+    history_order: Vec<FocusHandle>,
+    previous_open: bool,
+    history_page: usize,
 }
 impl ImageView {
+    pub(super) fn has_storage(&self) -> bool {
+        self.value.as_ref().is_some_and(|i| i.storage.is_some())
+    }
     pub(super) fn interrupted(&mut self) {
         self.poll = None;
         self.failures = 3;
@@ -130,6 +140,19 @@ impl RepositoryPanel {
                 self.image
                     .settings
                     .retain(|id| image.builds.iter().any(|b| &b.build_id == id));
+                if self.image.history_open
+                    && self
+                        .image
+                        .value
+                        .as_ref()
+                        .and_then(|v| v.builds.first())
+                        .map(|b| &b.build_id)
+                        != image.builds.first().map(|b| &b.build_id)
+                {
+                    if let Some(build) = image.builds.first() {
+                        self.image.expanded.insert(build.build_id.clone());
+                    }
+                }
                 self.image.value = Some(image);
             }
             Err(error) => {
@@ -152,276 +175,6 @@ impl RepositoryPanel {
             }));
         }
         cx.notify();
-    }
-    pub(super) fn render_image(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let busy = self.image_pending();
-        let starting = self.pending.values().any(|p| p.kind == "image-build");
-        let image = self.image.value.as_ref();
-        let state = image.map(|v| v.state.as_str()).unwrap_or("unknown");
-        let building = starting || state == "building";
-        let (title, description) = if building {
-            (
-                "Building cloud image".to_owned(),
-                if starting {
-                    "Starting the image build…".into()
-                } else {
-                    phase(image.and_then(|v| v.progress_phase.as_deref())).into()
-                },
-            )
-        } else {
-            match state {
-                "ready" => (
-                    "Cloud image ready".into(),
-                    "Agent authentication is delivered when a workspace starts.".into(),
-                ),
-                "failed" => (
-                    "Cloud image build failed".into(),
-                    format!(
-                        "{}{}",
-                        if image.is_some_and(|v| v.generation.is_some()) {
-                            "The previous image remains available. "
-                        } else {
-                            ""
-                        },
-                        image
-                            .and_then(|v| v.error_code.as_deref())
-                            .unwrap_or("Open the latest build for details.")
-                    ),
-                ),
-                "not-built" => (
-                    "Cloud image required".into(),
-                    if self.projects.is_empty() {
-                        "Add a repository before building your first cloud image.".into()
-                    } else {
-                        format!("{} repositories ready to include.", self.projects.len())
-                    },
-                ),
-                "outdated" => (
-                    "Unbuilt changes".into(),
-                    "Repositories or the runtime changed. Update the cloud image.".into(),
-                ),
-                "auth-broken" => (
-                    "Rebuild required".into(),
-                    "Reconnect the affected agent before rebuilding the image.".into(),
-                ),
-                _ => (
-                    if self.image.error.is_some() {
-                        "Image status unavailable".into()
-                    } else {
-                        "Checking cloud image…".into()
-                    },
-                    "Checking the saved image for this account.".into(),
-                ),
-            }
-        };
-        let mut readiness = s::setting_row(true)
-            .items_center()
-            .child(s::details(title, description));
-        if state == "ready" && !starting {
-            readiness = readiness
-                .child(s::description_text("Ready").text_color(crate::palette::rgb(0x8ccca4)));
-        }
-        let enabled = !busy
-            && !building
-            && state != "unknown"
-            && state != "auth-broken"
-            && self.can_manage()
-            && !self.projects.is_empty();
-        let action = if self.image.build_key.is_some() {
-            "Retry request"
-        } else {
-            match state {
-                "ready" => "Rebuild",
-                "not-built" => "Build image",
-                "failed" => "Retry build",
-                _ => "Update image",
-            }
-        };
-        let mode = if state == "ready" {
-            "rebuild"
-        } else {
-            "update"
-        };
-        if !building && state != "unknown" {
-            readiness = readiness.child(
-                s::button("build-cloud-image", action)
-                    .when(!enabled, |b| b.opacity(0.5))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if enabled {
-                            this.build_image(mode, cx);
-                        }
-                    })),
-            );
-        }
-        let mut view = s::frame()
-            .child(
-                row()
-                    .justify_between()
-                    .child(s::header(
-                        "Cloud image",
-                        "A private image with your selected repositories and installed agents.",
-                    ))
-                    .child(
-                        s::button("refresh-cloud-image", "Refresh")
-                            .when(busy, |b| b.opacity(0.5))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.image.failures = 0;
-                                this.refresh_image(cx);
-                            })),
-                    ),
-            )
-            .child(s::card().child(readiness));
-        if let Some(error) = &self.image.error {
-            view = view.child(div().px_3().py_2().text_size(px(11.)).child(error.clone()));
-        }
-        if let Some(storage) = self.image.value.as_ref().and_then(|i| i.storage.clone()) {
-            let deleting = storage.state == "deleting";
-            let description = if deleting {
-                "The saved image is being removed. Existing workspaces are preserved.".to_owned()
-            } else if storage.billing_enabled {
-                format!(
-                    "{} per month for the retained image.",
-                    zuse_model::cloud_billing::usd(storage.monthly_cost_micros)
-                )
-            } else {
-                "The image is retained. Storage charges are not enabled.".into()
-            };
-            let focus = self
-                .image
-                .delete_focus
-                .get_or_insert_with(|| cx.focus_handle())
-                .clone();
-            let id = storage.snapshot_id.clone();
-            let enabled = !busy && !building && !deleting && self.can_manage();
-            let mut row = s::setting_row(true).items_center().child(s::details(
-                if deleting {
-                    "Deleting saved image…"
-                } else {
-                    "Saved image storage"
-                },
-                description,
-            ));
-            if !deleting {
-                row = row.child(
-                    s::button("delete-cloud-image", "Delete image")
-                        .track_focus(&focus)
-                        .when(!enabled, |b| b.opacity(0.5))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if !enabled {
-                                return;
-                            }
-                            let focus = [cx.focus_handle(), cx.focus_handle(), cx.focus_handle()];
-                            window.focus(&focus[1], cx);
-                            this.image.confirm_focus = Some(focus);
-                            this.image.confirm_delete = Some(id.clone());
-                            cx.notify();
-                        })),
-                );
-            }
-            if let Some(error) = storage.last_error {
-                row = row.child(
-                    s::description_text(format!("Cleanup will retry: {error}"))
-                        .text_color(crate::palette::rgb(0xe5a0a0)),
-                );
-            }
-            view = view.child(div().mt_2().child(s::card().child(row)));
-        }
-        if let Some(image) = self.image.value.clone() {
-            let count = self.image.count.max(5);
-            if !image.builds.is_empty() {
-                let mut history =
-                    s::card().child(div().px_3().py_2().child(s::title_text("Build history")));
-                for build in image.builds.iter().take(count) {
-                    history = history.child(self.render_build(build, cx));
-                }
-                if image.builds.len() > count {
-                    history = history.child(
-                        s::button(
-                            "more-cloud-image-builds",
-                            format!("Show {} more", (image.builds.len() - count).min(5)),
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.image.count = this.image.count.max(5) + 5;
-                            cx.notify();
-                        })),
-                    );
-                }
-                view = view.child(div().mt_2().child(history));
-            }
-        }
-        if let Some(id) = self.image.confirm_delete.clone() {
-            if let Some(focus) = self.image.confirm_focus.clone() {
-                let card=s::card().id("image-delete-dialog").w(px(420.)).p_5().role(Role::Dialog).aria_label("Delete saved image?")
-                    .child(div().text_size(px(18.)).child("Delete saved image?"))
-                    .child(s::description_text("This removes the saved cloud image and stops its storage charges. Existing workspaces, conversations and files are preserved. Build another image before starting new workspaces.").mt_3())
-                    .child(row().mt_4().gap_3().justify_end()
-                        .child(s::button("cancel-image-delete","Cancel").track_focus(&focus[1]).tab_index(0).on_click(cx.listener(|this,_,window,cx|this.dismiss_image_delete(window,cx))))
-                        .child(s::button("confirm-image-delete","Delete image").track_focus(&focus[2]).tab_index(0).text_color(crate::palette::rgb(0xe5a0a0)).on_click(cx.listener(move|this,_,window,cx|{this.dismiss_image_delete(window,cx);this.delete_image(&id,cx);}))))
-                    ;
-                let overlay = div()
-                    .w(window.viewport_size().width)
-                    .h(window.viewport_size().height)
-                    .occlude()
-                    .bg(rgba(0x00000099))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .track_focus(&focus[0])
-                    .key_context("CloudImageDialog")
-                    .on_action(cx.listener(|this, _: &CancelImageDelete, window, cx| {
-                        this.dismiss_image_delete(window, cx)
-                    }))
-                    .on_action(cx.listener(|this, _: &ConfirmImageDelete, window, cx| {
-                        let confirmed = this
-                            .image
-                            .confirm_focus
-                            .as_ref()
-                            .is_some_and(|f| f[2].is_focused(window));
-                        let id = this.image.confirm_delete.clone();
-                        this.dismiss_image_delete(window, cx);
-                        if confirmed {
-                            if let Some(id) = id {
-                                this.delete_image(&id, cx);
-                            }
-                        }
-                    }))
-                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        match event.keystroke.key.as_str() {
-                            "escape" => this.dismiss_image_delete(window, cx),
-                            "tab" => {
-                                if let Some(f) = &this.image.confirm_focus {
-                                    window
-                                        .focus(&f[if f[1].is_focused(window) { 2 } else { 1 }], cx);
-                                }
-                            }
-                            "enter" | "space" => {
-                                let confirmed = this
-                                    .image
-                                    .confirm_focus
-                                    .as_ref()
-                                    .is_some_and(|f| f[2].is_focused(window));
-                                let id = this.image.confirm_delete.clone();
-                                this.dismiss_image_delete(window, cx);
-                                if confirmed {
-                                    if let Some(id) = id {
-                                        this.delete_image(&id, cx);
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                        cx.stop_propagation();
-                    }))
-                    .child(card);
-                view = view.child(deferred(
-                    anchored()
-                        .anchor(Anchor::TopLeft)
-                        .position(point(px(0.), px(0.)))
-                        .child(overlay),
-                ));
-            }
-        }
-        view
     }
     fn dismiss_image_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.image.confirm_delete = None;
@@ -452,142 +205,4 @@ impl RepositoryPanel {
         );
         cx.notify();
     }
-    fn render_build(&self, build: &CloudImageBuild, cx: &mut Context<Self>) -> Div {
-        let id = build.build_id.clone();
-        let open = self.image.expanded.contains(&id);
-        let settings = self.image.settings.contains(&id);
-        let (status, color) = match build.state.as_str() {
-            "ready" => ("Succeeded", 0x8ccca4),
-            "failed" => ("Failed", 0xe5a0a0),
-            _ => ("In progress", 0xd5bd7a),
-        };
-        let timestamp = chrono_date(build.created_at);
-        let mut header = s::button(
-            SharedString::from(format!("cloud-image-build-{id}")),
-            build_title(build),
-        )
-        .w_full()
-        .justify_start()
-        .px_3()
-        .rounded_none()
-        .child(div().flex_1())
-        .child(s::description_text(format!(
-            "{timestamp} · {}",
-            duration(build)
-        )))
-        .when(build.active, |v| {
-            v.child(s::description_text("Active").text_color(crate::palette::rgb(0x8ccca4)))
-        })
-        .child(s::description_text(status).text_color(crate::palette::rgb(color)))
-        .child(crate::assets::icon(if open {
-            "alt-arrow-down"
-        } else {
-            "alt-arrow-right"
-        }));
-        header = header.on_click(cx.listener(move |this, _, _, cx| {
-            if !this.image.expanded.remove(&id) {
-                this.image.expanded.insert(id.clone());
-            }
-            cx.notify();
-        }));
-        let mut view = column()
-            .border_t_1()
-            .border_color(s::card_border())
-            .child(header);
-        if open {
-            let logs = build
-                .log_text
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| {
-                    if build.state == "failed" {
-                        format!(
-                            "Logs were not retained for this build.\nError: {}",
-                            build.error_code.as_deref().unwrap_or("unknown")
-                        )
-                    } else if running(&build.state) {
-                        phase(build.progress_phase.as_deref()).into()
-                    } else {
-                        "Build completed. No output was retained.".into()
-                    }
-                });
-            let copy = logs.clone();
-            let id = build.build_id.clone();
-            let mut details = column().px_3().py_2().gap_2();
-            if running(&build.state) {
-                details =
-                    details.child(s::description_text(phase(build.progress_phase.as_deref())));
-            }
-            if let Some(error) = &build.error_code {
-                details = details.child(
-                    s::description_text(error.clone()).text_color(crate::palette::rgb(0xe5a0a0)),
-                );
-            }
-            details = details.child(
-                column()
-                    .rounded_md()
-                    .bg(s::frame_bg())
-                    .p_2()
-                    .child(
-                        row().justify_end().child(
-                            s::button(
-                                SharedString::from(format!("copy-image-logs-{id}")),
-                                "Copy logs",
-                            )
-                            .on_click(cx.listener(
-                                move |_, _, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
-                                },
-                            )),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("image-build-log-{id}")))
-                            .max_h(px(288.))
-                            .overflow_y_scroll()
-                            .text_size(px(10.))
-                            .line_height(px(16.))
-                            .child(logs),
-                    ),
-            );
-            details = details.child(
-                s::button(
-                    SharedString::from(format!("image-build-settings-{id}")),
-                    if settings {
-                        "Hide build settings"
-                    } else {
-                        "Build settings"
-                    },
-                )
-                .justify_start()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if !this.image.settings.remove(&id) {
-                        this.image.settings.insert(id.clone());
-                    }
-                    cx.notify();
-                })),
-            );
-            if settings {
-                details = details.child(s::description_text(format!(
-                    "Runtime {}",
-                    build.runtime_version
-                )));
-                for repository in &build.repositories {
-                    details = details.child(s::description_text(format!(
-                        "{} · {}",
-                        repository.repository_identity.replace("github.com/", ""),
-                        repository.default_branch
-                    )));
-                }
-            }
-            view = view.child(details);
-        }
-        view
-    }
-}
-fn chrono_date(at: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(at)
-        .map(|date| date.format("%Y-%m-%d %H:%M UTC").to_string())
-        .unwrap_or_else(|| "Unknown date".into())
 }

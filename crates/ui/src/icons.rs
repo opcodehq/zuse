@@ -187,6 +187,8 @@ icon_assets![
     (ANTIGRAVITY_MARK, "antigravity-mark"),
     // Site marks for compact links (`site_links`), drawn in one tint.
     (SITE_GITHUB, "site-github"),
+    (CLOUD_BOXD, "cloud-boxd"),
+    (CHECK_CIRCLE, "check-circle"),
     (SITE_GITLAB, "site-gitlab"),
     (SITE_FIGMA, "site-figma"),
     (SITE_NOTION, "site-notion"),

@@ -1,8 +1,11 @@
 //! One repository settings component shared by desktop and browser.
 use crate::{
+    assets::icon,
+    cloud_settings::style as cs,
     input::TextInput,
-    settings_style as s,
-    shell::{column, label, row},
+    palette, settings_style as s,
+    shell::{BORDER, MUTED, TEXT},
+    shell::{column, row},
 };
 use gpui::{prelude::*, *};
 use serde_json::{Value, json};
@@ -12,6 +15,11 @@ use zuse_protocol::{
     methods,
 };
 mod images;
+mod presentation;
+gpui::actions!(
+    cloud_setup_overlay,
+    [CloseRepositoryPicker, CloseImageHistory]
+);
 pub type Owner = (String, Option<String>);
 #[derive(Clone)]
 pub enum Request {
@@ -39,6 +47,13 @@ pub struct RepositoryPanel {
     error: Option<String>,
     notice: Option<String>,
     picker: bool,
+    usage_only: bool,
+    storage_usage: Option<i64>,
+    picker_focus: FocusHandle,
+    picker_trigger: FocusHandle,
+    picker_refresh: FocusHandle,
+    picker_add: FocusHandle,
+    choice_focus: BTreeMap<String, FocusHandle>,
     search: Entity<TextInput>,
     selected: BTreeSet<String>,
     queue: Vec<GithubRepository>,
@@ -48,6 +63,14 @@ impl EventEmitter<Request> for RepositoryPanel {}
 impl RepositoryPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         images::bind_keys(cx);
+        cx.bind_keys([
+            KeyBinding::new(
+                "escape",
+                CloseRepositoryPicker,
+                Some("CloudRepositoryPicker"),
+            ),
+            KeyBinding::new("escape", CloseImageHistory, Some("CloudImageHistory")),
+        ]);
         let search = cx.new(|cx| TextInput::new("Search repositories…", window, cx));
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
         Self {
@@ -61,6 +84,13 @@ impl RepositoryPanel {
             error: None,
             notice: None,
             picker: false,
+            usage_only: false,
+            storage_usage: None,
+            picker_focus: cx.focus_handle(),
+            picker_trigger: cx.focus_handle(),
+            picker_refresh: cx.focus_handle(),
+            picker_add: cx.focus_handle(),
+            choice_focus: BTreeMap::new(),
             search,
             selected: BTreeSet::new(),
             queue: vec![],
@@ -76,6 +106,7 @@ impl RepositoryPanel {
         }
         self.pending.clear();
         self.image = Default::default();
+        self.storage_usage = None;
         self.owner = owner;
         self.loaded = false;
         self.projects.clear();
@@ -83,12 +114,30 @@ impl RepositoryPanel {
         self.error = None;
         self.notice = None;
         self.picker = false;
+        self.choice_focus.clear();
         self.selected.clear();
         self.queue.clear();
         self.keys.clear();
         self.search
             .update(cx, |s, cx| s.set_value(String::new(), cx));
         cx.notify();
+    }
+    pub fn set_usage(&mut self, usage: bool, cost: Option<i64>, cx: &mut Context<Self>) -> bool {
+        if self.storage_usage != cost {
+            self.storage_usage = cost;
+            cx.notify();
+        }
+        if self.usage_only != usage {
+            self.usage_only = usage;
+            if usage && self.loaded {
+                self.refresh_image(cx);
+            }
+            cx.notify();
+        }
+        if usage && !self.loaded && self.owner.is_some() {
+            self.refresh(cx);
+        }
+        self.image.has_storage()
     }
     fn call(
         &mut self,
@@ -227,269 +276,5 @@ impl RepositoryPanel {
             .or_insert_with(|| uuid::Uuid::new_v4().to_string())
             .clone();
         self.call("connect",methods::CLOUD_PROJECT_CONNECT,json!({"repositoryUrl":repo.https_url,"defaultBranch":repo.default_branch,"visibility":if repo.is_private{"private"}else{"public"},"idempotencyKey":key}),cx);
-    }
-}
-impl Render for RepositoryPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.loaded && self.owner.is_some() {
-            self.refresh(cx);
-        }
-        let busy = self.repository_busy();
-        let can_manage = self.can_manage();
-        let mut card = s::card();
-        if self.projects.is_empty() {
-            card = card.child(
-                div()
-                    .p_4()
-                    .text_size(px(12.))
-                    .child(if self.owner.is_none() {
-                        "Sign in to manage cloud repositories."
-                    } else if busy {
-                        "Loading repositories…"
-                    } else {
-                        "No repositories included"
-                    }),
-            );
-        }
-        for project in &self.projects {
-            let id = project.project_id.clone();
-            card = card.child(
-                row()
-                    .p_3()
-                    .justify_between()
-                    .gap_3()
-                    .child(
-                        column()
-                            .gap_1()
-                            .flex_1()
-                            .min_w_0()
-                            .child(s::title_text(
-                                project.repository_identity.replace("github.com/", ""),
-                            ))
-                            .child(s::description_text(format!(
-                                "{} · {}",
-                                project.default_branch,
-                                if project.visibility
-                                    == zuse_protocol::cloud_projects::ProjectVisibility::Private
-                                {
-                                    "Private"
-                                } else {
-                                    "Public"
-                                }
-                            ))),
-                    )
-                    .child(
-                        s::button(
-                            SharedString::from(format!("remove-cloud-repository-{id}")),
-                            "Remove",
-                        )
-                        .when(busy || !can_manage, |b| b.opacity(0.5))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if this.repository_busy() || !this.can_manage() {
-                                return;
-                            }
-                            this.error = None;
-                            this.notice = None;
-                            this.call(
-                                "remove",
-                                methods::CLOUD_PROJECT_REMOVE,
-                                json!({"projectId":id}),
-                                cx,
-                            );
-                            cx.notify();
-                        })),
-                    ),
-            );
-        }
-        let available = self
-            .github
-            .as_ref()
-            .is_some_and(|g| g.installations.iter().any(|i| !i.suspended));
-        let mut trigger = div().relative().child(
-            s::button("add-cloud-repositories", "+ Repository")
-                .when(busy || !available || !can_manage, |b| b.opacity(0.5))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if this.repository_busy()
-                        || !this.can_manage()
-                        || !this
-                            .github
-                            .as_ref()
-                            .is_some_and(|g| g.installations.iter().any(|i| !i.suspended))
-                    {
-                        return;
-                    }
-                    this.picker = !this.picker;
-                    this.selected.clear();
-                    this.error = None;
-                    if this.picker {
-                        this.refresh(cx);
-                    }
-                    cx.notify();
-                })),
-        );
-        if self.picker {
-            let search = self.search.read(cx).value(cx).trim().to_lowercase();
-            let included = self
-                .projects
-                .iter()
-                .map(|p| {
-                    p.repository_identity
-                        .replace("github.com/", "")
-                        .to_lowercase()
-                })
-                .collect::<BTreeSet<_>>();
-            let repos = self
-                .github
-                .as_ref()
-                .map(|g| {
-                    g.repositories
-                        .iter()
-                        .filter(|r| {
-                            !included.contains(&r.name_with_owner.to_lowercase())
-                                && (search.is_empty()
-                                    || r.name_with_owner.to_lowercase().contains(&search)
-                                    || r.description
-                                        .as_deref()
-                                        .unwrap_or("")
-                                        .to_lowercase()
-                                        .contains(&search))
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let mut choices = column()
-                .id("cloud-repository-choices")
-                .max_h(px(260.))
-                .overflow_y_scroll();
-            for repo in &repos {
-                let name = repo.name_with_owner.clone();
-                let selected = self.selected.contains(&name);
-                choices = choices.child(
-                    s::button(
-                        SharedString::from(format!("cloud-repository-choice-{name}")),
-                        format!(
-                            "{}{}",
-                            name,
-                            if repo.is_private { " · Private" } else { "" }
-                        ),
-                    )
-                    .aria_selected(selected)
-                    .when(selected, |button| {
-                        button.child(crate::assets::icon("check"))
-                    })
-                    .w_full()
-                    .justify_start()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.selected.remove(&name) {
-                            this.selected.insert(name.clone());
-                        }
-                        cx.notify();
-                    })),
-                );
-            }
-            if repos.is_empty() {
-                choices = choices.child(
-                    div()
-                        .p_3()
-                        .text_size(px(11.))
-                        .child("No matching repositories"),
-                );
-            }
-            let menu = s::frame()
-                .w(px(420.))
-                .gap_2()
-                .p_2()
-                .border_1()
-                .border_color(s::card_border())
-                .shadow_lg()
-                .child(
-                    row()
-                        .gap_2()
-                        .child(s::field().flex_1().child(self.search.clone()))
-                        .child(s::button("close-repository-picker", "Close").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.picker = false;
-                                cx.notify();
-                            }),
-                        )),
-                )
-                .child(choices)
-                .child(
-                    row()
-                        .justify_between()
-                        .child(label(format!("{} selected", self.selected.len())))
-                        .child(
-                            s::button(
-                                "connect-selected-repositories",
-                                format!("Add {}", self.selected.len()),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if this.repository_busy() || this.selected.is_empty() {
-                                    return;
-                                }
-                                this.queue = this
-                                    .github
-                                    .as_ref()
-                                    .map(|g| {
-                                        g.repositories
-                                            .iter()
-                                            .filter(|r| this.selected.contains(&r.name_with_owner))
-                                            .cloned()
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
-                                this.picker = false;
-                                this.selected.clear();
-                                this.error = None;
-                                this.connect_next(cx);
-                                cx.notify();
-                            })),
-                        ),
-                );
-            trigger = trigger.child(deferred(
-                anchored()
-                    .anchor(Anchor::TopRight)
-                    .snap_to_window_with_margin(px(8.))
-                    .child(
-                        menu.occlude()
-                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                                this.picker = false;
-                                cx.notify();
-                            })),
-                    ),
-            ));
-        }
-        let mut view = s::frame()
-            .child(
-                row()
-                    .justify_between()
-                    .child(s::header(
-                        "Repositories",
-                        "Choose the repositories to include in your cloud image.",
-                    ))
-                    .child(trigger),
-            )
-            .child(card);
-        if let Some(error) = &self.error {
-            view = view.child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .text_size(px(11.))
-                    .child(error.clone())
-                    .child(
-                        s::button("retry-cloud-repositories", "Refresh")
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-                    ),
-            );
-        }
-        if let Some(notice) = &self.notice {
-            view = view.child(div().px_3().py_2().text_size(px(11.)).child(notice.clone()));
-        }
-        column()
-            .gap_4()
-            .child(view)
-            .child(self.render_image(window, cx))
     }
 }

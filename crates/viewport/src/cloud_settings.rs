@@ -1,4 +1,5 @@
 //! Cloud settings navigation shared by desktop and browser.
+pub(crate) mod style;
 use crate::{palette, settings_style as s};
 use gpui::{prelude::*, *};
 
