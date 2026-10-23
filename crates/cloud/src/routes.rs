@@ -53,6 +53,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             if state.runtime.is_some()
                 || state.store.billing_writes_enabled()
                 || state.store.project_writes_enabled()
+                || state.store.image_writes_enabled()
             {
                 vec![Method::GET, Method::POST, Method::PUT, Method::DELETE]
             } else {
@@ -70,6 +71,11 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/readyz", get(ready))
         .route("/v1/cloud/context", get(context))
         .route("/v1/cloud/github", get(github_catalog))
+        .route("/v1/cloud/image", get(image_status))
+        .route(
+            "/v1/cloud/image/build",
+            post(image_build).layer(DefaultBodyLimit::max(4096)),
+        )
         .route(
             "/v1/cloud/projects",
             get(project_list)
@@ -1260,4 +1266,85 @@ async fn github_catalog(
         .as_ref()
         .ok_or_else(|| ApiError::unavailable("cloud_github_unavailable"))?;
     Ok(Json(github.catalog(&access, bearer).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImageQuery {
+    provider_id: Option<String>,
+}
+async fn image_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ImageQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    if query.provider_id.as_deref().is_some_and(|p| p != "boxd") {
+        return Err(ApiError::conflict("cloud_provider_unavailable"));
+    }
+    let logs = access
+        .membership
+        .as_ref()
+        .is_none_or(|m| m.role.slug == "admin" || m.role.slug == "owner");
+    Ok(Json(
+        state.store.image_status(&access.owner_id, logs).await?,
+    ))
+}
+async fn image_build(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_projects::ImageBuildRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let access = state.access(&headers, AccessKind::Administration).await?;
+    let Json(request) = body.map_err(|_| ApiError::bad_request("invalid_image_build_request"))?;
+    let control = state
+        .store
+        .images
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_image_writes_disabled"))?;
+    // Check writer ownership before calling the legacy authorization authority.
+    control.owned(&access.owner_id).await?.rollback().await?;
+    let private:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_cloud_projects WHERE account_id=$1 AND included=true AND visibility='private')").bind(&access.owner_id).fetch_one(&control.pool).await?;
+    let github = if private {
+        if std::env::var("GITHUB_APP_ID")
+            .unwrap_or_default()
+            .is_empty()
+            || std::env::var("GITHUB_APP_PRIVATE_KEY")
+                .unwrap_or_default()
+                .is_empty()
+        {
+            return Err(ApiError::unavailable("image_github_grants_not_configured"));
+        }
+        let bearer = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|h| h.split_once(' '))
+            .map(|(_, token)| token)
+            .ok_or_else(|| ApiError::unauthorized("missing_bearer"))?;
+        Some(
+            state
+                .store
+                .github
+                .as_ref()
+                .ok_or_else(|| ApiError::unavailable("cloud_github_unavailable"))?
+                .catalog(&access, bearer)
+                .await?,
+        )
+    } else {
+        None
+    };
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(
+            state
+                .store
+                .image_build(
+                    &access,
+                    request,
+                    github,
+                    chrono::Utc::now().timestamp_millis(),
+                )
+                .await?,
+        ),
+    ))
 }

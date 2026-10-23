@@ -98,3 +98,17 @@ pub struct GithubCatalog {
     pub installations: Vec<GithubInstallation>,
     pub repositories: Vec<GithubRepository>,
 }
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageBuildMode {
+    Update,
+    Rebuild,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageBuildRequest {
+    pub mode: ImageBuildMode,
+    pub provider_id: Option<String>,
+    pub idempotency_key: String,
+}

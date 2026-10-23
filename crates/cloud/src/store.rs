@@ -8,6 +8,7 @@ use std::{str::FromStr, time::Duration};
 
 #[derive(Clone)]
 pub struct Store {
+    pub(crate) images: Option<std::sync::Arc<crate::images::ImageControl>>,
     pub(crate) github: Option<std::sync::Arc<crate::github::LegacyGithub>>,
     pub(crate) projects: Option<std::sync::Arc<crate::projects::ProjectControl>>,
     pub(crate) project_templates: std::sync::Arc<std::collections::BTreeMap<String, String>>,
@@ -46,6 +47,7 @@ impl Store {
         Ok(Self {
             pool,
             billing: None,
+            images: None,
             projects: None,
             github: None,
             project_templates: Default::default(),
@@ -57,6 +59,7 @@ impl Store {
         Self {
             pool,
             billing: None,
+            images: None,
             projects: None,
             github: None,
             project_templates: Default::default(),
@@ -69,6 +72,12 @@ impl Store {
             .fetch_one(&self.pool).await?;
         if !present {
             return Err(ApiError::unavailable("cloud_schema_not_ready"));
+        }
+        if self.images.is_some() {
+            let ready:bool=sqlx::query_scalar("SELECT to_regclass('zuse_rust_image_operations') IS NOT NULL AND to_regclass('zuse_rust_control_owners') IS NOT NULL AND to_regclass('api_provider_price_schedule') IS NOT NULL").fetch_one(&self.pool).await?;
+            if !ready {
+                return Err(ApiError::unavailable("cloud_image_schema_not_ready"));
+            }
         }
         if self.transcripts.is_some() {
             let ready: bool = sqlx::query_scalar(
@@ -89,7 +98,7 @@ impl Store {
         if !present {
             return Ok(vec![]);
         }
-        let rows = sqlx::query("SELECT to_jsonb(p) AS data, EXISTS(SELECT 1 FROM api_cloud_project_builds b WHERE b.account_id=p.account_id AND b.settings->>'rustRuntimeCheckoutProjectId'=p.project_id AND b.provider='boxd' AND b.state='ready' AND b.settings->>'runtimeRpcProtocol'='zuse-rpc-v1' AND b.settings->>'rustRuntimeStorageFormat'='zuse-rust-engine-v1' AND b.settings->>'rustSessionCommandVersion'='1' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE s.provider=b.provider AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted'))) AS prepared FROM api_cloud_projects p WHERE p.account_id=$1 AND p.included=true ORDER BY p.project_id").bind(owner).fetch_all(&self.pool).await?;
+        let rows = sqlx::query("SELECT to_jsonb(p) AS data, EXISTS(SELECT 1 FROM api_cloud_project_builds b WHERE b.account_id=p.account_id AND (b.settings->>'rustRuntimeCheckoutProjectId'=p.project_id OR b.settings->'rustRuntimeRepositoryLayouts' ? p.project_id) AND b.provider='boxd' AND b.state='ready' AND b.settings->>'runtimeRpcProtocol'='zuse-rpc-v1' AND b.settings->>'rustRuntimeStorageFormat'='zuse-rust-engine-v1' AND b.settings->>'rustSessionCommandVersion'='1' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE (s.provider=b.provider OR (b.provider='boxd' AND s.provider='box')) AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted'))) AS prepared FROM api_cloud_projects p WHERE p.account_id=$1 AND p.included=true ORDER BY p.project_id").bind(owner).fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(|r| {
             let row: Value = r.get("data"); let prepared: bool = r.get("prepared");
             json!({"projectId":row["project_id"],"displayName":row["display_name"].as_str().or(row["repository_url"].as_str()).or(row["project_id"].as_str()),"repositoryUrl":row["repository_url"],"defaultBranch":row["default_branch"].as_str().unwrap_or("main"),"state":row["state"],"prepared":prepared,"providerId":"boxd"})

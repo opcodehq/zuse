@@ -24,3 +24,5 @@ pub mod transcript;
 pub mod projects;
 
 pub mod github;
+
+pub mod images;

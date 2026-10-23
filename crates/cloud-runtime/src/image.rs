@@ -281,6 +281,12 @@ pub fn prepare(plan: &ImagePlan) -> Result<ImageManifest> {
     }
     owned_directory(&plan.home)?;
     clean_home(&plan.home)?;
+    let workspace = plan.home.join("workspace");
+    owned_directory(&workspace)?;
+    ensure!(
+        fs::read_dir(&workspace)?.next().is_none(),
+        "image_contains_user_checkout"
+    );
     owned_directory(&plan.cache_root)?;
     owned_directory(&plan.status_directory)?;
     owned_directory(&plan.secrets_root)?;

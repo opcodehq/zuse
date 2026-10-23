@@ -28,7 +28,12 @@ enum Command {
         #[arg(long)]
         snapshot: String,
     },
-    /// Drain existing billing/telemetry outboxes for accounts with explicit Rust export ownership.
+    /// Reconcile explicitly owned account image preparation and verified snapshots.
+    ImageWorker {
+        #[arg(long, default_value_t = false)]
+        once: bool,
+    },
+    /// Drain billing/telemetry outboxes for accounts with explicit Rust export ownership.
     BillingWorker {
         #[arg(long, default_value_t = false)]
         once: bool,
@@ -71,6 +76,51 @@ async fn main() -> Result<()> {
                 .await
                 .map_err(|error| anyhow::anyhow!("{}", error.code))?;
             println!("{operation}");
+        }
+        Command::ImageWorker { once } => {
+            let Some(settings) = zuse_cloud::images::ImageConfig::from_env()? else {
+                println!("Image worker disabled");
+                return Ok(());
+            };
+            let accounts = env::var("ZUSE_CLOUD_IMAGE_WRITE_ACCOUNTS")?
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect();
+            let url = env::var("ZUSE_CLOUD_DATABASE_URL")
+                .context("Image worker requires ZUSE_CLOUD_DATABASE_URL")?;
+            let control =
+                zuse_cloud::images::ImageControl::connect(&url, accounts, settings).await?;
+            let mut provider = zuse_cloud::providers::boxd::Boxd::new(
+                env::var("BOXD_API_KEY").context("Image worker requires BOXD_API_KEY")?,
+                env::var("BOXD_ORG").ok(),
+            )
+            .map_err(|_| anyhow::anyhow!("Invalid Boxd image configuration"))?;
+            if let Ok(base) = env::var("BOXD_BASE_URL") {
+                provider = provider
+                    .with_base_url(&base)
+                    .map_err(|_| anyhow::anyhow!("Invalid Boxd image endpoint"))?;
+            }
+            let issuer = zuse_cloud::images::github::GithubIssuer::from_env()?;
+            loop {
+                let result = control
+                    .work_once(
+                        &provider,
+                        issuer
+                            .as_ref()
+                            .map(|v| v as &dyn zuse_cloud::images::github::GrantIssuer),
+                    )
+                    .await;
+                if once {
+                    println!("{}", result.map_err(|e| anyhow::anyhow!("{}", e.code))?);
+                    break;
+                }
+                if let Err(error) = result {
+                    tracing::warn!(code = error.code, "Image build deferred");
+                }
+                tokio::select! {_=tokio::signal::ctrl_c()=>break,_=tokio::time::sleep(std::time::Duration::from_secs(2))=>{}}
+            }
         }
         Command::BillingWorker { once } => {
             let settings = zuse_cloud::billing::MeterExportConfig::from_env()?;
@@ -270,6 +320,22 @@ async fn main() -> Result<()> {
                     zuse_cloud::projects::ProjectControl::connect(
                         &config.database_url,
                         project_accounts,
+                    )
+                    .await?,
+                );
+            }
+            if let Some(settings) = zuse_cloud::images::ImageConfig::from_env()? {
+                let accounts = env::var("ZUSE_CLOUD_IMAGE_WRITE_ACCOUNTS")?
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                store = store.with_image_control(
+                    zuse_cloud::images::ImageControl::connect(
+                        &config.database_url,
+                        accounts,
+                        settings,
                     )
                     .await?,
                 );
