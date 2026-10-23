@@ -2,7 +2,9 @@
 mod catalog;
 mod delivery;
 mod exports;
+mod settlement;
 pub use exports::{ExportReport, MeterEvent, MeterExportConfig};
+pub use settlement::{BoxdSettlementConfig, SettlementReport};
 mod payments;
 use crate::error::ApiError;
 pub use catalog::BillingControl;

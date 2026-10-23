@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, provider-cost settlement and remaining usage sources, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources and snapshot/storage settlement, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -1855,3 +1855,65 @@ Provider report ingestion/cost settlement, additional provider sources, snapshot
 storage settlement, live provider/export acceptance and migration/cutover remain
 open. The worker exports accepted ledger outboxes; it does not turn runtime
 observations into invoice evidence. This does not complete C or G.
+
+
+### Completed Boxd report settlement
+
+The billing worker now polls closed Boxd daily usage windows with the reference
+30-minute delay, rotates at most seven historical windows plus the latest, and
+settles completed executions against original workspace/build identities. The
+provider adapter uses SDK 0.2.14 `GetOrgUsage`/`GetVmUsage` gRPC-web contracts.
+Per-machine reports must match the requested machine, time bounds, USD currency
+and completion status. Costs come from canonical reports, including retained
+resources; running observations alone cannot become customer charges.
+
+Retired-machine observations retain attribution to the original account/resource.
+Customer-connected providers, unmapped resources and incomplete reports are
+excluded. Existing event/execution finalizations prevent recharging legacy usage.
+Reports are bounded by resource creation and the explicit cutover; first-resource
+reads retain the reference quarter-hour bucket alignment. Period gaps or overlaps
+remain deferred without finalizing the execution.
+
+One fenced transaction locks the account, revalidates resource identity/config and
+all overlapping original period terms, then records every period segment, ledger
+delta, reservation removal, nonbillable cost telemetry and cent outbox together.
+Finalization commits with those writes. Included allowance, original markup,
+manual entitlement credits, cap absorption, cumulative rounding, period-specific
+provider and original event/outbox/idempotency formats are preserved. Failed
+capture or database writes leave the window event retryable; a partial execution
+cannot be finalized. Per-execution errors appear in the worker report.
+
+Settlement is default-off and independent of export. Enable only after fencing
+the old billing writer and assigning the original account's Rust billing marker:
+`BOXD_BILLING_ENABLED=true`, `BOXD_ADAPTER_ENABLED=true`, a positive whole-second
+RFC3339 `BOXD_BILLING_CUTOVER_AT`, `BOXD_API_KEY`, optional `BOXD_ORG`, and explicit
+`ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS`. Cost-only runs do not require Stripe/Polar
+credentials or export ownership. Export still requires its separate marker and
+flags. `BOXD_BASE_URL` accepts an HTTPS cluster and derives token exchange using
+the SDK's console-host rules; provider credentials do not follow redirects.
+
+Fourteen billing tests pass, including isolated PostgreSQL and actual HTTP
+provider adapters. The new workflow covers two billing periods, retained old
+machine attribution, a prepared-image build, BYOK/incomplete/unmapped exclusions,
+legacy finalization aliases, original ledger/subscription preservation, manual
+credits, cap absorption, cent outboxes, reservation removal and nonbillable
+telemetry. A database trigger interrupts the second period of a build; both
+segments roll back, then concurrent retries settle exactly once. Receipt:
+`.context/cloud-settlement-tests.log`.
+
+Three Boxd adapter checks pass, including independently SDK-generated usage
+request/response bytes through the HTTP transport, cached token exchange,
+cluster/auth URL derivation, and rejection of incomplete, non-USD, wrong-machine
+or wrong-period cost reports. Existing machine lifecycle/ambiguous-create checks
+still pass. Receipt: `.context/cloud-settlement-provider-tests.log`.
+
+The API executable builds (`.context/cloud-settlement-api-build.log`). Eight
+command checks pass without a database connection: disabled mode, missing or
+fractional cutover, adapter-off mode, missing account ownership, missing API key,
+cost-only database requirements and rejection of insecure cluster configuration.
+Receipt: `.context/cloud-settlement-cli.json`. Allocation and billing workers now
+honor the same configured Boxd cluster.
+
+Remaining scope includes other provider usage sources, snapshot/storage
+settlement, live provider acceptance and billing writer migration. No production
+flags or ownership have been transferred.

@@ -2,7 +2,7 @@
 pub mod boxd;
 #[cfg(test)]
 mod boxd_tests;
-mod boxd_wire;
+pub(crate) mod boxd_wire;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProviderError {

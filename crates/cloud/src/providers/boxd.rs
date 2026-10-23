@@ -25,9 +25,111 @@ pub struct Boxd {
     token: Mutex<Option<Token>>,
 }
 
+#[derive(Clone, Debug)]
+pub struct Usage {
+    pub machine_id: String,
+    pub vcpu: u32,
+    pub memory_bytes: u64,
+    pub cost_micros: i64,
+    pub complete: bool,
+}
+
 impl Boxd {
+    /// SDK-compatible cluster override; infrastructure secrets never follow redirects.
+    pub fn with_base_url(mut self, base: &str) -> Result<Self, ProviderError> {
+        let mut url = reqwest::Url::parse(base).map_err(|_| ProviderError::Rejected)?;
+        if url.scheme() != "https"
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(ProviderError::Rejected);
+        }
+        self.endpoint = url.as_str().trim_end_matches('/').to_owned();
+        let host = url.host_str().ok_or(ProviderError::Rejected)?.to_owned();
+        let single = host == "localhost"
+            || host.starts_with("app.")
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok();
+        if !single {
+            url.set_host(Some(&format!("app.{host}")))
+                .map_err(|_| ProviderError::Rejected)?;
+            url.set_port(None).map_err(|_| ProviderError::Rejected)?;
+        }
+        url.set_path("/api/v1/auth/token");
+        self.exchange_url = url.into();
+        Ok(self)
+    }
+
+    pub async fn organization_usage(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<Vec<Usage>, ProviderError> {
+        let (since, until) = usage_bounds(start_ms, end_ms)?;
+        let report: wire::OrgUsageResponse = self
+            .unary(
+                "GetOrgUsage",
+                wire::OrgUsageRequest {
+                    org: self.organization.clone(),
+                    since,
+                    until,
+                },
+                false,
+            )
+            .await?;
+        validate_usage_period(
+            report.period_start,
+            report.period_end,
+            &report.currency,
+            since,
+            until,
+        )?;
+        if report.total_cost_micro < 0 {
+            return Err(ProviderError::InvalidResponse);
+        }
+        report.vms.into_iter().map(usage).collect()
+    }
+
+    pub async fn machine_usage(
+        &self,
+        id: &str,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<Usage, ProviderError> {
+        machine_id(id)?;
+        let (since, until) = usage_bounds(start_ms, end_ms)?;
+        let report: wire::VmUsageResponse = self
+            .unary(
+                "GetVmUsage",
+                wire::VmUsageRequest {
+                    vm_id: id.to_owned(),
+                    org: self.organization.clone(),
+                    since,
+                    until,
+                },
+                false,
+            )
+            .await?;
+        validate_usage_period(
+            report.period_start,
+            report.period_end,
+            &report.currency,
+            since,
+            until,
+        )?;
+        let report = usage(report.usage.ok_or(ProviderError::InvalidResponse)?)?;
+        if report.machine_id != id || !report.complete {
+            return Err(ProviderError::InvalidResponse);
+        }
+        Ok(report)
+    }
+
     #[cfg(test)]
-    pub(super) fn set_test_endpoint(&mut self, endpoint: String) {
+    pub(crate) fn set_test_endpoint(&mut self, endpoint: String) {
         self.exchange_url = format!("{endpoint}/token");
         self.endpoint = endpoint;
     }
@@ -450,4 +552,81 @@ fn parse_frames(
     }
     check_status(status.ok_or(ProviderError::InvalidResponse)?, mutation)?;
     Ok(messages)
+}
+
+fn usage_bounds(start: i64, end: i64) -> Result<(i64, i64), ProviderError> {
+    if start <= 0 || end <= start || end > 9_007_199_254_740_000 || end - start > 366 * 86_400_000 {
+        return Err(ProviderError::Rejected);
+    }
+    Ok(((start + 999) / 1000, (end + 999) / 1000))
+}
+fn validate_usage_period(
+    start: i64,
+    end: i64,
+    currency: &str,
+    since: i64,
+    until: i64,
+) -> Result<(), ProviderError> {
+    if start != since || end != until || !currency.eq_ignore_ascii_case("usd") {
+        return Err(ProviderError::InvalidResponse);
+    }
+    Ok(())
+}
+fn usage(report: wire::VmUsage) -> Result<Usage, ProviderError> {
+    if report.vm_id.is_empty() || report.cost_micro < 0 || report.cost_micro > 9_007_199_254_740_991
+    {
+        return Err(ProviderError::InvalidResponse);
+    }
+    Ok(Usage {
+        machine_id: report.vm_id,
+        vcpu: report.vcpu,
+        memory_bytes: report.memory_bytes,
+        cost_micros: report.cost_micro,
+        complete: report.complete,
+    })
+}
+
+#[cfg(test)]
+mod usage_configuration_tests {
+    use super::*;
+    #[test]
+    fn cluster_exchange_matches_sdk_and_refuses_insecure_credentials() {
+        for (base, exchange) in [
+            (
+                "https://boxd.sh:9443",
+                "https://app.boxd.sh/api/v1/auth/token",
+            ),
+            (
+                "https://cluster.example:9443/",
+                "https://app.cluster.example/api/v1/auth/token",
+            ),
+            (
+                "https://app.cluster.example:8443",
+                "https://app.cluster.example:8443/api/v1/auth/token",
+            ),
+            (
+                "https://127.0.0.1:9443",
+                "https://127.0.0.1:9443/api/v1/auth/token",
+            ),
+        ] {
+            let client = Boxd::new("key".into(), None)
+                .unwrap()
+                .with_base_url(base)
+                .unwrap();
+            assert_eq!(client.exchange_url, exchange);
+        }
+        for base in [
+            "http://boxd.sh:9443",
+            "https://user:secret@boxd.sh:9443",
+            "https://boxd.sh?token=secret",
+            "https://boxd.sh#secret",
+        ] {
+            assert!(
+                Boxd::new("key".into(), None)
+                    .unwrap()
+                    .with_base_url(base)
+                    .is_err()
+            );
+        }
+    }
 }

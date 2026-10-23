@@ -118,3 +118,87 @@ pub struct ExecChunk {
     #[prost(string, tag = "11")]
     pub device_id: String,
 }
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct OrgUsageRequest {
+    #[prost(string, tag = "1")]
+    pub org: String,
+    #[prost(int64, tag = "2")]
+    pub since: i64,
+    #[prost(int64, tag = "3")]
+    pub until: i64,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct VmUsageRequest {
+    #[prost(string, tag = "1")]
+    pub vm_id: String,
+    #[prost(int64, tag = "2")]
+    pub since: i64,
+    #[prost(int64, tag = "3")]
+    pub until: i64,
+    #[prost(string, tag = "4")]
+    pub org: String,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct UsageSeconds {
+    #[prost(uint64, tag = "1")]
+    pub running: u64,
+    #[prost(uint64, tag = "2")]
+    pub standby: u64,
+    #[prost(uint64, tag = "3")]
+    pub hibernated: u64,
+    #[prost(uint64, tag = "4")]
+    pub stopped: u64,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct VmUsage {
+    #[prost(string, tag = "1")]
+    pub vm_id: String,
+    #[prost(uint32, tag = "7")]
+    pub vcpu: u32,
+    #[prost(uint64, tag = "8")]
+    pub memory_bytes: u64,
+    #[prost(uint64, tag = "9")]
+    pub disk_bytes: u64,
+    #[prost(message, optional, tag = "10")]
+    pub seconds: Option<UsageSeconds>,
+    #[prost(int64, tag = "14")]
+    pub cost_micro: i64,
+    #[prost(bool, tag = "15")]
+    pub complete: bool,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct OrgUsageResponse {
+    #[prost(string, tag = "1")]
+    pub org_id: String,
+    #[prost(string, tag = "2")]
+    pub org: String,
+    #[prost(int64, tag = "3")]
+    pub period_start: i64,
+    #[prost(int64, tag = "4")]
+    pub period_end: i64,
+    #[prost(string, tag = "5")]
+    pub currency: String,
+    #[prost(int64, tag = "7")]
+    pub total_cost_micro: i64,
+    #[prost(message, repeated, tag = "8")]
+    pub vms: Vec<VmUsage>,
+    #[prost(bool, tag = "9")]
+    pub complete: bool,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct VmUsageResponse {
+    #[prost(int64, tag = "1")]
+    pub period_start: i64,
+    #[prost(int64, tag = "2")]
+    pub period_end: i64,
+    #[prost(string, tag = "3")]
+    pub currency: String,
+    #[prost(message, optional, tag = "5")]
+    pub usage: Option<VmUsage>,
+}

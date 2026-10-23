@@ -74,7 +74,8 @@ async fn main() -> Result<()> {
         }
         Command::BillingWorker { once } => {
             let settings = zuse_cloud::billing::MeterExportConfig::from_env()?;
-            if !settings.enabled() {
+            let settlement = zuse_cloud::billing::BoxdSettlementConfig::from_env()?;
+            if !settings.enabled() && settlement.is_none() {
                 println!(
                     "{}",
                     serde_json::to_string(&zuse_cloud::billing::ExportReport::default())?
@@ -92,22 +93,54 @@ async fn main() -> Result<()> {
                 !accounts.is_empty(),
                 "Billing worker requires explicit billing account ownership configuration"
             );
-            let providers = zuse_cloud::billing::PaymentProviders::from_env()?
-                .context("Billing worker requires configured payment providers")?;
-            anyhow::ensure!(
-                !settings.financial
-                    || settings
-                        .meters
-                        .contains_key(providers.default_provider_id()),
-                "Financial export requires the default billing provider's overage meter"
-            );
+            let providers = if settings.enabled() {
+                let providers = zuse_cloud::billing::PaymentProviders::from_env()?
+                    .context("Billing export requires configured payment providers")?;
+                anyhow::ensure!(
+                    !settings.financial
+                        || settings
+                            .meters
+                            .contains_key(providers.default_provider_id()),
+                    "Financial export requires the default billing provider's overage meter"
+                );
+                Some(providers)
+            } else {
+                None
+            };
+            let provider = if settlement.is_some() {
+                let mut provider = zuse_cloud::providers::boxd::Boxd::new(
+                    env::var("BOXD_API_KEY").context("Boxd settlement requires BOXD_API_KEY")?,
+                    env::var("BOXD_ORG").ok(),
+                )
+                .map_err(|_| anyhow::anyhow!("Invalid Boxd settlement configuration"))?;
+                if let Ok(base) = env::var("BOXD_BASE_URL") {
+                    provider = provider
+                        .with_base_url(&base)
+                        .map_err(|_| anyhow::anyhow!("Invalid Boxd base URL"))?;
+                }
+                Some(provider)
+            } else {
+                None
+            };
             let url = env::var("ZUSE_CLOUD_DATABASE_URL")
                 .context("ZUSE_CLOUD_DATABASE_URL is required")?;
-            let control = zuse_cloud::billing::BillingControl::connect(&url, accounts)
+            let mut control = zuse_cloud::billing::BillingControl::connect(&url, accounts)
                 .await?
-                .with_payment_providers(providers)
                 .with_meter_exports(settings);
+            if let Some(providers) = providers {
+                control = control.with_payment_providers(providers);
+            }
             loop {
+                if let (Some(provider), Some(config)) = (&provider, settlement) {
+                    match control.settle_boxd_once(provider, config, now_ms()).await {
+                        Ok(report) => println!("{}", serde_json::to_string(&report)?),
+                        Err(error) if once => anyhow::bail!("{}", error.code),
+                        Err(error) => tracing::warn!(
+                            code = error.code,
+                            "Provider settlement maintenance failed"
+                        ),
+                    }
+                }
                 match control.export_once(now_ms(), 25).await {
                     Ok(report) => println!("{}", serde_json::to_string(&report)?),
                     Err(error) if once => anyhow::bail!("{}", error.code),
@@ -123,13 +156,17 @@ async fn main() -> Result<()> {
         }
         Command::Worker { once } => {
             let runtime = writable_runtime().await?;
-            let provider = Arc::new(
-                zuse_cloud::providers::boxd::Boxd::new(
-                    env::var("BOXD_API_KEY").context("Allocation worker requires BOXD_API_KEY")?,
-                    env::var("BOXD_ORG").ok(),
-                )
-                .map_err(|_| anyhow::anyhow!("Invalid Boxd worker configuration"))?,
-            );
+            let mut provider = zuse_cloud::providers::boxd::Boxd::new(
+                env::var("BOXD_API_KEY").context("Allocation worker requires BOXD_API_KEY")?,
+                env::var("BOXD_ORG").ok(),
+            )
+            .map_err(|_| anyhow::anyhow!("Invalid Boxd worker configuration"))?;
+            if let Ok(base) = env::var("BOXD_BASE_URL") {
+                provider = provider
+                    .with_base_url(&base)
+                    .map_err(|_| anyhow::anyhow!("Invalid Boxd base URL"))?;
+            }
+            let provider = Arc::new(provider);
             let recovery_task = if once {
                 None
             } else {

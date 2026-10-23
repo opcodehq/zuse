@@ -87,6 +87,8 @@ async fn rpc(
             }
             ("createRequest", vec!["createResponse"])
         }
+        "GetOrgUsage" => ("orgRequest", vec!["orgResponse"]),
+        "GetVmUsage" => ("machineRequest", vec!["machineResponse"]),
         "GetVm" => {
             if body.as_ref() == frame(&decode(fixture.wire["missingRequest"].as_str().unwrap())) {
                 return response(&fixture, &[], 5);
@@ -193,4 +195,66 @@ async fn sdk_wire_matches_actual_http_lifecycle_bootstrap_and_ambiguous_create()
         "One normal allocation and one ambiguous allocation; never an automatic replay"
     );
     server.abort();
+}
+
+#[tokio::test]
+async fn sdk_usage_wire_matches_http_and_rejects_incomplete_or_non_usd_costs() {
+    use prost::Message;
+    let golden: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/boxd-usage-wire.json")).unwrap();
+    for mode in ["valid", "incomplete", "currency", "period", "identity"] {
+        let mut value = golden.clone();
+        let mut report = super::boxd_wire::VmUsageResponse::decode(
+            decode(golden["machineResponse"].as_str().unwrap()).as_slice(),
+        )
+        .unwrap();
+        match mode {
+            "incomplete" => report.usage.as_mut().unwrap().complete = false,
+            "currency" => report.currency = "eur".into(),
+            "period" => report.period_end -= 1,
+            "identity" => report.usage.as_mut().unwrap().vm_id = "other".into(),
+            _ => {}
+        }
+        let encoded = report
+            .encode_to_vec()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        value["machineResponse"] = json!(encoded);
+        let fixture = Fixture {
+            wire: Arc::new(value),
+            exchanges: Arc::new(AtomicUsize::new(0)),
+            creates: Arc::new(AtomicUsize::new(0)),
+            truncate_create: Arc::new(AtomicBool::new(false)),
+            reject: Arc::new(AtomicBool::new(false)),
+        };
+        let app = axum::Router::new()
+            .route("/token", post(exchange))
+            .route("/boxd.api.v1.BoxdApi/{method}", post(rpc))
+            .with_state(fixture.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut provider = Boxd::new("fixture-api-key".into(), Some("fixture-org".into())).unwrap();
+        provider.set_test_endpoint(format!("http://{address}"));
+        let org = provider
+            .organization_usage(1700000000001, 1700086400000)
+            .await
+            .unwrap();
+        assert_eq!(org.len(), 1);
+        assert_eq!(org[0].cost_micros, 1234567);
+        let machine = provider
+            .machine_usage("vm-usage", 1700000000001, 1700086400000)
+            .await;
+        if mode == "valid" {
+            let machine = machine.unwrap();
+            assert_eq!(machine.memory_bytes, 17179869184);
+            assert_eq!(machine.vcpu, 4);
+            assert_eq!(machine.cost_micros, 1234567);
+        } else {
+            assert_eq!(machine.unwrap_err(), ProviderError::InvalidResponse);
+        }
+        assert_eq!(fixture.exchanges.load(Ordering::Relaxed), 1);
+        server.abort();
+    }
 }
