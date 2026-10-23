@@ -1,8 +1,10 @@
 // Isolated account/cloud protocol. Local workspace reads use a disposable real engine.
 import fs from 'node:fs';
 import path from 'node:path';
+import {providerSettingsFixture} from './provider-settings.mjs';
 const [ipc,ready,assets]=process.argv.slice(2);
 const clients=new Set(),events=[];
+const providerFixture=providerSettingsFixture(events);
 let state={user:null,login:null,error:null},hold=false,failNext=false,loginTimer,cloud=false,holdCloud=false;
 const delayed=[],delayedWrites=[];
 let setup={projects:null,github:null,image:null,imageError:null,projectError:null,failNextBuild:false};
@@ -24,12 +26,13 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
     if(Object.hasOwn(value,'cloud'))cloud=value.cloud;
     if(value.billing)billing={...billing,...value.billing};
     if(value.setup)setup={...setup,...value.setup};
+    if(value.providers)providerFixture.configure(value.providers);
     if(Object.hasOwn(value,'holdCloud'))holdCloud=value.holdCloud;
     if(!holdCloud)for(const [client,frame]of delayed.splice(0))emit(client,frame);
     if(!billing.holdWrites)for(const [client,frame]of delayedWrites.splice(0))emit(client,frame);
     publish();
    }
-   return Response.json({state,events,hold,billing,setup},{headers});
+   return Response.json({state,events,hold,billing,setup,providers:providerFixture.snapshot()},{headers});
   }
   if(url.pathname==='/api/session/check'||url.pathname==='/api/session')return Response.json({ok:true},{headers});
   if(url.pathname==='/api/rpc'||(url.pathname==='/'&&request.headers.get('upgrade')?.toLowerCase()==='websocket')){
@@ -50,6 +53,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
   },
   message(client,message){
    const text=message.toString(),frame=JSON.parse(text);
+   if(providerFixture.handle(client,frame,emit))return;
    if(frame.cancel){events.push({cancel:frame.id});if(client.data.handled.delete(frame.id))return;}
    if(frame.method==='CloudAccountStatus'){
     client.data.handled.set(frame.id,frame.method);if(!hold)emit(client,{id:frame.id,item:state});return;

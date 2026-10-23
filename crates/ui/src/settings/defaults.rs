@@ -555,7 +555,7 @@ impl DefaultsPage {
     }
 }
 impl Render for DefaultsPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
         let preferences = super::current(cx);
         let label = preferences
@@ -579,7 +579,7 @@ impl Render for DefaultsPage {
                 .map(|mode| widgets::SelectOption::new(mode.label())),
             selected,
         )
-        .width(256.)
+        .width(256_f32.min(f32::from(window.viewport_size().width) * 0.4))
         .on_select(|this, index, _, cx| {
             if let Some(mode) = PermissionMode::ALL.get(index) {
                 this.open = false;
@@ -594,9 +594,15 @@ impl Render for DefaultsPage {
         let trigger = div()
             .relative()
             .child(
-                widgets::text_action(&theme, widgets::ActionTone::Outlined, label)
+                widgets::action_button(&theme, widgets::ActionTone::Outlined)
                     .id("settings-default-model")
                     .w(px(256.))
+                    .max_w(window.viewport_size().width * 0.4)
+                    .h(px(28.))
+                    .min_h(px(28.))
+                    .px(px(10.))
+                    .py(px(0.))
+                    .text_size(px(12.))
                     .flex()
                     .items_center()
                     .justify_between()
@@ -604,6 +610,23 @@ impl Render for DefaultsPage {
                     .aria_label("Default model")
                     .aria_expanded(self.open)
                     .tab_index(0)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .flex_1()
+                            .min_w_0()
+                            .when_some(preferences.default_model.as_ref(), |view, selection| {
+                                let (path, tint) = pickers::harness_brand_icon(selection.provider);
+                                view.child(
+                                    icons::icon(path)
+                                        .size(px(14.))
+                                        .text_color(tint.unwrap_or(theme.text_muted)),
+                                )
+                            })
+                            .child(div().min_w_0().truncate().child(label)),
+                    )
                     .child(
                         icons::icon(icons::ALT_ARROW_DOWN)
                             .size(px(14.))
@@ -630,8 +653,8 @@ impl Render for DefaultsPage {
                 ))
             });
         let rows=widgets::section_card(&theme).mt_0()
-            .child(widgets::card_row(&theme,true).child(details(&theme,"Default model","Model for new chats.")).child(trigger))
-            .child(widgets::card_row(&theme,false).child(details(&theme,"Default permission mode","How new chats handle tool calls. Each chat can override this from the composer.")).child(permission));
+            .child(widgets::card_row(&theme,true).items_start().child(details(&theme,"Default model",&preferences.default_model.as_ref().map(|selection|format!("Model for new chats · {}",super::accounts::provider_name(selection.provider))).unwrap_or_else(||"Model for new chats.".into()))).child(trigger))
+            .child(widgets::card_row(&theme,false).items_start().child(details(&theme,"Default permission mode","How new chats handle tool calls. Each chat can override this from the composer.")).child(permission));
         let content = widgets::page_column()
             .child(widgets::section_title(&theme,"Default models","Choose how new chats start."))
             .child(widgets::section_stack().child(widgets::group(&theme,"Chat defaults","These choices apply when you start a new chat. You can still change either one from the composer.").child(rows)));
@@ -657,7 +680,7 @@ fn details(theme: &Theme, title: &str, description: &str) -> Div {
         ))
         .child(
             div()
-                .text_size(crate::typography::text_xs())
+                .text_size(px(11.))
                 .line_height(px(16.))
                 .text_color(theme.text_muted)
                 .child(SharedString::from(description.to_owned())),

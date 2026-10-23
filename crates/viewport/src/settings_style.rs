@@ -77,6 +77,13 @@ pub fn frame() -> Div {
         .p(px(4.))
 }
 pub fn header(title: impl Into<SharedString>, description: impl Into<SharedString>) -> Div {
+    header_with_action(title, description, None)
+}
+pub fn header_with_action(
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    action: Option<AnyElement>,
+) -> Div {
     let description = description.into();
     div()
         .flex()
@@ -96,6 +103,16 @@ pub fn header(title: impl Into<SharedString>, description: impl Into<SharedStrin
                     view.child(description_text(description))
                 }),
         )
+        .when_some(action, |header, action| {
+            header.child(
+                div()
+                    .h(px(CONTROL_HEIGHT))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .child(action),
+            )
+        })
 }
 pub fn card() -> Div {
     div()

@@ -198,7 +198,12 @@ impl WorkspaceView {
             .child(s::title_text(name.clone()));
         if let Some(status) = self.provider_update_status(id) {
             if let Some(version) = &status.installed_version {
-                title = title.child(s::description_text(version.clone()).text_size(px(10.)));
+                title = title.child(
+                    s::description_text(format!("v{version}"))
+                        .text_size(px(10.))
+                        .line_height(px(13.5))
+                        .font_family("Geist Mono"),
+                );
             }
             let action = if in_progress(status.phase) {
                 Some((methods::CANCEL_HARNESS_UPDATE, "Updating", "refresh"))

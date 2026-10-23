@@ -273,7 +273,7 @@ impl HarnessesPage {
         if !self.harnesses.ready().is_some_and(|items| {
             items
                 .iter()
-                .any(|item| item.id == harness && descriptor_enabled(item))
+                .any(|item| item.id == harness && (descriptor_enabled(item) || !item.installed))
         }) {
             return;
         }
@@ -301,13 +301,32 @@ impl HarnessesPage {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self
+            .harnesses
+            .ready()
+            .and_then(|items| items.iter().find(|item| item.id == harness))
+            .is_some_and(|item| !item.installed)
+        {
+            let command = zuse_providers::install::manual_command(harness);
+            return div().flex().flex_col().gap(px(6.)).px(px(12.)).pt(px(4.)).pb(px(16.))
+                .child(div().text_size(px(11.)).font_weight(gpui::FontWeight::MEDIUM).text_color(theme.text_muted).child("Install"))
+                .child(div().flex().items_center().gap(px(8.)).rounded(px(7.)).bg(theme.settings_frame_bg().opacity(0.4)).px(px(10.)).py(px(6.))
+                    .child(div().flex_1().min_w_0().font_family(theme.font_mono.clone()).text_size(px(11.)).child(command.unwrap_or("Install this agent on the execution host, then refresh its status.")))
+                    .when_some(command, |row, command| row.child(widgets::action_button(theme, widgets::ActionTone::Quiet).id("copy-provider-install").aria_label("Copy install command").role(gpui::Role::Button).tab_index(0).size(px(24.)).px_0().justify_center().child(crate::icons::icon(crate::icons::COPY).size(px(12.)).text_color(theme.text_muted)).on_click(move |_,_,cx|cx.write_to_clipboard(gpui::ClipboardItem::new_string(command.to_owned()))))))
+                .into_any_element();
+        }
         let accounts = accounts::signs_in(harness)
             .then(|| self.accounts_page.clone())
             .flatten()
             .map(|page| page.into_any_element());
-        // One quiet inset panel under the row: small section labels over
-        // compact rows, no air between the groups beyond a short gap.
-        let content = widgets::details_panel(theme)
+        // Expanded sections share the provider row's horizontal inset.
+        let content = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .px(px(12.))
+            .pt(px(4.))
+            .pb(px(16.))
             .child(self.render_completion_for(harness, theme, cx))
             .children(self.render_updates_for(harness, theme, cx))
             .when_some(accounts, |details, accounts| details.child(accounts));
@@ -806,8 +825,8 @@ impl HarnessesPage {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .text_size(crate::typography::text_xs())
-                    .line_height(crate::typography::ui_rems(16.))
+                    .text_size(px(11.))
+                    .line_height(px(14.85))
                     .text_color(theme.text_muted)
                     .map(|line| {
                         if installing {
@@ -845,122 +864,117 @@ impl HarnessesPage {
                             .size(px(16.0))
                             .text_color(tint.unwrap_or(theme.text_muted)),
                     );
-                let expanded = enabled && self.expanded_harness == Some(harness);
-                // The row's one update action sits inside the trigger, before
-                // the chevron, so it appearing never moves the chevron; the
-                // update policy lives in the expanded details.
-                let update_action =
-                    update.and_then(|status| {
-                        let (id, label, primary) = match status.phase {
-                            HarnessUpdatePhase::Available
-                            | HarnessUpdatePhase::ManualActionRequired
-                                if status.can_apply =>
-                            {
-                                ("harness-update", "Update", true)
+                let can_expand = enabled || !installed;
+                let expanded = can_expand && self.expanded_harness == Some(harness);
+                // The update action follows the version; policy remains in the details.
+                let update_action = update.and_then(|status| {
+                    let (id, label, primary) = match status.phase {
+                        HarnessUpdatePhase::Available
+                        | HarnessUpdatePhase::ManualActionRequired
+                            if status.can_apply =>
+                        {
+                            ("harness-update", "Update", true)
+                        }
+                        HarnessUpdatePhase::WaitingForIdle
+                        | HarnessUpdatePhase::Preparing
+                        | HarnessUpdatePhase::Downloading => {
+                            ("harness-update-cancel", "Cancel", false)
+                        }
+                        _ => return None,
+                    };
+                    let tooltip = match (primary, status.latest_version.as_deref()) {
+                        (true, Some(latest)) => format!("Update to v{latest}"),
+                        (true, None) => "Update to the latest version".to_owned(),
+                        (false, _) => "Cancel update".to_owned(),
+                    };
+                    let button = div()
+                        .id((id, ix))
+                        .flex_none()
+                        .h(px(24.0))
+                        .relative()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(4.0))
+                        .role(gpui::Role::Button)
+                        .aria_label(label)
+                        .tooltip(widgets::text_tooltip(tooltip))
+                        .rounded(px(6.0))
+                        .text_size(crate::typography::text_xs())
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            // Inside the details trigger: act, don't expand.
+                            cx.stop_propagation();
+                            if primary {
+                                this.apply_harness_update(harness, cx)
+                            } else {
+                                this.cancel_harness_update(harness, cx)
                             }
-                            HarnessUpdatePhase::WaitingForIdle
-                            | HarnessUpdatePhase::Preparing
-                            | HarnessUpdatePhase::Downloading => {
-                                ("harness-update-cancel", "Cancel", false)
-                            }
-                            _ => return None,
-                        };
-                        let tooltip = match (primary, status.latest_version.as_deref()) {
-                            (true, Some(latest)) => format!("Update to v{latest}"),
-                            (true, None) => "Update to the latest version".to_owned(),
-                            (false, _) => "Cancel update".to_owned(),
-                        };
-                        let button = div()
-                            .id((id, ix))
-                            .flex_none()
-                            .h(px(24.0))
-                            .relative()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(4.0))
-                            .role(gpui::Role::Button)
-                            .aria_label(label)
-                            .tooltip(widgets::text_tooltip(tooltip))
-                            .rounded(px(6.0))
-                            .text_size(crate::typography::text_xs())
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                // Inside the details trigger: act, don't expand.
-                                cx.stop_propagation();
-                                if primary {
-                                    this.apply_harness_update(harness, cx)
+                        }));
+                    Some(
+                        button
+                            .h(px(20.))
+                            .px(px(4.))
+                            .gap(px(4.))
+                            .rounded(px(4.))
+                            .text_size(px(10.))
+                            .text_color(if primary {
+                                theme.warning
+                            } else {
+                                theme.text_muted
+                            })
+                            .hover(|v| v.bg(theme.settings_frame_bg().opacity(0.6)))
+                            .child(
+                                crate::icons::icon(if primary {
+                                    crate::icons::ARROW_UP
                                 } else {
-                                    this.cancel_harness_update(harness, cx)
-                                }
-                            }));
-                        // gpui SVGs don't inherit the parent's text color, so
-                        // every glyph here sets its own ink.
-                        Some(if primary {
-                            // The composer send key's material: an olive
-                            // dither plate with white ink, labeled so it
-                            // reads as "Update" rather than a bare texture.
-                            button
-                                .pl(px(7.0))
-                                .pr(px(9.0))
-                                .overflow_hidden()
-                                .border_1()
-                                .border_color(theme.accent.opacity(0.4))
-                                .when(theme.appearance == crate::theme::Appearance::Light, |el| {
-                                    el.bg(gpui::hsla(80.0 / 360.0, 0.28, 0.2, 1.0))
+                                    crate::icons::CLOSE
                                 })
-                                .text_color(gpui::white())
-                                .hover(|style| style.opacity(0.88))
-                                .child(zuse_viewport::styling::dither_background(true, true))
-                                .child(
-                                    crate::icons::icon(crate::icons::ARROW_UP)
-                                        .relative()
-                                        .size(px(12.0))
-                                        .text_color(gpui::white()),
-                                )
-                                .child(div().relative().child(SharedString::from(label)))
-                        } else {
-                            button
-                                .size(px(24.0))
-                                .text_color(theme.text_muted)
-                                .hover(|style| style.bg(crate::theme::ink(0.05)))
-                                .child(
-                                    crate::icons::icon(crate::icons::CLOSE)
-                                        .size(px(13.0))
-                                        .text_color(theme.text_muted),
-                                )
-                        })
-                    });
+                                .size(px(14.))
+                                .text_color(if primary {
+                                    theme.warning
+                                } else {
+                                    theme.text_muted
+                                }),
+                            )
+                            .when(primary, |v| {
+                                v.child(SharedString::from(
+                                    status
+                                        .latest_version
+                                        .as_ref()
+                                        .map(|v| format!("v{v}"))
+                                        .unwrap_or_else(|| "Update".into()),
+                                ))
+                            }),
+                    )
+                });
                 let header = widgets::card_row(&theme, ix == 0)
                     .py(px(8.))
                     .min_h(px(48.))
                     .gap(px(12.))
                     .id(("harness-row", ix))
-                    .when(!installed && self.installing != Some(harness), |el| {
-                        el.opacity(0.55)
+                    .when(can_expand, |el| {
+                        el.hover(|s| s.bg(theme.settings_frame_bg().opacity(0.3)))
                     })
                     .child(
                         div()
                             .id(("harness-details-trigger", ix))
                             .group(format!("harness-details-{ix}"))
                             .flex_1()
-                            .min_w(px(180.0))
+                            .min_w_0()
                             .min_h(px(28.0))
                             .rounded(px(7.0))
                             .flex()
                             .flex_row()
                             .items_center()
                             .gap(px(12.0))
-                            .when(enabled, |el| {
+                            .when(can_expand, |el| {
                                 el.role(gpui::Role::Button)
                                     .aria_label(format!("{} preferences", descriptor.name))
                                     .aria_expanded(expanded)
                                     .tab_index(0)
                                     .cursor_pointer()
-                                    // No hover slab (it stopped short of the
-                                    // toggle and boxed the row); the chevron
-                                    // lifts instead, like a list disclosure.
                                     .focus_visible(|s| s.border_2().border_color(theme.accent))
                                     .on_click(cx.listener(move |page, _, _, cx| {
                                         page.toggle_agent_details(harness, cx)
@@ -979,7 +993,7 @@ impl HarnessesPage {
                                         },
                                     ))
                             })
-                            .child(tile)
+                            .child(tile.when(!enabled, |v| v.opacity(0.6)))
                             .child(
                                 div()
                                     .flex_1()
@@ -1000,15 +1014,16 @@ impl HarnessesPage {
                                                     div()
                                                         .flex_none()
                                                         .font_family(theme.font_mono.clone())
-                                                        .text_size(crate::typography::text_xs())
+                                                        .text_size(px(10.))
+                                                        .line_height(px(13.5))
                                                         .text_color(theme.text_muted)
                                                         .child(version),
                                                 )
-                                            }),
+                                            })
+                                            .children(update_action),
                                     )
                                     .child(status_line),
                             )
-                            .children(update_action)
                             // Install / Cancel sit with the row's other
                             // action, before the caret, so carets line up.
                             .when(
@@ -1090,7 +1105,7 @@ impl HarnessesPage {
                             .items_center()
                             .justify_center()
                             .rounded(px(7.))
-                            .when(enabled, |button| {
+                            .when(can_expand, |button| {
                                 button
                                     .role(gpui::Role::Button)
                                     .aria_label(format!("{} preferences", descriptor.name))
@@ -1116,13 +1131,13 @@ impl HarnessesPage {
                             })
                             .child(
                                 crate::icons::icon(if expanded {
-                                    crate::icons::ALT_ARROW_DOWN
+                                    crate::icons::ALT_ARROW_UP
                                 } else {
-                                    crate::icons::ALT_ARROW_RIGHT
+                                    crate::icons::ALT_ARROW_DOWN
                                 })
                                 .size(px(14.))
                                 .text_color(
-                                    theme.text_muted.opacity(if enabled { 1. } else { 0.35 }),
+                                    theme.text_muted.opacity(if can_expand { 1. } else { 0.35 }),
                                 ),
                             ),
                     );
@@ -1322,7 +1337,7 @@ impl Render for HarnessesPage {
             .gap(px(6.))
             .child(
                 div()
-                    .text_size(crate::typography::text_xs())
+                    .text_size(px(10.))
                     .text_color(theme.text_muted)
                     .child(status),
             )

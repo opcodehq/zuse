@@ -56,7 +56,9 @@ impl Section {
     }
     fn description(self) -> &'static str {
         match self {
-            Self::Cloud => "Connect GitHub and your coding agents, then keep work running when this app is closed.",
+            Self::Cloud => {
+                "Connect GitHub and your coding agents, then keep work running when this app is closed."
+            }
             Self::General => "Workspace defaults and your personal app preferences.",
             Self::Providers => {
                 "Verify what’s installed, signed in, and which subscription each provider runs on."
@@ -528,6 +530,8 @@ impl WorkspaceView {
                 s::button("settings-default-model", "")
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .w_full()
+                    .px(px(10.))
+                    .text_size(px(12.))
                     .justify_between()
                     .role(Role::ComboBox)
                     .aria_label(format!("Default model: {label}"))
@@ -594,6 +598,8 @@ impl WorkspaceView {
             .child(
                 s::button("settings-default-permission", selected.label())
                     .w(px(256.))
+                    .px(px(10.))
+                    .text_size(px(12.))
                     .justify_between()
                     .role(Role::ComboBox)
                     .tab_index(0)
@@ -708,7 +714,12 @@ impl WorkspaceView {
                 self.default_permission_menu = !self.default_permission_menu;
             }
             "up" | "down" if self.default_permission_menu => {
-                self.default_permission_active = 1 - self.default_permission_active
+                let count = PermissionMode::ALL.len();
+                self.default_permission_active = if event.keystroke.key == "up" {
+                    (self.default_permission_active + count - 1) % count
+                } else {
+                    (self.default_permission_active + 1) % count
+                };
             }
             "home" if self.default_permission_menu => self.default_permission_active = 0,
             "end" if self.default_permission_menu => {

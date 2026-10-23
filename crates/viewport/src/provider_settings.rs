@@ -121,7 +121,8 @@ impl WorkspaceView {
                     let installed = provider["installed"] != false;
                     let enabled = provider["enabled"].as_bool().unwrap_or(installed);
                     let busy = self.provider_actions.values().any(|pending| pending == &id);
-                    let open = self.provider_expanded.as_deref() == Some(&id);
+                    let can_expand = enabled || !installed;
+                    let open = can_expand && self.provider_expanded.as_deref() == Some(&id);
                     let account = self.accounts["accounts"]
                         .as_array()
                         .into_iter()
@@ -150,12 +151,12 @@ impl WorkspaceView {
                                         .rounded_full()
                                         .bg(rgb(if account.is_some() { 0x89ca21 } else { MUTED })),
                                 )
-                                .child(s::description_text(status))
+                                .child(s::description_text(status).line_height(px(14.85)))
                                 .when_some(
                                     account
                                         .and_then(|account| account["email"].as_str())
                                         .map(str::to_owned),
-                                    |row, email| row.child(s::description_text(zuse_protocol::presentation::masked_email(&email))),
+                                    |row, email| row.child(s::description_text(zuse_protocol::presentation::masked_email(&email)).line_height(px(14.85))),
                                 ),
                         );
                     let toggle_provider = id.clone();
@@ -168,6 +169,7 @@ impl WorkspaceView {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         if installed && !busy {
+                            if enabled { this.provider_expanded = None; }
                             this.provider_action(
                                 toggle_provider.clone(),
                                 methods::SET_HARNESS_ENABLED,
@@ -183,28 +185,25 @@ impl WorkspaceView {
                         .gap(px(12.))
                         .px(px(12.))
                         .py(px(8.))
-                        .cursor_pointer()
-                        .hover(|view| view.bg(s::frame_bg().opacity(0.3)))
+                        .when(can_expand, |view| view.cursor_pointer().hover(|v| v.bg(s::frame_bg().opacity(0.3))))
                         .child(
                             row()
                                 .size(px(28.))
                                 .justify_center()
                                 .rounded(px(7.))
                                 .bg(s::frame_bg().opacity(0.6))
+                                .when(!enabled, |view| view.opacity(0.6))
                                 .child(icon(provider_icon(&id)).size(px(16.))),
                         )
-                        .child(summary)
+                        .child(summary.when(!enabled, |view| view.opacity(0.6)))
                         .child(toggle)
                         .child(crate::shell::icon_button(
                             ("configure-provider", index),
-                            if open {
-                                "alt-arrow-down"
-                            } else {
-                                "alt-arrow-right"
-                            },
+                            if open { "alt-arrow-up" } else { "alt-arrow-down" },
                             "Configure provider",
-                        ))
+                        ).tab_index(if can_expand { 0 } else { -1 }).when(!can_expand, |view| view.opacity(0.35)))
                         .on_click(cx.listener(move |this, _, window, cx| {
+                            if !can_expand { return; }
                             this.provider_expanded =
                                 if this.provider_expanded.as_deref() == Some(&expand) {
                                     None
@@ -229,7 +228,7 @@ impl WorkspaceView {
                         })
                         .child(header);
                     if open {
-                        let mut details = column().gap(px(12.)).px(px(12.)).pt(px(4.)).pb(px(16.));
+                        let mut details = column().gap(px(16.)).px(px(12.)).pt(px(4.)).pb(px(16.));
                         if !installed && provider["canInstall"] != true {
                             let command = serde_json::from_value::<zuse_protocol::HarnessId>(json!(id)).ok().and_then(zuse_protocol::provider_setup::manual_command);
                             details = details.child(s::details("Install agent", command.unwrap_or("Install this agent on the execution host, then refresh its status.")));
@@ -371,7 +370,7 @@ impl WorkspaceView {
                     }
                     card
                 });
-        s::frame().child(s::header("Agent providers","Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.").child(refresh))
-            .child(s::card().when_some(self.provider_error.clone(),|card,error|card.child(div().px_3().py_2().text_size(px(11.)).text_color(rgb(0xf87171)).child(error))).children(rows).when_some(self.provider_updates_error.clone(),|card,error|card.child(s::description_text(error).px_3().py_2()))).child(self.custom_acp_settings(cx)).into_any_element()
+        column().gap(px(16.)).child(s::frame().child(s::header_with_action("Agent providers","Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.",Some(refresh.into_any_element())))
+            .child(s::card().when_some(self.provider_error.clone(),|card,error|card.child(div().px_3().py_2().text_size(px(11.)).text_color(rgb(0xf87171)).child(error))).children(rows).when_some(self.provider_updates_error.clone(),|card,error|card.child(s::description_text(error).px_3().py_2())))).child(self.custom_acp_settings(cx)).into_any_element()
     }
 }
