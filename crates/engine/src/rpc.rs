@@ -1702,6 +1702,7 @@ fn forwardable(method: &str) -> bool {
             | methods::DISCARD_WORKING_TREE
             | methods::GET_CHECKOUT_FILE_DIFF_TEXT
             // Terminals live on the chat's host device.
+            | methods::LIST_TERMINALS
             | methods::OPEN_TERMINAL
             | methods::SUBSCRIBE_TERMINAL
             | methods::WRITE_TERMINAL
@@ -4688,6 +4689,10 @@ impl RpcService for EngineRpc {
                 .map_err(|err| RpcError::Failed(err.to_string()))?;
                 RpcReply::value(&run)
             }
+            methods::LIST_TERMINALS => {
+                let p: ChatParams = parse_params(params)?;
+                RpcReply::value(&self.terminals.list_owned(&p.chat_id))
+            }
             methods::OPEN_TERMINAL => {
                 let p: OpenTerminalParams = parse_params(params)?;
                 // Prefer an explicit real path (new-chat canvas has no row
@@ -4715,7 +4720,7 @@ impl RpcService for EngineRpc {
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
                 let session = self
                     .terminals
-                    .open(&cwd, p.cols, p.rows)
+                    .open_owned(&p.chat_id, &cwd, p.cols, p.rows)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&session)
             }

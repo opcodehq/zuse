@@ -38,6 +38,8 @@ const EXITED_TTL: Duration = Duration::from_secs(30 * 60);
 const REAPER_INTERVAL: Duration = Duration::from_secs(60);
 
 struct LiveTerminal {
+    owner: Option<String>,
+    description: TerminalSession,
     cwd: std::path::PathBuf,
     // Keep the private action script alive until the shell exits or the tab is closed.
     initial_script: Option<tempfile::NamedTempFile>,
@@ -168,6 +170,35 @@ impl Terminals {
     /// [`Self::close`], shell exit + TTL, or engine shutdown.
     pub fn open(&self, cwd: &str, cols: u16, rows: u16) -> Result<TerminalSession, EngineError> {
         self.open_with_environment(cwd, cols, rows, &HashMap::new())
+    }
+
+    /// UI shells belong to a chat on this execution environment. Discovery never
+    /// creates a process and does not expose project-action or other-chat PTYs.
+    pub fn open_owned(
+        &self,
+        owner: &str,
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalSession, EngineError> {
+        let session = self.open(cwd, cols, rows)?;
+        let live = self.session(&session.id)?;
+        lock(&live).owner = Some(owner.into());
+        Ok(session)
+    }
+
+    pub fn list_owned(&self, owner: &str) -> Vec<TerminalSession> {
+        let sessions = lock(&self.inner.sessions);
+        let mut result = sessions
+            .values()
+            .filter_map(|session| {
+                let session = lock(session);
+                (session.owner.as_deref() == Some(owner) && !session.exited)
+                    .then(|| session.description.clone())
+            })
+            .collect::<Vec<_>>();
+        result.sort_by(|a, b| a.id.cmp(&b.id));
+        result
     }
 
     /// Open a login shell with host-resolved environment overrides.
@@ -305,6 +336,12 @@ impl Terminals {
         let id = new_id();
         let session = Arc::new(Mutex::new(LiveTerminal {
             cwd: std::path::PathBuf::from(cwd),
+            owner: None,
+            description: TerminalSession {
+                id: id.clone(),
+                cwd: cwd.into(),
+                shell: shell_name.clone(),
+            },
             initial_script,
             #[cfg(all(test, windows))]
             process_id: child.process_id().expect("ConPTY child has a process id"),

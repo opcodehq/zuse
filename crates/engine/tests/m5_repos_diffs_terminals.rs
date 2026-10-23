@@ -2525,6 +2525,9 @@ async fn rpc_dispatch_for_m5_methods() {
         .await
         .expect("OpenTerminal on canvas");
     assert_eq!(canvas["cwd"], repo_path);
+    assert_eq!(client.call(methods::LIST_TERMINALS, serde_json::json!({"chatId":"chat-term"})).await.unwrap(),serde_json::json!([session.clone()]));
+    assert_eq!(client.call(methods::LIST_TERMINALS, serde_json::json!({"chatId":"space-canvas:space-term"})).await.unwrap(),serde_json::json!([canvas.clone()]));
+    assert_eq!(client.call(methods::LIST_TERMINALS, serde_json::json!({"chatId":"another-chat"})).await.unwrap(),serde_json::json!([]));
     client
         .call(
             methods::CLOSE_TERMINAL,
@@ -2586,6 +2589,8 @@ async fn rpc_dispatch_for_m5_methods() {
             break;
         }
     }
+    drop(stream);
+    assert_eq!(client.call(methods::LIST_TERMINALS, serde_json::json!({"chatId":"chat-term"})).await.unwrap(),serde_json::json!([session]));
     let resized = client
         .call(
             methods::RESIZE_TERMINAL,
@@ -2602,6 +2607,7 @@ async fn rpc_dispatch_for_m5_methods() {
         .await
         .expect("CloseTerminal");
     assert_eq!(closed["ok"], true);
+    assert_eq!(client.call(methods::LIST_TERMINALS, serde_json::json!({"chatId":"chat-term"})).await.unwrap(),serde_json::json!([]));
     let err = client
         .call(
             methods::WRITE_TERMINAL,

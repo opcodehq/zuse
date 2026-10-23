@@ -176,7 +176,7 @@ impl WorkspaceView {
             "pullRequests" => self.refresh_pull_requests(cx),
             "terminal" if self.terminal_id.is_none() => {
                 if !self.restore_browser_terminal(cx) {
-                    self.open_browser_terminal(cx);
+                    self.discover_browser_terminals(cx);
                 }
             }
             _ => {}

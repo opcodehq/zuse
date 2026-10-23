@@ -13,7 +13,7 @@ completed UI images in the final user-facing report.
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, app captures/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect, cached reopening with conversation selection, encrypted first-message file delivery, and attached Pause/explicit retained-machine resume added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status/delete APIs, durable Boxd capture/read-back/promotion/retirement/cleanup worker and shared image deletion confirmation, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
-| D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
+| D: tools/integrations | Shared hosted RPC, scoped browser uploads and chat-owned retained-terminal discovery added; browser file/edit/Git and native terminal keyboard/reopen acceptance added; remaining tools, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads, browser file/edit/Git, terminal catalog/detach/reopen and native keyboard input pass with fixture runtime; remaining tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray, archived cloud transcript screens and shared Cloud repositories/image controls added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
@@ -160,8 +160,8 @@ repository, startup rendered in the attached composer tray, and the guest's orig
 conversation appeared. Closing its window and using the refreshed Connect row
 reopened the same history. The real Axum/PostgreSQL/guest acceptance passed with
 one allocation and exactly one provider turn. The provider is deterministic; this
-is not live-provider or Mac acceptance. A native guest terminal opened and showed
-the checkout prompt; keyboard input was not verified in the headless X11 run.
+is not live-provider or Mac acceptance. A native guest terminal initially verified only the checkout prompt. The retained-terminal
+section below now verifies native keyboard input and window closure/reopening.
 Fresh profiles can reach the composer through the existing Start without a project
 action, now also available on the initial onboarding screen.
 
@@ -2476,3 +2476,48 @@ Verified:
 Live provider and Mac acceptance, existing runtime migration, complete environment
 controls and the rest of the milestone ledger remain open. This does not complete
 Milestone B, E or F or enable production ownership changes.
+
+
+### Owned terminals and cloud file/Git tools
+
+`ListTerminals` reads the execution engine's live, chat-owned terminal catalog.
+`OpenTerminal` records the original chat owner. Catalog reads neither allocate a
+shell nor return another chat's sessions, project-action PTYs or exited shells.
+The existing target-device forwarding and cloud broker carry these reads through
+the same supervisor used for chat, files, Git and terminal input/output.
+
+The browser terminal panel and native bottom terminal drawer reconcile that
+catalog before opening their first shell. They reattach the original terminal
+identity and bounded replay stream after client/window closure. An uncertain
+catalog read shows an error rather than creating an extra process. Explicit plus
+still creates another tab; explicit Close terminates its process. Detaching a
+restored native view never closes the adopted shell merely because its attachment
+callback lost the view. The browser's chat host labels now identify Cloud.
+
+Verification:
+
+- Focused engine RPC integration covers separate chat/canvas catalogs, detach,
+  original identity and close/removal: `.context/cloud-tools-rpc-final-test.log`.
+- Compiled browser -> host -> Axum/PostgreSQL -> packaged guest: terminal command
+  creates a file in the selected guest checkout; file panel reads, edits and saves
+  it; Changes displays its actual Git diff. Closing/reloading the browser and
+  reopening the terminal retains its ID, PID, shell variable and replay without
+  another OpenTerminal. Reproducible scenario:
+  `ZUSE_CLOUD_TOOLS_ACCEPTANCE=1 node scripts/acceptance/cloud-launch.mjs`
+  with the existing composer fixture environment.
+- Native Linux attaches the browser-created shell, accepts clipboard/keyboard
+  input, writes the guest checkout, and retains the same PID/variable after its
+  window closes and reopens. Explicit browser Close terminates that shared shell.
+  `.context/cloud-tools-native-acceptance.json`,
+  `.context/cloud-tools-shared-native-wire-proof.json`,
+  `.context/cloud-tools-api.log`. The fixture verifies one allocation and one
+  provider turn across both frontends.
+- Host/guest, browser and native builds pass. UI:
+  `.context/cloud-tools-native-terminal.png`,
+  `.context/cloud-tools-retained-browser.png`, `.context/cloud-tools-git-browser.png`.
+
+Native right-dock terminal placement/catalog restoration, full local-versus-cloud
+terminal selection with a synchronized checkout, remaining tool/integration flows,
+full screen parity, live-provider/Mac acceptance and migration remain open. Terminal
+processes survive client detachment; runtime pause/shutdown still intentionally
+stops them. This chunk does not complete Milestone D or F.

@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {engine,browser,fixture,artifact,sleep} from './harness.mjs';
+import {beforeCloudTools,afterCloudTools} from './cloud-tools.mjs';
 let host,page,stage='startup';
 const file=process.env.ZUSE_CLOUD_LAUNCH_UI_FIXTURE_FILE;
 try {
@@ -45,6 +46,11 @@ try {
     }
     page.screenshot('cloud-launch-streamed-chat.png');
     const workspace=page.evaluate('window.__cloudLaunch.creates[0]');
+    if(process.env.ZUSE_CLOUD_TOOLS_ACCEPTANCE==='1') { stage='workspace-tools';await beforeCloudTools(page,file); }
+    if(process.env.ZUSE_CLOUD_TOOLS_MANUAL==='1') {
+      fs.writeFileSync(file.replace(/\.[^.]+$/,'.tools-ready'),'ready');
+      while(!fs.existsSync(file.replace(/\.[^.]+$/,'.tools-done')))await sleep(300);
+    }
     stage='close-client';page.run(['reload']);
     page.wait('window.__cloudLaunch?.methods.includes("WatchChats")');await sleep(250);
     page.click(657,849);
@@ -58,6 +64,11 @@ try {
     page.wait('window.__cloudLaunch.status.some(s=>s.state==="ready")');
     page.wait('window.__cloudLaunch.forwards.some(f=>f.reply)');await sleep(2500);
     page.screenshot('cloud-composer-connected.png');
+    if(process.env.ZUSE_CLOUD_TOOLS_ACCEPTANCE==='1') { stage='retained-terminal';await afterCloudTools(page,file); }
+    if(process.env.ZUSE_CLOUD_TOOLS_MANUAL==='1') {
+      fs.writeFileSync(file.replace(/\.[^.]+$/,'.tools-reconnected'),'ready');
+      while(!fs.existsSync(file.replace(/\.[^.]+$/,'.tools-reconnect-done')))await sleep(300);
+    }
     if(process.env.ZUSE_CLOUD_UPLOAD_ACCEPTANCE==='1') {
       stage='cloud-attachments';page.click(600,895);
       const note=Array.from(Buffer.from('cloud attachment bytes\n'));

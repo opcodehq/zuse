@@ -17,6 +17,8 @@ impl WorkspaceView {
             .is_some_and(|id| Some(id) != self.device_id.as_deref())
         {
             "Other computer"
+        } else if self.cloud.guest {
+            "Cloud"
         } else if self.account_remote {
             "Account computer"
         } else if self.paired {
