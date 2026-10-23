@@ -14,9 +14,9 @@ completed UI images in the final user-facing report.
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
-| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Encrypted transcript contracts, R2 transport, journaled native guest projections, cached read transport and native/browser archived transcript views added; archived files, backup/retirement/restore/delete and migration remain | Retained guest-process, host-broker and rendered browser archive acceptance passed; live provider and recovery acceptance pending |
+| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Encrypted transcript contracts, R2 transport, journaled native guest projections, cached read transport and native/browser archived transcript views and a packaged full-state recovery helper added; archive object routes, retirement orchestration, authorized replacement enrollment, archived files, permanent deletion and migration remain | Retained guest-process, rendered browser and packaged recovery-helper acceptance passed; end-to-end machine retirement, replacement-runtime continuation and live-provider recovery acceptance pending |
 | F: complete GPUI parity | Archived cloud transcript screens added to native/browser settings; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive workflow pass; native visual and full-screen audits pending |
-| G: migration/cutover | Read-only inspection added; ownership handoff, guest conversion, archive migration and live cutover pending | Pending |
+| G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
 
 Do not mark a milestone complete from compilation alone. Record tested behavior and remaining gates here.
 
@@ -965,3 +965,92 @@ current `dist/web`. The browser drives the real host, saves screenshots/receipt,
 and writes the corresponding `.done` file; the fixture verifies paused compute
 before removing its isolated schema. Keep this test identity and fixture loopback
 only. Normal acceptance does not set the UI fixture variable.
+
+
+### Packaged full-state recovery helper
+
+`zuse-cloud-runtime recover` now implements the existing helper environment
+contract in Rust. It reads `ZUSE_USER_DATA`/`--data-dir` and a private
+`ZUSE_ARCHIVE_CONFIG` containing the original operation/workspace/chat/session,
+home/repository roots, scoped object URL/capability, archive key, expiry and
+`backup` or `restore` mode. Rust data additionally pins `rustStorage.database`
+(relative to the data root), `accountId` and `storageIncarnationId`; absent
+`rustStorage` selects the original `data/zuse.sqlite` adapter. Neither mode starts
+an engine, creates a database, enrolls a runtime, wakes compute or deletes a
+machine. CLI success distinguishes `workspace_archive_uploaded` from
+`workspace_archive_restored`.
+
+The helper takes the shared runtime lock (including the verified inherited
+launcher descriptor) and existing engine instance lock. Capture includes runtime
+data, WAL/SHM, repositories/worktrees, Git refs, tracked/deleted/untracked files,
+ignored user files, attachments, engine journals and supported Claude/Codex
+continuation roots. It checks source metadata for mutation and validates an
+extracted copy before publication. Rust validation checks full SQLite integrity,
+the original workspace/account/storage identity, registry chat IDs and session
+document identity. Legacy validation checks the original chat/session tables and
+supported native providers. Unsupported native-agent layouts fail without
+publishing a backup.
+
+Reusable login/provider credentials, model vaults, old runtime credentials and
+enrollment marker, GitHub broker credentials, account logins, pairing keys,
+managed-device identities, relay settings and browser access tokens are excluded
+at their device/profile locations. Public device IDs and durable conversation
+state remain. Codex capture is restricted to sessions, archived sessions, session
+index and native state databases/sidecars. Internal recovery journals are not
+recaptured. External symlinks and unsupported entries fail; archive extraction
+rejects traversal, duplicate paths, non-directory roots, hardlinks and symlink
+parents before installation.
+
+The transport preserves the original version-one manifest, gzip/tar root names,
+4 MiB plaintext chunk size, standard-base64 AES-256-GCM envelope and
+workspace/operation/chunk-order AAD. Chunks are addressed by SHA-256 of their
+encoded ciphertext. A private operation journal retains exact ciphertext through
+upload retry; the manifest is uploaded last. The guest's original upload-only
+capability is never used for reads. `Recovery::verify` is a separate privileged
+read-back operation: it rereads/authenticates every chunk, checks the full archive
+digest and validates the reconstructed database. Its local verification receipt
+is **not** a control-plane retirement barrier and cannot authorize deletion.
+
+Restore authenticates the manifest and every chunk before staged extraction,
+validation and journaled entry installation. It refuses an occupied runtime data
+store, including another account/profile's database, before changing repositories.
+Existing prepared-image entries are preserved under each root's
+`.zuse-archive/<operation>/previous`. Recovery locks stay in place during install.
+Interrupted installation can retry without rewinding installed files or newer
+work. A completed receipt is written after validation and fsync. Failed capture,
+upload, verification or restoration leaves the source/archive/partial target
+available; no recovery helper path authorizes retirement.
+
+Verified with all **19 runtime checks passing**, including the packaged binary
+against a real loopback HTTP object fixture with separate upload-only and
+read-only capabilities. The filesystem round trip covers a 350-message WAL
+history, held queue, processed-command claim, uncertain journal, attachment,
+random multi-chunk file, ignored `.env`, raw-byte filename, branch/tag refs, a
+second Git worktree, tracked modifications/deletion and fresh target identity.
+Tests also cover interrupted upload and install, corrupted remote reads, original
+Python tar/Node ciphertext import, wrong account/storage identity, occupied target
+protection, source locks and inherited launcher lock ownership. Subsequent writes
+to the original restored conversation survive an idempotent retry. This is data
+continuity evidence, not live provider/SDK agent continuation acceptance.
+
+Reproduce after building the guest:
+
+```sh
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3 \
+  cargo build --locked -p zuse-cloud-guest
+ZUSE_CLOUD_TEST_GUEST_BIN="$PWD/target/debug/zuse-cloud-runtime" \
+  CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3 \
+  cargo test --locked -p zuse-cloud-runtime --features engine -- --include-ignored
+```
+
+Remaining before any retirement enablement: original archive object/capability
+routes and their persisted operations; cancellation/deletion fencing; privileged
+verification wired to a durable source-machine retirement barrier; exact-machine
+provider destruction and retry; recovery usage attribution; compatible replacement
+allocation and authorized storage adoption with fresh runtime enrollment; live
+provider continuation acceptance. The transcript R2 adapter's current 4 MiB bound
+also needs an isolated archive-object path supporting the original encrypted
+chunk wire limit (6 MiB), while retaining transcript limits. Ordinary storage
+admission still refuses a populated unbound replacement; the restore helper does
+not bypass it. Recovery remains default-off and retention expiry still never
+requests machine destruction.

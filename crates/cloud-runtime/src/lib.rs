@@ -29,3 +29,6 @@ pub mod lifecycle;
 
 #[cfg(feature = "engine")]
 pub mod projection;
+
+#[cfg(feature = "engine")]
+pub mod recovery;

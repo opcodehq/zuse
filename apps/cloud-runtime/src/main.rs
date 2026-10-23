@@ -41,6 +41,8 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     Mcp,
+    /// Capture or restore a fenced workspace using its scoped archive capability.
+    Recover,
 }
 fn main() -> Result<()> {
     if zuse_engine::command_host::requested() {
@@ -59,6 +61,18 @@ async fn run() -> Result<()> {
     let args = Args::parse();
     if matches!(args.command, Some(Command::Mcp)) {
         return zuse_mcp::run(zuse_mcp::McpConfig::from_env()).await;
+    }
+    if matches!(args.command, Some(Command::Recover)) {
+        let data = args
+            .data_dir
+            .ok_or_else(|| anyhow::anyhow!("runtime_data_directory_required"))?;
+        let config = std::env::var("ZUSE_ARCHIVE_CONFIG")
+            .map_err(|_| anyhow::anyhow!("recovery_config_required"))?;
+        let outcome = zuse_cloud_runtime::recovery::run(data, &config)
+            .await
+            .map_err(|_| anyhow::anyhow!("workspace_recovery_failed"))?;
+        println!("{}", outcome.phase());
+        return Ok(());
     }
     let workspace = args
         .workspace_id
