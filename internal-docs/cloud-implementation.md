@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -2022,3 +2022,60 @@ Image preparation/rebuild execution, account image configuration/status, live
 account provider/connection resolution, GitHub enrollment and repository
 administration UI remain open. This implements repository catalog operations,
 not all image parity.
+
+
+### Shared native/browser repository settings
+
+A shared GPUI repository panel is connected through the root host account authority.
+The new scoped RPCs list/connect/remove repositories and fetch the GitHub catalog;
+clients carry their expected account/organization and the host rejects stale scope
+before issuing HTTP requests. Remove uses the original DELETE contract. Reads do
+not obtain environment transport; connect/remove are never automatically replayed.
+The panel clears account state, cancels pending view requests, retains per-repository
+idempotency keys after uncertain failures, and verifies account-bound replies.
+
+The panel uses the existing settings frames, compact rows, search input and
+floating picker. It supports multiple selection, private/default-branch metadata,
+add/remove, loading, refresh/error and empty states. Both native Cloud settings and
+the compiled GPUI browser render the same component.
+
+GitHub enrollment is still owned by the original service. The optional
+`ZUSE_CLOUD_LEGACY_GITHUB_URL` adapter forwards the verified user's bearer and
+selected scope to its existing `/v1/cloud/github` endpoint. The original service
+continues refreshing OAuth and installation grants. The adapter requires HTTPS,
+refuses redirects, bounds/validates responses, strips unknown/private fields and
+recomputes installation-management permission from current Rust authorization.
+This is an explicit migration adapter, not a completed Rust GitHub authority port.
+
+Verification passes:
+
+- Thirty-one cloud library checks cover the new scoped GitHub migration reader,
+  private-field filtering and redirect refusal alongside original billing,
+  settlement, provider, authorization and repository operations.
+  `.context/cloud-repositories-api-tests.log`.
+- Native Linux: searched and selected an authorized repository, added it through
+  the actual host/API/PostgreSQL path, removed another repository and reopened the
+  view with persisted state. The final shared picker uses the embedded SVG check
+  and outside-click dismissal. `.context/cloud-repositories-native-acceptance.json`;
+  images `.context/cloud-repositories-native.png` and
+  `.context/cloud-repositories-native-picker.png`.
+- Compiled GPUI browser: authorized catalog/search, connect/remove through visible
+  controls, stale account and organization refusal, and no environment allocation
+  RPC. `.context/cloud-repositories-browser-acceptance.json`,
+  `.context/cloud-repositories-browser-proof.json`; images
+  `.context/cloud-repositories-browser.png` and
+  `.context/cloud-repositories-browser-picker.png`.
+- After the UI run, an independent SQL comparison against the original fixture
+  verifies every retained workspace field, its original project binding, the
+  added/removed selections and unrelated organization selection. The interactive
+  fixture process terminated before its final cleanup assertion; this independent
+  check supplies the post-UI storage evidence instead.
+  `.context/cloud-repositories-retention-proof.json`.
+- Native app, browser wasm, host server and API executable builds pass:
+  `.context/cloud-repositories-{native,web,host,api}-build.log`.
+
+The UI fixture deliberately has no payment writer/provider credentials, so its
+billing section displays the existing read-only/unavailable state. Live GitHub,
+live billing and Mac acceptance are not established by this run. Remaining work
+includes GitHub enrollment/authority in Rust, image build/rebuild operations,
+complete Cloud settings and full screen parity.

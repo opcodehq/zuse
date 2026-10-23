@@ -310,7 +310,7 @@ impl WorkspaceView {
     }
     pub(super) fn billing_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let busy = !self.billing.requests.is_empty();
-        let mut view = column().gap_5().child(
+        let mut view = column().gap_5().child(self.repository_panel.clone()).child(
             row().justify_end().child(
                 s::button(
                     "refresh-cloud-billing",

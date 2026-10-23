@@ -5757,7 +5757,7 @@ impl Shell {
                 if self.cloud_billing_page.is_none() {
                     let state = self.state.clone();
                     self.cloud_billing_page = Some(
-                        cx.new(|cx| settings::cloud_billing::CloudBillingPage::new(state, cx)),
+                        cx.new(|cx| settings::cloud_billing::CloudBillingPage::new(state, window, cx)),
                     );
                 }
                 self.cloud_billing_page

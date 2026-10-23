@@ -286,6 +286,8 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | LIST_ACCOUNT_DEVICES
         | CLOUD_ACCOUNT_STATUS
         | CLOUD_CONTEXT
+        | CLOUD_PROJECTS
+        | CLOUD_GITHUB
         | CLOUD_PREPAID_BALANCE
         | CLOUD_BILLING_ENTITLEMENTS
         | CLOUD_BILLING_SUMMARY
@@ -348,6 +350,8 @@ mod retry_tests {
             CLOUD_DELETE,
             CLOUD_CLEANUP_MIRROR,
             CLOUD_CREATE,
+            CLOUD_PROJECT_CONNECT,
+            CLOUD_PROJECT_REMOVE,
             CLOUD_PREPAID_CHECKOUT,
             CLOUD_BILLING_CHECKOUT,
             CLOUD_BILLING_CAP,
@@ -414,3 +418,8 @@ pub const CLOUD_BILLING_ENTITLEMENTS: &str = "CloudBillingEntitlements";
 pub const CLOUD_BILLING_CHECKOUT: &str = "CloudBillingCheckout";
 pub const CLOUD_BILLING_PORTAL: &str = "CloudBillingPortal";
 pub const CLOUD_BILLING_CAP: &str = "CloudBillingSetCap";
+
+pub const CLOUD_PROJECTS: &str = "CloudProjects";
+pub const CLOUD_PROJECT_CONNECT: &str = "CloudProjectConnect";
+pub const CLOUD_PROJECT_REMOVE: &str = "CloudProjectRemove";
+pub const CLOUD_GITHUB: &str = "CloudGithubCatalog";

@@ -8,6 +8,7 @@ use std::{str::FromStr, time::Duration};
 
 #[derive(Clone)]
 pub struct Store {
+    pub(crate) github: Option<std::sync::Arc<crate::github::LegacyGithub>>,
     pub(crate) projects: Option<std::sync::Arc<crate::projects::ProjectControl>>,
     pub(crate) project_templates: std::sync::Arc<std::collections::BTreeMap<String, String>>,
     pub(crate) billing: Option<std::sync::Arc<crate::billing::BillingControl>>,
@@ -46,6 +47,7 @@ impl Store {
             pool,
             billing: None,
             projects: None,
+            github: None,
             project_templates: Default::default(),
             transcripts: None,
         })
@@ -56,6 +58,7 @@ impl Store {
             pool,
             billing: None,
             projects: None,
+            github: None,
             project_templates: Default::default(),
             transcripts: None,
         }
@@ -265,5 +268,12 @@ impl Workspace {
             out["failureDiagnostic"] = json!(message);
         }
         out
+    }
+}
+
+impl Store {
+    pub fn with_github_authority(mut self, github: crate::github::LegacyGithub) -> Self {
+        self.github = Some(std::sync::Arc::new(github));
+        self
     }
 }

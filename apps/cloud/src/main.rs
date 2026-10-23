@@ -254,6 +254,10 @@ async fn main() -> Result<()> {
                 .configure_transcripts()?;
             store =
                 store.with_project_templates(zuse_cloud::projects::template_versions_from_env()?);
+            if let Ok(origin) = env::var("ZUSE_CLOUD_LEGACY_GITHUB_URL") {
+                store =
+                    store.with_github_authority(zuse_cloud::github::LegacyGithub::new(&origin)?);
+            }
             let project_accounts = env::var("ZUSE_CLOUD_PROJECT_WRITE_ACCOUNTS")
                 .unwrap_or_default()
                 .split(',')

@@ -20,6 +20,10 @@ pub fn handles(method: &str) -> bool {
     matches!(
         method,
         LIST | READ
+            | zuse_protocol::methods::CLOUD_PROJECTS
+            | zuse_protocol::methods::CLOUD_PROJECT_CONNECT
+            | zuse_protocol::methods::CLOUD_PROJECT_REMOVE
+            | zuse_protocol::methods::CLOUD_GITHUB
             | zuse_protocol::methods::CLOUD_CONTEXT
             | zuse_protocol::methods::CLOUD_CREATE
             | zuse_protocol::methods::CLOUD_BILLING_SUMMARY
@@ -114,15 +118,33 @@ impl CloudApi {
         organization: Option<&str>,
         query: &[(String, String)],
     ) -> Result<Value> {
+        let verb = if body.is_some() {
+            reqwest::Method::POST
+        } else {
+            reqwest::Method::GET
+        };
+        self.request_scoped_verb(token, path, body, organization, query, verb)
+            .await
+    }
+    async fn request_scoped_verb(
+        &self,
+        token: &str,
+        path: &[&str],
+        body: Option<Value>,
+        organization: Option<&str>,
+        query: &[(String, String)],
+        verb: reqwest::Method,
+    ) -> Result<Value> {
         let mut url = self.origin.clone();
         url.path_segments_mut()
             .map_err(|_| anyhow::anyhow!("Cloud service configuration is invalid."))?
             .clear()
             .extend(path.iter().copied());
+        let request = self.http.request(verb, url);
         let request = if let Some(body) = body {
-            self.http.post(url).json(&body)
+            request.json(&body)
         } else {
-            self.http.get(url)
+            request
         };
         let request = request.query(query);
         let request = if let Some(org) = organization {
@@ -196,6 +218,34 @@ impl CloudApi {
                     _ => "Cloud billing is unavailable. Refresh and try again.",
                 };
                 anyhow::bail!("{message}");
+            }
+            if path
+                .get(2)
+                .is_some_and(|s| *s == "projects" || *s == "github")
+            {
+                let error = serde_json::from_slice::<Value>(&bytes)
+                    .ok()
+                    .and_then(|v| v["error"].as_str().map(str::to_owned));
+                anyhow::bail!(
+                    "{}",
+                    match error.as_deref() {
+                        Some("invalid_repository") =>
+                            "Check the repository URL, branch and environment settings.",
+                        Some("cloud_entitlement_required") =>
+                            "Subscribe to Cloud before adding repositories.",
+                        Some("cloud_project_secret_vault_required") =>
+                            "Use the cloud secret vault for repository secrets.",
+                        Some("cloud_project_writes_disabled" | "cloud_project_owner_not_rust") =>
+                            "Repository management is not enabled for this account yet.",
+                        Some("cloud_github_unavailable") =>
+                            "GitHub is unavailable. Refresh and try again.",
+                        Some("workspace_access_denied") =>
+                            "An administrator role is required to manage repositories.",
+                        Some("cloud_project_not_found") =>
+                            "This repository is no longer included. Refresh the list.",
+                        _ => "Repository management is unavailable. Refresh and try again.",
+                    }
+                );
             }
             ensure!(
                 status.is_success(),
@@ -316,6 +366,70 @@ impl CloudApi {
                         &query,
                     )
                     .await?;
+                json!({"accountId":account,"organizationId":org,"data":value})
+            }
+            zuse_protocol::methods::CLOUD_PROJECTS
+            | zuse_protocol::methods::CLOUD_PROJECT_CONNECT
+            | zuse_protocol::methods::CLOUD_PROJECT_REMOVE
+            | zuse_protocol::methods::CLOUD_GITHUB => {
+                let org = auth.state().org_id().map(str::to_owned);
+                ensure!(
+                    params["expectedAccountId"].as_str() == Some(account.as_str())
+                        && params["expectedOrganizationId"].as_str() == org.as_deref()
+                        && auth.user_id().as_deref() == Some(account.as_str()),
+                    "Your account changed. Refresh repositories."
+                );
+                let value = match method {
+                    zuse_protocol::methods::CLOUD_PROJECT_CONNECT => {
+                        let request: zuse_protocol::cloud_projects::ProjectConnectRequest =
+                            serde_json::from_value(params)?;
+                        self.request_scoped(
+                            &token,
+                            &["v1", "cloud", "projects"],
+                            Some(serde_json::to_value(request)?),
+                            org.as_deref(),
+                            &[],
+                        )
+                        .await?
+                    }
+                    zuse_protocol::methods::CLOUD_PROJECT_REMOVE => {
+                        let request: zuse_protocol::cloud_projects::ProjectRemoveRequest =
+                            serde_json::from_value(params)?;
+                        ensure!(
+                            !request.project_id.is_empty() && request.project_id.len() <= 1024,
+                            "Choose a repository to remove."
+                        );
+                        self.request_scoped_verb(
+                            &token,
+                            &["v1", "cloud", "projects", &request.project_id],
+                            None,
+                            org.as_deref(),
+                            &[],
+                            reqwest::Method::DELETE,
+                        )
+                        .await?
+                    }
+                    zuse_protocol::methods::CLOUD_GITHUB => {
+                        self.request_scoped(
+                            &token,
+                            &["v1", "cloud", "github"],
+                            None,
+                            org.as_deref(),
+                            &[],
+                        )
+                        .await?
+                    }
+                    _ => {
+                        self.request_scoped(
+                            &token,
+                            &["v1", "cloud", "projects"],
+                            None,
+                            org.as_deref(),
+                            &[],
+                        )
+                        .await?
+                    }
+                };
                 json!({"accountId":account,"organizationId":org,"data":value})
             }
             zuse_protocol::methods::CLOUD_CONTEXT => {

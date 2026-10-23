@@ -10,6 +10,7 @@ mod browser;
 mod cloud;
 mod cloud_billing;
 mod cloud_history;
+pub mod cloud_repositories;
 mod composer_alerts;
 mod connection;
 pub mod context_status;
@@ -82,6 +83,8 @@ use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 pub struct WorkspaceView {
     cloud_archive: cloud_history::ArchiveView,
     cloud: cloud::Cloud,
+    repository_panel: Entity<cloud_repositories::RepositoryPanel>,
+    repository_requests: HashMap<u64, u64>,
     billing: cloud_billing::Billing,
     billing_cap: Entity<input::TextInput>,
     cloud_branch: Entity<input::TextInput>,
@@ -308,6 +311,27 @@ impl WorkspaceView {
             cx.notify();
         })
         .detach();
+        let repository_panel = cx.new(|cx| cloud_repositories::RepositoryPanel::new(window, cx));
+        cx.subscribe(
+            &repository_panel,
+            |this, _, event: &cloud_repositories::Request, _cx| match event {
+                cloud_repositories::Request::Call { id, method, params } => {
+                    let remote = this.call(method, params.clone());
+                    this.repository_requests.insert(remote, *id);
+                }
+                cloud_repositories::Request::Cancel { id } => {
+                    if let Some(remote) = this
+                        .repository_requests
+                        .iter()
+                        .find_map(|(remote, local)| (*local == *id).then_some(*remote))
+                    {
+                        this.repository_requests.remove(&remote);
+                        this.cancel(remote);
+                    }
+                }
+            },
+        )
+        .detach();
         let session_search = cx.new(|cx| input::TextInput::new("Search sessions…", window, cx));
         cx.observe(&session_search, |_, _, cx| cx.notify()).detach();
         let model_search = cx.new(|cx| input::TextInput::new("Search models…", window, cx));
@@ -435,6 +459,8 @@ impl WorkspaceView {
             input,
             cloud_archive: Default::default(),
             cloud: Default::default(),
+            repository_panel,
+            repository_requests: HashMap::new(),
             billing: Default::default(),
             billing_cap: cx.new(|cx| input::TextInput::new("Monthly cap in dollars", window, cx)),
             cloud_branch,
@@ -695,6 +721,38 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if frame["id"]
+            .as_u64()
+            .and_then(|id| self.pending.get(&id))
+            .is_some_and(|m| m == methods::AUTH_STATUS)
+        {
+            if let Some(value) = frame.get("item").or_else(|| frame.get("ok")) {
+                let owner = value["user"]["id"]
+                    .as_str()
+                    .map(|id| (id.to_owned(), value["orgId"].as_str().map(str::to_owned)));
+                self.repository_panel
+                    .update(cx, |panel, cx| panel.bind_owner(owner, cx));
+            }
+        }
+        if let Some((remote, local)) = frame["id"].as_u64().and_then(|id| {
+            self.repository_requests
+                .remove(&id)
+                .map(|local| (id, local))
+        }) {
+            self.pending.remove(&remote);
+            let result = if let Some(error) = frame["err"].as_str() {
+                Err(error.to_owned())
+            } else {
+                frame
+                    .get("ok")
+                    .or_else(|| frame.get("item"))
+                    .cloned()
+                    .ok_or_else(|| "Repository response was interrupted.".into())
+            };
+            self.repository_panel
+                .update(cx, |panel, cx| panel.receive(local, result, cx));
+            return;
+        }
         if self.receive_billing(&frame, cx) {
             return;
         }

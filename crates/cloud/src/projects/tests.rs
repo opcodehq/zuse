@@ -15,6 +15,13 @@ struct TestIdentity;
 #[async_trait]
 impl Identity for TestIdentity {
     async fn verify(&self, token: &str) -> Result<Principal, ApiError> {
+        let token = if token == "dev-user"
+            && std::env::var_os("ZUSE_CLOUD_PROJECTS_UI_FIXTURE_FILE").is_some()
+        {
+            "alice"
+        } else {
+            token
+        };
         if token == "invalid" {
             return Err(ApiError::unauthorized("invalid_workos_token"));
         }
@@ -410,6 +417,45 @@ async fn scoped_http_repository_connect_list_remove_preserves_existing_workspace
         .0,
         StatusCode::CONFLICT
     );
+    if let Ok(path) = std::env::var("ZUSE_CLOUD_PROJECTS_UI_FIXTURE_FILE") {
+        sqlx::query("UPDATE zuse_rust_control_owners SET backend='rust' WHERE resource_kind='project-catalog' AND resource_id='user-alice'").execute(&pool).await.unwrap();
+        sqlx::raw_sql(include_str!("../../tests/fixtures/billing.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query("INSERT INTO api_cloud_billing_periods VALUES('ui-period','user-alice','stripe','sub-preserved','active','USD',$1,$2,40000000,35000000,500,25000000,$1)").bind(now-86400000).bind(now+86400000).execute(&pool).await.unwrap();
+        let upstream=axum::Router::new().route("/catalog",axum::routing::get(||async{axum::Json(json!({"configured":true,"user":{"login":"swarajbachu","name":"Swaraj","email":"fixture@example.test"},"installations":[{"installationId":123,"accountLogin":"example","accountType":"Organization","repositorySelection":"selected","suspended":false}],"repositories":[{"nameWithOwner":"swarajbachu/zuse","description":"Zuse","sshUrl":"git@github.com:swarajbachu/zuse.git","httpsUrl":"https://github.com/swarajbachu/zuse.git","isPrivate":true,"defaultBranch":"main","updatedAt":"2026-10-23T00:00:00Z"},{"nameWithOwner":"example/cloud-app","description":"Cloud application","sshUrl":"git@github.com:example/cloud-app.git","httpsUrl":"https://github.com/example/cloud-app.git","isPrivate":true,"defaultBranch":"main","updatedAt":"2026-10-23T00:00:00Z"}]}))}));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let authority = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let mut github = crate::github::LegacyGithub::new("https://api.zuse.sh").unwrap();
+        github.test_url(format!("http://{address}/catalog").parse().unwrap());
+        let app = app(store.clone().with_github_authority(github));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let file = std::path::Path::new(&path);
+        std::fs::write(file, format!("http://{address}")).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(900), async {
+            while !file.with_extension("done").exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Repository UI acceptance timed out");
+        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM api_cloud_projects WHERE account_id='user-alice' AND repository_identity='github.com/example/cloud-app' AND included=true").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+        let after: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-alice'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(after, original);
+        server.abort();
+        authority.abort();
+    }
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin)

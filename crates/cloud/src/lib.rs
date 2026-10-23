@@ -22,3 +22,5 @@ pub mod objects;
 pub mod transcript;
 
 pub mod projects;
+
+pub mod github;

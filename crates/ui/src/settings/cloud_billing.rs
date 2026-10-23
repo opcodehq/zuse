@@ -20,6 +20,8 @@ fn bound(value: &Value, owner: &Owner) -> bool {
         && value["organizationId"].as_str() == owner.1.as_deref()
 }
 pub struct CloudBillingPage {
+    repository_panel: Entity<zuse_viewport::cloud_repositories::RepositoryPanel>,
+    repository_tasks: std::collections::HashMap<u64, Task<()>>,
     state: Entity<AppState>,
     owner: Option<Owner>,
     loaded: bool,
@@ -40,12 +42,60 @@ pub struct CloudBillingPage {
     cap_request: Option<(i64, String)>,
 }
 impl CloudBillingPage {
-    pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+    pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let repository_panel =
+            cx.new(|cx| zuse_viewport::cloud_repositories::RepositoryPanel::new(window, cx));
+        cx.subscribe(
+            &repository_panel,
+            |this, panel, event: &zuse_viewport::cloud_repositories::Request, cx| {
+                use zuse_viewport::cloud_repositories::Request;
+                match event {
+                    Request::Cancel { id } => {
+                        this.repository_tasks.remove(id);
+                    }
+                    Request::Call { id, method, params } => {
+                        let Some(engine) = this.state.read(cx).engine().map(|e| e.controller())
+                        else {
+                            panel.update(cx, |panel, cx| {
+                                panel.receive(
+                                    *id,
+                                    Err("The account connection is unavailable.".into()),
+                                    cx,
+                                )
+                            });
+                            return;
+                        };
+                        let id = *id;
+                        let method = *method;
+                        let params = params.clone();
+                        let panel = panel.clone();
+                        let job = gpui_tokio::Tokio::spawn(cx, async move {
+                            engine
+                                .client()
+                                .call_scoped(method, params)
+                                .await
+                                .map_err(|e| e.to_string())
+                        });
+                        let task = cx.spawn(async move |this, cx| {
+                            let result = job.await.unwrap_or_else(|e| Err(e.to_string()));
+                            let _ = this.update(cx, |this, cx| {
+                                this.repository_tasks.remove(&id);
+                                panel.update(cx, |panel, cx| panel.receive(id, result, cx));
+                            });
+                        });
+                        this.repository_tasks.insert(id, task);
+                    }
+                }
+            },
+        )
+        .detach();
         let cap = cx
             .new(|cx| ComposerInput::new("Monthly overage cap in dollars", cx).with_single_line());
         cx.observe(&state, |_: &mut Self, _, cx| cx.notify())
             .detach();
         Self {
+            repository_panel,
+            repository_tasks: Default::default(),
             state,
             owner: None,
             loaded: false,
@@ -434,6 +484,8 @@ impl Render for CloudBillingPage {
         if !self.loaded {
             self.load(false, cx);
         }
+        self.repository_panel
+            .update(cx, |panel, cx| panel.bind_owner(self.owner.clone(), cx));
         let theme = Theme::of(cx).for_settings_surface();
         let busy = self.task.is_some();
         let mut body = widgets::page_column().child(widgets::section_title_with_action(
@@ -453,6 +505,7 @@ impl Render for CloudBillingPage {
                     .into_any_element(),
             ),
         ));
+        body = body.child(div().mb(px(20.)).child(self.repository_panel.clone()));
         if self.owner.is_some() {
             body = body.child(widgets::group(&theme, "Subscription", if self.subscribed==Some(false){"$40 per month includes $35 of compute. Additional compute has a 5% markup."}else{"Manage your existing subscription, invoices and payment method with your billing provider."})
                 .child(widgets::card_row(&theme, false)

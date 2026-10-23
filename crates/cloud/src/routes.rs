@@ -69,6 +69,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .route("/v1/cloud/context", get(context))
+        .route("/v1/cloud/github", get(github_catalog))
         .route(
             "/v1/cloud/projects",
             get(project_list)
@@ -1240,4 +1241,23 @@ async fn project_remove(
             .project_remove(&access.owner_id, &id, chrono::Utc::now().timestamp_millis())
             .await?,
     ))
+}
+
+async fn github_catalog(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<zuse_protocol::cloud_projects::GithubCatalog>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split_once(' '))
+        .map(|(_, token)| token)
+        .ok_or_else(|| ApiError::unauthorized("missing_bearer"))?;
+    let github = state
+        .store
+        .github
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_github_unavailable"))?;
+    Ok(Json(github.catalog(&access, bearer).await?))
 }

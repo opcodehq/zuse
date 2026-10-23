@@ -51,3 +51,50 @@ pub struct CloudProject {
 pub struct ProjectList {
     pub projects: Vec<CloudProject>,
 }
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectRemoveRequest {
+    pub project_id: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubRepository {
+    pub name_with_owner: String,
+    pub description: Option<String>,
+    pub ssh_url: String,
+    pub https_url: String,
+    pub is_private: bool,
+    pub default_branch: String,
+    pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_avatar_url: Option<String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubInstallation {
+    pub installation_id: i64,
+    pub account_login: String,
+    pub account_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    pub repository_selection: String,
+    pub suspended: bool,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct GithubUser {
+    pub login: String,
+    pub name: String,
+    pub email: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubCatalog {
+    pub configured: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub can_manage_installations: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<GithubUser>,
+    pub installations: Vec<GithubInstallation>,
+    pub repositories: Vec<GithubRepository>,
+}
