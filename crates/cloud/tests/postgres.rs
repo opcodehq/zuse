@@ -1776,6 +1776,82 @@ mod runtime_engine {
             Err(zuse_cloud::providers::ProviderError::OutcomeUnknown)
         }
     }
+    #[async_trait]
+    impl zuse_cloud::runtime::lifecycle::RetainedProvider for AllocatorFixture {
+        async fn inspect_retained(
+            &self,
+            id: &str,
+        ) -> Result<Option<zuse_cloud::providers::Machine>, zuse_cloud::providers::ProviderError> {
+            Ok(self.machine.lock().unwrap().clone().filter(|m| m.id == id))
+        }
+        async fn pause_retained(&self, id: &str) -> Result<(), zuse_cloud::providers::ProviderError> {
+            if let Some(mut child) = self.child.lock().await.take() {
+                stop_guest(&mut child).await;
+            }
+            let mut machine = self.machine.lock().unwrap();
+            let machine = machine
+                .as_mut()
+                .ok_or(zuse_cloud::providers::ProviderError::NotFound)?;
+            assert_eq!(machine.id, id);
+            machine.state = zuse_cloud::providers::MachineState::Paused;
+            Ok(())
+        }
+        async fn wake_retained(
+            &self,
+            id: &str,
+            _: &zuse_cloud::providers::MachineState,
+        ) -> Result<(), zuse_cloud::providers::ProviderError> {
+            let mut machine = self.machine.lock().unwrap();
+            let machine = machine
+                .as_mut()
+                .ok_or(zuse_cloud::providers::ProviderError::NotFound)?;
+            assert_eq!(machine.id, id);
+            machine.state = zuse_cloud::providers::MachineState::Running;
+            Ok(())
+        }
+        async fn launch_retained(
+            &self,
+            d: &zuse_protocol::cloud_lifecycle::Directive,
+            workspace: &str,
+            api: &str,
+        ) -> Result<(), zuse_cloud::providers::ProviderError> {
+            let mut child = self.child.lock().await;
+            if child.is_none() {
+                *child = Some(
+                    tokio::process::Command::new("bash")
+                        .arg(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/../../infra/cloud/launch-runtime.sh"
+                        ))
+                        .arg("--foreground")
+                        .env("ZUSE_RUNTIME_RETAINED", "true")
+                        .env("ZUSE_CLOUD_WORKSPACE_ID", workspace)
+                        .env("ZUSE_API_URL", api)
+                        .env("ZUSE_RUNTIME_GENERATION", d.generation.to_string())
+                        .env("ZUSE_STORAGE_INCARNATION_ID", &d.storage_incarnation_id)
+                        .env("ZUSE_USER_DATA", &self.directory)
+                        .env("ZUSE_CLOUD_WORKSPACE_ROOT", &self.checkout)
+                        .env("ZUSE_RUNTIME_BINARY", &self.wrapper)
+                        .env(
+                            "ZUSE_WORKSPACE_RUNTIME_STATUS_DIR",
+                            self.directory.parent().unwrap().join("status"),
+                        )
+                        .stdout(std::process::Stdio::null())
+                        .stderr(
+                            std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(self.directory.parent().unwrap().join("allocated-guest.log"))
+                                .unwrap(),
+                        )
+                        .kill_on_drop(true)
+                        .spawn()
+                        .unwrap(),
+                );
+            }
+            Ok(())
+        }
+    }
     async fn allocation_due(api: &GuestApi) {
         sqlx::query("UPDATE zuse_rust_jobs SET due_at=$1 WHERE kind='workspace-allocate' AND state='pending'").bind(chrono::Utc::now().timestamp_millis()).execute(&api.pool).await.unwrap();
     }
@@ -1900,6 +1976,11 @@ mod runtime_engine {
                     .await
                 {
                     std::fs::write(root.join("allocation-error"), error.code).unwrap();
+                }
+                if std::env::var_os("ZUSE_CLOUD_LIFECYCLE_ACCEPTANCE").is_some() {
+                    if let Err(error)=api.control.lifecycle_once(&provider,chrono::Utc::now().timestamp_millis()).await {
+                        std::fs::write(root.join("lifecycle-error"),error.code).unwrap();
+                    }
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }

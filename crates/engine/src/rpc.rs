@@ -1983,6 +1983,12 @@ impl RpcService for AuthRpc {
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
             return RpcReply::value(&result);
         }
+        if method == methods::CLOUD_PAUSE {
+            let value = crate::cloud::environment::pause(&self.auth, params)
+                .await
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
+            return RpcReply::value(&value);
+        }
         if crate::cloud::handles(method) {
             let result = crate::cloud::handle(&self.auth, method, params)
                 .await

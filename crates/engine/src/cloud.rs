@@ -21,6 +21,8 @@ pub fn handles(method: &str) -> bool {
     matches!(
         method,
         LIST | READ
+            | zuse_protocol::methods::CLOUD_PAUSE
+            | zuse_protocol::methods::CLOUD_WORKSPACE
             | zuse_protocol::methods::CLOUD_IMAGE
             | zuse_protocol::methods::CLOUD_IMAGE_DELETE
             | zuse_protocol::methods::CLOUD_IMAGE_BUILD
@@ -544,6 +546,21 @@ impl CloudApi {
                 }
                 rows.retain(|row| row.rpc_protocol.as_deref() == Some("zuse-rpc-v1"));
                 json!({"accountId":account,"workspaces":rows})
+            }
+            zuse_protocol::methods::CLOUD_WORKSPACE => {
+                let id = params["workspaceId"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| anyhow::anyhow!("Select a workspace."))?;
+                ensure!(
+                    params["expectedAccountId"].as_str() == Some(account.as_str())
+                        && auth.state().org_id().is_none(),
+                    "The account changed. Select the workspace again."
+                );
+                let value = self
+                    .request(&token, &["v1", "cloud", "workspaces", id], None)
+                    .await?;
+                json!({"accountId":account,"workspace":value.get("workspace").unwrap_or(&value)})
             }
             READ => {
                 let id = params["workspaceId"]

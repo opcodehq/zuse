@@ -33,6 +33,7 @@ struct Saved {
     loading: bool,
     authorized: bool,
     watch: Option<Task<()>>,
+    progress: Option<Task<()>>,
 }
 fn matches(target: &CloudTarget, value: Value) -> bool {
     matches!(serde_json::from_value::<AuthState>(value),Ok(AuthState::SignedIn{user,org_id:None}) if user.id==target.subject)
@@ -48,6 +49,7 @@ impl Saved {
             loading: true,
             authorized: false,
             watch: None,
+            progress: None,
         };
         this.load(cx);
         this
@@ -58,6 +60,7 @@ impl Saved {
         self.authorized = false;
         self.history = None;
         self.subscription = None;
+        self.progress = None;
         let target = self.target.clone();
         self.watch=Some(cx.spawn(async move |this,cx| {
             let result=target.controller.client().subscribe_scoped(methods::AUTH_STATUS,json!({})).await;
@@ -99,6 +102,7 @@ impl Saved {
                                     }
                                 }));
                                 this.history=Some(history);
+                                this.watch_pause(cx);
                             }
                             _=>this.failed("Saved conversation has the wrong workspace identity.".into(),cx),
                         }
@@ -112,6 +116,75 @@ impl Saved {
                 if !matches(&target,value) { let _=this.update(cx,|this,cx|this.revoked(cx));return; }
             }
             let _=this.update(cx,|this,cx|this.revoked(cx));
+        }));
+    }
+    fn watch_pause(&mut self, cx: &mut Context<Self>) {
+        let Some(history) = &self.history else {
+            return;
+        };
+        if history.read(cx).workspace.state != "pausing" {
+            return;
+        }
+        let target = self.target.clone();
+        self.progress = Some(cx.spawn(async move |this, cx| {
+            let mut failures = 0;
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                let result = target
+                    .controller
+                    .client()
+                    .call_scoped(
+                        methods::CLOUD_WORKSPACE,
+                        json!({"workspaceId":target.workspace,"expectedAccountId":target.subject}),
+                    )
+                    .await;
+                let keep = this
+                    .update(cx, |this, cx| {
+                        if !this.authorized {
+                            return false;
+                        }
+                        match result {
+                            Ok(value)
+                                if value["accountId"].as_str() == Some(target.subject.as_str()) =>
+                            {
+                                if let Ok(row) =
+                                    serde_json::from_value::<Workspace>(value["workspace"].clone())
+                                {
+                                    if row.workspace_id != target.workspace {
+                                        this.revoked(cx);
+                                        return false;
+                                    }
+                                    failures = 0;
+                                    let pending = row.state == "pausing";
+                                    if let Some(history) = &this.history {
+                                        history.update(cx, |h, cx| h.update_workspace(row, cx));
+                                    }
+                                    return pending;
+                                }
+                            }
+                            Err(error) => {
+                                failures += 1;
+                                if let Some(history) = &this.history {
+                                    history.update(cx, |h, cx| {
+                                        h.error = Some(error.to_string());
+                                        cx.notify();
+                                    });
+                                }
+                            }
+                            _ => {
+                                this.revoked(cx);
+                                return false;
+                            }
+                        }
+                        failures < 8
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    return;
+                }
+            }
         }));
     }
     fn close(&self, cx: &mut Context<Self>) {
@@ -133,6 +206,7 @@ impl Saved {
         cx.notify();
     }
     fn revoked(&mut self, cx: &mut Context<Self>) {
+        self.progress = None;
         self.history = None;
         self.subscription = None;
         self.authorized = false;

@@ -8,8 +8,126 @@ pub(super) struct Launch {
     owner: Option<String>,
     request: Option<Value>,
     accepted: Option<Value>,
+    pub pause_task: Option<Task<()>>,
+    pub pause_error: Option<String>,
+    pause_command: Option<String>,
 }
 impl Composer {
+    pub(super) fn live_cloud_row(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<super::tray::TrayPill> {
+        self.state.read(cx).engine()?.cloud_workspace()?;
+        let busy = self.cloud.pause_task.is_some();
+        let mut row = super::tray::TrayPill::new(
+            "live-cloud-workspace",
+            if busy {
+                "Pausing cloud workspace…"
+            } else {
+                "Cloud workspace"
+            },
+        )
+        .glyph(crate::icons::CLOUD);
+        if let Some(error) = &self.cloud.pause_error {
+            row = row.subtitle(error.clone());
+        }
+        Some(
+            row.action(
+                super::tray::tray_text_action(
+                    "pause-cloud-workspace",
+                    if busy {
+                        "Pausing…"
+                    } else if self.cloud.pause_error.is_some() {
+                        "Retry pause"
+                    } else {
+                        "Pause"
+                    },
+                    None,
+                    theme,
+                )
+                .opacity(if busy { 0.5 } else { 1. })
+                .on_click(cx.listener(|this, _, window, cx| this.pause_cloud(window, cx))),
+            ),
+        )
+    }
+    pub(crate) fn cloud_has_draft(&self, cx: &App) -> bool {
+        self.has_draft(cx)
+            || self
+                .drafts
+                .iter()
+                .any(|(key, draft)| key != &self.current_key && !draft.trim().is_empty())
+            || self.attachments.values().any(|files| !files.is_empty())
+            || self.appshots.values().any(|captures| !captures.is_empty())
+            || self.queue_edit_draft.is_some()
+    }
+    fn pause_cloud(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cloud.pause_task.is_some() {
+            return;
+        }
+        let unsaved_files = window
+            .root::<crate::shell::Shell>()
+            .flatten()
+            .is_none_or(|shell| shell.read(cx).cloud_pause_has_unsaved_work(cx));
+        if self.cloud_has_draft(cx) || unsaved_files {
+            self.cloud.pause_error = Some("Send or clear drafts and save editor changes before pausing. Your work is preserved.".into());
+            cx.notify();
+            return;
+        }
+        let state = self.state.read(cx);
+        let Some(engine) = state.engine() else {
+            return;
+        };
+        let Some(workspace) = engine.cloud_workspace() else {
+            return;
+        };
+        let Some(subject) = state.auth_user().map(|u| u.id.clone()) else {
+            return;
+        };
+        let target = crate::state::CloudTarget {
+            controller: engine.controller(),
+            subject,
+            workspace,
+            initial_session: state.selected_chat.clone().unwrap_or_default(),
+        };
+        let command = self
+            .cloud
+            .pause_command
+            .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+            .clone();
+        let root = target.controller.clone();
+        let request = json!({"workspaceId":target.workspace,"expectedAccountId":target.subject,"commandId":command});
+        let handle = window.window_handle();
+        self.cloud.pause_error = None;
+        self.cloud.pause_task = Some(cx.spawn(async move |this, cx| {
+            let result = root
+                .client()
+                .call_scoped(methods::CLOUD_PAUSE, request)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.cloud.pause_task = None;
+                match result {
+                    Ok(_) => {
+                        gpui::App::defer(cx, move |cx| {
+                            crate::cloud_history::saved::open(target, cx);
+                            if let Some(handle) = handle.downcast::<crate::shell::Shell>() {
+                                let _ = handle.update(cx, |shell, window, cx| {
+                                    if shell.cloud_pause_can_close(cx)
+                                        && shell.prepare_window_close(cx)
+                                    {
+                                        window.remove_window();
+                                    }
+                                });
+                            }
+                        });
+                    }
+                    Err(error) => this.cloud.pause_error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
     pub(super) fn send_cloud(&mut self, text: String, cx: &mut Context<Self>) -> bool {
         let state = self.state.read(cx);
         if state.selected_chat.is_some() {

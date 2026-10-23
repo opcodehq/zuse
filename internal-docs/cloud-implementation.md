@@ -11,7 +11,7 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, app captures/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect, cached reopening with conversation selection, and encrypted first-message file delivery added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, app captures/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect, cached reopening with conversation selection, encrypted first-message file delivery, and attached Pause/explicit retained-machine resume added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status/delete APIs, durable Boxd capture/read-back/promotion/retirement/cleanup worker and shared image deletion confirmation, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
@@ -53,7 +53,7 @@ or a paid model. Receipts: `.context/cloud-launch-browser-acceptance.json`;
 Remaining before Milestone B/live rollout: remaining native desktop routing,
 app captures/context, complete provider/model catalogs, queued startup messages,
 reload-persistent uncertain-create retry state, bounded handling of repeated immediately
-closed connections and retry controls, full startup/reconnect trays, pause/resume UI,
+closed connections and retry controls, full startup/reconnect trays, seamless paused draft transfer,
 and live-provider acceptance. C–G and the remaining archive gates stay open in the ledger.
 
 
@@ -2426,3 +2426,53 @@ Provider compute in these tests is deterministic; live Boxd and Mac acceptance
 remain open. Custom snapshot import/selection, provider administration, complete
 UI parity and migration/cutover remain on the milestone checklist. This chunk does
 not complete Milestone C or authorize production ownership changes.
+
+### Composer pause and retained-machine resume
+
+The native and browser attached composer notices now offer Pause using the existing
+tray controls. The controller pins the personal account and original command ID,
+fences the shared chat/files/Git/terminal connection, and admits the durable pause
+independently of the UI waiter. Saved transcript views poll lifecycle metadata
+without opening a gateway. They show actual pausing/paused progress and expose an
+explicit Connect action for retained-machine resume.
+
+The environment supervisor distinguishes interactive Connect from background
+reconnection. Once attached, automatic retries cannot wake a paused workspace.
+Each later interactive resume receives a new command ID; uncertain retries retain
+that command. Browser pause commands also rotate after accepted admission, so a
+second pause/resume cycle performs a new operation.
+
+Native Pause refuses unsent drafts and unsaved editor work before admission, with
+a message preserving that work. The final window-close check also retains the
+original window if new unsent work appears while the request is pending. This is
+a temporary UX limitation: seamless draft transfer into the saved view remains
+part of the full UI audit. Browser uses its existing draft stash and editor guards.
+
+Verified:
+
+- Compiled GPUI browser -> host -> Axum/PostgreSQL -> packaged Rust guest:
+  two complete pause/resume cycles, the same retained machine, readable cached
+  transcript while paused, and one explicit provider turn across both restarts.
+  `.context/cloud-pause-verified-browser.log`,
+  `.context/cloud-pause-verified-api.log`,
+  `.context/cloud-pause-browser-wire-proof.json`,
+  `.context/cloud-pause-browser-acceptance.json`.
+- The focused supervisor test proves a background grant for a paused workspace
+  emits no resume mutation, while interactive admission emits the original
+  resume command once: `.context/cloud-pause-no-autowake-test.log`.
+- Native Linux: attached tray Pause, actual guest quiescence, saved transcript
+  without gateway/resume requests, explicit same-machine Connect with the original
+  reply, and refusal of Pause while the input holds an unsent draft. Clearing the
+  draft permits Pause; two native cycles retain one provider turn.
+  `.context/cloud-pause-native-verified-ui.log`,
+  `.context/cloud-pause-native-acceptance.json`,
+  `.context/cloud-pause-native-api.log`, `.context/cloud-pause-native-http.log`.
+- Host/guest, native Linux and browser builds pass:
+  `.context/cloud-pause-current-binaries.log`,
+  `.context/cloud-pause-native-verified-build.log`,
+  `.context/cloud-pause-web-final-build.log`. UI artifacts:
+  `.context/cloud-paused-native.png`, `.context/cloud-resumed-native.png`,
+  `.context/cloud-pause-native-draft-guard.png`, `.context/cloud-resumed-browser.png`.
+Live provider and Mac acceptance, existing runtime migration, complete environment
+controls and the rest of the milestone ledger remain open. This does not complete
+Milestone B, E or F or enable production ownership changes.

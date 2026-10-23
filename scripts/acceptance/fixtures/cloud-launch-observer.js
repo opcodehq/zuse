@@ -2,7 +2,7 @@
 (() => {
   try {localStorage.setItem("zuse.workspace.preferences.v1",JSON.stringify({appearance:"dark"}));} catch {}
   const Native = WebSocket;
-  const proof = window.__cloudLaunch = {methods:[],status:[],forwards:[],creates:[],history:[],uploads:[],imageReads:[],innerMethods:[],staged:[],sockets:0};
+  const proof = window.__cloudLaunch = {methods:[],status:[],forwards:[],creates:[],history:[],uploads:[],imageReads:[],innerMethods:[],staged:[],pauses:[],metadata:[],sockets:0};
   const pending = new Map();
   const fetchOriginal = window.fetch.bind(window);
   window.fetch = async (...args) => {
@@ -27,6 +27,8 @@
           if (method === 'CloudWorkspaces') proof.list = value.workspaces;
           if (method === 'CloudCreate') proof.creates.push(value.workspace.workspace ?? value.workspace);
           if (method === 'CloudEnvironment') proof.status.push(value);
+          if (method === 'CloudPause') proof.pauses.push(value.workspace);
+          if (method === 'CloudWorkspace') proof.metadata.push(value.workspace);
           if (method === 'CloudHistory') proof.history.push({workspaceId:value.head.workspaceId,sessionId:value.head.sessionId,reply:JSON.stringify(value.head.transcript).includes('Brokered native provider reply') || JSON.stringify(value.head?.transcript ?? value).includes('Cloud attachment verified')});
           if (method === 'CloudRpc') {
             proof.forwards.push({id:value.id,done:value.done,error:value.err,reply:JSON.stringify(value).includes('Brokered native provider reply') || JSON.stringify(value.head?.transcript ?? value).includes('Cloud attachment verified'),attachmentReply:JSON.stringify(value).includes('Cloud attachment verified')});

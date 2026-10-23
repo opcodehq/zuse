@@ -54,7 +54,7 @@ try {
     page.wait('window.__cloudLaunch.history.some(h=>h.reply)');await sleep(150);
     assert.equal(page.evaluate('window.__cloudLaunch.methods.includes("CloudEnvironment")'),false,'Cached reopening cannot wake compute');
     page.screenshot('cloud-launch-cached-reopen.png');
-    stage='reconnect';page.click(560,22);
+    stage='reconnect';page.click(1235,22);
     page.wait('window.__cloudLaunch.status.some(s=>s.state==="ready")');
     page.wait('window.__cloudLaunch.forwards.some(f=>f.reply)');await sleep(2500);
     page.screenshot('cloud-composer-connected.png');
@@ -77,9 +77,30 @@ try {
       artifact('cloud-upload-wire-proof.json',page.evaluate('window.__cloudLaunch'));
       artifact('cloud-upload-browser-acceptance.json',{actualCompiledGpui:true,selectedGuestBytesVerified:true,textAndPng:true,paste:true,realClaudeDriverReadsGuestFiles:true,inlineImageBytesVerified:true,existingConnectionOnly:true,explicitCloudTurns:2,liveProvider:false});
     }
+    if(process.env.ZUSE_CLOUD_LIFECYCLE_ACCEPTANCE==='1') {
+      for(let cycle=1;cycle<=2;cycle++) {
+        stage=`pause-cloud-${cycle}`;
+        const metadataBefore=page.evaluate('window.__cloudLaunch.metadata.length');
+        const resumeBefore=page.evaluate('window.__cloudLaunch.status.filter(s=>s.state==="ready").length');
+        page.click(1125,811);
+        page.wait(`window.__cloudLaunch.pauses.length===${cycle}`);
+        page.wait(`window.__cloudLaunch.metadata.slice(${metadataBefore}).some(w=>w.state==="paused")`);
+        page.wait('window.__cloudLaunch.history.some(h=>h.reply)');
+        await sleep(1200);
+        assert.equal(page.evaluate('window.__cloudLaunch.status.filter(s=>s.state==="ready").length'),resumeBefore,'Paused history cannot auto-resume');
+        page.screenshot('cloud-paused-browser.png');
+        stage=`resume-cloud-${cycle}`;page.click(1235,22);
+        page.wait(`window.__cloudLaunch.status.filter(s=>s.state==="ready").length>${resumeBefore}`);
+        page.wait('window.__cloudLaunch.forwards.some(f=>f.reply)');
+        await sleep(1000);
+      }
+      page.screenshot('cloud-resumed-browser.png');
+      artifact('cloud-pause-browser-wire-proof.json',page.evaluate('window.__cloudLaunch'));
+      artifact('cloud-pause-browser-acceptance.json',{actualGpui:true,realApiAndPostgres:true,guestQuiesced:true,sameMachine:true,retainedRuntimeRestart:true,cachedHistoryDuringPause:true,interactiveResume:true,pauseResumeCycles:2,providerTurns:1,liveProvider:false});
+    }
     const proof=page.evaluate('window.__cloudLaunch');
     assert.equal(proof.creates.length,0,'Reload/reopen must not resubmit creation');
-    assert.equal(proof.status.filter(s=>s.state==='ready').length,1,'Startup subscriptions must keep one connection');
+    assert.equal(proof.status.filter(s=>s.state==='ready').length,process.env.ZUSE_CLOUD_LIFECYCLE_ACCEPTANCE==='1'?3:1,'One ready connection per explicit connect');
     artifact('cloud-launch-browser-acceptance.json',{actualCompiledGpui:true,hostSupervisor:true,postgresApiAndPackagedGuest:true,firstMessageAcceptedOnce:true,durableEncryptedLaunch:true,stableStartupSubscriptions:true,liveStream:true,clientClosure:true,cachedReadDoesNotWake:true,reconnectOriginalSession:true,workspaceId:workspace.workspaceId,liveProvider:false});
   }
   fs.writeFileSync(file.replace(/\.[^.]+$/,'.done'),'verified\n');

@@ -9,6 +9,10 @@ use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
 use zuse_rpc::{RpcClient, RpcError, RpcReply, reconnect::Control};
 
+pub const PAUSED_MESSAGE: &str = "Cloud workspace is paused. Connect to resume.";
+pub const PAUSING_MESSAGE: &str =
+    "Cloud workspace is pausing. Open saved history to check its state.";
+
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
@@ -20,6 +24,7 @@ pub struct Status {
 pub struct Environment {
     client: Arc<RpcClient>,
     status: watch::Receiver<Status>,
+    status_send: watch::Sender<Status>,
     retry: Arc<Notify>,
     cancel: CancellationToken,
     control: Control,
@@ -42,6 +47,25 @@ impl Manager {
             .get(&(account.into(), workspace.into()))
             .and_then(Weak::upgrade)
     }
+    fn retire(&self, account: &str, workspace: &str) {
+        let environment = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(account.into(), workspace.into()))
+            .and_then(|v| v.upgrade());
+        if let Some(environment) = environment {
+            environment.status_send.send_replace(Status {
+                workspace_id: workspace.into(),
+                state: "blocked",
+                epoch: environment.control.generation(),
+                message: PAUSING_MESSAGE.into(),
+            });
+            environment.cancel.cancel();
+            environment.control.close();
+            environment.task.abort();
+        }
+    }
     fn open(
         &self,
         api: Arc<CloudApi>,
@@ -56,7 +80,16 @@ impl Manager {
         entries.retain(|_, entry| entry.strong_count() > 0);
         let key = (account.clone(), workspace.clone());
         if let Some(old) = entries.get(&key).and_then(Weak::upgrade) {
-            old.retry.notify_one();
+            let state = old.status.borrow().state;
+            if matches!(state, "paused" | "blocked" | "failed" | "reconnecting") {
+                old.status_send.send_replace(Status {
+                    workspace_id: workspace.clone(),
+                    state: "connecting",
+                    epoch: old.control.generation(),
+                    message: "Connecting to cloud workspace…".into(),
+                });
+                old.retry.notify_one();
+            }
             return old;
         }
         let (client, control) = RpcClient::reconnecting();
@@ -76,7 +109,7 @@ impl Manager {
             control.clone(),
             cancel.clone(),
             retry.clone(),
-            status,
+            status.clone(),
         ));
         let environment = Arc::new(Environment {
             client: Arc::new(client),
@@ -84,6 +117,7 @@ impl Manager {
             cancel,
             retry,
             status: receiver,
+            status_send: status,
             task,
         });
         entries.insert(key, Arc::downgrade(&environment));
@@ -108,6 +142,7 @@ async fn grant(
     account: &str,
     workspace: &str,
     resume: &str,
+    interactive_resume: bool,
 ) -> Result<zuse_rpc::cloud::Grant, Failure> {
     if auth.user_id().as_deref() != Some(account) {
         return Err(failed(
@@ -155,6 +190,9 @@ async fn grant(
         ));
     }
     if row.state == "paused" || row.desired_state == "paused" {
+        if !interactive_resume {
+            return Err(failed("paused", PAUSED_MESSAGE, false));
+        }
         api.request(
             &token,
             &["v1", "cloud", "workspaces", workspace, "resume"],
@@ -207,16 +245,18 @@ async fn run(
     retry: Arc<Notify>,
     status: watch::Sender<Status>,
 ) {
-    let resume = uuid::Uuid::new_v4().to_string();
+    let mut resume = uuid::Uuid::new_v4().to_string();
     let mut failures = 0u32;
+    let mut interactive_resume = true;
     let mut changes = auth.watch_state();
     loop {
         if cancel.is_cancelled() {
             return;
         }
-        let result = tokio::select! {biased;_=cancel.cancelled()=>return,result=grant(&api,&auth,&account,&workspace,&resume)=>result};
+        let result = tokio::select! {biased;_=cancel.cancelled()=>return,result=grant(&api,&auth,&account,&workspace,&resume,interactive_resume)=>result};
         let failure = match result {
             Ok(grant) => {
+                interactive_resume = false;
                 let channel =
                     zuse_rpc::cloud::connect_channel(grant, &workspace, cancel.child_token()).await;
                 match channel {
@@ -258,14 +298,18 @@ async fn run(
         let retryable = failure.retry && failures < 8;
         status.send_replace(Status {
             workspace_id: workspace.clone(),
-            state: if retryable { failure.state } else { "blocked" },
+            state: if retryable || failure.state == "paused" {
+                failure.state
+            } else {
+                "blocked"
+            },
             epoch: control.generation(),
             message: failure.message,
         });
         if retryable {
-            tokio::select! {biased;_=cancel.cancelled()=>return,_=retry.notified()=>{},_=tokio::time::sleep(Duration::from_millis(if pending{500}else{(500u64<<failures.min(5)).min(10000)}))=>{}}
+            tokio::select! {biased;_=cancel.cancelled()=>return,_=retry.notified()=>{interactive_resume=true;resume=uuid::Uuid::new_v4().to_string();},_=tokio::time::sleep(Duration::from_millis(if pending{500}else{(500u64<<failures.min(5)).min(10000)}))=>{}}
         } else {
-            tokio::select! {biased;_=cancel.cancelled()=>return,_=retry.notified()=>{failures=0;}}
+            tokio::select! {biased;_=cancel.cancelled()=>return,_=retry.notified()=>{failures=0;interactive_resume=true;resume=uuid::Uuid::new_v4().to_string();}}
         }
     }
 }
@@ -327,4 +371,140 @@ pub async fn handle(auth: &Auth, method: &str, params: Value) -> Result<RpcReply
     )
     .boxed();
     Ok(RpcReply::Stream(stream))
+}
+
+/// Pause is admitted on the controller and outlives a disappearing UI waiter.
+pub async fn pause(auth: &Auth, params: Value) -> Result<Value> {
+    let api = CloudApi::shared()?;
+    ensure!(
+        auth.workos_enabled() || api.loopback,
+        "Sign in to access cloud workspaces."
+    );
+    let account = auth
+        .user_id()
+        .ok_or_else(|| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
+    ensure!(
+        params["expectedAccountId"].as_str() == Some(account.as_str())
+            && auth.state().org_id().is_none(),
+        "The account changed. Select the workspace again."
+    );
+    let workspace = params["workspaceId"]
+        .as_str()
+        .filter(|s| !s.is_empty() && s.len() <= 512)
+        .ok_or_else(|| anyhow::anyhow!("Select a workspace."))?
+        .to_owned();
+    let command = params["commandId"]
+        .as_str()
+        .filter(|s| !s.is_empty() && s.len() <= 128)
+        .ok_or_else(|| anyhow::anyhow!("Pause request is missing."))?
+        .to_owned();
+    let token = auth
+        .access_token()
+        .await
+        .map_err(|_| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
+    ensure!(
+        auth.user_id().as_deref() == Some(account.as_str()) && auth.state().org_id().is_none(),
+        "The account changed. Select the workspace again."
+    );
+    api.environments.retire(&account, &workspace);
+    tokio::spawn(async move {
+        let value = api
+            .request(
+                &token,
+                &["v1", "cloud", "workspaces", &workspace, "pause"],
+                Some(json!({"workspaceId":workspace,"commandId":command})),
+            )
+            .await?;
+        Ok(json!({"accountId":account,"workspace":value}))
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("Pause was interrupted. Retry the same request to check its state.")
+    })?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        Json, Router,
+        routing::{get, post},
+    };
+    #[tokio::test]
+    async fn paused_workspace_requires_interactive_resume() {
+        let resumes = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let captured = resumes.clone();
+        let row = json!({"workspaceId":"paused-workspace","chatId":"thread","initialSessionId":"session","branch":"feature","state":"paused","desiredState":"paused","statusCode":"paused","revision":3,"rpcProtocol":"zuse-rpc-v1"});
+        let app = Router::new()
+            .route(
+                "/v1/cloud/workspaces/paused-workspace",
+                get(move || {
+                    let row = row.clone();
+                    async move { Json(row) }
+                }),
+            )
+            .route(
+                "/v1/cloud/workspaces/paused-workspace/resume",
+                post(move |Json(body): Json<Value>| {
+                    let captured = captured.clone();
+                    async move {
+                        captured.lock().unwrap().push(body);
+                        Json(json!({}))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let data = tempfile::tempdir().unwrap();
+        let mut config = crate::auth::AuthConfig::new(&origin, data.path());
+        config.workos_client_id = None;
+        let auth = Auth::new(config);
+        let account = auth.user_id().unwrap();
+        let api = CloudApi::new(&origin).unwrap();
+        let result = grant(
+            &api,
+            &auth,
+            &account,
+            "paused-workspace",
+            "resume-once",
+            false,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(Failure {
+                state: "paused",
+                retry: false,
+                ..
+            })
+        ));
+        assert!(
+            resumes.lock().unwrap().is_empty(),
+            "A background reconnect cannot wake compute"
+        );
+        let result = grant(
+            &api,
+            &auth,
+            &account,
+            "paused-workspace",
+            "resume-once",
+            true,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(Failure {
+                state: "starting",
+                ..
+            })
+        ));
+        assert_eq!(
+            *resumes.lock().unwrap(),
+            vec![json!({"workspaceId":"paused-workspace","commandId":"resume-once"})]
+        );
+        server.abort();
+    }
 }

@@ -4739,6 +4739,15 @@ impl Shell {
         cx.notify();
     }
 
+    pub(crate) fn cloud_pause_can_close(&self, cx: &App) -> bool {
+        !self.cloud_pause_has_unsaved_work(cx) && !self.composer.read(cx).cloud_has_draft(cx)
+    }
+
+    pub(crate) fn cloud_pause_has_unsaved_work(&self, cx: &App) -> bool {
+        !self.all_file_edits_flushed(cx)
+            || self.side_chats.values().any(|side| side.composer.read(cx).has_draft(cx))
+    }
+
     pub fn prepare_window_close(&mut self, cx: &mut Context<Self>) -> bool {
         self.prepare_exit(PendingExit::CloseWindow, cx)
     }

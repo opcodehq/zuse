@@ -17,6 +17,13 @@ pub(super) struct Cloud {
     context: Option<u64>,
     list: Option<u64>,
     create: Option<u64>,
+    pause: Option<u64>,
+    pause_command: Option<String>,
+    pause_session: Option<String>,
+    metadata: Option<u64>,
+    metadata_failures: usize,
+    poll: Option<Task<()>>,
+    pub guest_workspace: Option<String>,
     launch: Option<Value>,
     status_request: Option<u64>,
     status: Value,
@@ -33,6 +40,38 @@ pub(super) struct Cloud {
     notice: Option<String>,
 }
 impl WorkspaceView {
+    fn pause_cloud(&mut self, session: Option<String>) {
+        if self.cloud.pause.is_some() {
+            return;
+        }
+        let Some(target) = &self.cloud.target else {
+            return;
+        };
+        let command = self
+            .cloud
+            .pause_command
+            .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+            .clone();
+        let body = json!({"workspaceId":target["workspaceId"],"expectedAccountId":self.cloud.account,"commandId":command});
+        self.cloud.pause_session = session;
+        self.cloud.pause = Some(self.call(methods::CLOUD_PAUSE, body));
+        self.cloud.notice = Some("Pausing cloud workspace…".into());
+    }
+    fn watch_cloud_pause(&mut self, cx: &mut Context<Self>) {
+        self.cloud.poll=Some(cx.spawn(async move|this,cx| {
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_secs(1)).await;
+                if !this.update(cx,|this,_| {
+                    if this.cloud.target.as_ref().is_none_or(|t|t["state"]!="pausing") {return false;}
+                    if this.cloud.metadata.is_none() {
+                        let body=json!({"workspaceId":this.cloud.target.as_ref().unwrap()["workspaceId"],"expectedAccountId":this.cloud.account});
+                        this.cloud.metadata=Some(this.call(methods::CLOUD_WORKSPACE,body));
+                    }
+                    true
+                }).unwrap_or(false) {return;}
+            }
+        }));
+    }
     fn refresh_cloud(&mut self) {
         if self.cloud.context.is_none() {
             self.cloud.context = Some(self.call(methods::CLOUD_CONTEXT, json!({})));
@@ -42,6 +81,14 @@ impl WorkspaceView {
         }
     }
     fn connect_cloud(&mut self) {
+        if matches!(
+            self.cloud.status["state"].as_str(),
+            Some("paused" | "blocked")
+        ) {
+            if let Some(id) = self.cloud.status_request.take() {
+                self.cancel(id);
+            }
+        }
         if self.cloud.status_request.is_none() {
             if let Some(target) = &self.cloud.target {
                 let id = target["workspaceId"].clone();
@@ -51,6 +98,16 @@ impl WorkspaceView {
         }
     }
     fn close_cloud(&mut self) {
+        if let Some(id) = self.cloud.pause.take() {
+            self.cancel(id);
+        }
+        self.cloud.pause_command = None;
+        self.cloud.pause_session = None;
+        self.cloud.metadata_failures = 0;
+        self.cloud.poll = None;
+        if let Some(id) = self.cloud.metadata.take() {
+            self.cancel(id);
+        }
         self.close_cloud_uploads();
         if let Some(id) = self.cloud.status_request.take() {
             self.cancel(id);
@@ -181,10 +238,20 @@ impl WorkspaceView {
             4
         } else if self.cloud.history_request == Some(id) {
             5
+        } else if self.cloud.pause == Some(id) {
+            6
+        } else if self.cloud.metadata == Some(id) {
+            7
         } else {
             return false;
         };
         if let Some(error) = frame.get("err") {
+            if kind == 7 {
+                self.cloud.metadata_failures += 1;
+                if self.cloud.metadata_failures >= 8 {
+                    self.cloud.poll = None;
+                }
+            }
             self.cloud.notice = Some(
                 error
                     .as_str()
@@ -288,7 +355,47 @@ impl WorkspaceView {
                     self.cloud.notice =
                         Some("Saved history · viewing does not start compute.".into());
                 }
+                6 => {
+                    self.cloud.pause_command = None;
+                    let session = self.cloud.pause_session.take();
+                    self.close_cloud();
+                    self.cloud.target = Some(value["workspace"].clone());
+                    self.cloud.status = Value::Null;
+                    let body = json!({"workspaceId":value["workspace"]["workspaceId"],"sessionId":session.unwrap_or_else(||value["workspace"]["initialSessionId"].as_str().unwrap_or_default().to_owned())});
+                    self.cloud.history_request = Some(self.call(methods::CLOUD_HISTORY, body));
+                    self.cloud.notice = Some("Pausing cloud workspace…".into());
+                    self.watch_cloud_pause(cx);
+                }
+                7 => {
+                    self.cloud.metadata_failures = 0;
+                    self.cloud.target = Some(value["workspace"].clone());
+                    self.cloud.notice = Some(
+                        if value["workspace"]["state"] == "paused" {
+                            "Cloud workspace paused. Connect to resume."
+                        } else if value["workspace"]["statusCode"]
+                            .as_str()
+                            .is_some_and(|s| s.starts_with("cloud_"))
+                        {
+                            "Pause needs attention. Reopen this thread to check its state."
+                        } else {
+                            "Pausing cloud workspace…"
+                        }
+                        .into(),
+                    );
+                }
                 _ => {}
+            }
+        }
+        if kind == 4 && frame["done"] == true {
+            self.cloud.status = json!({"state":"blocked"});
+            self.cloud.connected_epoch = None;
+            if let Some(events) = &self.cloud.events {
+                let interrupted:Vec<_>=self.cloud.forwards.values().map(|(id,method)|json!({"id":id,"mutation":!methods::retryable_read(method,&Value::Null)})).collect();
+                let _ = events
+                    .unbounded_send(json!({"connection":"retrying","interrupted":interrupted}));
+            }
+            for (id, _) in self.cloud.forwards.drain().collect::<Vec<_>>() {
+                self.cancel(id);
             }
         }
         if frame.get("ok").is_some() || frame.get("err").is_some() || frame["done"] == true {
@@ -299,6 +406,8 @@ impl WorkspaceView {
                 3 => self.cloud.create = None,
                 4 => self.cloud.status_request = None,
                 5 => self.cloud.history_request = None,
+                6 => self.cloud.pause = None,
+                7 => self.cloud.metadata = None,
                 _ => {}
             }
         }
@@ -534,13 +643,25 @@ impl WorkspaceView {
             });
             child.update(cx, |view, _| {
                 view.cloud.guest = true;
-                view.preferences = self.preferences.clone();
-                view.cloud.initial_session = self
+                view.cloud.guest_workspace = self
                     .cloud
                     .target
                     .as_ref()
-                    .and_then(|t| t["initialSessionId"].as_str())
+                    .and_then(|t| t["workspaceId"].as_str())
                     .map(str::to_owned);
+                view.preferences = self.preferences.clone();
+                view.cloud.initial_session = self
+                    .cloud
+                    .head
+                    .as_ref()
+                    .map(|h| h.session_id.clone())
+                    .or_else(|| {
+                        self.cloud
+                            .target
+                            .as_ref()
+                            .and_then(|t| t["initialSessionId"].as_str())
+                            .map(str::to_owned)
+                    });
             });
             self.cloud.child = Some(child);
             self.cloud.events = Some(events);
@@ -549,7 +670,9 @@ impl WorkspaceView {
                 while let Some(request) = receiver.next().await {
                     if this.update(cx,|this,_|{
                         if request["ui"].is_string() {
-                            if matches!(request["ui"].as_str(),Some("loadDrafts"|"saveDrafts"|"savePreferences")) {
+                            if request["ui"]=="pauseCloud" {
+                                this.pause_cloud(request["sessionId"].as_str().map(str::to_owned));
+                            } else if matches!(request["ui"].as_str(),Some("loadDrafts"|"saveDrafts"|"savePreferences")) {
                                 let _ = this.requests.unbounded_send(request);
                             } else if matches!(request["ui"].as_str(),Some("pickAttachments"|"pasteAttachments")) {
                                 this.cloud_file_picker(request);
@@ -615,14 +738,22 @@ impl WorkspaceView {
                             .unwrap_or_default(),
                     )))
                     .when_some(self.cloud.notice.clone(), |v, n| v.child(label(n)))
-                    .when(self.cloud.status_request.is_none(), |v| {
-                        v.child(control("connect-cloud", "Connect").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.connect_cloud();
-                                cx.notify();
-                            },
-                        )))
-                    }),
+                    .child(div().flex_1())
+                    .when(
+                        self.cloud.status_request.is_none()
+                            || matches!(
+                                self.cloud.status["state"].as_str(),
+                                Some("paused" | "blocked")
+                            ),
+                        |v| {
+                            v.child(control("connect-cloud", "Connect").on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.connect_cloud();
+                                    cx.notify();
+                                },
+                            )))
+                        },
+                    ),
             )
             .when_some(self.cloud.child.clone(), |v, child| {
                 v.child(div().flex_1().min_h_0().child(child))

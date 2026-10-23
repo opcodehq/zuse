@@ -250,6 +250,8 @@ pub const CLOUD_HISTORY: &str = "CloudHistory";
 pub const CLOUD_CLEANUP_MIRROR: &str = "CloudCleanupMirror";
 pub const CLOUD_DELETE: &str = "CloudDelete";
 pub const CLOUD_UNARCHIVE: &str = "CloudUnarchive";
+pub const CLOUD_PAUSE: &str = "CloudPause";
+pub const CLOUD_WORKSPACE: &str = "CloudWorkspace";
 pub const CLOUD_ACCOUNT_STATUS: &str = "CloudAccountStatus";
 pub const CLOUD_ACCOUNT_SIGN_IN: &str = "CloudAccountSignIn";
 pub const CLOUD_ACCOUNT_SIGN_OUT: &str = "CloudAccountSignOut";
@@ -294,6 +296,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | CLOUD_BILLING_USAGE
         | CLOUD_WORKSPACES
         | CLOUD_HISTORY
+        | CLOUD_WORKSPACE
         | AUTH_STATUS
         | LOCAL_DEVICE
         | LIST_HARNESSES
@@ -347,6 +350,7 @@ mod retry_tests {
             PLUGINS,
             MODEL_CONNECT,
             CLOUD_UNARCHIVE,
+            CLOUD_PAUSE,
             CLOUD_DELETE,
             CLOUD_CLEANUP_MIRROR,
             CLOUD_CREATE,

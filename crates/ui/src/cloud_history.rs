@@ -66,6 +66,12 @@ impl CloudHistory {
         let view = cx.new(|cx| Transcript::new(state.clone(), cx));
         (state, view)
     }
+    pub(crate) fn update_workspace(&mut self, workspace: Workspace, cx: &mut Context<Self>) {
+        if workspace.workspace_id == self.workspace.workspace_id {
+            self.workspace = workspace;
+            cx.notify();
+        }
+    }
     pub(crate) fn selected_session(&self, cx: &gpui::App) -> String {
         self._state
             .read(cx)
@@ -269,6 +275,10 @@ impl Render for CloudHistory {
                                     } else {
                                         if self.workspace.archived() {
                                             "This chat is archived."
+                                        } else if self.workspace.status_code.starts_with("cloud_") {
+                                            "Pause needs attention. Reopen this thread to check its state."
+                                        } else if self.workspace.state == "pausing" {
+                                            "Pausing cloud workspace…"
                                         } else if self.workspace.state == "paused" {
                                             "This workspace is paused. Connect to continue."
                                         } else {

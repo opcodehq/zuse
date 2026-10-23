@@ -70,7 +70,8 @@ impl WorkspaceView {
         }
     }
     pub(super) fn has_composer_notices(&self) -> bool {
-        !self.connected
+        self.cloud.guest_workspace.is_some()
+            || !self.connected
             || self.transcript_state.notice.is_some()
             || self.error.is_some()
             || self.latest_provider_alert().is_some()
@@ -89,6 +90,17 @@ impl WorkspaceView {
                     .map(|(id, text)| (id, text, false))
             });
         let mut view = column().w_full();
+        if self.cloud.guest_workspace.is_some() {
+            view=view.child(row().min_h(px(32.)).px_3().gap_2()
+                .child(icon("cloud").size(px(14.)).text_color(rgb(MUTED)))
+                .child(label("Cloud workspace").flex_1().text_size(px(11.)))
+                .child(control("pause-cloud-workspace","Pause").h(px(24.)).on_click(cx.listener(|this,_,_,cx| {
+                    if this.file_navigation_blocked(cx) || this.queue_edit_navigation_blocked(cx) {return;}
+                    this.stash_draft(cx);
+                    let _=this.requests.unbounded_send(json!({"ui":"pauseCloud","sessionId":this.selected.as_ref().and_then(|s|s["id"].as_str())}));
+                }))));
+        }
+
         if let Some(notice) = &self.transcript_state.notice {
             view = view.child(
                 row()

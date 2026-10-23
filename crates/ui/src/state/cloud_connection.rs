@@ -73,6 +73,9 @@ impl Source {
 }
 #[async_trait]
 impl super::remote_connection::Source for Source {
+    fn blocked_error(&self, error: &RpcError) -> bool {
+        matches!(error,RpcError::Failed(message) if message==zuse_engine::cloud::environment::PAUSED_MESSAGE || message==zuse_engine::cloud::environment::PAUSING_MESSAGE)
+    }
     fn cancellation(&self) -> CancellationToken {
         self.closed.clone()
     }
@@ -99,7 +102,7 @@ impl super::remote_connection::Source for Source {
                             RpcError::Failed("Invalid cloud connection epoch".into())
                         });
                     }
-                    Some("blocked" | "failed") => {
+                    Some("blocked" | "failed" | "paused") => {
                         return Err(RpcError::Failed(
                             value["message"]
                                 .as_str()
