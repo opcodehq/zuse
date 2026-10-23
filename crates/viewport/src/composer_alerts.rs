@@ -70,8 +70,8 @@ impl WorkspaceView {
         }
     }
     pub(super) fn has_composer_notices(&self) -> bool {
-        self.cloud.guest_workspace.is_some()
-            || !self.connected
+        (!self.connected && !self.cloud.guest)
+            || (self.cloud.guest && self.cloud.guest_status["state"] != "ready")
             || self.transcript_state.notice.is_some()
             || self.error.is_some()
             || self.latest_provider_alert().is_some()
@@ -90,16 +90,20 @@ impl WorkspaceView {
                     .map(|(id, text)| (id, text, false))
             });
         let mut view = column().w_full();
-        if self.cloud.guest_workspace.is_some() {
-            view=view.child(row().min_h(px(32.)).px_3().gap_2()
-                .child(icon("cloud").size(px(14.)).text_color(rgb(MUTED)))
-                .child(label("Cloud workspace").flex_1().text_size(px(11.)))
-                .child(control("pause-cloud-workspace","Pause").h(px(24.)).on_click(cx.listener(|this,_,_,cx| {
-                    if this.file_navigation_blocked(cx) || this.queue_edit_navigation_blocked(cx) {return;}
-                    this.stash_draft(cx);
-                    let _=this.requests.unbounded_send(json!({"ui":"pauseCloud","sessionId":this.selected.as_ref().and_then(|s|s["id"].as_str())}));
-                }))));
+        if self.cloud.guest && self.cloud.guest_status["state"] != "ready" {
+            let state = self.cloud.guest_status["state"].as_str().unwrap_or("connecting");
+            let retry = matches!(state, "blocked" | "failed" | "paused");
+            let title = if state == "paused" { "Cloud workspace paused" }
+                else if retry { "Cloud connection needs attention" }
+                else { "Resuming cloud workspace…" };
+            view = view.child(row().min_h(px(32.)).px_3().gap_2()
+                .child(icon("cloud-dither").size(px(14.)))
+                .child(column().flex_1().min_w_0().child(label(title))
+                    .when_some(self.cloud.guest_status["message"].as_str().map(str::to_owned), |view, detail| view.child(label(detail).text_size(px(11.)))))
+                .when(retry, |view| view.child(control("retry-cloud-connection", if state == "paused" { "Resume" } else { "Retry" })
+                    .on_click(cx.listener(|this, _, _, _| { let _ = this.requests.unbounded_send(json!({"ui":"resumeCloud"})); })) )));
         }
+
 
         if let Some(notice) = &self.transcript_state.notice {
             view = view.child(
@@ -155,7 +159,7 @@ impl WorkspaceView {
                     ),
             );
         }
-        if !self.connected {
+        if !self.connected && !self.cloud.guest {
             view = view.child(
                 row()
                     .id("connection-alert")

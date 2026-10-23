@@ -5602,6 +5602,7 @@ impl Render for ComposerInput {
 /// Events the shell listens for.
 #[derive(Debug, Clone)]
 pub enum ComposerEvent {
+    ResumeCloud { text: String, send: bool },
     WorkspaceCommand(WorkspaceCommand),
     /// Arm the shared-element transition before the draft route is replaced
     /// by the newly-created session. Emitting this before `select_chat` keeps
@@ -8925,6 +8926,7 @@ impl Composer {
         if self.queue_edit_finishing {
             return true;
         }
+        if self.cached_cloud() { return false; }
         let state = self.state.read(cx);
         if state.configuration_blocked() {
             return true;
@@ -11028,6 +11030,16 @@ impl Focusable for Composer {
 
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let resume = self.state.read(cx).pending_cloud_resume.as_ref().filter(|(session, _, _)| {
+            self.current_key == *session && self.state.read(cx).engine().is_some()
+                && self.state.read(cx).connection == crate::state::ConnectionStatus::Ready
+                && !self.state.read(cx).configuration_blocked()
+        }).cloned();
+        if let Some((_, text, send)) = resume {
+            self.state.update(cx, |state, _| state.pending_cloud_resume = None);
+            self.input.update(cx, |input, cx| input.set_text(text.clone(), cx));
+            if send && !text.trim().is_empty() { self.send(text, false, cx); }
+        }
         let archived = self
             .state
             .read(cx)

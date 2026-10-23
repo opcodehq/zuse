@@ -163,6 +163,11 @@ impl WorkspaceView {
     pub(super) fn set_panel(&mut self, tab: &str, cx: &mut Context<Self>) {
         self.right_open = true;
         self.right_tab = tab.into();
+        if self.cloud.cached {
+            let _ = self.requests.unbounded_send(json!({"ui":"resumeCloud"}));
+            cx.notify();
+            return;
+        }
         match tab {
             "browser" => self.watch_browser_previews(),
             "recovery" => self.inspect_recovery(),

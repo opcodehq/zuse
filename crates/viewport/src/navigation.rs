@@ -89,7 +89,7 @@ impl WorkspaceView {
                         .child(div().min_w_0().truncate().text_size(px(12.)).child(title))
                         .role(Role::Tab).aria_selected(active).max_w(px(180.)).flex_shrink_0()
                         .when(active, |d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
-                        .on_click(cx.listener(move |this, _, _, cx| { this.select(chat.clone(), cx); }))
+                        .on_click(cx.listener(move |this, _, _, cx| { if this.cloud.cached { let _ = this.requests.unbounded_send(json!({"ui":"selectCachedCloudSession","sessionId":chat["id"]})); } else { this.select(chat.clone(), cx); } }))
                 })))
             .when(selected["archived"] != true, |d| d.child(icon_button("add-thread-conversation", "plus", "New chat in this thread")
                 .on_click(cx.listener(|this, _, _, cx| {

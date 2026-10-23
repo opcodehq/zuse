@@ -149,7 +149,7 @@ impl Pickers {
                         )
                         .id(("cloud-device", index))
                         .child(
-                            crate::icons::icon(crate::icons::CLOUD)
+                            crate::icons::icon(crate::icons::DITHER_CLOUD)
                                 .size(px(14.))
                                 .text_color(theme.text_muted),
                         )
@@ -186,7 +186,7 @@ impl Pickers {
                     .map(|(index, row)| {
                         popover::picker_row(&theme, false, false, format!("cloud-existing-{index}"))
                             .id(("cloud-existing", index))
-                            .child(crate::icons::icon(crate::icons::CLOUD).size(px(14.)))
+                            .child(crate::icons::icon(crate::icons::DITHER_CLOUD).size(px(14.)))
                             .child(SharedString::from(format!(
                                 "Open · {}",
                                 row["title"]

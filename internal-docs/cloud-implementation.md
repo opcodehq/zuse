@@ -15,7 +15,7 @@ completed UI images in the final user-facing report.
 | C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status/delete APIs, durable Boxd capture/read-back/promotion/retirement/cleanup worker and shared image deletion confirmation, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC, scoped browser uploads, chat-owned retained-terminal discovery and verified Git-aware mirror transfer/publication added; browser file/edit/Git and native terminal keyboard/reopen acceptance added; persisted background sync controller added; native/browser sync controls added; remaining tools, local-mirror terminal/editor selection, device bridge/org automation pending | Guest text/PNG bytes, image reads, browser file/edit/Git, terminal catalog/detach/reopen, native keyboard input, background sync and native/browser sync controls pass with fixture runtime; remaining tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; registered default/custom-path sync cleanup added; remaining: legacy custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
-| F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray, archived cloud transcript screens, shared Cloud repositories/image controls and top-bar cloud details/sync controls added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
+| F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray, archived cloud transcript screens, shared Cloud repositories/image controls, top-bar cloud details/sync controls, conditional paused composer notices and cached draft restoration added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
 
 Do not mark a milestone complete from compilation alone. Record tested behavior and remaining gates here.
@@ -2651,3 +2651,55 @@ The new stream regression and existing interactive-pause guard both passed
 Remaining: native system-picker/Mac acceptance, local mirror editor/terminal routing,
 legacy custom-path settings import, organizations, SSH actions and the rest of the
 full top-bar/screen parity audit. No milestone closes with these controls.
+
+
+## Composer and cloud connection UI correction
+
+The pinned renderer hides cloud connection notices while the workspace is healthy.
+The previous permanent “Cloud workspace / Pause” tray was a parity mistake.
+
+Implemented:
+
+- Removed the healthy-state Pause tray from native and browser composers. Pause
+  is in the cloud details menu and still uses the existing draft/editor admission guards.
+- Removed the browser's duplicate cloud header and the connected-chat project/branch
+  strip. The compact top bar identifies the branch; conversation titles remain in tabs.
+- Matched the reference 19.2 px composer corners, 14/15 attached toolbar, neutral
+  surface treatment, compact destination rows and original dither-cloud vector.
+- Paused browser history keeps the workspace navigation, conversations and real
+  composer. Explicit Resume restores the retained runtime; typing does not wake it.
+  Sending a paused draft resumes and admits that draft once into the original conversation.
+  Cached conversation tabs use HTTP history reads. Duplicate snapshot tabs are removed.
+- Native cached history now reuses the existing Composer and TrayPill instead of
+  replacing the composer with a footer. Resume carries the draft to the original
+  session. Deferred native sends wait for the live configuration watch before admission.
+  Archived history continues to use the Unarchive footer with no execution connection.
+
+Verified behavior and evidence:
+
+- Compiled browser / real isolated PostgreSQL API / packaged guest: two Pause cycles,
+  explicit Resume, editing while paused without waking, and one paused submission
+  delivered once. One workspace and exactly two explicit provider turns. Original
+  history survived both cycles. `.context/cloud-reference-browser-acceptance.json`,
+  `.context/cloud-reference-cached-wire-proof.json`.
+- Final browser build: reload into cached paused history with its composer and
+  navigation, no CloudEnvironment request until explicit Resume, and the original
+  transcript on reconnect. `.context/cloud-reference-cached-reopen-acceptance.json`.
+- Native Linux: the menu pauses the retained runtime without a shell-entity borrow
+  panic; the cached view renders the actual Composer/TrayPill; typing stays asleep;
+  Resume returns to the original session and restores its draft without an extra
+  provider turn. `.context/cloud-reference-native-acceptance.json`,
+  `.context/cloud-reference-native-api.log`. The native submit-event regression
+  passed without consuming the retained draft: `.context/cloud-ui-cached-native-test.log`.
+- Native/web builds and whitespace checks passed. Screenshots:
+  `.context/cloud-reference-ui-running-browser.png`,
+  `.context/cloud-reference-ui-paused-browser.png`,
+  `.context/cloud-reference-ui-running-native.png`,
+  `.context/cloud-reference-ui-paused-native.png`.
+- This acceptance uses the deterministic machine and provider fixtures. It does not
+  establish live-provider, Mac or complete screen parity. Browser/native settings,
+  full sidebar alignment and the remaining Milestone F screen audit stay open.
+
+Reproduction: `scripts/acceptance/cloud-composer-parity.mjs` exercises the rendered
+browser lifecycle against the isolated cloud launch fixture. The broader launch
+script's Pause/Resume locations follow the corrected controls.

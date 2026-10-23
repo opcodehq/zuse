@@ -3,13 +3,18 @@ mod uploads;
 mod sync;
 use super::*;
 use crate::assets::icon;
-use crate::shell::{BG, BORDER, MUTED, column, control, label, row};
+use crate::shell::{BG, BORDER, MUTED, RAISED, column, control, icon_button, label, row};
 
 #[derive(Default)]
 pub(super) struct Cloud {
     pub mode: bool,
     sync: sync::SyncUi,
     pub guest: bool,
+    pub guest_status: Value,
+    pub cached: bool,
+    refresh_cached: bool,
+    pub resume_draft: Option<(String, String, Vec<Value>, bool)>,
+    resume_send: bool,
     pub picker: Option<&'static str>,
     pub target: Option<Value>,
     account: Option<String>,
@@ -325,6 +330,9 @@ impl WorkspaceView {
                     self.connect_cloud();
                 }
                 4 => {
+                    if let Some(child) = &self.cloud.child {
+                        child.update(cx, |view, cx| { view.cloud.guest_status = value.clone(); cx.notify(); });
+                    }
                     let ready = value["state"] == "ready";
                     let epoch = value["epoch"].as_u64().unwrap_or(0);
                     if !ready && self.cloud.connected_epoch.take().is_some() {
@@ -359,13 +367,16 @@ impl WorkspaceView {
                 }
                 5 => {
                     self.cloud.head = serde_json::from_value(value["head"].clone()).ok();
-                    self.cloud.notice =
-                        Some("Saved history · viewing does not start compute.".into());
+                    self.cloud.notice = None;
+                    self.cloud.refresh_cached = true;
                 }
                 6 => {
                     self.cloud.pause_command = None;
                     let session = self.cloud.pause_session.take();
+                    let child = self.cloud.child.take();
                     self.close_cloud();
+                    self.cloud.child = child;
+                    if let Some(child) = &self.cloud.child { child.update(cx, |view, _| view.cloud.cached = true); }
                     self.cloud.target = Some(value["workspace"].clone());
                     self.cloud.status = Value::Null;
                     let body = json!({"workspaceId":value["workspace"]["workspaceId"],"sessionId":session.unwrap_or_else(||value["workspace"]["initialSessionId"].as_str().unwrap_or_default().to_owned())});
@@ -447,13 +458,10 @@ impl WorkspaceView {
             .relative()
             .w(relative(14. / 15.))
             .self_center()
-            .min_h(px(38.))
+            .min_h(px(40.))
             .px_2()
             .gap_1()
-            .bg(rgb(0x191a17))
-            .border_1()
-            .border_b_0()
-            .border_color(rgb(0x2b2d26))
+            .bg(crate::palette::composer_toolbar())
             .when(!self.has_composer_notices(), |view| view.rounded_t(px(19.)))
             .child(
                 control("composer-project", "")
@@ -472,9 +480,10 @@ impl WorkspaceView {
             )
             .child(
                 control("composer-environment", "")
+                    .h(px(28.))
+                    .text_size(px(11.))
                     .rounded_full()
-                    .bg(rgb(0x202020))
-                    .child(icon(if self.cloud.mode { "cloud" } else { "monitor" }).size(px(15.)))
+                    .child(icon(if self.cloud.mode { "cloud-dither" } else { "monitor" }).size(px(15.)))
                     .child(SharedString::from(destination))
                     .child(icon("alt-arrow-down").size(px(11.)))
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -521,13 +530,13 @@ impl WorkspaceView {
             .bottom_full()
             .mb_2()
             .left(px(120.))
-            .w(px(320.))
-            .p_2()
+            .w(px(256.))
+            .p_1()
             .gap_1()
-            .rounded(px(14.))
+            .rounded(px(10.))
             .border_1()
             .border_color(rgb(BORDER))
-            .bg(rgb(0x191a17))
+            .bg(rgb(RAISED))
             .shadow_lg()
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -560,7 +569,7 @@ impl WorkspaceView {
                 .into_any_element();
         }
         menu.when(kind=="environment",|view|view.child(
-            control("destination-this-computer", "").w_full().h(px(36.))
+            control("destination-this-computer", "").w_full().h(px(28.))
                 .when(!self.cloud.mode,|view|view.bg(rgb(0x202020)))
                 .child(icon("monitor").size(px(16.))).child("This computer").child(div().flex_1())
                 .child(destination_radio(!self.cloud.mode))
@@ -569,8 +578,8 @@ impl WorkspaceView {
                 let ready=project["prepared"]==true && project["state"]=="ready";
                 let name=project["displayName"].as_str().unwrap_or("Repository");
                 let title=if kind=="environment"{format!("Cloud · {name}")}else{name.to_owned()};
-                control(("cloud-destination",index),"").w_full().h(px(36.))
-                    .child(icon(if kind=="environment"{"cloud"}else{"folder"}).size(px(16.)))
+                control(("cloud-destination",index),"").w_full().h(px(28.))
+                    .child(icon(if kind=="environment"{"cloud-dither"}else{"folder"}).size(px(16.)))
                     .child(div().flex_1().min_w_0().truncate().child(SharedString::from(title)))
                     .when(kind=="environment",|view|view.child(label("Beta").text_size(px(11.))))
                     .when(!ready,|view|view.child(label("Update cloud image").text_size(px(10.))))
@@ -583,7 +592,7 @@ impl WorkspaceView {
             .when(self.cloud.projects.is_empty(),|view|view.child(label(if self.cloud.context.is_some(){"Loading cloud destinations…"}else{"No cloud repositories available."}).px_2().py_2()))
             .when_some(self.cloud.notice.clone(),|view,n|view.child(label(n).px_2().py_1()))
             .when(kind=="environment",|view|view.child(div().h(px(1.)).my_1().bg(rgb(BORDER))).child(
-                control("destination-add-computer","").w_full().h(px(36.)).child(icon("monitor").size(px(16.))).child("Add computer…")
+                control("destination-add-computer","").w_full().h(px(28.)).child(icon("monitor").size(px(16.))).child("Add computer…")
                     .on_click(cx.listener(|this,_,_,cx|{this.cloud.picker=None;this.settings=true;this.select_settings_section(crate::settings_view::Section::Devices,cx);}))))
             .into_any_element()
     }
@@ -619,13 +628,91 @@ impl WorkspaceView {
                             ("recent-cloud-thread", i),
                             SharedString::from(w["title"].as_str().unwrap_or("Cloud thread")),
                         )
-                        .child(icon("cloud").size(px(13.)))
+                        .child(icon("cloud-dither").size(px(13.)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.open_cloud(w.clone());
                             cx.notify();
                         }))
                     }),
             )
+            .into_any_element()
+    }
+    fn cached_cloud_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(head) = self.cloud.head.clone() else { return; };
+        let (requests, mut receiver) = futures::channel::mpsc::unbounded::<Value>();
+        let (_, events) = futures::channel::mpsc::unbounded();
+        let child = self.cloud.child.clone().unwrap_or_else(|| cx.new(|cx| Self::new(Transport { requests: requests.clone(), events }, window, cx)));
+        let mut status = self.cloud.target.as_ref().cloned().unwrap_or_default();
+        if status["state"] == "ready" {
+            status["state"] = json!("blocked");
+            status["message"] = json!("Reconnect to continue in this workspace.");
+        }
+        child.update(cx, |view, cx| {
+            view.requests = requests;
+            view.pending.clear();
+            view.cloud.guest = true;
+            view.cloud.cached = true;
+            view.cloud.guest_status = status.clone();
+            view.cloud.guest_workspace = Some(head.workspace_id.clone());
+            view.install_cached_history(&head);
+            // The snapshot is read-only by transport; the original thread remains active.
+            view.cached_only = false;
+            if let Some(chat) = &mut view.selected { chat["archived"] = json!(false); }
+            view.chats = head.conversations.iter().filter_map(|chat| serde_json::to_value(chat).ok()).collect();
+            if !view.chats.iter().any(|chat|chat["id"].as_str() == Some(&head.chat.id)) {
+                if let Ok(chat) = serde_json::to_value(&head.chat) { view.chats.push(chat); }
+            }
+            for chat in &mut view.chats { chat["archived"] = json!(false); }
+            view.device_id = Some(head.chat.device_id.clone());
+            view.providers = self.providers.clone();
+            view.preferences = self.preferences.clone();
+            view.connected = false;
+            view.status = if status["state"] == "paused" { "Paused" } else { "Saved history" }.into();
+            view.model = head.chat.config.as_ref().and_then(|config| config.model.clone());
+            cx.notify();
+        });
+        self.cloud.child = Some(child);
+        self.cloud.pump = Some(cx.spawn(async move |this, cx| {
+            while let Some(request) = receiver.next().await {
+                if this.update(cx, |this, cx| {
+                    match request["ui"].as_str() {
+                        Some("resumeCloud") => {
+                            this.cloud.resume_send = request["send"] == true;
+                            this.connect_cloud(); cx.notify();
+                        }
+                        Some("leaveCloud") => { this.close_cloud(); this.refresh_cloud(); cx.notify(); }
+                        Some("selectCachedCloudSession") => {
+                            if let Some(target) = &this.cloud.target {
+                                let body = json!({"workspaceId":target["workspaceId"],"sessionId":request["sessionId"]});
+                                this.cloud.history_request = Some(this.call(methods::CLOUD_HISTORY, body));
+                            }
+                        }
+                        Some("saveDrafts" | "loadDrafts" | "savePreferences") => { let _ = this.requests.unbounded_send(request); }
+                        _ => {}
+                    }
+                }).is_err() { break; }
+            }
+        }));
+    }
+    fn cloud_reconnect_tray(&self, cx: &mut Context<Self>) -> AnyElement {
+        let state = self.cloud.status["state"].as_str()
+            .filter(|state| !state.is_empty())
+            .or_else(|| self.cloud.target.as_ref().and_then(|t| t["state"].as_str()))
+            .unwrap_or("paused");
+        let busy = self.cloud.status_request.is_some() && !matches!(state, "paused" | "blocked" | "failed");
+        let paused = state == "paused" || self.cloud.target.as_ref().is_some_and(|t| t["state"] == "paused");
+        let title = if busy { "Resuming cloud workspace…" } else if paused { "Cloud workspace paused" } else { "Reconnect to cloud workspace" };
+        column().w_full().max_w(px(920.)).self_center().px_3().pb_3().pt_2()
+            .child(row().id("cloud-connection-notice").role(Role::Status)
+                .min_h(px(36.)).px_3().py_1().gap_2().rounded(px(10.))
+                .bg(crate::palette::composer_toolbar())
+                .child(icon("cloud-dither").size(px(14.)))
+                .child(column().min_w_0().flex_1()
+                    .child(label(title).text_color(rgb(crate::shell::TEXT)))
+                    .when_some(self.cloud.notice.clone().filter(|text| !text.contains("Connect to resume")), |view, text| view.child(label(text).text_size(px(11.)))))
+                .child(control("connect-cloud", if busy { "Resuming…" } else if paused { "Resume" } else { "Reconnect" })
+                    .opacity(if busy {0.5} else {1.})
+                    .on_click(cx.listener(move |this, _, _, cx| { if !busy { this.connect_cloud(); cx.notify(); } }))))
             .into_any_element()
     }
     pub(super) fn cloud_workspace(
@@ -638,6 +725,11 @@ impl WorkspaceView {
             // Replace the cached transcript only once the live transport is available.
             let (requests, mut receiver) = futures::channel::mpsc::unbounded::<Value>();
             let (events, event_receiver) = futures::channel::mpsc::unbounded();
+            let resumed = self.cloud.child.as_ref().filter(|child| child.read(cx).cloud.cached).map(|child| {
+                let view = child.read(cx);
+                (view.selected.as_ref().and_then(|chat|chat["id"].as_str()).unwrap_or_default().to_owned(), view.input.read(cx).value(cx), view.attachments.clone(), self.cloud.resume_send)
+            });
+            let panel = self.cloud.child.as_ref().map(|child| { let view = child.read(cx); (view.right_open, view.right_tab.clone()) });
             let child = cx.new(|cx| {
                 Self::new(
                     Transport {
@@ -650,6 +742,10 @@ impl WorkspaceView {
             });
             child.update(cx, |view, _| {
                 view.cloud.guest = true;
+                view.cloud.guest_status = self.cloud.status.clone();
+                view.cloud.resume_draft = resumed;
+                if let Some((open, tab)) = panel { view.right_open = open; view.right_tab = tab; }
+
                 view.cloud.guest_workspace = self
                     .cloud
                     .target
@@ -677,7 +773,11 @@ impl WorkspaceView {
                 while let Some(request) = receiver.next().await {
                     if this.update(cx,|this,_|{
                         if request["ui"].is_string() {
-                            if request["ui"]=="pauseCloud" {
+                            if request["ui"]=="leaveCloud" {
+                                this.close_cloud(); this.refresh_cloud();
+                            } else if request["ui"]=="resumeCloud" {
+                                this.connect_cloud();
+                            } else if request["ui"]=="pauseCloud" {
                                 this.pause_cloud(request["sessionId"].as_str().map(str::to_owned));
                             } else if matches!(request["ui"].as_str(),Some("loadDrafts"|"saveDrafts"|"savePreferences")) {
                                 let _ = this.requests.unbounded_send(request);
@@ -706,66 +806,41 @@ impl WorkspaceView {
                 .as_ref()
                 .unwrap()
                 .unbounded_send(json!({"connection":"connected","epoch":epoch}));
-        } else if !ready && self.cloud.child.is_none() {
-            if let Some(head) = self.cloud.head.clone() {
-                let (requests, _) = futures::channel::mpsc::unbounded();
-                let (_, events) = futures::channel::mpsc::unbounded();
-                let preferences = self.preferences.clone();
-                self.cloud.child = Some(cx.new(|cx| {
-                    let mut view = Self::new(Transport { requests, events }, window, cx);
-                    view.preferences = preferences;
-                    view.install_cached_history(&head);
-                    view
-                }));
-            }
+        } else if !ready && (self.cloud.child.is_none() || self.cloud.refresh_cached) {
+            self.cloud.refresh_cached = false;
+            self.cached_cloud_view(window, cx);
+        } else if !ready && self.cloud.child.as_ref().is_some_and(|child|child.read(cx).cloud.cached) {
+            let mut state = if self.cloud.status_request.is_some() { self.cloud.status.clone() } else { self.cloud.target.as_ref().cloned().unwrap_or_default() };
+            if state["state"] == "ready" || state["state"].is_null() { state["state"] = json!("blocked"); }
+            self.cloud.child.as_ref().unwrap().update(cx, |view, _|view.cloud.guest_status = state);
         }
+        let live = self.cloud.child.as_ref().is_some_and(|child| !child.read(cx).cached_only);
+        let branch = self.cloud.target.as_ref()
+            .and_then(|t| t["branch"].as_str()).unwrap_or("Cloud workspace").to_owned();
         column()
+            .relative()
             .size_full()
             .min_h_0()
             .bg(rgb(BG))
             .text_color(rgb(MUTED))
-            .child(
-                row()
-                    .h(px(44.))
-                    .px_4()
-                    .gap_3()
-                    .child(control("leave-cloud", "Back").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.close_cloud();
-                            this.refresh_cloud();
-                            cx.notify();
-                        },
-                    )))
-                    .child(label("Cloud"))
-                    .child(label(SharedString::from(
-                        self.cloud
-                            .target
-                            .as_ref()
-                            .and_then(|t| t["branch"].as_str())
-                            .unwrap_or_default(),
-                    )))
-                    .when_some(self.cloud.notice.clone(), |v, n| v.child(label(n)))
+            .font_family("Geist")
+            .when(!live, |view| view.child(
+                row().h(px(36.)).px_3().gap_2()
+                    .child(icon_button("leave-cloud", "alt-arrow-left", "Back to threads")
+                        .on_click(cx.listener(|this, _, _, cx| { this.close_cloud(); this.refresh_cloud(); cx.notify(); })))
+                    .child(icon("git-branch").size(px(14.)))
+                    .child(label(SharedString::from(branch)))
                     .child(div().flex_1())
                     .child(self.cloud_details_button(cx))
-                    .when(
-                        self.cloud.status_request.is_none()
-                            || matches!(
-                                self.cloud.status["state"].as_str(),
-                                Some("paused" | "blocked")
-                            ),
-                        |v| {
-                            v.child(control("connect-cloud", "Connect").on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.connect_cloud();
-                                    cx.notify();
-                                },
-                            )))
-                        },
-                    ),
-            )
-            .when_some(self.cloud.child.clone(), |v, child| {
-                v.child(div().flex_1().min_h_0().child(child))
+            ))
+            .when_some(self.cloud.child.clone(), |view, child| {
+                view.child(div().flex_1().min_h_0().child(child))
             })
+            .when(live, |view| view.child(
+                div().absolute().top(px(4.)).right(px(44.))
+                    .child(self.cloud_details_button(cx))
+            ))
+            .when(!live, |view| view.child(self.cloud_reconnect_tray(cx)))
             .into_any_element()
     }
 }

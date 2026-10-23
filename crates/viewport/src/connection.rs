@@ -5,6 +5,10 @@ use zuse_protocol::browser_link::InterruptedRequest;
 
 impl WorkspaceView {
     pub(super) fn require_connection(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.cloud.cached {
+            let _ = self.requests.unbounded_send(json!({"ui":"resumeCloud"}));
+            return false;
+        }
         if self.cached_only {
             return false;
         }

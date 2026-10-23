@@ -13,11 +13,14 @@ pub enum Event {
     Back,
     Restored(String),
     Connect(String),
+    Resume { session: String, text: String, send: bool },
 }
 pub struct CloudHistory {
     root: EngineHandle,
     workspace: Workspace,
     view: Entity<Transcript>,
+    composer: Entity<crate::composer::Composer>,
+    _composer_events: gpui::Subscription,
     _state: Entity<AppState>,
     busy: bool,
     error: Option<String>,
@@ -34,11 +37,20 @@ impl CloudHistory {
         head: Head,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (state, view) = Self::frozen(&head, cx);
+        let (state, view) = Self::frozen(&head, workspace.archived(), cx);
+        let composer = cx.new(|cx| crate::composer::Composer::new(state.clone(), cx));
+        composer.update(cx, |composer, cx| composer.set_cached_cloud(workspace.state == "paused", cx));
+        let events = cx.subscribe(&composer, |this: &mut Self, _, event, cx| {
+            if let crate::composer::ComposerEvent::ResumeCloud { text, send } = event {
+                cx.emit(Event::Resume { session: this.selected_session(cx), text: text.clone(), send: *send });
+            }
+        });
         Self {
             root,
             workspace,
             view,
+            composer,
+            _composer_events: events,
             _state: state,
             busy: false,
             error: None,
@@ -48,7 +60,7 @@ impl CloudHistory {
             session_task: None,
         }
     }
-    fn frozen(head: &Head, cx: &mut Context<Self>) -> (Entity<AppState>, Entity<Transcript>) {
+    fn frozen(head: &Head, archived: bool, cx: &mut Context<Self>) -> (Entity<AppState>, Entity<Transcript>) {
         let state = cx.new(|cx| {
             let mut state = AppState::new();
             state.connection = zuse_protocol::view::ConnectionStatus::Ready;
@@ -57,7 +69,7 @@ impl CloudHistory {
                 state.chats.push(head.chat.clone());
             }
             for chat in &mut state.chats {
-                chat.archived = true;
+                chat.archived = archived;
             }
             state.selected_chat = Some(head.session_id.clone());
             let _ = state.receive_transcript_update(head.transcript.clone(), cx);
@@ -68,6 +80,7 @@ impl CloudHistory {
     }
     pub(crate) fn update_workspace(&mut self, workspace: Workspace, cx: &mut Context<Self>) {
         if workspace.workspace_id == self.workspace.workspace_id {
+            self.composer.update(cx, |composer, cx| composer.set_cached_cloud(workspace.state == "paused", cx));
             self.workspace = workspace;
             cx.notify();
         }
@@ -100,9 +113,15 @@ impl CloudHistory {
                 match result {
                     Ok(value) => match serde_json::from_value::<Head>(value["head"].clone()) {
                         Ok(head) if head.workspace_id == workspace && head.session_id == id => {
-                            let (state, view) = Self::frozen(&head, cx);
-                            this._state = state;
-                            this.view = view;
+                            let archived = this.workspace.archived();
+                            this._state.update(cx, |state, cx| {
+                                state.chats = head.conversations.clone();
+                                if !state.chats.iter().any(|chat|chat.id == head.chat.id) { state.chats.push(head.chat.clone()); }
+                                for chat in &mut state.chats { chat.archived = archived; }
+                                state.selected_chat = Some(head.session_id.clone());
+                                let _ = state.receive_transcript_update(head.transcript.clone(), cx);
+                                cx.notify();
+                            });
                         }
                         _ => {
                             this.error =
@@ -154,7 +173,7 @@ impl Render for CloudHistory {
             .selected_chat_row()
             .and_then(|c| c.title.clone())
             .unwrap_or_else(|| self.workspace.branch.clone());
-        div()
+        let content = div()
             .size_full()
             .flex()
             .flex_col()
@@ -238,8 +257,11 @@ impl Render for CloudHistory {
                             }),
                     ),
             )
-            .child(div().flex_1().min_h_0().child(self.view.clone()))
-            .child(
+            .child(div().flex_1().min_h_0().child(self.view.clone()));
+        if !self.workspace.archived() {
+            return content.child(self.composer.clone()).into_any_element();
+        }
+        content.child(
                 div()
                     .flex_none()
                     .border_t_1()
@@ -280,9 +302,9 @@ impl Render for CloudHistory {
                                         } else if self.workspace.state == "pausing" {
                                             "Pausing cloud workspace…"
                                         } else if self.workspace.state == "paused" {
-                                            "This workspace is paused. Connect to continue."
+                                            "Cloud workspace paused."
                                         } else {
-                                            "Saved conversation. Connect to continue."
+                                            "Saved conversation. Reconnect to continue."
                                         }
                                     })
                                     .when_some(self.error.clone(), |view, error| {
@@ -296,7 +318,7 @@ impl Render for CloudHistory {
                                     .aria_label(if self.workspace.archived() {
                                         "Unarchive cloud thread"
                                     } else {
-                                        "Connect to cloud workspace"
+                                        "Resume cloud workspace"
                                     })
                                     .tab_index(0)
                                     .h(px(28.))
@@ -328,8 +350,10 @@ impl Render for CloudHistory {
                                         "Unarchiving…"
                                     } else if self.workspace.archived() {
                                         "Unarchive"
+                                    } else if self.workspace.state == "paused" {
+                                        "Resume"
                                     } else {
-                                        "Connect"
+                                        "Reconnect"
                                     })
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if this.workspace.archived() {
@@ -340,6 +364,6 @@ impl Render for CloudHistory {
                                     })),
                             ),
                     ),
-            )
+            ).into_any_element()
     }
 }

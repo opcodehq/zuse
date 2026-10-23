@@ -301,7 +301,7 @@ impl WorkspaceView {
         let workspace_focus = cx.focus_handle();
         window.focus(&workspace_focus, cx);
         let input = cx.new(|cx| {
-            input::TextInput::multiline("Ask to make changes or ask a question…", window, cx)
+            input::TextInput::multiline("Ask to make changes at the @ mentioned files or run slash commands…", window, cx)
         });
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         let project_input =
@@ -1423,6 +1423,12 @@ impl WorkspaceView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cloud.cached {
+            if !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty() {
+                let _ = self.requests.unbounded_send(json!({"ui":"resumeCloud","send":true}));
+            }
+            return;
+        }
         if self.submit_cloud_delete(window, cx) {
             return;
         }

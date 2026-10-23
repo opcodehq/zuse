@@ -196,6 +196,7 @@ impl ArchivedPage {
                                     &view,
                                     |page, _, event: &crate::cloud_history::Event, cx| {
                                         match event {
+                                            crate::cloud_history::Event::Resume { .. } => {},
                                             crate::cloud_history::Event::Back => page.cloud.back(),
                                             crate::cloud_history::Event::Restored(id) => {
                                                 page.cloud.restored(id)

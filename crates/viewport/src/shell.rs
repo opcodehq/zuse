@@ -75,7 +75,7 @@ pub(super) fn provider_icon(id: &str) -> &'static str {
 impl WorkspaceView {
     fn header(&self, cx: &mut Context<Self>) -> AnyElement {
         row()
-            .h(px(44.))
+            .h(px(36.))
             .flex_shrink_0()
             .px_3()
             .gap_2()
@@ -87,45 +87,22 @@ impl WorkspaceView {
                     }),
                 ),
             )
-            .child(
-                icon(provider_icon(
-                    self.selected
-                        .as_ref()
-                        .and_then(|chat| chat["config"]["harness"].as_str())
-                        .or_else(|| self.composer_provider().and_then(|p| p["id"].as_str()))
-                        .unwrap_or_default(),
+            .when(self.cloud.guest, |view| view.child(
+                icon_button("leave-cloud", "alt-arrow-left", "Back to threads")
+                    .on_click(cx.listener(|this, _, _, _| { let _ = this.requests.unbounded_send(json!({"ui":"leaveCloud"})); }))
+            ))
+            .child(icon("git-branch").size(px(14.)))
+            .child(control("workspace-branch", SharedString::from(
+                self.selected.as_ref().and_then(|chat| chat["branch"].as_str())
+                    .filter(|branch| !branch.is_empty()).unwrap_or("New chat").to_owned()
                 ))
-                .size(px(15.))
-                .text_color(rgb(0xd38c6d)),
-            )
-            .child(
-                div()
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_ellipsis()
-                    .child(
-                        self.selected
-                            .as_ref()
-                            .and_then(|c| c["title"].as_str())
-                            .unwrap_or("New session")
-                            .to_owned(),
-                    ),
-            )
-            .when(self.content_width > 660. && self.selected.is_some(), |d| {
-                d.child(
-                    label(format!(
-                        "{} · {}",
-                        self.project_name(),
-                        self.selected
-                            .as_ref()
-                            .map(|chat| self.chat_host_label(chat))
-                            .unwrap_or("This device")
-                    ))
-                    .text_size(px(11.))
-                    .text_color(rgb(FAINT))
-                    .text_ellipsis(),
-                )
-            })
+                .h(px(24.)).text_size(px(11.)).max_w(px(280.)).overflow_hidden()
+                .child(icon("alt-arrow-down").size(px(10.)))
+                .on_click(cx.listener(|this, _, _, cx| { if this.selected.is_some() { this.right_open=true; this.set_panel("changes",cx); cx.notify(); } })))
+            .when_some(self.selected.as_ref().and_then(|chat|chat["branch"].as_str()).map(str::to_owned), |view, branch| view.child(
+                icon_button("copy-branch", "copy", "Copy branch").size(px(24.))
+                    .on_click(move |_,_,cx| cx.write_to_clipboard(ClipboardItem::new_string(branch.clone())))
+            ))
             .child(div().flex_1())
             .child(
                 icon_button("voice-call", "microphone", "Open or hide voice call").on_click(
@@ -171,6 +148,7 @@ impl WorkspaceView {
                     ),
                 )
             })
+            .when(self.cloud.guest, |view| view.child(div().w(px(28.)).h(px(28.))))
             .child(
                 icon_button(
                     "toggle-workspace",
@@ -203,11 +181,11 @@ impl WorkspaceView {
             !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty();
         column()
             .w_full()
-            .max_w(px(816.))
+            .max_w(px(if self.selected.is_none() { 768. } else { 920. }))
             .min_w_0()
             .self_center()
             .flex_shrink_0()
-            .px(px(if self.content_width < 500. { 12. } else { 24. }))
+            .px(px(12.))
             .pb_3()
             .pt_2()
             .when_some(self.voice.notice.clone(), |d, notice| {
@@ -234,58 +212,13 @@ impl WorkspaceView {
                         .w(relative(14. / 15.))
                         .self_center()
                         .rounded_t(px(19.))
-                        .border_1()
-                        .border_b_0()
-                        .border_color(rgb(0x2b2d26))
-                        .bg(rgb(0x1c1d19))
+                        .bg(crate::palette::composer_toolbar())
                         .child(self.composer_notices(cx)),
                 )
             })
             .when(self.selected.is_none() && !self.cloud.guest, |view| {
                 view.when(self.cloud.mode, |view| view.child(self.cloud_notices(cx)))
                     .child(self.cloud_toolbar(cx))
-            })
-            .when(self.selected.is_some(), |d| {
-                d.child(
-                    row()
-                        .w(relative(14. / 15.))
-                        .self_center()
-                        .min_h(px(34.))
-                        .px_2()
-                        .gap_1()
-                        .bg(rgb(0x191a17))
-                        .border_1()
-                        .border_b_0()
-                        .border_color(rgb(0x2b2d26))
-                        .when(!self.has_composer_notices(), |d| d.rounded_t(px(19.)))
-                        .child(
-                            control("composer-project", SharedString::from(self.project_name()))
-                                .h(px(28.))
-                                .text_size(px(11.))
-                                .child(icon("alt-arrow-down").size(px(10.)))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.project_picker = true;
-                                    cx.notify();
-                                })),
-                        )
-                        .when_some(
-                            self.selected
-                                .as_ref()
-                                .and_then(|c| c["branch"].as_str())
-                                .map(str::to_owned),
-                            |d, branch| {
-                                d.child(
-                                    control("composer-branch", SharedString::from(branch))
-                                        .h(px(28.))
-                                        .text_size(px(11.))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.right_open = true;
-                                            this.set_panel("changes", cx);
-                                        })),
-                                )
-                            },
-                        ),
-                )
             })
             .when(!self.queue.is_empty(), |view| {
                 view.child(self.queue_view(cx))
@@ -298,10 +231,10 @@ impl WorkspaceView {
                     .w_full()
                     .min_w_0()
                     .relative()
-                    .rounded(px(26.))
+                    .rounded(px(19.2))
                     .border_1()
-                    .border_color(rgb(0x30312b))
-                    .bg(rgb(0x181a18))
+                    .border_color(crate::palette::composer_border())
+                    .bg(crate::palette::composer_background())
                     .shadow_sm()
                     .when(self.model_picker, |d| {
                         d.child(self.composer_picker(cx, None))
@@ -559,7 +492,7 @@ impl WorkspaceView {
                                         } else {
                                             "Send message"
                                         },
-                                        has_draft && self.connected && !self.transcript_blocked(),
+                                        has_draft && (self.connected || self.cloud.cached) && !self.transcript_blocked(),
                                     )
                                     .on_click(cx.listener(
                                         |this, _, window, cx| this.submit(&Submit, window, cx),
@@ -1234,6 +1167,15 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let light = match self.preferences.appearance {
+            zuse_protocol::presentation::AppearanceMode::Light => true,
+            zuse_protocol::presentation::AppearanceMode::Dark => false,
+            zuse_protocol::presentation::AppearanceMode::System => matches!(
+                window.appearance(),
+                WindowAppearance::Light | WindowAppearance::VibrantLight
+            ),
+        };
+        crate::palette::set_light(light);
         if self.cached_only {
             return column()
                 .size_full()
@@ -1244,10 +1186,18 @@ impl Render for WorkspaceView {
         if self.cloud.target.is_some() {
             return self.cloud_workspace(window, cx);
         }
+        if self.connected && !self.transcript_blocked()
+            && self.cloud.resume_draft.as_ref().is_some_and(|draft| self.selected.as_ref().and_then(|chat|chat["id"].as_str()) == Some(draft.0.as_str()))
+        {
+            let (_, text, attachments, send) = self.cloud.resume_draft.take().unwrap();
+            self.input.update(cx, |input, cx| input.set_value(text, cx));
+            self.attachments = attachments;
+            if send { self.submit(&Submit, window, cx); }
+        }
         self.sync_motion(cx);
         self.sync_browser_visibility();
         self.sync_browser_voice_visibility(cx);
-        let target = self.selected.as_ref().and_then(|chat| {
+        let target = self.selected.as_ref().filter(|_| !self.cloud.cached).and_then(|chat| {
             Some(crate::git_controls::Target {
                 chat_id: chat["id"].as_str()?.into(),
                 cwd: chat["cwd"].as_str()?.into(),
@@ -1256,15 +1206,6 @@ impl Render for WorkspaceView {
             })
         });
 
-        let light = match self.preferences.appearance {
-            zuse_protocol::presentation::AppearanceMode::Light => true,
-            zuse_protocol::presentation::AppearanceMode::Dark => false,
-            zuse_protocol::presentation::AppearanceMode::System => matches!(
-                window.appearance(),
-                WindowAppearance::Light | WindowAppearance::VibrantLight
-            ),
-        };
-        crate::palette::set_light(light);
         let colors = crate::plugin_setup::SetupColors {
             text: rgb(0xe8e9e7).into(),
             muted: rgb(0xa4a8a3).into(),

@@ -62,7 +62,7 @@ try {
     page.wait('window.__cloudLaunch.history.some(h=>h.reply)');await sleep(150);
     assert.equal(page.evaluate('window.__cloudLaunch.methods.includes("CloudEnvironment")'),false,'Cached reopening cannot wake compute');
     page.screenshot('cloud-launch-cached-reopen.png');
-    stage='reconnect';page.click(1235,22);
+    stage='reconnect';page.click(1162,850);
     page.wait('window.__cloudLaunch.status.some(s=>s.state==="ready")');
     page.wait('window.__cloudLaunch.forwards.some(f=>f.reply)');await sleep(2500);
     page.screenshot('cloud-composer-connected.png');
@@ -96,14 +96,14 @@ try {
         stage=`pause-cloud-${cycle}`;
         const metadataBefore=page.evaluate('window.__cloudLaunch.metadata.length');
         const resumeBefore=page.evaluate('window.__cloudLaunch.status.filter(s=>s.state==="ready").length');
-        page.click(1125,811);
+        page.click(1222,18);await sleep(200);page.click(1000,359);
         page.wait(`window.__cloudLaunch.pauses.length===${cycle}`);
         page.wait(`window.__cloudLaunch.metadata.slice(${metadataBefore}).some(w=>w.state==="paused")`);
         page.wait('window.__cloudLaunch.history.some(h=>h.reply)');
         await sleep(1200);
         assert.equal(page.evaluate('window.__cloudLaunch.status.filter(s=>s.state==="ready").length'),resumeBefore,'Paused history cannot auto-resume');
         page.screenshot('cloud-paused-browser.png');
-        stage=`resume-cloud-${cycle}`;page.click(1235,22);
+        stage=`resume-cloud-${cycle}`;page.click(1162,850);
         page.wait(`window.__cloudLaunch.status.filter(s=>s.state==="ready").length>${resumeBefore}`);
         page.wait('window.__cloudLaunch.forwards.some(f=>f.reply)');
         await sleep(1000);

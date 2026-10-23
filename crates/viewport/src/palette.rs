@@ -37,3 +37,14 @@ pub fn rgb(value: u32) -> gpui::Rgba {
 pub fn tone(dark: gpui::Hsla, light: gpui::Hsla) -> gpui::Hsla {
     if is_light() { light } else { dark }
 }
+
+/// The reference composer's surface and attached toolbar are separate tonal layers.
+pub fn composer_background() -> gpui::Hsla {
+    tone(gpui::hsla(120. / 360., 0.02, 0.10, 0.90), gpui::white())
+}
+pub fn composer_toolbar() -> gpui::Hsla {
+    tone(gpui::hsla(120. / 360., 0.02, 0.085, 0.96), gpui::rgb(0xe9eee8).into())
+}
+pub fn composer_border() -> gpui::Hsla {
+    tone(gpui::hsla(0., 0., 1., 0.08), gpui::rgb(0xe1e7df).into())
+}

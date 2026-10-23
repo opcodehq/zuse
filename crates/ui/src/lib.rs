@@ -326,6 +326,9 @@ pub(crate) fn open_account_window(target: state::AccountTarget, cx: &mut App) {
 }
 
 pub(crate) fn open_cloud_window(target: state::CloudTarget, cx: &mut App) {
+    open_cloud_window_with_draft(target, None, cx);
+}
+pub(crate) fn open_cloud_window_with_draft(target: state::CloudTarget, draft: Option<(String, String, bool)>, cx: &mut App) {
     let Some(reopen) = cx.try_global::<ReopenState>() else {
         return;
     };
@@ -338,6 +341,7 @@ pub(crate) fn open_cloud_window(target: state::CloudTarget, cx: &mut App) {
     boot.target = Some(state::RemoteTarget::Cloud(target));
     let state = cx.new(|cx| {
         let mut state = state::AppState::new();
+        state.pending_cloud_resume = draft;
         state.watch_clock_transitions(cx);
         state
     });

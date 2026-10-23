@@ -96,6 +96,7 @@ impl Saved {
                                 this.subscription=Some(cx.subscribe(&history,|this,_,event:&Event,cx|match event {
                                     Event::Back=>this.close(cx),
                                     Event::Connect(session)=>this.connect(session.clone(),cx),
+                                    Event::Resume { session, text, send } => this.connect_with_draft(session.clone(), Some((text.clone(), *send)), cx),
                                     Event::Restored(_)=> {
                                         if let Some(history)=&this.history {this.target.initial_session=history.read(cx).selected_session(cx);}
                                         this.load(cx);
@@ -193,10 +194,13 @@ impl Saved {
             .update(cx, |_, window, _| window.remove_window());
     }
     fn connect(&self, session: String, cx: &mut Context<Self>) {
+        self.connect_with_draft(session, None, cx);
+    }
+    fn connect_with_draft(&self, session: String, draft: Option<(String, bool)>, cx: &mut Context<Self>) {
         if self.authorized {
             let mut target = self.target.clone();
-            target.initial_session = session;
-            crate::open_cloud_window(target, cx);
+            target.initial_session = session.clone();
+            crate::open_cloud_window_with_draft(target, draft.map(|(text, send)| (session, text, send)), cx);
             self.close(cx);
         }
     }
@@ -255,7 +259,7 @@ impl Render for Saved {
                                     div()
                                         .id("saved-cloud-connect")
                                         .cursor_pointer()
-                                        .child("Connect")
+                                        .child("Resume")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.connect(this.target.initial_session.clone(), cx)
                                         })),

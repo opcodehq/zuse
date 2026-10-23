@@ -138,7 +138,7 @@ impl Composer {
         let harness = resolved.harness;
         let selected = effective(resolved.sandbox, harness.as_ref());
         let pending = self.state.read(cx).configuration_saving();
-        let unconfirmed = !pending && self.state.read(cx).configuration_blocked();
+        let unconfirmed = !self.cached_cloud() && !pending && self.state.read(cx).configuration_blocked();
         // Safe modes rest muted and brighten on hover; full access stays in
         // the warning tone so the unlocked state is never mistaken for them.
         let full_access = selected == SandboxLevel::DangerFullAccess;

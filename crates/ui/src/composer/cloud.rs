@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 pub(super) struct Launch {
     pub task: Option<Task<()>>,
     pub message: Option<String>,
+    cached: Option<bool>,
     owner: Option<String>,
     request: Option<Value>,
     accepted: Option<Value>,
@@ -13,22 +14,41 @@ pub(super) struct Launch {
     pause_command: Option<String>,
 }
 impl Composer {
+    pub(super) fn cached_cloud(&self) -> bool { self.cloud.cached.is_some() }
+    pub(crate) fn set_cached_cloud(&mut self, paused: bool, cx: &mut Context<Self>) {
+        if self.cloud.cached != Some(paused) {
+            self.cloud.cached = Some(paused);
+            cx.notify();
+        }
+    }
     pub(super) fn live_cloud_row(
         &self,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<super::tray::TrayPill> {
+        if let Some(paused) = self.cloud.cached {
+            return Some(super::tray::TrayPill::new("cached-cloud-connection", if paused { "Cloud workspace paused" } else { "Reconnect to cloud workspace" })
+                .glyph(crate::icons::DITHER_CLOUD)
+                .subtitle("Sending a message will resume this workspace.")
+                .action(super::tray::tray_text_action("resume-cloud-workspace", if paused { "Resume" } else { "Reconnect" }, None, theme)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.emit(ComposerEvent::ResumeCloud { text: this.input.read(cx).text().to_owned(), send: false });
+                    }))));
+        }
         self.state.read(cx).engine()?.cloud_workspace()?;
         let busy = self.cloud.pause_task.is_some();
+        if !busy && self.cloud.pause_error.is_none() {
+            return None;
+        }
         let mut row = super::tray::TrayPill::new(
             "live-cloud-workspace",
             if busy {
                 "Pausing cloud workspace…"
             } else {
-                "Cloud workspace"
+                "Couldn’t pause cloud workspace"
             },
         )
-        .glyph(crate::icons::CLOUD);
+        .glyph(crate::icons::DITHER_CLOUD);
         if let Some(error) = &self.cloud.pause_error {
             row = row.subtitle(error.clone());
         }
@@ -61,7 +81,7 @@ impl Composer {
             || self.appshots.values().any(|captures| !captures.is_empty())
             || self.queue_edit_draft.is_some()
     }
-    fn pause_cloud(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn pause_cloud(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.cloud.pause_task.is_some() {
             return;
         }
@@ -129,6 +149,10 @@ impl Composer {
         cx.notify();
     }
     pub(super) fn send_cloud(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+        if self.cloud.cached.is_some() {
+            cx.emit(ComposerEvent::ResumeCloud { text, send: true });
+            return true;
+        }
         let state = self.state.read(cx);
         if state.selected_chat.is_some() {
             return false;
@@ -373,5 +397,35 @@ impl Composer {
         self.failure = Some(message.into());
         self.failure_key = None;
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod cached_tests {
+    use super::*;
+
+    #[gpui::test]
+    fn cached_cloud_submit_resumes_without_consuming_the_draft(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.selected_chat = Some("retained-session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state, cx));
+        let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = actions.clone();
+        let _subscription = cx.update(|cx| cx.subscribe(&composer, move |_, event, _| {
+            if let ComposerEvent::ResumeCloud { text, send } = event {
+                captured.borrow_mut().push((text.clone(), *send));
+            }
+        }));
+        composer.update(cx, |composer, cx| {
+            composer.set_cached_cloud(true, cx);
+            composer.input.update(cx, |input, cx| input.set_text("Continue the retained conversation", cx));
+            composer.on_submit(cx);
+            assert_eq!(composer.input.read(cx).text(), "Continue the retained conversation");
+            assert!(composer.failure.is_none());
+        });
+        assert_eq!(&*actions.borrow(), &[("Continue the retained conversation".to_owned(), true)]);
     }
 }

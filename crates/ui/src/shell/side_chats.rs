@@ -297,7 +297,8 @@ impl Shell {
                         // A side chat is already selected before its composer
                         // mounts, and it inherits its parent's checkout, so it
                         // never runs worktree setup of its own.
-                        ComposerEvent::NewThreadTransitionStarted
+                        ComposerEvent::ResumeCloud { .. }
+                        | ComposerEvent::NewThreadTransitionStarted
                         | ComposerEvent::WorktreeSetup { .. }
                         | ComposerEvent::OpenFile(_) => {}
                         ComposerEvent::Sent {

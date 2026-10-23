@@ -222,7 +222,7 @@ impl Shell {
         let open = self.cloud_info.menu.get().is_some();
         let mut button = header_icon_button(
             "cloud-workspace-details",
-            icons::CLOUD,
+            icons::DITHER_CLOUD,
             "Cloud workspace details",
             theme,
             cx.listener(|this, _, _, cx| {
@@ -306,7 +306,7 @@ impl Shell {
             .as_str()
             .unwrap_or("Cloud")
             .to_owned();
-        let status = metadata["state"].as_str().unwrap_or("Connected").to_owned();
+        let status = match metadata["state"].as_str() { Some("ready") => "Running", Some("paused") => "Paused", Some("pausing") => "Pausing…", Some("failed") => "Failed", _ => "Starting…" }.to_owned();
         let created = metadata["createdAt"]
             .as_i64()
             .and_then(chrono::DateTime::from_timestamp_millis)
@@ -322,6 +322,20 @@ impl Shell {
             .child(row("Environment", environment))
             .child(row("Status", status))
             .child(row("Created", created))
+            .child(popover::menu_separator())
+            .child(
+                popover::menu_row(&theme, false, "pause-cloud-workspace")
+                    .id("pause-cloud-workspace")
+                    .child(icon(icons::DITHER_CLOUD).size(px(14.)))
+                    .child("Pause workspace")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.close_cloud_info(cx);
+                        let composer = this.composer.clone();
+                        window.defer(cx, move |window, cx| {
+                            composer.update(cx, |composer, cx| composer.pause_cloud(window, cx));
+                        });
+                    })),
+            )
             .child(popover::menu_separator())
             .child(
                 popover::menu_row(&theme, false, "cloud-sync-toggle")

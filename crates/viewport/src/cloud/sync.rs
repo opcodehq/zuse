@@ -4,6 +4,8 @@ use crate::shell::{RAISED, TEXT, icon_button};
 #[derive(Default)]
 pub(super) struct SyncUi {
     open: bool,
+    pressed_while_open: bool,
+    dismissed_at: Option<std::time::Instant>,
     status: Value,
     pub(super) request: Option<u64>,
     pub(super) metadata: Option<u64>,
@@ -83,7 +85,11 @@ impl WorkspaceView {
         true
     }
     fn toggle_cloud_details(&mut self, cx: &mut Context<Self>) {
-        self.cloud.sync.open = !self.cloud.sync.open;
+        // Outside dismissal runs on mouse-down before the trigger's click.
+        // Preserve that dismissal through the same short exit interval as native menus.
+        let dismissed = std::mem::take(&mut self.cloud.sync.pressed_while_open);
+        self.cloud.sync.dismissed_at = None;
+        self.cloud.sync.open = !dismissed && !self.cloud.sync.open;
         if self.cloud.sync.open {
             self.request_cloud_sync(methods::CLOUD_SYNC_STATUS, false, None);
             if self.cloud.sync.metadata.is_none() {
@@ -156,10 +162,21 @@ impl WorkspaceView {
             .unwrap_or_default();
         let button = icon_button(
             "cloud-workspace-details",
-            "cloud",
+            "cloud-dither",
             "Cloud workspace details",
         )
         .aria_expanded(self.cloud.sync.open)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, _| {
+                this.cloud.sync.pressed_while_open = this.cloud.sync.open
+                    || this
+                        .cloud
+                        .sync
+                        .dismissed_at
+                        .is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(150));
+            }),
+        )
         .on_click(cx.listener(|this, _, _, cx| this.toggle_cloud_details(cx)));
         let mut view = row().relative().child(button);
         if self.cloud.sync.open {
@@ -180,6 +197,7 @@ impl WorkspaceView {
                 .occlude()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.cloud.sync.dismissed_at = Some(std::time::Instant::now());
                     this.cloud.sync.open = false;
                     this.cloud.sync.poll = None;
                     cx.notify();
@@ -280,6 +298,26 @@ impl WorkspaceView {
                         },
                     )),
                 );
+            }
+            if self.cloud.status["state"] == "ready" {
+                menu = menu.child(div().h(px(1.)).my_1().bg(rgb(BORDER)))
+                    .child(control("pause-cloud-workspace", "Pause workspace").w_full()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let child = this.cloud.child.clone();
+                            if let Some(child) = child {
+                                let session = child.update(cx, |view, cx| {
+                                    if view.file_navigation_blocked(cx) || view.queue_edit_navigation_blocked(cx) { return None; }
+                                    view.stash_draft(cx);
+                                    Some(view.selected.as_ref().and_then(|chat|chat["id"].as_str()).map(str::to_owned))
+                                });
+                                if let Some(session) = session {
+                                    this.cloud.sync.open = false;
+                                    this.cloud.sync.poll = None;
+                                    this.pause_cloud(session);
+                                    cx.notify();
+                                }
+                            }
+                        })));
             }
             if let Some(error) = self
                 .cloud

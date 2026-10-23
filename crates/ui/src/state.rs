@@ -874,6 +874,7 @@ pub struct AppState {
     pub(crate) canvas_target: Option<CanvasTarget>,
     pub(crate) cloud_project: Option<serde_json::Value>,
     initial_cloud_chat: Option<String>,
+    pub(crate) pending_cloud_resume: Option<(String, String, bool)>,
     pub selected_chat: Option<String>,
     /// Boot auto-select happened (or a manual selection superseded it).
     pub auto_selected: bool,
@@ -1026,6 +1027,7 @@ impl AppState {
             cloud_project: None,
             initial_cloud_chat: None,
             selected_chat: None,
+            pending_cloud_resume: None,
             transcript: Vec::new(),
             queue: Vec::new(),
             context_usage: None,
