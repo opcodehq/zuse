@@ -167,7 +167,8 @@ impl SessionRoom {
         _permit: OwnedSemaphorePermit,
     ) {
         let id = uuid::Uuid::new_v4().to_string();
-        let (tx, mut rx) = mpsc::channel(8);
+        // Initial chat/files/Git subscriptions arrive together; bytes remain globally bounded.
+        let (tx, mut rx) = mpsc::channel(128);
         let (close, mut closed) = watch::channel(None);
         self.0.attach(
             id.clone(),
@@ -186,7 +187,7 @@ impl SessionRoom {
         };
         let (mut sink, mut source) = socket.split();
         loop {
-            tokio::select! { biased;
+            tokio::select! {
                 changed=closed.changed()=> {
                     if changed.is_ok() {
                         let value=*closed.borrow();

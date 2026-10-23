@@ -19,6 +19,10 @@ const STREAM_QUEUE_CAP: usize = 256;
 enum Pending {
     Call(oneshot::Sender<Result<serde_json::Value, RpcError>>),
     Stream(mpsc::Sender<serde_json::Value>),
+    Forward {
+        frames: mpsc::Sender<ServerFrame>,
+        readiness_ack: bool,
+    },
     CheckedStream {
         items: mpsc::Sender<serde_json::Value>,
         ready: Option<oneshot::Sender<Result<(), RpcError>>>,
@@ -34,8 +38,8 @@ impl Shared {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
     }
     pub(super) fn interrupt(&self, reconnecting: bool) {
-        let drained: Vec<_> = self.lock().drain().map(|(_, p)| p).collect();
-        for entry in drained {
+        let drained: Vec<_> = self.lock().drain().collect();
+        for (id, entry) in drained {
             match entry {
                 Pending::Call(tx) => {
                     let error = if reconnecting {
@@ -44,6 +48,13 @@ impl Shared {
                         RpcError::Closed
                     };
                     let _ = tx.send(Err(error));
+                }
+                Pending::Forward { frames, .. } => {
+                    let _ = frames.try_send(ServerFrame {
+                        id, err: Some(if reconnecting {
+                            "The connection closed before completion. This action may have completed; check its current state before retrying.".into()
+                        } else { "Connection closed.".into() }), ..Default::default()
+                    });
                 }
                 Pending::CheckedStream {
                     ready: Some(ready), ..
@@ -120,6 +131,34 @@ pub struct RpcSubscription {
     items: mpsc::Receiver<serde_json::Value>,
     out: mpsc::Sender<String>,
     shared: Arc<Shared>,
+}
+
+/// A proxy keeps the original reply kind and wire error, including null values
+/// and readiness acknowledgements. Dropping it cancels only that RPC request.
+pub struct RpcForward {
+    id: u64,
+    readiness_ack: bool,
+    ended: bool,
+    frames: mpsc::Receiver<ServerFrame>,
+    _cancel: PendingCancellation,
+}
+impl RpcForward {
+    pub async fn recv(&mut self) -> Option<ServerFrame> {
+        match self.frames.recv().await {
+            Some(frame) => {
+                if frame.err.is_some() || frame.done || (frame.ok.is_some() && !self.readiness_ack)
+                {
+                    self.ended = true;
+                }
+                Some(frame)
+            }
+            None if !self.ended => {
+                self.ended = true;
+                Some(ServerFrame { id: self.id, err: Some("Cloud connection interrupted. This action may have completed; check its state before retrying.".into()), ..Default::default() })
+            }
+            None => None,
+        }
+    }
 }
 
 impl RpcSubscription {
@@ -240,6 +279,48 @@ impl RpcClient {
             next_id: AtomicU64::new(1),
             reader,
         }
+    }
+
+    /// Forward a canonical request through a shared client without guessing
+    /// whether its reply will be unary, streaming or a versioned stream ack.
+    pub async fn forward(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<RpcForward, RpcError> {
+        let session = self.out.snapshot()?;
+        let out = session.sender;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (frames, receiver) = mpsc::channel(8);
+        self.shared.lock().insert(
+            id,
+            Pending::Forward {
+                frames,
+                readiness_ack: method == crate::methods::WATCH_CHECKOUT_CHANGE_REQUEST,
+            },
+        );
+        let forward = RpcForward {
+            id,
+            readiness_ack: method == crate::methods::WATCH_CHECKOUT_CHANGE_REQUEST,
+            ended: false,
+            frames: receiver,
+            _cancel: PendingCancellation {
+                id,
+                out: out.clone(),
+                shared: self.shared.clone(),
+            },
+        };
+        Self::send(
+            &out,
+            ClientFrame {
+                id,
+                method: Some(method.into()),
+                params,
+                cancel: false,
+            },
+        )
+        .await?;
+        Ok(forward)
     }
 
     /// Unary request.
@@ -429,6 +510,34 @@ impl Drop for RpcClient {
 
 async fn route_frame(shared: &Arc<Shared>, out: &Outbound, frame: ServerFrame) {
     let id = frame.id;
+    let forward = {
+        let mut pending = shared.lock();
+        match pending.get(&id) {
+            Some(Pending::Forward {
+                frames,
+                readiness_ack,
+            }) => {
+                let sender = frames.clone();
+                if frame.err.is_some() || frame.done || (frame.ok.is_some() && !readiness_ack) {
+                    pending.remove(&id);
+                }
+                Some(sender)
+            }
+            _ => None,
+        }
+    };
+    if let Some(sender) = forward {
+        if sender.send(frame).await.is_err() {
+            if let Ok(session) = out.snapshot() {
+                drop(PendingCancellation {
+                    id,
+                    out: session.sender,
+                    shared: shared.clone(),
+                });
+            }
+        }
+        return;
+    }
     if let Some(err) = frame.err {
         let error = wire_error(err);
         match shared.lock().remove(&id) {
@@ -440,7 +549,10 @@ async fn route_frame(shared: &Arc<Shared>, out: &Outbound, frame: ServerFrame) {
             }) => {
                 let _ = ready.send(Err(error));
             }
-            Some(Pending::Stream(_)) | Some(Pending::CheckedStream { ready: None, .. }) | None => {
+            Some(Pending::Stream(_))
+            | Some(Pending::Forward { .. })
+            | Some(Pending::CheckedStream { ready: None, .. })
+            | None => {
                 // Stream errored: the sender drop closes the receiver.
                 tracing::debug!(id, %error, "rpc: stream ended with error");
             }
@@ -559,3 +671,7 @@ pub async fn connect_ws(url: &str) -> Result<RpcClient, RpcError> {
     });
     Ok(RpcClient::new(out_tx, in_rx))
 }
+
+#[cfg(test)]
+#[path = "client/forward_tests.rs"]
+mod forward_tests;

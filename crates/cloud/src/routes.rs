@@ -458,8 +458,9 @@ async fn context(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let access = state.access(&headers, AccessKind::Content).await?;
+    let projects = state.store.launch_projects(&access.owner_id).await?;
     Ok(Json(
-        json!({"actor":access.actor,"scope":access.scope,"ownerId":access.owner_id}),
+        json!({"actor":access.actor,"scope":access.scope,"ownerId":access.owner_id,"projects":projects}),
     ))
 }
 async fn entitlements(

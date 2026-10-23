@@ -174,7 +174,9 @@ impl WorkspaceView {
                 .unbounded_send(json!({"ui":"loadDrafts","deviceId":device}));
         }
         self.connected = true;
-        self.status = if self.account_remote {
+        self.status = if self.cloud.guest {
+            "Cloud workspace connected"
+        } else if self.account_remote {
             "Account computer connected"
         } else if self.paired {
             "Paired engine connected"

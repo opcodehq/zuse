@@ -1837,6 +1837,78 @@ mod runtime_engine {
         }
     }
     #[tokio::test]
+    #[ignore = "requires isolated PostgreSQL, guest binary and browser driver"]
+    async fn rust_cloud_composer_launch_close_and_reopen() {
+        let api = GuestApi::start_options_with_grants(true, false, false, true, true).await;
+        sqlx::raw_sql(include_str!("fixtures/creation.sql"))
+            .execute(&api.pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE TABLE api_cloud_auth_authorities(account_id text PRIMARY KEY,storage_incarnation_id text NOT NULL,auth_epoch bigint NOT NULL,state text NOT NULL); INSERT INTO api_cloud_auth_authorities VALUES('user-bob','original-auth-storage',1,'ready'); UPDATE api_cloud_project_builds SET settings=settings||'{\"providerAuthDeliveryVersion\":1}'::jsonb WHERE build_id='rust-build';").execute(&api.pool).await.unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::query("INSERT INTO api_cloud_billing_periods(period_id,account_id,status,period_start,period_end,included_provider_cost_micros,markup_basis_points,overage_cap_micros) VALUES('launch-period','user-bob','active',$1,$2,100000000,0,0)").bind(now-1000).bind(now+3600000).execute(&api.pool).await.unwrap();
+        let root = tempfile::Builder::new()
+            .prefix("cloud-launch-")
+            .tempdir_in(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.context"))
+            .unwrap()
+            .keep();
+        let provider = allocation_fixture(&api, root.as_path(), false).await;
+        provider.uncertain_create.store(false, Ordering::SeqCst);
+        let cli = root.as_path().join("claude-fixture");
+        std::fs::write(&cli, include_str!("fixtures/claude-provider.py")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let binary = std::env::var("ZUSE_CLOUD_TEST_GUEST_BIN").unwrap();
+        let wrapper = format!(
+            "#!/usr/bin/env python3\nimport os,sys\nos.environ.pop('ZUSE_API_URL',None)\nos.environ['CLAUDE_CODE_EXECUTABLE']={}\nos.environ['ZUSE_TEST_PROVIDER_SEEN']={}\nos.execv({},[{},'--ipc-port','0',*sys.argv[1:]])\n",
+            serde_json::to_string(&cli.to_string_lossy()).unwrap(),
+            serde_json::to_string(&root.as_path().join("provider-observed").to_string_lossy())
+                .unwrap(),
+            serde_json::to_string(&binary).unwrap(),
+            serde_json::to_string(&binary).unwrap()
+        );
+        std::fs::write(&provider.wrapper, wrapper).unwrap();
+        let path = std::path::PathBuf::from(
+            std::env::var("ZUSE_CLOUD_LAUNCH_UI_FIXTURE_FILE")
+                .expect("Set browser fixture ready file"),
+        );
+        std::fs::write(
+            path.with_extension("runtime"),
+            root.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        std::fs::write(&path, &api.origin).unwrap();
+        tokio::time::timeout(Duration::from_secs(900), async {
+            while !path.with_extension("done").exists() {
+                allocation_due(&api).await;
+                if let Err(error) = api
+                    .control
+                    .allocate_once(&provider, chrono::Utc::now().timestamp_millis())
+                    .await
+                {
+                    std::fs::write(root.join("allocation-error"), error.code).unwrap();
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Cloud composer browser acceptance timed out");
+        assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            std::fs::read_to_string(root.as_path().join("provider-observed"))
+                .unwrap()
+                .lines()
+                .count(),
+            1,
+            "Reopen must not replay the accepted first message"
+        );
+        if let Some(mut child) = provider.child.lock().await.take() {
+            stop_guest(&mut child).await;
+        }
+        api.finish().await;
+    }
+
+    #[tokio::test]
     #[ignore = "requires isolated PostgreSQL and ZUSE_CLOUD_TEST_GUEST_BIN"]
     async fn rust_cloud_allocation_recovers_uncertain_create_and_launch_into_original_chat() {
         let api = GuestApi::start().await;

@@ -7,6 +7,7 @@ pub mod assets;
 mod attachment_tests;
 pub mod branding;
 mod browser;
+mod cloud;
 mod cloud_history;
 mod composer_alerts;
 mod connection;
@@ -79,6 +80,9 @@ use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 
 pub struct WorkspaceView {
     cloud_archive: cloud_history::ArchiveView,
+    cloud: cloud::Cloud,
+    cloud_branch: Entity<input::TextInput>,
+    cloud_model: Entity<input::TextInput>,
     cached_only: bool,
     managed_access: managed_access::ManagedAccess,
     managed_name: Entity<input::TextInput>,
@@ -419,12 +423,17 @@ impl WorkspaceView {
         });
         let worktree_settings = worktree_settings::WorktreeSettingsView::new(window, cx);
         let browser = browser::Browser::new(window, cx);
+        let cloud_branch = cx.new(|cx| input::TextInput::new("Branch (main)", window, cx));
+        let cloud_model = cx.new(|cx| input::TextInput::new("Model (sonnet)", window, cx));
         let view = Self {
             environment: Default::default(),
             browser,
             workspace_focus,
             input,
             cloud_archive: Default::default(),
+            cloud: Default::default(),
+            cloud_branch,
+            cloud_model,
             cached_only: false,
             requests: transport.requests,
             next_id: 1,
@@ -681,6 +690,9 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if self.receive_cloud(&frame, cx) {
+            return;
+        }
         if self.receive_cloud_archive(&frame, cx) {
             return;
         }
@@ -1021,6 +1033,17 @@ impl WorkspaceView {
                 methods::WATCH_CHATS => {
                     self.workspace_synced = true;
                     self.chats = value.as_array().cloned().unwrap_or_default();
+                    if let Some(chat) = self
+                        .cloud
+                        .initial_session
+                        .as_deref()
+                        .and_then(|id| self.chats.iter().find(|c| c["id"] == id))
+                        .cloned()
+                    {
+                        if self.select(chat, cx) {
+                            self.cloud.initial_session = None;
+                        }
+                    }
                     if let Some(selected) = &self.selected {
                         if let Some(chat) = self
                             .chats
@@ -1343,6 +1366,10 @@ impl WorkspaceView {
             return;
         }
         if self.settings {
+            return;
+        }
+        if self.cloud.mode && self.selected.is_none() {
+            self.submit_cloud(cx);
             return;
         }
         if self.queue_edit.is_some() {

@@ -241,7 +241,11 @@ impl WorkspaceView {
                         .child(self.composer_notices(cx)),
                 )
             })
-            .when(self.selected.is_some() || self.project.is_some(), |d| {
+            .when(self.selected.is_none() && !self.cloud.guest, |view| {
+                view.when(self.cloud.mode, |view| view.child(self.cloud_notices(cx)))
+                    .child(self.cloud_toolbar(cx))
+            })
+            .when(self.selected.is_some(), |d| {
                 d.child(
                     row()
                         .w(relative(14. / 15.))
@@ -484,9 +488,13 @@ impl WorkspaceView {
                                     })
                                     .child(
                                         icon(provider_icon(
-                                            provider
-                                                .and_then(|p| p["id"].as_str())
-                                                .unwrap_or_default(),
+                                            if self.cloud.mode && self.selected.is_none() {
+                                                "claude-code"
+                                            } else {
+                                                provider
+                                                    .and_then(|p| p["id"].as_str())
+                                                    .unwrap_or_default()
+                                            },
                                         ))
                                         .size(px(12.))
                                         .text_color(rgb(MUTED)),
@@ -499,7 +507,16 @@ impl WorkspaceView {
                                             .text_size(px(11.))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(rgb(TEXT))
-                                            .child(self.picker_label()),
+                                            .child(if self.cloud.mode && self.selected.is_none() {
+                                                let model = self.cloud_model.read(cx).value(cx);
+                                                if model.is_empty() {
+                                                    "Sonnet".to_owned()
+                                                } else {
+                                                    model
+                                                }
+                                            } else {
+                                                self.picker_label()
+                                            }),
                                     )
                                     .when_some(self.picker_effort_label(), |view, detail| {
                                         view.child(
@@ -512,7 +529,12 @@ impl WorkspaceView {
                                     })
                                     .child(icon("alt-arrow-down").size(px(12.)).opacity(0.6))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_model_picker(window, cx)
+                                        if this.cloud.mode && this.selected.is_none() {
+                                            this.cloud.picker = Some("model");
+                                            cx.notify();
+                                        } else {
+                                            this.open_model_picker(window, cx)
+                                        }
                                     })),
                             )
                             .when_some(self.context_control(cx), |view, control| {
@@ -1219,6 +1241,9 @@ impl Render for WorkspaceView {
                 .child(self.transcript(cx))
                 .into_any_element();
         }
+        if self.cloud.target.is_some() {
+            return self.cloud_workspace(window, cx);
+        }
         self.sync_motion(cx);
         self.sync_browser_visibility();
         self.sync_browser_voice_visibility(cx);
@@ -1309,6 +1334,10 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
+                if this.cloud.picker.take().is_some() {
+                    cx.notify();
+                    return;
+                }
                 if this.dismiss_cloud_delete(window, cx) {
                     return;
                 }

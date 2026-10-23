@@ -2,8 +2,7 @@
 use super::*;
 use crate::assets::icon;
 use crate::shell::{
-    BG, BORDER, FAINT, MUTED, RAISED, SURFACE, TEXT, column, icon_button, label,
-    provider_icon, row,
+    BG, BORDER, FAINT, MUTED, RAISED, SURFACE, TEXT, column, icon_button, label, provider_icon, row,
 };
 use zuse_protocol::presentation::{SidebarView, project_identity};
 
@@ -414,6 +413,9 @@ impl WorkspaceView {
                         )
                     }),
             )
+            .when(!self.cloud.workspaces.is_empty(), |view| {
+                view.child(self.cloud_recent(cx))
+            })
             .child(
                 row()
                     .p_4()
@@ -438,7 +440,9 @@ impl WorkspaceView {
                                 div()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child(if self.account_remote {
+                                    .child(if self.cloud.guest {
+                                        "Cloud workspace"
+                                    } else if self.account_remote {
                                         "Account workspace"
                                     } else if self.paired {
                                         "Paired workspace"
@@ -456,7 +460,9 @@ impl WorkspaceView {
                                     )
                                     .child(
                                         label(if self.connected {
-                                            if self.account_remote {
+                                            if self.cloud.guest {
+                                                "Cloud runtime"
+                                            } else if self.account_remote {
                                                 "Account computer"
                                             } else if self.paired {
                                                 "Paired engine"

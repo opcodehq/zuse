@@ -150,8 +150,8 @@ impl RuntimeControl {
         {
             return Err(ApiError::conflict("cloud_secret_runtime_update_required"));
         }
-        let build:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(b) FROM api_cloud_project_builds b WHERE account_id=$1 AND provider=$2 AND state='ready' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE s.provider=b.provider AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY updated_at DESC LIMIT 1 FOR SHARE")
-            .bind(owner).bind(&body.provider_id).fetch_optional(&mut *tx).await?;
+        let build:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(b) FROM api_cloud_project_builds b WHERE account_id=$1 AND provider=$2 AND state='ready' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE s.provider=b.provider AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY (settings->>'rustRuntimeCheckoutProjectId'=$3) DESC NULLS LAST,updated_at DESC LIMIT 1 FOR SHARE")
+            .bind(owner).bind(&body.provider_id).bind(&body.project_id).fetch_optional(&mut *tx).await?;
         let build = build.ok_or_else(|| ApiError::conflict("cloud_project_not_ready"))?;
         // Prepared Rust images attest the checked-out project and guest protocol explicitly.
         // Account-wide cache selection/custom layouts are ported with image preparation.
@@ -219,7 +219,7 @@ impl RuntimeControl {
             .master
             .create_transcript_key(owner, &id)
             .map_err(|_| ApiError::unavailable("cloud_transcript_key_unavailable"))?;
-        let config = json!({"runtimeGeneration":1,"gatewayEpoch":1,"rustCreateRequestDigest":digest,"rustCommandMailboxEnabled":mailbox,"runtimeRpcProtocol":zuse_protocol::cloud_gateway::RUST_RPC,"title":title,"agent":body.agent,"initialTurnId":turn,"providerAuthMode":if brokered{"broker-v1"}else{"legacy-image"},"runtimeMode":intent["runtimeMode"],"permissions":intent["permissions"],"repositoryCache":"account-image","rustRepositoryCheckout":{"branch":branch,"baseRef":body.base_ref},"startupTimings":{"requestedAt":now}});
+        let config = json!({"runtimeGeneration":1,"gatewayEpoch":1,"rustCreateRequestDigest":digest,"rustNativeTranscriptEnabled":self.transcript_objects.is_some(),"rustCommandMailboxEnabled":mailbox,"runtimeRpcProtocol":zuse_protocol::cloud_gateway::RUST_RPC,"title":title,"agent":body.agent,"initialTurnId":turn,"providerAuthMode":if brokered{"broker-v1"}else{"legacy-image"},"runtimeMode":intent["runtimeMode"],"permissions":intent["permissions"],"repositoryCache":"account-image","rustRepositoryCheckout":{"branch":branch,"baseRef":body.base_ref},"startupTimings":{"requestedAt":now}});
         sqlx::query("INSERT INTO api_cloud_workspaces(workspace_id,account_id,project_id,build_id,provider,runtime_state,chat_id,initial_session_id,branch,base_ref,state,desired_state,status_code,wrapped_transcript_key,idempotency_key,request_config,next_action_at,revision,created_at,updated_at,last_activity_at) VALUES($1,$2,$3,$4,$5,'offline',$6,$7,$8,$9,'queued','ready','provisioning-queued',$10,$11,$12,$13,0,$13,$13,$13)")
             .bind(&id).bind(owner).bind(&body.project_id).bind(build["build_id"].as_str()).bind(&body.provider_id).bind(&chat).bind(&session).bind(&branch).bind(&body.base_ref).bind(wrapped).bind(&body.idempotency_key).bind(config).bind(now).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO api_cloud_workspace_launch_intents(workspace_id,account_id,chat_id,session_id,turn_id,command_id,ciphertext,expires_at,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)").bind(&id).bind(owner).bind(&chat).bind(&session).bind(&turn).bind(&command).bind(ciphertext).bind(now+86_400_000).bind(now).execute(&mut *tx).await?;

@@ -1,4 +1,5 @@
 //! Host-authorized control plane access. No access token crosses the viewport RPC boundary.
+pub mod environment;
 #[cfg(unix)]
 pub mod mirror;
 use crate::auth::Auth;
@@ -16,13 +17,24 @@ pub const CLEANUP_MIRROR: &str = zuse_protocol::methods::CLOUD_CLEANUP_MIRROR;
 pub const DELETE: &str = zuse_protocol::methods::CLOUD_DELETE;
 pub const UNARCHIVE: &str = zuse_protocol::methods::CLOUD_UNARCHIVE;
 pub fn handles(method: &str) -> bool {
-    matches!(method, LIST | READ | UNARCHIVE | DELETE | CLEANUP_MIRROR)
+    matches!(
+        method,
+        LIST | READ
+            | zuse_protocol::methods::CLOUD_CONTEXT
+            | zuse_protocol::methods::CLOUD_CREATE
+            | UNARCHIVE
+            | DELETE
+            | CLEANUP_MIRROR
+            | zuse_protocol::methods::CLOUD_ENVIRONMENT
+            | zuse_protocol::methods::CLOUD_RPC
+    )
 }
 pub struct CloudApi {
     origin: reqwest::Url,
     http: reqwest::Client,
     history: zuse_cloud_projection::reader::Reader,
     loopback: bool,
+    environments: environment::Manager,
     #[cfg(unix)]
     mirrors: mirror::Manager,
 }
@@ -43,6 +55,7 @@ impl CloudApi {
                 .build()?,
             history,
             loopback,
+            environments: environment::Manager::default(),
             #[cfg(unix)]
             mirrors: mirror::Manager::new(
                 std::env::var_os("ZUSE_CLOUD_MIRROR_ROOT")
@@ -139,6 +152,24 @@ impl CloudApi {
             .await
             .map_err(|_| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
         let result = match method {
+            zuse_protocol::methods::CLOUD_CONTEXT => {
+                let value = self
+                    .request(&token, &["v1", "cloud", "context"], None)
+                    .await?;
+                json!({"accountId":account,"projects":value["projects"]})
+            }
+            zuse_protocol::methods::CLOUD_CREATE => {
+                let request: zuse_protocol::cloud::CloudWorkspaceCreateRequest =
+                    serde_json::from_value(params)?;
+                let value = self
+                    .request(
+                        &token,
+                        &["v1", "cloud", "workspaces"],
+                        Some(serde_json::to_value(request)?),
+                    )
+                    .await?;
+                json!({"accountId":account,"workspace":value})
+            }
             LIST => {
                 let value = self
                     .request(&token, &["v1", "cloud", "workspaces"], None)
@@ -160,8 +191,9 @@ impl CloudApi {
                 let workspace: Workspace = serde_json::from_value(value["workspace"].clone())
                     .or_else(|_| serde_json::from_value(value.clone()))?;
                 ensure!(
-                    workspace.archived(),
-                    "This workspace is no longer archived."
+                    workspace.rpc_protocol.as_deref()
+                        == Some(zuse_protocol::cloud_gateway::RUST_RPC),
+                    "This workspace requires a runtime update."
                 );
                 let session = params["sessionId"]
                     .as_str()

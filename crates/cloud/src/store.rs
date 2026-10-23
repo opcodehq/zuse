@@ -71,6 +71,19 @@ impl Store {
         Ok(())
     }
 
+    /// Launch summaries contain no environment values, credentials or secret bindings.
+    pub async fn launch_projects(&self, owner: &str) -> Result<Vec<Value>, ApiError> {
+        let present: bool = sqlx::query_scalar("SELECT to_regclass('api_cloud_projects') IS NOT NULL AND to_regclass('api_cloud_project_builds') IS NOT NULL AND to_regclass('api_cloud_snapshots') IS NOT NULL").fetch_one(&self.pool).await?;
+        if !present {
+            return Ok(vec![]);
+        }
+        let rows = sqlx::query("SELECT to_jsonb(p) AS data, EXISTS(SELECT 1 FROM api_cloud_project_builds b WHERE b.account_id=p.account_id AND b.settings->>'rustRuntimeCheckoutProjectId'=p.project_id AND b.provider='boxd' AND b.state='ready' AND b.settings->>'runtimeRpcProtocol'='zuse-rpc-v1' AND b.settings->>'rustRuntimeStorageFormat'='zuse-rust-engine-v1' AND b.settings->>'rustSessionCommandVersion'='1' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE s.provider=b.provider AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted'))) AS prepared FROM api_cloud_projects p WHERE p.account_id=$1 AND p.included=true ORDER BY p.project_id").bind(owner).fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|r| {
+            let row: Value = r.get("data"); let prepared: bool = r.get("prepared");
+            json!({"projectId":row["project_id"],"displayName":row["display_name"].as_str().or(row["repository_url"].as_str()).or(row["project_id"].as_str()),"repositoryUrl":row["repository_url"],"defaultBranch":row["default_branch"].as_str().unwrap_or("main"),"state":row["state"],"prepared":prepared,"providerId":"boxd"})
+        }).collect())
+    }
+
     pub async fn entitlements(&self, owner: &str) -> Result<Vec<Value>, ApiError> {
         let rows = sqlx::query("SELECT to_jsonb(e) AS data, (SELECT m.machine_id FROM api_machines m WHERE m.account_id=e.account_id AND m.entitlement_id=e.entitlement_id AND m.state <> 'destroyed' ORDER BY m.created_at DESC LIMIT 1) AS machine_id FROM api_entitlements e WHERE account_id=$1 ORDER BY created_at DESC, entitlement_id")
             .bind(owner).fetch_all(&self.pool).await?;
@@ -164,6 +177,7 @@ impl Workspace {
         if let Some(operation) = config.get("rustDeleteOperation") {
             out["deletion"] = json!({"operationId":operation["id"],"phase":operation["phase"]});
         }
+        out["title"] = json!(row["title"].as_str().or_else(|| config["title"].as_str()));
         out["imageGeneration"] = row["build_id"].clone();
         out["rpcProtocol"] = json!(match config["runtimeRpcProtocol"].as_str() {
             Some(zuse_protocol::cloud_gateway::RUST_RPC) => zuse_protocol::cloud_gateway::RUST_RPC,

@@ -240,6 +240,10 @@ pub const UNLINK_MANAGED_HOST: &str = "UnlinkManagedHost";
 pub const LIST_ACCOUNT_DEVICES: &str = "ListAccountDevices";
 pub const REVOKE_ACCOUNT_DEVICE: &str = "RevokeAccountDevice";
 /// Host-authorized cloud catalog and saved history; neither wakes compute.
+pub const CLOUD_CONTEXT: &str = "CloudContext";
+pub const CLOUD_CREATE: &str = "CloudCreate";
+pub const CLOUD_ENVIRONMENT: &str = "CloudEnvironment";
+pub const CLOUD_RPC: &str = "CloudRpc";
 pub const CLOUD_WORKSPACES: &str = "CloudWorkspaces";
 pub const CLOUD_HISTORY: &str = "CloudHistory";
 /// Explicit lifecycle mutation. Never automatically retry on reconnect.
@@ -281,6 +285,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | WATCH_MANAGED_HOST
         | LIST_ACCOUNT_DEVICES
         | CLOUD_ACCOUNT_STATUS
+        | CLOUD_CONTEXT
         | CLOUD_WORKSPACES
         | CLOUD_HISTORY
         | AUTH_STATUS
@@ -338,10 +343,14 @@ mod retry_tests {
             CLOUD_UNARCHIVE,
             CLOUD_DELETE,
             CLOUD_CLEANUP_MIRROR,
+            CLOUD_CREATE,
+            CLOUD_ENVIRONMENT,
+            CLOUD_RPC,
             "FutureMethod",
         ] {
             assert!(!retryable_read(method, &serde_json::json!({})));
         }
+        assert!(retryable_read(CLOUD_CONTEXT, &serde_json::Value::Null));
         assert!(retryable_read(CLOUD_WORKSPACES, &serde_json::Value::Null));
         assert!(retryable_read(CLOUD_HISTORY, &serde_json::Value::Null));
         assert!(retryable_read(AUTH_STATUS, &serde_json::Value::Null));

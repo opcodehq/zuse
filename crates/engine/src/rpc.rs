@@ -1958,6 +1958,9 @@ impl AuthRpc {
 #[async_trait]
 impl RpcService for AuthRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if matches!(method, methods::CLOUD_ENVIRONMENT | methods::CLOUD_RPC) {
+            return crate::cloud::environment::handle(&self.auth, method, params).await;
+        }
         if crate::cloud::handles(method) {
             let result = crate::cloud::handle(&self.auth, method, params)
                 .await
