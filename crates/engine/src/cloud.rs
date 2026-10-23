@@ -2,6 +2,8 @@
 pub mod environment;
 pub mod launch;
 #[cfg(unix)]
+pub mod sync;
+#[cfg(unix)]
 pub mod mirror;
 use crate::auth::Auth;
 use anyhow::{Result, ensure};
@@ -21,6 +23,9 @@ pub fn handles(method: &str) -> bool {
     matches!(
         method,
         LIST | READ
+            | zuse_protocol::methods::CLOUD_SYNC_STATUS
+            | zuse_protocol::methods::CLOUD_SYNC_CONFIGURE
+            | zuse_protocol::methods::CLOUD_SYNC_RETRY
             | zuse_protocol::methods::CLOUD_PAUSE
             | zuse_protocol::methods::CLOUD_WORKSPACE
             | zuse_protocol::methods::CLOUD_IMAGE
@@ -55,6 +60,8 @@ pub struct CloudApi {
     environments: environment::Manager,
     #[cfg(unix)]
     mirrors: mirror::Manager,
+    #[cfg(unix)]
+    syncs: sync::Manager,
 }
 impl CloudApi {
     pub fn new(origin: &str) -> Result<Self> {
@@ -74,6 +81,8 @@ impl CloudApi {
             history,
             loopback,
             environments: environment::Manager::default(),
+            #[cfg(unix)]
+            syncs: sync::Manager::default(),
             #[cfg(unix)]
             mirrors: mirror::Manager::new(
                 std::env::var_os("ZUSE_CLOUD_MIRROR_ROOT")
@@ -107,6 +116,7 @@ impl CloudApi {
             row.local_mirror_cleanup =
                 self.mirrors
                     .observe(account, &row.workspace_id, admitted, retry);
+            self.syncs.observe(account,row);
         }
         #[cfg(not(unix))]
         {
@@ -313,6 +323,10 @@ impl CloudApi {
             .access_token()
             .await
             .map_err(|_| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
+        #[cfg(unix)]
+        if matches!(method,LIST|READ|DELETE|UNARCHIVE|CLEANUP_MIRROR|zuse_protocol::methods::CLOUD_WORKSPACE) {
+            self.syncs.hydrate(self,auth,&account)?;
+        }
         let result = match method {
             zuse_protocol::methods::CLOUD_PREPAID_BALANCE
             | zuse_protocol::methods::CLOUD_PREPAID_CHECKOUT => {
@@ -669,7 +683,10 @@ impl CloudApi {
     }
 }
 pub async fn handle(auth: &Auth, method: &str, params: Value) -> Result<Value> {
-    CloudApi::shared()?.handle(auth, method, params).await
+    let api=CloudApi::shared()?;
+    #[cfg(unix)]
+    if auth.workos_enabled()||api.loopback {api.syncs.ensure_reconciliation(auth.clone());}
+    api.handle(auth, method, params).await
 }
 
 #[cfg(test)]
@@ -738,8 +755,10 @@ pub fn start_mirror_reconciliation(auth: Auth) -> MirrorReconciler {
     MirrorReconciler(tokio::spawn(async move {
         let mut changes = auth.watch_state();
         loop {
-            if auth.user_id().is_some() {
+            if auth.state().is_signed_in() {
                 if let Ok(api) = CloudApi::shared() {
+                    #[cfg(unix)]
+                    let _ = sync::reconcile(api.clone(),auth.clone()).await;
                     let _ = api.handle(&auth, LIST, json!({})).await;
                 }
             }

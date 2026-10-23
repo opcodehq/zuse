@@ -1986,6 +1986,14 @@ impl RpcService for AuthRpc {
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
             return RpcReply::value(&result);
         }
+        #[cfg(unix)]
+        if matches!(method,methods::CLOUD_SYNC_STATUS|methods::CLOUD_SYNC_CONFIGURE|methods::CLOUD_SYNC_RETRY) {
+            let auth=self.auth.clone();let method=method.to_owned();
+            let result=tokio::spawn(async move {crate::cloud::sync::handle(auth,&method,params).await})
+                .await.map_err(|_|RpcError::Failed("Cloud sync request was interrupted. Reopen its status.".into()))?
+                .map_err(|error|RpcError::Failed(error.to_string()))?;
+            return RpcReply::value(&result);
+        }
         if method == methods::CLOUD_PAUSE {
             let value = crate::cloud::environment::pause(&self.auth, params)
                 .await

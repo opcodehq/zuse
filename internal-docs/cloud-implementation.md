@@ -13,8 +13,8 @@ completed UI images in the final user-facing report.
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, app captures/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect, cached reopening with conversation selection, encrypted first-message file delivery, and attached Pause/explicit retained-machine resume added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status/delete APIs, durable Boxd capture/read-back/promotion/retirement/cleanup worker and shared image deletion confirmation, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
-| D: tools/integrations | Shared hosted RPC, scoped browser uploads, chat-owned retained-terminal discovery and verified Git-aware mirror transfer/publication added; browser file/edit/Git and native terminal keyboard/reopen acceptance added; remaining tools, sync controllers/UI/device bridge/org automation pending | Guest text/PNG bytes, image reads, browser file/edit/Git, terminal catalog/detach/reopen and native keyboard input pass with fixture runtime; remaining tool flows pending |
-| E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
+| D: tools/integrations | Shared hosted RPC, scoped browser uploads, chat-owned retained-terminal discovery and verified Git-aware mirror transfer/publication added; browser file/edit/Git and native terminal keyboard/reopen acceptance added; persisted background sync controller added; remaining tools, sync UI/device bridge/org automation pending | Guest text/PNG bytes, image reads, browser file/edit/Git, terminal catalog/detach/reopen and native keyboard input pass with fixture runtime; remaining tool flows pending |
+| E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; registered default/custom-path sync cleanup added; remaining: sync UI and legacy custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray, archived cloud transcript screens and shared Cloud repositories/image controls added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
 
@@ -2565,3 +2565,40 @@ cancellation/cleanup fencing, background scheduling, progress/retry presentation
 default/custom-path management and the native/browser environment controls. Those
 remain on Milestone D/E; do not enable a Sync toggle without those operations.
 No full milestone or live-provider sync acceptance is completed by this layer.
+
+
+### Persisted background sync controller
+
+The host now owns personal-account `CloudSyncStatus`, `CloudSyncConfigure` and
+`CloudSyncRetry` operations. Configuration defaults off and persists in private,
+account-scoped profile files. Default destinations derive from the launch catalog's
+repository/branch; custom destinations require an empty directory or matching
+ownership manifest. Invalid destinations leave the previous configuration running.
+
+An enabled controller copies Git snapshots in the background over the existing
+ready environment connection. It never allocates, resumes or requests a gateway
+connection itself. Status reports actual phases, last successful time, file count,
+transferred bytes and actionable errors. Disable cancels and drains the worker,
+retaining local files. Account changes and signout stop access; development profiles
+cannot start production sync workers with synthetic credentials.
+
+All registered destinations share the archive/deletion publication lock. Partial
+transfers cancel before publication; a publication already underway drains before
+cleanup can proceed. Archive disables persisted sync and reclaims owned files from
+default and custom paths, preserving unrelated or locally changed files. Metadata
+reconciliation operates without an open viewer. Successful permanent cleanup removes
+the workspace's persisted sync settings. Restart reloads preferences without waking
+compute; an explicit connection permits work to continue.
+
+Verified with the real host, isolated Axum/PostgreSQL API and packaged guest:
+default/custom paths, automatic background updates, unchanged-file inode preservation,
+disable/re-enable, host restart with persisted settings and no resume/ticket request,
+unowned-target refusal, wrong-account rejection, and archive cleanup of all registered
+paths without an open viewer. Receipt: `.context/cloud-sync-controller-acceptance.json`;
+run: `.context/cloud-sync-controller-verified-live.log`. The API fixture also passed
+its original single-allocation/single-turn assertions. All 22 focused cloud tests
+passed (`.context/cloud-sync-controller-verified-tests.log`).
+
+Native/browser Sync controls and visual progress/retry presentation are still pending.
+This supports personal accounts; organization sync, import of legacy custom-path
+preferences, live-provider and Mac acceptance remain open. No full milestone is closed.

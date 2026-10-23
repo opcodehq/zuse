@@ -1969,6 +1969,15 @@ mod runtime_engine {
                     if let Some(mut child)=provider.child.lock().await.take() { stop_guest(&mut child).await; }
                     std::fs::write(path.with_extension("offline-ready"),"runtime stopped; account API remains online").unwrap();
                 }
+                if std::env::var_os("ZUSE_CLOUD_SYNC_ACCEPTANCE").is_some()
+                    && path.with_extension("sync-repository").exists()
+                    && !path.with_extension("sync-repository-ready").exists() {
+                    // Import legacy catalog metadata after creation, without
+                    // changing the enrolled runtime's original checkout config.
+                    sqlx::raw_sql("ALTER TABLE api_cloud_projects ADD COLUMN IF NOT EXISTS repository_url text; UPDATE api_cloud_projects SET repository_url='https://github.com/fixture/sync-repository.git' WHERE project_id='create-project';")
+                        .execute(&api.pool).await.unwrap();
+                    std::fs::write(path.with_extension("sync-repository-ready"),"catalog metadata imported").unwrap();
+                }
                 allocation_due(&api).await;
                 if let Err(error) = api
                     .control

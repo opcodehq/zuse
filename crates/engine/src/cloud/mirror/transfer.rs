@@ -292,7 +292,7 @@ fn ensure_dir(path: &Path) -> Result<unix::Dir> {
     }
     Ok(dir)
 }
-fn prepare(path: &Path, workspace: &str) -> Result<unix::Dir> {
+pub(super) fn prepare(path: &Path, workspace: &str) -> Result<unix::Dir> {
     let dir = ensure_dir(path)?;
     if dir.optional_file(MARKER)?.is_none() {
         ensure!(
@@ -580,11 +580,28 @@ impl Drop for PartialFile {
     }
 }
 
+#[cfg(test)]
 async fn receive(
+    root: PathBuf,
+    workspace: String,
+    stream: BoxStream<'static, serde_json::Value>,
+    objects: Arc<unix::Dir>,
+) -> Result<SnapshotResult> {
+    receive_controlled(
+        root,
+        workspace,
+        stream,
+        objects,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+}
+async fn receive_controlled(
     root: PathBuf,
     workspace: String,
     mut stream: BoxStream<'static, serde_json::Value>,
     objects: Arc<unix::Dir>,
+    cancel: tokio_util::sync::CancellationToken,
 ) -> Result<SnapshotResult> {
     let mut checkout = None;
     let mut files = vec![];
@@ -593,7 +610,11 @@ async fn receive(
     let mut bytes = 0u64;
     let mut declared = 0u64;
     let mut complete = false;
-    while let Some(value) = stream.next().await {
+    loop {
+        let value = tokio::select! {biased;_=cancel.cancelled()=>bail!("Sync stopped."),value=stream.next()=>value};
+        let Some(value) = value else {
+            break;
+        };
         let frame: Frame =
             serde_json::from_value(value).context("Invalid cloud snapshot frame.")?;
         ensure!(!complete, "Trailing cloud snapshot frame.");
@@ -733,6 +754,9 @@ async fn receive(
         files: files.len(),
         transferred_bytes: bytes,
     };
+    ensure!(!cancel.is_cancelled(), "Sync stopped.");
+    // Once publication begins, finish it under the caller's gate. Disable/archive
+    // waits for this future; dropping a waiter must never release that gate early.
     tokio::task::spawn_blocking(move || publish(&root, &workspace, files, &objects)).await??;
     Ok(result)
 }
@@ -744,6 +768,23 @@ pub async fn sync_once(
     root: PathBuf,
     workspace: String,
 ) -> Result<SnapshotResult> {
+    sync_once_cancellable(
+        client,
+        target,
+        root,
+        workspace,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+}
+pub async fn sync_once_cancellable(
+    client: &zuse_rpc::RpcClient,
+    target: WorkspaceTarget,
+    root: PathBuf,
+    workspace: String,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<SnapshotResult> {
+    ensure!(!cancel.is_cancelled(), "Sync stopped.");
     let root = root.components().collect::<PathBuf>();
     prepare(&root, &workspace)?;
     let mut cache_name = root.as_os_str().to_owned();
@@ -781,7 +822,14 @@ pub async fn sync_once(
         stream.recv().await.map(|v| (v, stream))
     })
     .boxed();
-    let result = receive(root.clone(), workspace.clone(), stream, objects.clone()).await;
+    let result = receive_controlled(
+        root.clone(),
+        workspace.clone(),
+        stream,
+        objects.clone(),
+        cancel,
+    )
+    .await;
     if result.is_ok() {
         let dir = unix::Dir::optional(&root)?.context("Local mirror disappeared.")?;
         let manifest = read_manifest(&dir, &workspace)?;
@@ -1031,6 +1079,67 @@ mod tests {
         assert_eq!(
             fs::read_to_string(outside.join("sentinel")).unwrap(),
             "untouched"
+        );
+    }
+    #[tokio::test]
+    async fn cancelling_transfer_discards_partial_bytes_before_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("local");
+        let objects = Arc::new(ensure_dir(&temp.path().join("objects")).unwrap());
+        let entry = Entry {
+            path: "file".into(),
+            hash: format!("{:x}", Sha256::digest(b"new")),
+            mode: 0o644,
+            size: 3,
+            link: None,
+            stamp: None,
+        };
+        let frames = vec![
+            Frame::Begin {
+                checkout_id: "checkout".into(),
+            },
+            Frame::Entry { entry },
+            Frame::Chunk {
+                path: "file".into(),
+                data: STANDARD.encode(b"new"),
+            },
+        ];
+        let stream =
+            futures::stream::iter(frames.into_iter().map(|f| serde_json::to_value(f).unwrap()))
+                .chain(futures::stream::pending())
+                .boxed();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let stop = cancel.clone();
+        let target = local.clone();
+        let cache = objects.clone();
+        let task = tokio::spawn(async move {
+            receive_controlled(target, "workspace".into(), stream, cache, stop).await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while fs::read_dir(temp.path().join("objects"))
+                .unwrap()
+                .next()
+                .is_none()
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        cancel.cancel();
+        assert!(
+            task.await
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("stopped")
+        );
+        assert!(!local.exists());
+        assert!(
+            fs::read_dir(temp.path().join("objects"))
+                .unwrap()
+                .next()
+                .is_none()
         );
     }
 }

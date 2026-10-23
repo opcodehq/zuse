@@ -11,7 +11,13 @@ use std::{
 };
 
 mod transfer;
-pub use transfer::{SnapshotRequest, SnapshotResult, snapshot_stream, sync_once};
+pub use transfer::{
+    SnapshotRequest, SnapshotResult, snapshot_stream, sync_once, sync_once_cancellable,
+};
+
+pub(super) fn prepare_target(path: &Path, workspace: &str) -> Result<()> {
+    transfer::prepare(path, workspace).map(|_| ())
+}
 
 const MARKER: &str = ".zuse-sync.json";
 const MANIFEST_LIMIT: u64 = 32 * 1024 * 1024;
@@ -154,12 +160,22 @@ pub fn cleanup_default(base: &Path, workspace: &str) -> Cleanup {
     cleanup_default_checked(base, workspace, &|| false)
 }
 fn cleanup_default_checked(base: &Path, workspace: &str, cancelled: &dyn Fn() -> bool) -> Cleanup {
+    cleanup_all_checked(base, workspace, &HashSet::new(), cancelled)
+}
+fn cleanup_all_checked(
+    base: &Path,
+    workspace: &str,
+    registered: &HashSet<PathBuf>,
+    cancelled: &dyn Fn() -> bool,
+) -> Cleanup {
     let mut status = Cleanup {
         state: "complete".into(),
         ..Cleanup::default()
     };
     let result = (|| {
-        for root in discover(base, workspace)? {
+        let mut roots = registered.clone();
+        roots.extend(discover(base, workspace)?);
+        for root in roots {
             ensure!(!cancelled(), "Cleanup interrupted.");
             let (removed, preserved) = cleanup_checked(&root, workspace, cancelled)?;
             status.removed += removed;
@@ -576,7 +592,10 @@ mod unix {
 pub struct Manager {
     base: PathBuf,
     records: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<(String, String), Record>>>,
-    gate: std::sync::Arc<std::sync::Mutex<()>>,
+    gate: std::sync::Arc<tokio::sync::Mutex<()>>,
+    roots: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<(String, String), HashSet<PathBuf>>>,
+    >,
 }
 struct Record {
     status: Cleanup,
@@ -588,7 +607,35 @@ impl Manager {
             base,
             records: Default::default(),
             gate: Default::default(),
+            roots: Default::default(),
         }
+    }
+    pub(crate) fn register_root(&self, account: &str, workspace: &str, root: PathBuf) {
+        self.roots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry((account.into(), workspace.into()))
+            .or_default()
+            .insert(root);
+    }
+    pub(crate) fn base(&self) -> &Path {
+        &self.base
+    }
+    pub(crate) async fn sync_guard(
+        &self,
+        account: &str,
+        workspace: &str,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>> {
+        let guard = self.gate.clone().lock_owned().await;
+        ensure!(
+            !self
+                .records
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(&(account.into(), workspace.into())),
+            "This workspace is archived or being deleted."
+        );
+        Ok(guard)
     }
     pub fn observe(
         &self,
@@ -627,12 +674,17 @@ impl Manager {
         );
         let this = self.clone();
         tokio::task::spawn_blocking(move || {
-            let _gate = this
-                .gate
+            let _gate = this.gate.blocking_lock();
+            let roots = this
+                .roots
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let result =
-                cleanup_default_checked(&this.base, &key.1, &|| cancelled.load(Ordering::SeqCst));
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&key)
+                .cloned()
+                .unwrap_or_default();
+            let result = cleanup_all_checked(&this.base, &key.1, &roots, &|| {
+                cancelled.load(Ordering::SeqCst)
+            });
             let mut records = this
                 .records
                 .lock()

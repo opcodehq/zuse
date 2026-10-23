@@ -30,6 +30,11 @@ pub struct Environment {
     control: Control,
     task: tokio::task::JoinHandle<()>,
 }
+impl Environment {
+    pub(super) fn ready_client(&self) -> Option<Arc<RpcClient>> {
+        (self.status.borrow().state == "ready").then(|| self.client.clone())
+    }
+}
 impl Drop for Environment {
     fn drop(&mut self) {
         self.cancel.cancel();
@@ -40,7 +45,7 @@ impl Drop for Environment {
 #[derive(Default)]
 pub struct Manager(Mutex<HashMap<(String, String), Weak<Environment>>>);
 impl Manager {
-    fn get(&self, account: &str, workspace: &str) -> Option<Arc<Environment>> {
+    pub(super) fn get(&self, account: &str, workspace: &str) -> Option<Arc<Environment>> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
