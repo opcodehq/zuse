@@ -44,6 +44,8 @@ pub struct PreparedRepository {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageManifest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_launch_assets_version: Option<u32>,
     pub version: u32,
     pub build_id: String,
     pub template_version: String,
@@ -557,6 +559,7 @@ pub fn prepare(plan: &ImagePlan) -> Result<ImageManifest> {
             "image_contains_unconsumed_secrets"
         );
         let manifest = ImageManifest {
+            rust_launch_assets_version: Some(1),
             version: 1,
             build_id: plan.build_id.clone(),
             template_version: plan.template_version.clone(),

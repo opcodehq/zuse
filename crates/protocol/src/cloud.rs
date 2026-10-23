@@ -52,6 +52,8 @@ pub struct CloudForkSource {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudLaunchIntent {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<crate::cloud_assets::Asset>,
     pub command_id: String,
     pub turn_id: String,
     pub title: String,
@@ -293,6 +295,8 @@ pub struct CloudStorageEnrollment {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudWorkspaceCreateRequest {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<crate::cloud_assets::Asset>,
     pub project_id: String,
     pub provider_id: String,
     pub base_ref: String,

@@ -83,11 +83,11 @@ impl WorkspaceView {
             return;
         }
         let text = self.input.read(cx).value(cx);
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
-        if !self.attachments.is_empty() || self.uploading > 0 {
-            self.error = Some("Cloud launch uploads are not connected yet. Keep this draft and remove attachments to start.".into());
+        if self.uploading > 0 {
+            self.error = Some("Wait for attachments to finish uploading.".into());
             cx.notify();
             return;
         }
@@ -103,12 +103,21 @@ impl WorkspaceView {
                 "projectId":project["projectId"],"providerId":project["providerId"],
                 "baseRef":if branch.trim().is_empty(){project["defaultBranch"].as_str().unwrap_or("main")}else{branch.trim()},
                 "agent":"claude-code", "model":if model.trim().is_empty(){"sonnet"}else{model.trim()},
-                "idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text
+                "idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text,
+                "expectedAccountId":self.cloud.account,
+                "attachmentTransfers":self.attachments.iter().map(|a| json!({"uploadId":a["uploadId"],"fileName":a["fileName"]})).collect::<Vec<_>>()
             }));
         }
         let body = self.cloud.launch.clone().unwrap();
         self.cloud.create = Some(self.call(methods::CLOUD_CREATE, body));
-        self.cloud.notice = Some("Accepting first message…".into());
+        self.cloud.notice = Some(
+            if self.attachments.is_empty() {
+                "Accepting first message…"
+            } else {
+                "Uploading cloud attachments…"
+            }
+            .into(),
+        );
         self.error = None;
         cx.notify();
     }
@@ -221,6 +230,19 @@ impl WorkspaceView {
                     if first == Some(self.input.read(cx).value(cx).as_str()) {
                         self.input
                             .update(cx, |input, cx| input.set_value(String::new(), cx));
+                    }
+                    if let Some(sent) = self
+                        .cloud
+                        .launch
+                        .as_ref()
+                        .and_then(|v| v["attachmentTransfers"].as_array())
+                    {
+                        self.attachments.retain(|attachment| {
+                            !sent
+                                .iter()
+                                .any(|file| file["uploadId"] == attachment["uploadId"])
+                        });
+                        self.sync_previews(true, cx);
                     }
                     self.cloud.launch = None;
                     self.close_cloud();

@@ -21,6 +21,9 @@ pub trait Objects: Send + Sync {
     async fn get_archive(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
         self.get(key).await
     }
+    async fn get_asset(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
+        self.get_archive(key).await
+    }
     async fn put_archive(&self, key: &str, bytes: &[u8]) -> Result<(), ApiError> {
         self.put(key, bytes).await
     }
@@ -348,6 +351,18 @@ impl Objects for R2 {
             .try_collect::<Vec<_>>()
             .await?;
         Ok(false)
+    }
+    async fn get_asset(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
+        let response = self
+            .request(reqwest::Method::GET, key, None, 40 * 1024 * 1024)
+            .await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(failed());
+        }
+        Ok(Some(bounded(response, 40 * 1024 * 1024).await?))
     }
     async fn get_archive(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
         let response = self

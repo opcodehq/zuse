@@ -375,7 +375,7 @@ fn authorize(row: &Value, access: &Access, edit: bool) -> Result<(), ApiError> {
     }
     Ok(())
 }
-fn runtime_auth(row: &Value, credential: &str, now: i64) -> Result<(), ApiError> {
+pub(super) fn runtime_auth(row: &Value, credential: &str, now: i64) -> Result<(), ApiError> {
     if !enrollment_matches(row)
         || row["runtime_credential_hash"]
             .as_str()

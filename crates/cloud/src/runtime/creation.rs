@@ -5,6 +5,12 @@ use zuse_protocol::cloud::CloudRuntimeMode;
 
 pub use zuse_protocol::cloud::CloudWorkspaceCreateRequest as CreateWorkspace;
 fn validate(body: &CreateWorkspace) -> Result<(), ApiError> {
+    if body.attachments.len() > zuse_protocol::cloud_assets::MAX_ASSETS
+        || (!body.attachments.is_empty()
+            && body.initial_message_delivery.as_deref() == Some("mailbox-v1"))
+    {
+        return Err(ApiError::bad_request("invalid_launch_attachments"));
+    }
     if body.idempotency_key.is_empty()
         || body.idempotency_key.len() > 512
         || body.project_id.is_empty()
@@ -198,7 +204,33 @@ impl RuntimeControl {
             .as_str()
             .filter(|s| !s.is_empty())
             .ok_or_else(|| ApiError::conflict("cloud_project_not_ready"))?;
-        let id = format!("workspace_{}", uuid::Uuid::new_v4().simple());
+        let staging: bool =
+            sqlx::query_scalar("SELECT to_regclass('zuse_rust_launch_staging') IS NOT NULL")
+                .fetch_one(&mut *tx)
+                .await?;
+        let staged: Option<(String, i64)> = if staging {
+            sqlx::query_as("SELECT workspace_id,expires_at FROM zuse_rust_launch_staging WHERE account_id=$1 AND idempotency_digest=$2 FOR UPDATE").bind(owner).bind(self.master.digest_api(&format!("launch-assets:{owner}"),&body.idempotency_key)).fetch_optional(&mut *tx).await?
+        } else {
+            None
+        };
+        if staged.as_ref().is_some_and(|(_, expiry)| *expiry <= now) {
+            return Err(ApiError::conflict("cloud_launch_upload_expired"));
+        }
+        let id = staged
+            .map(|(id, _)| id)
+            .unwrap_or_else(|| format!("workspace_{}", uuid::Uuid::new_v4().simple()));
+        if !body.attachments.is_empty() {
+            if !staging {
+                return Err(ApiError::unavailable("cloud_launch_asset_schema_not_ready"));
+            }
+            if build["settings"]["rustLaunchAssetsVersion"] != 1 {
+                return Err(ApiError::conflict(
+                    "cloud_launch_attachments_runtime_update_required",
+                ));
+            }
+            self.verify_launch_assets(&mut tx, owner, &id, &body.attachments)
+                .await?;
+        }
         let chat = format!("chat_{}", uuid::Uuid::new_v4());
         let session = format!("s_{}", uuid::Uuid::new_v4());
         let branch = body
@@ -211,8 +243,11 @@ impl RuntimeControl {
         }
         let command = format!("launch:{id}");
         let turn = format!("turn:{id}");
-        let line = body
+        let title_text = body
             .first_message
+            .as_deref()
+            .map(zuse_protocol::attachment_mentions::attachment_mention_prompt);
+        let line = title_text
             .as_deref()
             .unwrap_or(&branch)
             .lines()
@@ -227,6 +262,9 @@ impl RuntimeControl {
             line.to_owned()
         };
         let mut intent = json!({"commandId":command,"turnId":turn,"title":title,"agent":body.agent,"model":body.model,"permissions":body.permissions.clone().unwrap_or_default(),"runtimeMode":body.runtime_mode.unwrap_or(CloudRuntimeMode::ApprovalRequired)});
+        if !body.attachments.is_empty() {
+            intent["attachments"] = json!(body.attachments);
+        }
         let mailbox = body.initial_message_delivery.as_deref() == Some("mailbox-v1");
         if !mailbox && let Some(message) = body.first_message {
             intent["firstMessage"] = json!(message);

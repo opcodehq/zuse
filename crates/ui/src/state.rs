@@ -227,7 +227,13 @@ impl RpcService for DeferredEngineRpc {
                 Err(message) => Err(RpcError::Failed(message)),
             };
         }
-        if AuthRpc::handles(method) {
+        // Launch files belong to the resolved profile upload store. Account-only
+        // controls remain available during onboarding; file launches wait for it.
+        let launch_files = method == methods::CLOUD_CREATE
+            && params["attachmentTransfers"]
+                .as_array()
+                .is_some_and(|files| !files.is_empty());
+        if AuthRpc::handles(method) && !launch_files {
             return self.auth.handle(method, params).await;
         }
 
@@ -2462,8 +2468,7 @@ impl AppState {
 
     fn checkout_diff_stat(&self, chat: &Chat) -> Option<&CheckoutDiffStat> {
         let stats = &self.checkout_diff_stats;
-        chat
-            .checkout_id
+        chat.checkout_id
             .as_deref()
             .and_then(|id| stats.iter().find(|stat| stat.checkout_id == id))
             .or_else(|| {

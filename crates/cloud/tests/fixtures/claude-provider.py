@@ -17,6 +17,9 @@ for line in sys.stdin:
   content=m.get('message',{}).get('content',[])
   blocks=content if isinstance(content,list) else [{'type':'text','text':content}]
   text='\n'.join(b.get('text','') for b in blocks if b.get('type')=='text')
+  if '--system-prompt' not in sys.argv and os.environ.get('ZUSE_TEST_PROVIDER_IMAGE'):
+   assert any(b.get('type')=='image' and base64.b64decode(b['source']['data'])==Path(os.environ['ZUSE_TEST_PROVIDER_IMAGE']).read_bytes() for b in blocks)
+
   if '--system-prompt' not in sys.argv and 'cloud-attachment.txt' in text:
    paths=[line[2:].strip() for line in text.splitlines() if line.startswith('- /')]
    note=next(Path(p) for p in paths if p.endswith('cloud-attachment.txt'))

@@ -376,6 +376,8 @@ async fn purge_metadata(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<
         "zuse_rust_lifecycle_operations",
         "zuse_rust_provider_creates",
         "zuse_rust_gateway_leases",
+        "zuse_rust_launch_assets",
+        "zuse_rust_launch_staging",
     ] {
         let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
             .bind(table)

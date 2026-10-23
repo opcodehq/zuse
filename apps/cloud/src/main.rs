@@ -270,6 +270,12 @@ async fn main() -> Result<()> {
                         anyhow::bail!("{}", error.code);
                     }
                 }
+                if let Err(error) = runtime.sweep_launch_assets_once(now_ms()).await {
+                    tracing::warn!(
+                        code = error.code,
+                        "Abandoned launch upload cleanup deferred"
+                    );
+                }
                 if once {
                     runtime
                         .recovery_once(&*provider, now_ms())

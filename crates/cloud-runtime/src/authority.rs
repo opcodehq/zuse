@@ -48,6 +48,69 @@ impl Authority {
             origin: parsed,
         })
     }
+    pub async fn asset(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+        expected: &zuse_protocol::cloud_assets::Asset,
+    ) -> Result<(zuse_protocol::cloud_assets::Asset, Vec<u8>)> {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use sha2::{Digest, Sha256};
+        let mut url = self.origin.clone();
+        url.path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("runtime_api_origin_invalid"))?
+            .extend([
+                "v1",
+                "cloud",
+                "workspaces",
+                &bootstrap.workspace_id,
+                "runtime",
+                "attachments",
+                &expected.asset_id,
+            ]);
+        let mut response = self
+            .client
+            .get(url)
+            .bearer_auth(&bootstrap.runtime_credential)
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("runtime_asset_unavailable"))?;
+        ensure!(response.status().is_success(), "runtime_asset_unavailable");
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| anyhow::anyhow!("runtime_asset_unavailable"))?
+        {
+            ensure!(
+                body.len() + chunk.len() <= 32 * 1024 * 1024,
+                "runtime_asset_response_too_large"
+            );
+            body.extend_from_slice(&chunk);
+        }
+        let download: zuse_protocol::cloud_assets::Download =
+            serde_json::from_slice(&body).map_err(|_| anyhow::anyhow!("runtime_asset_invalid"))?;
+        let mut identity = expected.clone();
+        // Original launch envelopes predate a public digest field. The authority
+        // authenticates that immutable object's digest before returning its bytes.
+        if identity.sha256.is_empty() {
+            identity.sha256 = download.asset.sha256.clone();
+        }
+        ensure!(
+            download.asset == identity
+                && expected.size_bytes > 0
+                && expected.size_bytes <= zuse_protocol::cloud_assets::MAX_BYTES,
+            "runtime_asset_identity_mismatch"
+        );
+        let bytes = URL_SAFE_NO_PAD
+            .decode(&download.bytes)
+            .map_err(|_| anyhow::anyhow!("runtime_asset_invalid"))?;
+        ensure!(
+            bytes.len() == expected.size_bytes
+                && URL_SAFE_NO_PAD.encode(Sha256::digest(&bytes)) == download.asset.sha256,
+            "runtime_asset_integrity_failed"
+        );
+        Ok((download.asset, bytes))
+    }
     pub async fn lifecycle(
         &self,
         bootstrap: &CloudRuntimeBootstrap,

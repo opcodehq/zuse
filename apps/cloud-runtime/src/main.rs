@@ -288,6 +288,7 @@ async fn run() -> Result<()> {
             &checkout,
             args.test_harness,
             &command_key,
+            &authority,
         )
         .await?;
         if let Some(intent) = &bootstrap.launch_intent {
@@ -421,6 +422,7 @@ async fn adopt(
     checkout: &std::path::Path,
     allow_test: bool,
     command_key: &zuse_cloud_runtime::mailbox::CommandKey,
+    authority: &zuse_cloud_runtime::Authority,
 ) -> Result<()> {
     let Some(intent) = &bootstrap.launch_intent else {
         ensure!(
@@ -482,6 +484,19 @@ async fn adopt(
         core.workspace
             .rename_chat(&bootstrap.chat_id, &intent.title)?;
     }
+    let fingerprint = command_key.fingerprint(&serde_json::to_vec(intent)?);
+    if core.doc_host.mailbox_command_admitted(
+        &bootstrap.initial_session_id,
+        &intent.command_id,
+        &fingerprint,
+    )? {
+        return Ok(());
+    }
+    let mut paths = Vec::new();
+    for asset in &intent.attachments {
+        let (metadata, bytes) = authority.asset(bootstrap, asset).await?;
+        paths.push(core.uploads.import_cloud_asset(&metadata, &bytes)?);
+    }
     if let Some(prompt) = &intent.first_message
         && !core.doc_host.legacy_launch_admitted(
             &bootstrap.initial_session_id,
@@ -490,9 +505,9 @@ async fn adopt(
             prompt,
         )?
     {
-        let fingerprint = command_key.fingerprint(&serde_json::to_vec(intent)?);
+        let prompt = zuse_protocol::message_attachments::with_attachments(prompt, &paths);
         let entry: zuse_doc::SessionCommandEntry = serde_json::from_value(
-            serde_json::json!({"id":intent.command_id,"payload":{"kind":"run","messageId":intent.turn_id,"request":{"prompt":prompt,"harness":harness,"model":intent.model,"cwd":checkout,"sandbox":sandbox,"autoApprove":auto}},"issuedBy":format!("cloud-mailbox:{fingerprint}"),"issuedAt":zuse_cloud_runtime::now_ms(),"expiresAt":9_007_199_254_740_991i64,"status":"pending"}),
+            serde_json::json!({"id":intent.command_id,"payload":{"kind":"run","messageId":intent.turn_id,"request":{"prompt":prompt,"attachments":paths,"harness":harness,"model":intent.model,"cwd":checkout,"sandbox":sandbox,"autoApprove":auto}},"issuedBy":format!("cloud-mailbox:{fingerprint}"),"issuedAt":zuse_cloud_runtime::now_ms(),"expiresAt":9_007_199_254_740_991i64,"status":"pending"}),
         )?;
         core.doc_host
             .admit_mailbox_command(&bootstrap.initial_session_id, entry)

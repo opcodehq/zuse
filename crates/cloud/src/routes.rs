@@ -70,6 +70,18 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .route("/v1/cloud/context", get(context))
+        .route(
+            "/v1/cloud/launch-assets/chunk",
+            post(launch_asset_chunk).layer(DefaultBodyLimit::max(800_000)),
+        )
+        .route(
+            "/v1/cloud/launch-assets/commit",
+            post(launch_asset_commit).layer(DefaultBodyLimit::max(8192)),
+        )
+        .route(
+            "/v1/cloud/workspaces/{id}/runtime/attachments/{asset}",
+            get(runtime_asset),
+        )
         .route("/v1/cloud/github", get(github_catalog))
         .route("/v1/cloud/image", get(image_status))
         .route(
@@ -1375,4 +1387,55 @@ async fn image_delete(
         StatusCode::ACCEPTED,
         Json(state.store.image_status(&access.owner_id, true).await?),
     ))
+}
+
+async fn launch_asset_chunk(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_assets::Chunk>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_launch_asset"))?;
+    Ok(Json(
+        runtime(&state)?
+            .launch_asset_chunk(&access, body, chrono::Utc::now().timestamp_millis())
+            .await?,
+    ))
+}
+async fn launch_asset_commit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_assets::Commit>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_launch_asset"))?;
+    Ok(Json(
+        runtime(&state)?
+            .launch_asset_commit(&access, body, chrono::Utc::now().timestamp_millis())
+            .await?,
+    ))
+}
+async fn runtime_asset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, asset)): Path<(String, String)>,
+) -> Result<Json<zuse_protocol::cloud_assets::Download>, ApiError> {
+    let credential = runtime_bearer(&headers)?;
+    Ok(Json(
+        runtime(&state)?
+            .runtime_asset(
+                &id,
+                credential,
+                &asset,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
+}
+
+fn runtime(state: &AppState) -> Result<&RuntimeControl, ApiError> {
+    state
+        .runtime
+        .as_deref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))
 }

@@ -1932,11 +1932,20 @@ async fn opening_doc_messages_stream(
 #[derive(Clone)]
 pub struct AuthRpc {
     auth: Auth,
+    uploads: Option<Uploads>,
 }
 
 impl AuthRpc {
     pub fn new(auth: Auth) -> Self {
-        Self { auth }
+        Self {
+            auth,
+            uploads: None,
+        }
+    }
+
+    pub fn with_uploads(mut self, uploads: Uploads) -> Self {
+        self.uploads = Some(uploads);
+        self
     }
 
     pub fn handles(method: &str) -> bool {
@@ -1960,6 +1969,19 @@ impl RpcService for AuthRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
         if matches!(method, methods::CLOUD_ENVIRONMENT | methods::CLOUD_RPC) {
             return crate::cloud::environment::handle(&self.auth, method, params).await;
+        }
+        if method == methods::CLOUD_CREATE
+            && params["attachmentTransfers"]
+                .as_array()
+                .is_some_and(|v| !v.is_empty())
+        {
+            let uploads = self.uploads.clone().ok_or_else(|| {
+                RpcError::Failed("Open your workspace before uploading cloud attachments.".into())
+            })?;
+            let result = crate::cloud::launch::create(&self.auth, uploads, params)
+                .await
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
+            return RpcReply::value(&result);
         }
         if crate::cloud::handles(method) {
             let result = crate::cloud::handle(&self.auth, method, params)
@@ -2255,6 +2277,7 @@ impl RpcService for EngineRpc {
         }
         if AuthRpc::handles(method) {
             return AuthRpc::new(self.auth()?.clone())
+                .with_uploads(self.uploads.clone())
                 .handle(method, params)
                 .await;
         }
@@ -4809,7 +4832,9 @@ impl RpcService for EngineRpc {
                 // Bytes just landed on this device: any command deferred on
                 // them (queued-attachment refs) is executable NOW.
                 self.doc_host.kick_drains();
-                RpcReply::value(&serde_json::json!({ "path": path }))
+                RpcReply::value(
+                    &serde_json::json!({ "path": path, "uploadId": p.upload_id, "fileName": p.file_name }),
+                )
             }
             methods::READ_ATTACHMENT_CHUNK => {
                 let p: ReadAttachmentChunkParams = parse_params(params)?;

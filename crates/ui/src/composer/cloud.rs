@@ -21,17 +21,20 @@ impl Composer {
         if self.cloud.task.is_some() {
             return true;
         }
-        if !self.staged().is_empty() || !self.staged_appshots().is_empty() {
+        if !self.staged_appshots().is_empty() {
             self.failure = Some(
-                "Start the cloud thread first, then attach files. Your draft is preserved.".into(),
+                "Start the cloud thread before attaching app captures. Your draft is preserved."
+                    .into(),
             );
             self.failure_key = None;
             cx.notify();
             return true;
         }
-        let Some(controller) = state.engine().map(|e| e.controller()) else {
+        let Some(engine) = state.engine().cloned() else {
             return true;
         };
+        let controller = engine.controller();
+        let staged = self.staged().to_vec();
         let Some(subject) = state.auth_user().map(|user| user.id.clone()) else {
             return true;
         };
@@ -77,29 +80,55 @@ impl Composer {
                 }
             };
             self.cloud.request = Some(
-                json!({"runtimeMode":runtime_mode,"projectId":project["projectId"],"providerId":project["providerId"],"baseRef":project["defaultBranch"],"agent":config.harness.unwrap_or(HarnessId::ClaudeCode),"model":config.model.unwrap_or_else(||"sonnet".into()),"idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text}),
+                json!({"runtimeMode":runtime_mode,"projectId":project["projectId"],"providerId":project["providerId"],"baseRef":project["defaultBranch"],"agent":config.harness.unwrap_or(HarnessId::ClaudeCode),"model":config.model.unwrap_or_else(||"sonnet".into()),"idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text,"expectedAccountId":subject,"attachmentTransfers":staged.iter().map(|a|json!({"uploadId":a.id,"fileName":a.name})).collect::<Vec<_>>()}),
             );
         }
         let key = self.current_key.clone();
         let request = self.cloud.request.clone().unwrap();
         let accepted = self.cloud.accepted.clone();
-        self.cloud.message = Some("Accepting cloud message…".into());
+        self.cloud.message = Some(
+            if staged.is_empty() {
+                "Accepting cloud message…"
+            } else {
+                "Uploading cloud attachments…"
+            }
+            .into(),
+        );
         self.failure = None;
         let launch_controller = controller.clone();
-        let create = gpui_tokio::Tokio::spawn(cx, async move {
-            match accepted {
-                Some(value) => Ok(value),
-                None => {
-                    let response = launch_controller
-                        .client()
-                        .call_scoped(methods::CLOUD_CREATE, request)
-                        .await?;
-                    let value = &response["workspace"];
-                    Ok::<Value, zuse_rpc::RpcError>(value.get("workspace").unwrap_or(value).clone())
+        self.cloud.task = Some(cx.spawn(async move |this, cx| {
+            if accepted.is_none() {
+                for attachment in &staged {
+                    if let Err(error) = attachments::upload_attachment(
+                        &engine,
+                        cx.background_executor(),
+                        None,
+                        &attachment.id,
+                        attachment,
+                        None,
+                    )
+                    .await
+                    {
+                        let _ = this.update(cx, |this, cx| this.cloud_failure(error, cx));
+                        return;
+                    }
                 }
             }
-        });
-        self.cloud.task = Some(cx.spawn(async move |this, cx| {
+            let create = gpui_tokio::Tokio::spawn(cx, async move {
+                match accepted {
+                    Some(value) => Ok(value),
+                    None => {
+                        let response = launch_controller
+                            .client()
+                            .call_scoped(methods::CLOUD_CREATE, request)
+                            .await?;
+                        let value = &response["workspace"];
+                        Ok::<Value, zuse_rpc::RpcError>(
+                            value.get("workspace").unwrap_or(value).clone(),
+                        )
+                    }
+                }
+            });
             let result = create.await;
             let workspace = match result {
                 Ok(Ok(value)) => value,
@@ -173,6 +202,10 @@ impl Composer {
                     let _ = this.update(cx, |this, cx| {
                         if this.current_key == key && this.input.read(cx).text() == text {
                             this.input.update(cx, |input, cx| input.set_text("", cx));
+                            if let Some(current) = this.attachments.get_mut(&key) {
+                                current.retain(|a| !staged.iter().any(|sent| sent.id == a.id));
+                            }
+                            this.sync_attachment_chips(cx);
                         }
                         this.cloud.message = None;
                         this.cloud.request = None;

@@ -11,7 +11,7 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, app captures/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect and encrypted first-message file delivery added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status/delete APIs, durable Boxd capture/read-back/promotion/retirement/cleanup worker and shared image deletion confirmation, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
@@ -51,10 +51,68 @@ or a paid model. Receipts: `.context/cloud-launch-browser-acceptance.json`;
 `.context/cloud-chat-acceptance.log`. UI: `.context/cloud-composer-destination-menu.png`.
 
 Remaining before Milestone B/live rollout: remaining native desktop routing and cached reopen,
-first-launch attachments/context, complete provider/model catalogs, queued startup messages,
+app captures/context, complete provider/model catalogs, queued startup messages,
 reload-persistent uncertain-create retry state, bounded handling of repeated immediately
 closed connections and retry controls, full startup/reconnect trays, pause/resume UI,
 and live-provider acceptance. C–G and the remaining archive gates stay open in the ledger.
+
+
+### First-message cloud files
+
+Native and browser composers can attach files before starting a cloud workspace.
+They reuse local staging and send committed upload identities through the host
+controller. The host pins the admitting personal account, uploads encrypted assets,
+then submits the original idempotent workspace request. Accepted host work survives
+client cancellation. Native attachment launch waits for the resolved profile store;
+account-only onboarding remains available before engine assembly.
+
+The additive `0008_launch_assets.sql` migration records an opaque future workspace
+identity before any R2 write. Files retain the original eight-file / 20 MiB limits
+and supported MIME types. Immutable encrypted chunks are read back and hashed before
+publishing the manifest. Private filenames stay encrypted in PostgreSQL and R2.
+Create verifies the committed references and the prepared image's attested
+`rustLaunchAssetsVersion: 1` capability before allocation. Older prepared images
+continue to support text launches; attachment launches request a rebuild.
+
+The packaged guest authenticates runtime-only downloads, verifies metadata and bytes,
+installs without overwriting changed destinations, and admits the original command
+with both prompt references and provider attachment paths. Existing original-format
+v1 asset objects remain readable, including large encrypted envelopes. Launch titles
+use the existing plain attachment labels rather than displaying chip markup.
+
+Unaccepted uploads expire after 24 hours. The allocation worker purges a bounded
+page under the same account lock as create; accepted workspace assets remain intact.
+A database failure after object upload leaves a durable reservation for retry and
+cleanup. Permanent workspace deletion removes these assets and staging metadata
+through the existing workspace purge lifecycle.
+
+Verified:
+
+- PostgreSQL/HTTP: encrypted round trip, no allocation before create, identical and
+  conflicting retries, incomplete/corrupt files, runtime ownership fencing, original
+  Node-produced v1 compatibility, capability gating, admission identity, database
+  failure after object upload and scoped expiry cleanup.
+  `.context/cloud-launch-assets-postgres-final.log`.
+- Browser: pasted text + PNG, first-turn provider consumption of the original text
+  and identical inline image bytes, streamed reply, client reload, cached reopening
+  without compute and reconnect with exactly one provider turn.
+  `.context/cloud-launch-assets-browser-api.log`,
+  `.context/cloud-launch-attachments-acceptance.json`,
+  `.context/cloud-launch-browser-acceptance.json`.
+- Native Linux: clipboard image through the attached composer, original bytes on the
+  guest, real Claude driver image assertion and a completed journal with one turn.
+  `.context/cloud-launch-assets-native-acceptance.json`,
+  `.context/cloud-launch-assets-native-api.log`.
+- Native/browser builds and focused import preservation and existing create/capacity
+  checks passed. `.context/cloud-launch-assets-import-test.log`,
+  `.context/cloud-launch-assets-creation-regression.log`.
+
+Screenshots: `.context/cloud-launch-assets-browser.png`,
+`.context/cloud-launch-assets-native-composer.png`, `.context/cloud-launch-assets-native.png`.
+These checks use a deterministic machine/provider fixture. Live provider and Mac
+acceptance remain open. App captures/context bundles, mailbox attachment dependencies,
+reload-persistent uncertain-create recovery and the remaining Milestone B gates remain
+open; no full milestone is completed by this chunk.
 
 
 ### Connected-cloud attachments
@@ -75,8 +133,8 @@ identical inline PNG bytes. Only the two submitted turns executed. Receipt:
 The native GPUI admission test covers foreign workspace/selection/connection rejection,
 cancellation and removal of browser routing metadata before delivery to the child view.
 
-First-launch attachments, cached/archived image projections, native desktop file
-selection, and recovery of the parent host transport remain open. This completes
+First-launch file delivery is covered above. Cached/archived image projections,
+native desktop file selection and recovery of the parent host transport remain open. This completes
 connected-browser upload delivery, not all attachment or workspace-tool parity.
 
 
@@ -87,7 +145,7 @@ repositories, readiness, recent-workspace Connect actions and Add computer.
 Cloud startup uses the existing attached tray. Launch retains its idempotency key
 and accepted workspace for retry; the native permission selection maps to the
 runtime mode. Read-only launch is refused explicitly because the guest contract
-does not implement it yet. First-launch attachments remain pending.
+does not implement it yet. First-launch file delivery is covered above.
 
 A cloud window uses the existing native conversation, files, Git and terminal
 controllers through the root host's shared `CloudEnvironment`/`CloudRpc` broker.
@@ -120,7 +178,7 @@ and `.context/native-cloud-entry-build.log`. Screenshots:
 `.context/native-cloud-launch-progress.png`, `.context/native-cloud-reopened.png`.
 
 This does not complete Milestone B or F: cached native reopen, integrated
-sidebar/window routing, full model/branch controls, first-launch attachments,
+sidebar/window routing, full model/branch controls, app captures/context,
 startup queues and remaining administration remain open.
 
 

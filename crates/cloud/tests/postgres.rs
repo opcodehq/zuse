@@ -1852,6 +1852,8 @@ mod runtime_engine {
             .await
             .unwrap();
         sqlx::raw_sql("CREATE TABLE api_cloud_auth_authorities(account_id text PRIMARY KEY,storage_incarnation_id text NOT NULL,auth_epoch bigint NOT NULL,state text NOT NULL); INSERT INTO api_cloud_auth_authorities VALUES('user-bob','original-auth-storage',1,'ready'); UPDATE api_cloud_project_builds SET settings=settings||'{\"providerAuthDeliveryVersion\":1}'::jsonb WHERE build_id='rust-build';").execute(&api.pool).await.unwrap();
+        sqlx::raw_sql(zuse_cloud::runtime::assets::MIGRATION).execute(&api.pool).await.unwrap();
+        sqlx::query("UPDATE api_cloud_project_builds SET settings=settings||'{\"rustLaunchAssetsVersion\":1}'::jsonb WHERE build_id='rust-build'").execute(&api.pool).await.unwrap();
         let now = chrono::Utc::now().timestamp_millis();
         sqlx::query("INSERT INTO api_cloud_billing_periods(period_id,account_id,status,period_start,period_end,included_provider_cost_micros,markup_basis_points,overage_cap_micros) VALUES('launch-period','user-bob','active',$1,$2,100000000,0,0)").bind(now-1000).bind(now+3600000).execute(&api.pool).await.unwrap();
         let root = tempfile::Builder::new()
@@ -5450,3 +5452,6 @@ async fn billing_portal_preserves_provider_customer_and_owner() {
         .unwrap();
     admin.close().await;
 }
+
+#[path = "cases/launch_assets.rs"]
+mod launch_assets;

@@ -18,6 +18,7 @@ use std::{env, str::FromStr, sync::Arc, time::Duration};
 use subtle::ConstantTimeEq;
 
 pub mod allocation;
+pub mod assets;
 pub mod creation;
 pub mod deletion;
 mod effects;

@@ -68,7 +68,15 @@ fn encrypt(key: &[u8], aad: &[u8], plaintext: &[u8]) -> Result<Envelope, CryptoE
     })
 }
 fn decrypt(key: &[u8], aad: &[u8], envelope: Envelope) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
-    if envelope.version != 1 || envelope.ciphertext.len() > MAX_ENVELOPE || envelope.iv.len() > 32 {
+    decrypt_limited(key, aad, envelope, MAX_ENVELOPE)
+}
+fn decrypt_limited(
+    key: &[u8],
+    aad: &[u8],
+    envelope: Envelope,
+    limit: usize,
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    if envelope.version != 1 || envelope.ciphertext.len() > limit || envelope.iv.len() > 32 {
         return Err(CryptoError::InvalidEnvelope);
     }
     let iv = decode(&envelope.iv)?;
@@ -129,6 +137,22 @@ impl MasterKey {
         self.open(
             format!("zuse-cloud-api-v1\n{context}").as_bytes(),
             ciphertext,
+        )
+    }
+    pub fn open_asset(
+        &self,
+        context: &str,
+        ciphertext: &str,
+    ) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        let limit = 40 * 1024 * 1024;
+        if ciphertext.len() > limit {
+            return Err(CryptoError::InvalidEnvelope);
+        }
+        decrypt_limited(
+            self.0.as_slice(),
+            format!("zuse-cloud-api-v1\n{context}").as_bytes(),
+            serde_json::from_str(ciphertext).map_err(|_| CryptoError::InvalidEnvelope)?,
+            limit,
         )
     }
     pub fn digest_api(&self, context: &str, plaintext: &str) -> String {

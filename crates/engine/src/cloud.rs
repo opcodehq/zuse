@@ -1,5 +1,6 @@
 //! Host-authorized control plane access. No access token crosses the viewport RPC boundary.
 pub mod environment;
+pub mod launch;
 #[cfg(unix)]
 pub mod mirror;
 use crate::auth::Auth;
@@ -174,6 +175,37 @@ impl CloudApi {
             bytes.extend_from_slice(&chunk);
         }
         if !status.is_success() {
+            if path
+                .get(2)
+                .is_some_and(|p| matches!(*p, "launch-assets" | "workspaces"))
+            {
+                let error: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                let actionable = match error["error"].as_str() {
+                    Some("cloud_launch_attachments_runtime_update_required") => Some(
+                        "Rebuild this repository's cloud image before launching with attachments.",
+                    ),
+                    Some("cloud_launch_upload_expired") => Some(
+                        "These cloud uploads expired. Start a new cloud draft and attach the files again.",
+                    ),
+                    Some("launch_asset_incomplete") => {
+                        Some("The cloud attachment upload is incomplete. Retry the same message.")
+                    }
+                    Some(
+                        "launch_asset_integrity_failed"
+                        | "launch_asset_manifest_conflict"
+                        | "launch_asset_chunk_conflict",
+                    ) => Some(
+                        "The cloud attachment could not be verified. Keep the original file and start a new draft.",
+                    ),
+                    Some("cloud_launch_asset_schema_not_ready") => {
+                        Some("Cloud launch attachments are not enabled on this service yet.")
+                    }
+                    _ => None,
+                };
+                if let Some(message) = actionable {
+                    anyhow::bail!("{message}");
+                }
+            }
             if path.starts_with(&["v1", "cloud", "billing"]) || path.starts_with(&["v1", "billing"])
             {
                 let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
@@ -479,6 +511,18 @@ impl CloudApi {
                 json!({"accountId":account,"projects":value["projects"]})
             }
             zuse_protocol::methods::CLOUD_CREATE => {
+                let mut params = params;
+                if let Some(expected) = params.get("expectedAccountId") {
+                    ensure!(
+                        expected.as_str() == Some(account.as_str())
+                            && auth.state().org_id().is_none(),
+                        "The account changed. Select the cloud destination again."
+                    );
+                }
+                if let Some(body) = params.as_object_mut() {
+                    body.remove("attachmentTransfers");
+                    body.remove("expectedAccountId");
+                }
                 let request: zuse_protocol::cloud::CloudWorkspaceCreateRequest =
                     serde_json::from_value(params)?;
                 let value = self

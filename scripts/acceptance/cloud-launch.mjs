@@ -25,10 +25,24 @@ try {
     stage='select-cloud';page.click(657,849);
     page.wait('window.__cloudLaunch.projects?.some(p=>p.projectId==="create-project")');await sleep(150);
     page.screenshot('cloud-composer-destination-menu.png');page.click(694,743);
-    stage='first-message';page.click(600,895);page.run(['keyboard','type','Create the original cloud conversation']);page.run(['press','Enter']);
+    stage='first-message';page.click(600,895);
+    if(process.env.ZUSE_CLOUD_LAUNCH_ATTACHMENTS==='1') {
+      const note=Array.from(Buffer.from('cloud attachment bytes\n'));
+      const png=Array.from(fs.readFileSync('crates/icons/assets/plugins/granola.png'));
+      assert.equal(page.evaluate(`(()=>{const data=new DataTransfer();data.items.add(new File([new Uint8Array(${JSON.stringify(note)})],'cloud-attachment.txt',{type:'text/plain'}));data.items.add(new File([new Uint8Array(${JSON.stringify(png)})],'cloud-attachment.png',{type:'image/png'}));return document.querySelector('input:not([type=file])').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));})()`),false);
+      await page.wait('window.__cloudLaunch.staged.length===2');await sleep(600);
+      page.screenshot('cloud-launch-attachments-composer.png');
+    }
+    page.run(['keyboard','type','Create the original cloud conversation']);page.run(['press','Enter']);
     page.wait('window.__cloudLaunch.creates.length===1');artifact('cloud-launch-created.json',page.evaluate('window.__cloudLaunch.creates[0]'));
     page.wait('window.__cloudLaunch.status.some(s=>s.state==="ready")');
     page.wait('window.__cloudLaunch.forwards.some(f=>f.reply)');await sleep(250);
+    if(process.env.ZUSE_CLOUD_LAUNCH_ATTACHMENTS==='1') {
+      page.wait('window.__cloudLaunch.forwards.some(f=>f.attachmentReply)');
+      assert.ok(page.evaluate('window.__cloudLaunch.forwards.some(f=>f.attachmentReply)'), 'The first provider turn must verify text and identical inline PNG bytes');
+      page.screenshot('cloud-launch-attachments-conversation.png');
+      artifact('cloud-launch-attachments-acceptance.json',{actualCompiledGpui:true,hostStaging:true,encryptedApiAssets:true,packagedGuest:true,firstTurnTextAndPngVerified:true,workspace:page.evaluate('window.__cloudLaunch.creates[0].workspaceId'),liveProvider:false});
+    }
     page.screenshot('cloud-launch-streamed-chat.png');
     const workspace=page.evaluate('window.__cloudLaunch.creates[0]');
     stage='close-client';page.run(['reload']);

@@ -143,7 +143,11 @@ fn upload(
                 None => upload_file(file).await,
             };
             let attachment = match result {
-                Ok(path) => json!({"name":name,"mime":mime,"path":path}),
+                Ok(mut value) => {
+                    value["name"] = json!(name);
+                    value["mime"] = json!(mime);
+                    value
+                }
                 Err(error) => json!({"error":error}),
             };
             let frame = json!({"attachment":attachment,"generation":generation,"epoch":epoch});
@@ -155,7 +159,7 @@ fn upload(
     }
 }
 
-async fn upload_file(file: web_sys::File) -> Result<String, String> {
+async fn upload_file(file: web_sys::File) -> Result<Value, String> {
     if file.size() > 32. * 1024. * 1024. {
         return Err("Attachments must be 32 MB or smaller.".into());
     }
@@ -184,17 +188,17 @@ async fn upload_file(file: web_sys::File) -> Result<String, String> {
         .map_err(|_| "Invalid upload response")?;
     let data: Value = serde_json::from_str(&value.as_string().unwrap_or_default())
         .map_err(|_| "Invalid upload response")?;
-    data["path"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "Attachment did not finish uploading".into())
+    if data["path"].as_str().is_none() {
+        return Err("Attachment did not finish uploading".into());
+    }
+    Ok(data)
 }
 
 async fn upload_remote(
     file: web_sys::File,
     target: &UploadTarget,
     events: &Sender,
-) -> Result<String, String> {
+) -> Result<Value, String> {
     use base64::Engine as _;
     if file.size() > 32. * 1024. * 1024. {
         return Err("Attachments must be 32 MB or smaller.".into());
@@ -245,10 +249,10 @@ async fn upload_remote(
         json!({"uploadId":upload_id,"fileName":file.name()}),
     )
     .await?;
-    result["path"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "Attachment did not finish uploading".into())
+    if result["path"].as_str().is_none() {
+        return Err("Attachment did not finish uploading".into());
+    }
+    Ok(result)
 }
 async fn paired_upload_call(
     socket: &mut super::socket::Socket,
@@ -279,7 +283,7 @@ async fn upload_cloud(
     file: web_sys::File,
     target: &crate::cloud_upload::Target,
     events: &Sender,
-) -> Result<String, String> {
+) -> Result<Value, String> {
     use base64::Engine as _;
     let upload_id = uuid::Uuid::new_v4().simple().to_string();
     let mut offset = 0usize;
@@ -315,8 +319,8 @@ async fn upload_cloud(
             json!({"uploadId":upload_id,"fileName":file.name()}),
         )
         .await?;
-    value["path"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "Attachment did not finish uploading".into())
+    if value["path"].as_str().is_none() {
+        return Err("Attachment did not finish uploading".into());
+    }
+    Ok(value)
 }
