@@ -7,6 +7,8 @@ mod audio;
 #[cfg(target_family = "wasm")]
 mod browser_frame;
 #[cfg(target_family = "wasm")]
+mod cloud_upload;
+#[cfg(target_family = "wasm")]
 mod connection;
 #[cfg(target_family = "wasm")]
 mod drafts;

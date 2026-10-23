@@ -1,4 +1,5 @@
 //! Cloud launch and environment selection. Only interactive connection acquires compute.
+mod uploads;
 use super::*;
 use crate::assets::icon;
 use crate::shell::{BG, BORDER, MUTED, column, control, label, row};
@@ -25,6 +26,8 @@ pub(super) struct Cloud {
     events: Option<UnboundedSender<Value>>,
     pump: Option<Task<()>>,
     forwards: HashMap<u64, (u64, String)>,
+    uploads: HashMap<u64, Value>,
+    viewport: String,
     connected_epoch: Option<u64>,
     pub initial_session: Option<String>,
     notice: Option<String>,
@@ -48,6 +51,7 @@ impl WorkspaceView {
         }
     }
     fn close_cloud(&mut self) {
+        self.close_cloud_uploads();
         if let Some(id) = self.cloud.status_request.take() {
             self.cancel(id);
         }
@@ -109,6 +113,9 @@ impl WorkspaceView {
         cx.notify();
     }
     pub(super) fn receive_cloud(&mut self, frame: &Value, cx: &mut Context<Self>) -> bool {
+        if self.receive_cloud_upload(frame, cx) {
+            return true;
+        }
         if let Some(child) = &self.cloud.child {
             if frame["browserDrafts"]["deviceId"]
                 .as_str()
@@ -523,9 +530,7 @@ impl WorkspaceView {
                             if matches!(request["ui"].as_str(),Some("loadDrafts"|"saveDrafts"|"savePreferences")) {
                                 let _ = this.requests.unbounded_send(request);
                             } else if matches!(request["ui"].as_str(),Some("pickAttachments"|"pasteAttachments")) {
-                                if let Some(events)=&this.cloud.events {
-                                    let _=events.unbounded_send(json!({"attachment":{"error":"Cloud uploads are not connected yet. Your message is preserved."},"generation":request["generation"],"epoch":request["epoch"],"uploadRejected":true}));
-                                }
+                                this.cloud_file_picker(request);
                             }
                             return;
                         }

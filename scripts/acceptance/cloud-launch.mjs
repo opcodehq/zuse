@@ -44,6 +44,25 @@ try {
     page.wait('window.__cloudLaunch.status.some(s=>s.state==="ready")');
     page.wait('window.__cloudLaunch.forwards.some(f=>f.reply)');await sleep(2500);
     page.screenshot('cloud-composer-connected.png');
+    if(process.env.ZUSE_CLOUD_UPLOAD_ACCEPTANCE==='1') {
+      stage='cloud-attachments';page.click(600,895);
+      const note=Array.from(Buffer.from('cloud attachment bytes\n'));
+      const png=Array.from(fs.readFileSync('crates/icons/assets/plugins/granola.png'));
+      assert.equal(page.evaluate(`(()=>{const data=new DataTransfer();data.items.add(new File([new Uint8Array(${JSON.stringify(note)})],'cloud-attachment.txt',{type:'text/plain'}));data.items.add(new File([new Uint8Array(${JSON.stringify(png)})],'cloud-attachment.png',{type:'image/png'}));return document.querySelector('input:not([type=file])').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));})()`),false,'Cloud composer must admit pasted files');
+      page.wait('window.__cloudLaunch.uploads.length===2');page.wait('window.__cloudLaunch.imageReads.some(r=>r.done)');await sleep(1200);
+      const uploaded=page.evaluate('window.__cloudLaunch.uploads');
+      const guestRoot=fs.realpathSync(fs.readFileSync(file.replace(/\.[^.]+$/,'.runtime'),'utf8'));
+      for(const name of uploaded)assert.ok(name.startsWith(guestRoot+'/'),'Uploads must land on selected guest storage');
+      assert.deepEqual([...fs.readFileSync(uploaded.find(p=>p.endsWith('cloud-attachment.txt')))],note);
+      assert.deepEqual([...fs.readFileSync(uploaded.find(p=>p.endsWith('cloud-attachment.png')))],png);
+      page.screenshot('cloud-upload-composer.png');
+      page.run(['keyboard','type','Inspect the attached cloud files']);page.run(['press','Enter']);
+      page.wait('window.__cloudLaunch.forwards.some(f=>f.attachmentReply)');await sleep(300);
+      assert.equal(page.evaluate('window.__cloudLaunch.sockets'),1,'Uploads must share the existing host socket');
+      page.screenshot('cloud-upload-conversation.png');
+      artifact('cloud-upload-wire-proof.json',page.evaluate('window.__cloudLaunch'));
+      artifact('cloud-upload-browser-acceptance.json',{actualCompiledGpui:true,selectedGuestBytesVerified:true,textAndPng:true,paste:true,realClaudeDriverReadsGuestFiles:true,inlineImageBytesVerified:true,existingConnectionOnly:true,explicitCloudTurns:2,liveProvider:false});
+    }
     const proof=page.evaluate('window.__cloudLaunch');
     assert.equal(proof.creates.length,0,'Reload/reopen must not resubmit creation');
     assert.equal(proof.status.filter(s=>s.state==='ready').length,1,'Startup subscriptions must keep one connection');

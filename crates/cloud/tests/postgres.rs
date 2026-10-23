@@ -1899,8 +1899,12 @@ mod runtime_engine {
                 .unwrap()
                 .lines()
                 .count(),
-            1,
-            "Reopen must not replay the accepted first message"
+            if std::env::var_os("ZUSE_CLOUD_UPLOAD_ACCEPTANCE").is_some() {
+                2
+            } else {
+                1
+            },
+            "Only explicitly submitted turns may reach the provider"
         );
         if let Some(mut child) = provider.child.lock().await.take() {
             stop_guest(&mut child).await;

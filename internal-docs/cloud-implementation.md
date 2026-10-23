@@ -11,9 +11,9 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
-| D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
+| D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser composer destination menu and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
@@ -51,10 +51,33 @@ or a paid model. Receipts: `.context/cloud-launch-browser-acceptance.json`;
 `.context/cloud-chat-acceptance.log`. UI: `.context/cloud-composer-destination-menu.png`.
 
 Remaining before Milestone B/live rollout: native desktop cloud creation integration,
-cloud-scoped uploads/context, complete provider/model catalogs, queued startup messages,
+first-launch attachments/context, complete provider/model catalogs, queued startup messages,
 reload-persistent uncertain-create retry state, bounded handling of repeated immediately
 closed connections and retry controls, full startup/reconnect trays, pause/resume UI,
 and live-provider acceptance. C–G and the remaining archive gates stay open in the ledger.
+
+
+### Connected-cloud attachments
+
+Browser paste and the existing file picker now route chunks through the selected
+workspace's shared `CloudRpc` connection. They reuse the guest upload store, size
+limit, file commit and attachment read contracts. Results retain the admitting
+workspace, viewport selection, connection epoch and composer generation; navigation
+cancels pending callbacks and late results cannot enter another composer. No additional
+host or gateway socket is opened for cloud uploads.
+
+Verified with the compiled browser, PostgreSQL/API and packaged guest: text and PNG
+bytes landed under the guest profile, the transcript preview read the guest image,
+and an explicit second turn reached the real Claude driver with the text file and
+identical inline PNG bytes. Only the two submitted turns executed. Receipt:
+`.context/cloud-upload-browser-acceptance.json`; full run:
+`.context/cloud-image-acceptance.log`; screenshot: `.context/cloud-upload-conversation.png`.
+The native GPUI admission test covers foreign workspace/selection/connection rejection,
+cancellation and removal of browser routing metadata before delivery to the child view.
+
+First-launch attachments, cached/archived image projections, native desktop file
+selection, and recovery of the parent host transport remain open. This completes
+connected-browser upload delivery, not all attachment or workspace-tool parity.
 
 
 ## Current service
@@ -1405,7 +1428,7 @@ joining that future transfer worker before cleanup, and orphan cache discovery
 without a known checkout remain required. It does not claim full local sync parity.
 
 
-Next implementation focus: finish cloud-scoped uploads/context, startup queues and
+Next implementation focus: finish first-launch attachments/context, startup queues and
 native desktop integration using the shared transport, then cloud administration.
 Full live sync and migration remain open; the verified browser create/stream/reopen
 workflow and default mirror cleanup do not close those requirements.

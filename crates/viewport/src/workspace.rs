@@ -259,6 +259,9 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let Some(handled) = self.paste_cloud_attachments(ticket, window, cx) {
+            return handled;
+        }
         if self.settings || !self.input.read(cx).focus_handle(cx).is_focused(window) {
             return false;
         }
