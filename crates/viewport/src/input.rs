@@ -55,8 +55,14 @@ impl TextInput {
         let editor = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx)
                 .placeholder(placeholder.to_owned())
-                .auto_grow(1, 8)
+                .auto_grow(1, 13)
                 .submit_on_enter(true);
+            state.set_editor_paddings(Edges {
+                top: px(crate::composer_style::CONTENT_PAD_Y),
+                bottom: px(crate::composer_style::CONTENT_PAD_Y),
+                left: px(4.),
+                right: px(4.),
+            });
             state.set_editor_style(editor_style());
             state.on_context_menu(edit_menu::handler(owner, state.focus_handle(cx)));
             state
@@ -216,15 +222,15 @@ impl Render for TextInput {
                 matches!(self.editor, Editor::Code(_)) && self.clipboard_error.is_some(),
                 |d| d.pb(px(18.)),
             )
-            .text_size(px(if matches!(self.editor, Editor::Single(_)) {
-                12.
-            } else {
-                13.
+            .text_size(px(match self.editor {
+                Editor::Single(_) => 12.,
+                Editor::Multi(_) => crate::composer_style::TEXT_SIZE,
+                Editor::Code(_) => 13.,
             }))
-            .line_height(px(if matches!(self.editor, Editor::Single(_)) {
-                16.
-            } else {
-                22.
+            .line_height(px(match self.editor {
+                Editor::Single(_) => 16.,
+                Editor::Multi(_) => crate::composer_style::LINE_HEIGHT,
+                Editor::Code(_) => 22.,
             }))
             .text_color(rgb(crate::shell::TEXT))
             .child(match &self.editor {

@@ -57,25 +57,15 @@ pub(crate) use chip::{
 // Constants + pure decision logic
 // ---------------------------------------------------------------------------
 
-/// Expanded-mode textarea vertical padding: `pt-4 pb-1` (zuse composer.tsx
-/// line 578) = 16 + 4.
-pub const TEXTAREA_PAD_V: f32 = 20.0;
-/// The expanded textarea BOX (content + padding) is clamped by the original's
-/// auto-grow effect: `ta.style.height = Math.min(Math.max(scrollHeight, 76),
-/// 260)` (zuse composer.tsx line 235). The 76px floor applies even when
-/// empty — it's what makes the always-expanded new-chat composer tall.
-pub const TEXTAREA_MIN: f32 = 76.0;
-pub const TEXTAREA_MAX: f32 = 260.0;
-/// Expanded actions row: 2px top + 32px picker + 8px bottom.
+/// Editor content and card padding match the shared browser composer.
+pub const TEXTAREA_PAD_V: f32 = 20.0 + 2.0 * zuse_viewport::composer_style::CONTENT_PAD_Y;
+pub const TEXTAREA_MIN: f32 = zuse_viewport::composer_style::EDITOR_MIN + 20.0;
+pub const TEXTAREA_MAX: f32 = zuse_viewport::composer_style::EDITOR_MAX + 20.0;
 const ACTIONS_BOTTOM_PAD: f32 = 8.0;
-/// Below this editor width the toolbar's access chip drops its label.
 const NARROW_TOOLBAR_WIDTH: f32 = 440.0;
-pub const ACTIONS_ROW_HEIGHT: f32 = 2.0 + 32.0 + ACTIONS_BOTTOM_PAD;
-/// The pill's 1px hairline, top + bottom (`rounded-[26px] border`).
+pub const ACTIONS_ROW_HEIGHT: f32 = zuse_viewport::composer_style::TOOLBAR_HEIGHT;
 pub const PILL_BORDER_V: f32 = 2.0;
-/// Corner radius shared by the composer and the queue tray behind it.
-pub(crate) const COMPOSER_RADIUS: f32 = 19.2;
-/// Expanded composer bounds: 120px when empty, 304px at the content cap.
+pub(crate) const COMPOSER_RADIUS: f32 = zuse_viewport::composer_style::RADIUS;
 pub const COMPOSER_MIN_HEIGHT: f32 = TEXTAREA_MIN + ACTIONS_ROW_HEIGHT + PILL_BORDER_V;
 pub const COMPOSER_MAX_HEIGHT: f32 = TEXTAREA_MAX + ACTIONS_ROW_HEIGHT + PILL_BORDER_V;
 /// A single-line pill, border-box: one-line textarea `py-3` (24) + one
@@ -130,9 +120,9 @@ fn route_chrome_opacities(new_thread_chrome: f32) -> (f32, f32) {
 }
 /// Ignore subpixel noise when the shell reports the conversation width.
 const COMPOSER_WIDTH_EPSILON: f32 = 0.5;
-/// Input text metrics: `text-[14px] leading-relaxed` = 14 × 1.625 = 22.75.
-pub const INPUT_LINE_HEIGHT: f32 = 22.75;
-pub const INPUT_TEXT_SIZE: f32 = crate::typography::TEXT_MD;
+/// Text metrics from the composer's prose editor.
+pub const INPUT_LINE_HEIGHT: f32 = zuse_viewport::composer_style::LINE_HEIGHT;
+pub const INPUT_TEXT_SIZE: f32 = zuse_viewport::composer_style::TEXT_SIZE;
 /// A compact ramp; the glyph-ascent inset keeps the clip edge invisible.
 const INPUT_FADE_BAND: f32 = 12.0;
 /// Single-select questions auto-advance after this long.
@@ -159,22 +149,17 @@ pub fn input_content_height(wrapped_lines: usize) -> f32 {
     wrapped_lines.max(1) as f32 * INPUT_LINE_HEIGHT
 }
 
-/// Total expanded composer height (border-box) for a content height: the
-/// textarea BOX (content + `pt-4 pb-1`) clamps to 76–260 exactly like the
-/// original's auto-grow effect, then the actions row and the hairline
-/// ride on top. Range 120–304.
+/// Card height from the editor's content, bounded by the shared editor floor
+/// and cap, with its toolbar and border. Range 106–302px.
 pub fn composer_total_height(content_height: f32) -> f32 {
     (content_height + TEXTAREA_PAD_V).clamp(TEXTAREA_MIN, TEXTAREA_MAX)
         + ACTIONS_ROW_HEIGHT
         + PILL_BORDER_V
 }
 
-/// A docked thread's card: the same two rows, with a lower empty-editor floor
-/// than the new-chat hero (60px editor box instead of 76).
+/// Conversation and landing cards share their content bounds.
 pub fn thread_composer_height(content_height: f32) -> f32 {
-    (content_height + TEXTAREA_PAD_V).clamp(TEXTAREA_MIN - 16.0, TEXTAREA_MAX)
-        + ACTIONS_ROW_HEIGHT
-        + PILL_BORDER_V
+    composer_total_height(content_height)
 }
 
 fn input_max_scroll(content_height: f32, viewport_height: f32) -> f32 {
@@ -372,7 +357,8 @@ impl FlipMorph {
 /// The toolbar's outer inset on both sides of the card.
 pub const ACTION_INSET: f32 = 12.0;
 /// The editor's top padding (`pt-4`).
-pub const TEXT_TOP_PAD: f32 = 16.0;
+pub const TEXT_TOP_PAD: f32 =
+    zuse_viewport::composer_style::EDITOR_PAD_TOP + zuse_viewport::composer_style::CONTENT_PAD_Y;
 /// Optical join between the picker group and the paperclip. This is tighter
 /// than the structural spacing ladder because the narrow paperclip glyph
 /// otherwise looks farther away than its hit target actually is.
@@ -1943,7 +1929,7 @@ const VOICE_MORPH: Duration = Duration::from_millis(420);
 const VOICE_CURVE: motion::CubicBezier = motion::CubicBezier::new(0.2, 0.0, 0.0, 1.0);
 const VOICE_LIMIT_WARNING: Duration = Duration::from_secs(10);
 /// Height of the voice track and its gap to the Stop control.
-const VOICE_TRACK_HEIGHT: f32 = 32.0;
+const VOICE_TRACK_HEIGHT: f32 = 28.0;
 const VOICE_TRACK_GAP: f32 = 8.0;
 
 /// Everything the voice track draws, captured from the dictation meter.
@@ -11625,7 +11611,7 @@ impl Render for Composer {
                     .overflow_hidden()
                     .px(px(16.0))
                     .pt(px(text_pt))
-                    .pb(px(4.0))
+                    .pb(px(TEXTAREA_PAD_V - TEXT_TOP_PAD))
                     .child(self.render_input_with_completion()),
             )
             .child(
@@ -11639,7 +11625,7 @@ impl Render for Composer {
                     .flex_row()
                     .items_center()
                     .px(px(action_inset))
-                    .pt(px(2.0))
+                    .pt(px(4.0))
                     .pb(px(ACTIONS_BOTTOM_PAD))
                     .child(
                         div()
@@ -15338,13 +15324,9 @@ mod tests {
 
     #[test]
     fn every_route_uses_the_two_row_card() {
-        // An empty editor keeps both rows: the hero's 76px editor floor, a
-        // docked thread's 60px floor, the 42px toolbar and the hairline.
+        // Landing and conversation cards use the same editor floor and toolbar.
         assert_eq!(composer_total_height(0.0), COMPOSER_MIN_HEIGHT);
-        assert_eq!(
-            thread_composer_height(0.0),
-            60.0 + ACTIONS_ROW_HEIGHT + PILL_BORDER_V
-        );
+        assert_eq!(thread_composer_height(0.0), COMPOSER_MIN_HEIGHT);
         assert!(thread_composer_height(0.0) > COMPACT_TOTAL_HEIGHT + ACTIONS_ROW_HEIGHT / 2.0);
         // One line of text never collapses the toolbar row into the editor.
         let one_line = INPUT_LINE_HEIGHT;
@@ -15369,18 +15351,15 @@ mod tests {
 
     #[test]
     fn auto_grow_math() {
-        // The source heights (zuse composer.tsx line 235 clamp, composer-
-        // actions.tsx row, 1px hairlines): 76+46+2 empty … 260+46+2 capped.
-        assert_eq!(COMPOSER_MIN_HEIGHT, 120.0);
-        assert_eq!(COMPOSER_MAX_HEIGHT, 304.0);
-        // One line sits at the floor: the textarea BOX (content + `pt-4 pb-1`)
-        // clamps UP to 76 exactly like `Math.max(scrollHeight, 76)` — this is
-        // what makes the always-expanded new-chat composer 120px tall.
+        // Shared editor box, 40px toolbar, and two 1px borders.
+        assert_eq!(COMPOSER_MIN_HEIGHT, 106.0);
+        assert_eq!(COMPOSER_MAX_HEIGHT, 302.0);
+        // One line remains at the shared empty-editor floor.
         assert_eq!(
             composer_total_height(input_content_height(1)),
             COMPOSER_MIN_HEIGHT
         );
-        // Growth is linear once the textarea box exceeds its 76px floor.
+        // Content beyond the floor grows until the editor cap.
         let h4 = composer_total_height(input_content_height(4));
         assert_eq!(
             h4,
@@ -15847,12 +15826,12 @@ mod tests {
     #[test]
     fn toolbar_geometry_is_shared_by_every_route() {
         assert_eq!(ACTION_INSET, 12.0);
-        assert_eq!(TEXT_TOP_PAD, 16.0);
+        assert_eq!(TEXT_TOP_PAD, 19.0);
         assert_eq!(ACTION_UTILITY_GAP, 2.0);
         assert_eq!(ACTION_PRIMARY_GAP, Theme::SPACE_SM);
         assert!(ACTION_UTILITY_GAP < ACTION_PRIMARY_GAP);
         // The editor's padding is the `pt-4 pb-1` split of TEXTAREA_PAD_V.
-        assert_eq!(TEXT_TOP_PAD + 4.0, TEXTAREA_PAD_V);
+        assert_eq!(TEXT_TOP_PAD + 15.0, TEXTAREA_PAD_V);
     }
 
     #[test]

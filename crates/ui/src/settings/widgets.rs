@@ -303,8 +303,8 @@ pub fn rail<V: 'static>(
 /// Shared typography for a settings component's title and description. The
 /// Shortcuts page established this compact rhythm; list-style settings reuse
 /// it instead of drifting by page.
-pub const ROW_TITLE_SIZE: f32 = crate::typography::TEXT_SM;
-pub const ROW_DESCRIPTION_SIZE: f32 = crate::typography::TEXT_XS;
+pub const ROW_TITLE_SIZE: f32 = zuse_viewport::settings_style::TITLE_SIZE;
+pub const ROW_DESCRIPTION_SIZE: f32 = zuse_viewport::settings_style::DESCRIPTION_SIZE;
 
 /// The page column's outer max width and side padding: a centered 768px
 /// content measure with generous air on either side.
@@ -336,7 +336,7 @@ pub fn page_header(theme: &Theme, title: &str, count: Option<usize>) -> gpui::Di
         .gap(px(10.0))
         .child(
             div()
-                .text_size(crate::typography::text_xl())
+                .text_size(crate::typography::ui_rems(20.0))
                 .line_height(crate::typography::ui_rems(26.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.text_strong)
@@ -380,7 +380,7 @@ pub fn section_title_with_action(
                 .gap(px(8.))
                 .child(
                     div()
-                        .text_size(crate::typography::text_xl())
+                        .text_size(crate::typography::ui_rems(20.0))
                         .line_height(crate::typography::ui_rems(28.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.text_strong)
@@ -705,11 +705,7 @@ pub fn block_fill(theme: &Theme) -> gpui::Hsla {
 pub fn row_divider(theme: &Theme) -> gpui::Hsla {
     // Light hairlines are already the design system's faint #F2F2F2 border;
     // thinning them further would erase the divider.
-    if theme.appearance.is_light() {
-        theme.border
-    } else {
-        theme.border.opacity(0.6)
-    }
+    theme.border
 }
 
 /// A bordered, rounded card of related settings rows. Standalone blocks keep
@@ -910,12 +906,10 @@ impl RenderOnce for SwitchVisual {
         if (position - target).abs() > 0.001 {
             window.request_animation_frame();
         }
-        // The raised surface vanishes on dark cards; an ink wash keeps the
-        // off track visible in both appearances.
         let track = if self.on {
             self.theme.accent
         } else if self.theme.appearance.is_dark() {
-            self.theme.text.opacity(0.16)
+            self.theme.surface_raised
         } else {
             self.theme.surface_raised
         };
@@ -924,7 +918,7 @@ impl RenderOnce for SwitchVisual {
         } else {
             gpui::white()
         };
-        let thumb_left = 2.0 + 12.0 * position;
+        let thumb_left = 2.0 + 14.0 * position;
         div()
             .relative()
             .w(px(SWITCH_WIDTH))
@@ -1584,7 +1578,7 @@ pub fn action_button(theme: &Theme, tone: ActionTone) -> gpui::Div {
         .min_h(px(zuse_viewport::settings_style::CONTROL_HEIGHT))
         .px(px(16.0))
         .py(px(4.0))
-        .text_size(crate::typography::text_xs())
+        .text_size(crate::typography::ui_rems(11.0))
         .cursor_pointer();
     match tone {
         ActionTone::Quiet => button

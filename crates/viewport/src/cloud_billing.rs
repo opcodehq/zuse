@@ -8,6 +8,7 @@ use zuse_model::cloud_billing::{cap_dollars, cap_micros, usd};
 use zuse_protocol::cloud_billing::{BillingSummary, BillingUsageItem, BillingUsagePage};
 #[derive(Default)]
 pub(super) struct Billing {
+    pub(super) tab: crate::cloud_settings::Tab,
     owner: Option<(String, Option<String>)>,
     requests: HashMap<u64, (&'static str, Option<(String, Option<String>)>)>,
     subscribed: Option<bool>,
@@ -310,7 +311,22 @@ impl WorkspaceView {
     }
     pub(super) fn billing_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let busy = !self.billing.requests.is_empty();
-        let mut view = column().gap_5().child(self.repository_panel.clone()).child(
+        let mut view = column().gap_4().child(crate::cloud_settings::tabs(
+            self.billing.tab,
+            &self.cloud_settings_focus,
+            cx,
+            |this: &mut Self, tab, _, cx| {
+                this.billing.tab = tab;
+                if tab == crate::cloud_settings::Tab::Usage {
+                    this.refresh_billing(false);
+                }
+                cx.notify();
+            },
+        ));
+        if self.billing.tab == crate::cloud_settings::Tab::Setup {
+            return view.child(self.repository_panel.clone()).into_any_element();
+        }
+        view = view.child(
             row().justify_end().child(
                 s::button(
                     "refresh-cloud-billing",

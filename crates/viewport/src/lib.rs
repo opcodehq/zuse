@@ -11,7 +11,9 @@ mod cloud;
 mod cloud_billing;
 mod cloud_history;
 pub mod cloud_repositories;
+pub mod cloud_settings;
 mod composer_alerts;
+pub mod composer_style;
 mod connection;
 pub mod context_status;
 mod custom_acp;
@@ -86,6 +88,7 @@ pub struct WorkspaceView {
     repository_panel: Entity<cloud_repositories::RepositoryPanel>,
     repository_requests: HashMap<u64, u64>,
     billing: cloud_billing::Billing,
+    cloud_settings_focus: [FocusHandle; 2],
     billing_cap: Entity<input::TextInput>,
     cloud_branch: Entity<input::TextInput>,
     cloud_sync_path: Entity<input::TextInput>,
@@ -212,6 +215,7 @@ pub struct WorkspaceView {
     sidebar_open: bool,
     search_open: bool,
     session_search: Entity<input::TextInput>,
+    archive_search: Entity<input::TextInput>,
     plugin_search: Entity<input::TextInput>,
     plugin_connected_only: bool,
     plugin_catalog_page: usize,
@@ -301,11 +305,18 @@ impl WorkspaceView {
         let workspace_focus = cx.focus_handle();
         window.focus(&workspace_focus, cx);
         let input = cx.new(|cx| {
-            input::TextInput::multiline("Ask to make changes at the @ mentioned files or run slash commands…", window, cx)
+            input::TextInput::multiline(
+                "Ask to make changes at the @ mentioned files or run slash commands…",
+                window,
+                cx,
+            )
         });
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         let project_input =
             cx.new(|cx| input::TextInput::new("Absolute project path on this machine", window, cx));
+        let archive_search =
+            cx.new(|cx| input::TextInput::new("Filter archived chats", window, cx));
+        cx.observe(&archive_search, |_, _, cx| cx.notify()).detach();
         let plugin_search = cx.new(|cx| input::TextInput::new("Search plugins", window, cx));
         cx.observe(&plugin_search, |this: &mut Self, _, cx| {
             this.plugin_catalog_page = 0;
@@ -474,6 +485,7 @@ impl WorkspaceView {
             repository_panel,
             repository_requests: HashMap::new(),
             billing: Default::default(),
+            cloud_settings_focus: std::array::from_fn(|_| cx.focus_handle()),
             billing_cap: cx.new(|cx| input::TextInput::new("Monthly cap in dollars", window, cx)),
             cloud_branch,
             cloud_sync_path,
@@ -591,6 +603,7 @@ impl WorkspaceView {
             search_open: false,
             session_search,
             plugin_search,
+            archive_search,
             plugin_connected_only: false,
             plugin_catalog_page: 0,
             agent_picker: false,

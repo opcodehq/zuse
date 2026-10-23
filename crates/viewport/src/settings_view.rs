@@ -66,7 +66,7 @@ impl Section {
             Self::Plugins => "Your Zuse account and the tools shared across your agents.",
             Self::Usage => "Provider accounts, plans and current usage.",
             Self::Shortcuts => "Keyboard shortcuts for the browser workspace.",
-            Self::Archived => "Read saved cloud conversations or return them to Active.",
+            Self::Archived => "Read saved conversations or restore them to your workspace.",
         }
     }
 }
@@ -251,7 +251,7 @@ impl WorkspaceView {
             Section::Plugins => self.cloud_settings(cx),
             Section::Usage => self.usage_settings(cx),
             Section::Shortcuts => self.shortcuts_settings(),
-            Section::Archived => self.cloud_archive_list(window, cx),
+            Section::Archived => self.archive_list(window, cx),
         };
         let content_panel =
             if section == Section::Archived && self.cloud_archive.state.head.is_some() {

@@ -20,16 +20,11 @@ pub enum UiFontFamily {
     Installed(String),
 }
 
-/// The default interface face is SF Pro, the macOS system UI font, used at
-/// regular (400) and medium (500) weights. SF Pro is not installed on Linux or
-/// Windows, so those platforms keep the bundled Geist instead.
+/// Use the bundled Geist face on every platform so text metrics match the
+/// browser UI. The native system face remains an explicit font choice.
 impl Default for UiFontFamily {
     fn default() -> Self {
-        if cfg!(target_os = "macos") {
-            Self::System
-        } else {
-            Self::Geist
-        }
+        Self::Geist
     }
 }
 
@@ -78,7 +73,7 @@ impl<'de> Deserialize<'de> for UiFontFamily {
         let value = String::deserialize(deserializer)?;
         Ok(match value.as_str() {
             // Written by builds whose default was Geist, whether or not the
-            // user picked it: follow the current default (SF Pro on macOS).
+            // user picked it: follow the current default.
             "geist" => Self::default(),
             "geistSans" => Self::Geist,
             "geistMono" => Self::GeistMono,
@@ -784,17 +779,10 @@ mod tests {
     }
 
     #[test]
-    fn default_family_is_sf_pro_on_macos_and_geist_elsewhere() {
-        let expected = if cfg!(target_os = "macos") {
-            UiFontFamily::System
-        } else {
-            UiFontFamily::Geist
-        };
-        assert_eq!(UiFontFamily::default(), expected);
-        if cfg!(target_os = "macos") {
-            assert_eq!(UiFontFamily::default().family_name(), ".SystemUIFont");
-            assert_eq!(UiFontFamily::default().label(), "SF Pro");
-        }
+    fn default_family_matches_the_browser_on_every_platform() {
+        let expected = UiFontFamily::Geist;
+        assert_eq!(UiFontFamily::default(), UiFontFamily::Geist);
+        assert_eq!(UiFontFamily::default().family_name(), "Geist");
         // The old default's wire value follows the new default; an explicit
         // Geist choice written from now on survives.
         assert_eq!(

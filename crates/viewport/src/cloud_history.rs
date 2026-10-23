@@ -258,12 +258,13 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let query = self.archive_search.read(cx).value(cx).trim().to_lowercase();
         let rows: Vec<_> = self
             .cloud_archive
             .state
             .rows
             .iter()
-            .filter(|w| w.archive_visible())
+            .filter(|w| w.archive_visible() && w.label().to_lowercase().contains(&query))
             .cloned()
             .collect();
         s::frame()
@@ -447,6 +448,152 @@ impl WorkspaceView {
                     gpui::anchored().position(gpui::point(px(0.), px(0.))).child(overlay)
                 ).priority(2))
             })
+            .into_any_element()
+    }
+
+    pub(super) fn archive_list(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        use crate::shell::{MUTED, provider_icon};
+        let query = self.archive_search.read(cx).value(cx).trim().to_lowercase();
+        let chats: Vec<_> = self
+            .chats
+            .iter()
+            .filter(|chat| {
+                chat["archived"] == true
+                    && chat["threadId"].is_null()
+                    && format!(
+                        "{} {}",
+                        chat["title"].as_str().unwrap_or_default(),
+                        chat["cwd"].as_str().unwrap_or_default()
+                    )
+                    .to_lowercase()
+                    .contains(&query)
+            })
+            .cloned()
+            .collect();
+        let mut saved = s::card();
+        for (index, chat) in chats.iter().enumerate() {
+            let open = chat.clone();
+            let restore = chat.clone();
+            let actions = chat.clone();
+            let project = self
+                .spaces
+                .iter()
+                .find(|space| Some(space.id.as_str()) == chat["spaceId"].as_str())
+                .map(|space| space.display_name().to_owned())
+                .or_else(|| {
+                    chat["cwd"]
+                        .as_str()
+                        .and_then(|path| path.trim_end_matches('/').rsplit('/').next())
+                        .map(str::to_owned)
+                })
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "Local workspace".to_owned());
+            let busy = self.thread_action.is_some();
+            saved = saved.child(
+                s::setting_row(index == 0)
+                    .child(
+                        icon(provider_icon(
+                            chat["config"]["harness"].as_str().unwrap_or_default(),
+                        ))
+                        .size(px(16.))
+                        .text_color(crate::palette::rgb(MUTED)),
+                    )
+                    .child(
+                        div()
+                            .id(("archived-local-open", index))
+                            .role(Role::Button)
+                            .tab_index(0)
+                            .aria_label(format!(
+                                "Open {}",
+                                chat["title"].as_str().unwrap_or("Archived chat")
+                            ))
+                            .flex_1()
+                            .min_w_0()
+                            .cursor_pointer()
+                            .child(s::details(
+                                chat["title"].as_str().unwrap_or("Archived chat").to_owned(),
+                                project,
+                            ))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.select(open.clone(), cx);
+                            })),
+                    )
+                    .child(
+                        s::button(
+                            ("archived-local-restore", index),
+                            if busy { "Restoring…" } else { "Restore" },
+                        )
+                        .opacity(if busy || !self.connected { 0.45 } else { 1. })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.change_thread(
+                                restore.clone(),
+                                crate::thread_actions::ThreadChange::Archive(false),
+                                cx,
+                            );
+                        })),
+                    )
+                    .child(
+                        crate::shell::icon_button(
+                            ("archived-local-actions", index),
+                            "more-horizontal",
+                            "Archived chat actions",
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.open_thread_actions(actions.clone(), window, cx)
+                            },
+                        )),
+                    ),
+            );
+        }
+        if chats.is_empty() {
+            saved = saved.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .py(px(32.))
+                    .child(
+                        icon("archive-minimalistic")
+                            .size(px(18.))
+                            .text_color(crate::palette::rgb(MUTED)),
+                    )
+                    .child(s::description_text(if query.is_empty() {
+                        "No archived chats"
+                    } else {
+                        "No archived chats match your search"
+                    })),
+            );
+        }
+        column()
+            .gap_4()
+            .child(
+                row()
+                    .max_w(px(576.))
+                    .gap_2()
+                    .h(px(28.))
+                    .px(px(10.))
+                    .rounded(px(7.))
+                    .border_1()
+                    .border_color(crate::palette::rgb(BORDER))
+                    .bg(s::card_bg())
+                    .child(
+                        icon("magnifer")
+                            .size(px(16.))
+                            .text_color(crate::palette::rgb(MUTED)),
+                    )
+                    .child(self.archive_search.clone()),
+            )
+            .child(
+                s::frame()
+                    .child(s::header(
+                        "Archived chats",
+                        "Saved threads on your connected computers.",
+                    ))
+                    .child(saved),
+            )
+            .child(self.cloud_archive_list(window, cx))
             .into_any_element()
     }
     pub(super) fn cloud_archive_history(

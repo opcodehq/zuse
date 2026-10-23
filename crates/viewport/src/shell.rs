@@ -1,6 +1,6 @@
 //! Shared workspace presentation, following the native shell's density and surfaces.
 use super::*;
-use crate::assets::icon;
+use crate::{assets::icon, composer_style as composer};
 use zuse_markdown::{Block, InlineRun, parse_full};
 
 pub(super) const BG: u32 = 0x0b0c0b;
@@ -87,22 +87,77 @@ impl WorkspaceView {
                     }),
                 ),
             )
-            .when(self.cloud.guest, |view| view.child(
-                icon_button("leave-cloud", "alt-arrow-left", "Back to threads")
-                    .on_click(cx.listener(|this, _, _, _| { let _ = this.requests.unbounded_send(json!({"ui":"leaveCloud"})); }))
-            ))
+            .when(
+                self.selected
+                    .as_ref()
+                    .is_some_and(|chat| chat["archived"] == true),
+                |view| {
+                    view.child(
+                        icon_button(
+                            "back-to-archives",
+                            "alt-arrow-left",
+                            "Back to archived chats",
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.settings = true;
+                            this.select_settings_section(
+                                crate::settings_view::Section::Archived,
+                                cx,
+                            );
+                        })),
+                    )
+                },
+            )
+            .when(self.cloud.guest, |view| {
+                view.child(
+                    icon_button("leave-cloud", "alt-arrow-left", "Back to threads").on_click(
+                        cx.listener(|this, _, _, _| {
+                            let _ = this.requests.unbounded_send(json!({"ui":"leaveCloud"}));
+                        }),
+                    ),
+                )
+            })
             .child(icon("git-branch").size(px(14.)))
-            .child(control("workspace-branch", SharedString::from(
-                self.selected.as_ref().and_then(|chat| chat["branch"].as_str())
-                    .filter(|branch| !branch.is_empty()).unwrap_or("New chat").to_owned()
-                ))
-                .h(px(24.)).text_size(px(11.)).max_w(px(280.)).overflow_hidden()
+            .child(
+                control(
+                    "workspace-branch",
+                    SharedString::from(
+                        self.selected
+                            .as_ref()
+                            .and_then(|chat| chat["branch"].as_str())
+                            .filter(|branch| !branch.is_empty())
+                            .unwrap_or("New chat")
+                            .to_owned(),
+                    ),
+                )
+                .h(px(24.))
+                .text_size(px(11.))
+                .max_w(px(280.))
+                .overflow_hidden()
                 .child(icon("alt-arrow-down").size(px(10.)))
-                .on_click(cx.listener(|this, _, _, cx| { if this.selected.is_some() { this.right_open=true; this.set_panel("changes",cx); cx.notify(); } })))
-            .when_some(self.selected.as_ref().and_then(|chat|chat["branch"].as_str()).map(str::to_owned), |view, branch| view.child(
-                icon_button("copy-branch", "copy", "Copy branch").size(px(24.))
-                    .on_click(move |_,_,cx| cx.write_to_clipboard(ClipboardItem::new_string(branch.clone())))
-            ))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if this.selected.is_some() {
+                        this.right_open = true;
+                        this.set_panel("changes", cx);
+                        cx.notify();
+                    }
+                })),
+            )
+            .when_some(
+                self.selected
+                    .as_ref()
+                    .and_then(|chat| chat["branch"].as_str())
+                    .map(str::to_owned),
+                |view, branch| {
+                    view.child(
+                        icon_button("copy-branch", "copy", "Copy branch")
+                            .size(px(24.))
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(branch.clone()))
+                            }),
+                    )
+                },
+            )
             .child(div().flex_1())
             .child(
                 icon_button("voice-call", "microphone", "Open or hide voice call").on_click(
@@ -148,7 +203,9 @@ impl WorkspaceView {
                     ),
                 )
             })
-            .when(self.cloud.guest, |view| view.child(div().w(px(28.)).h(px(28.))))
+            .when(self.cloud.guest, |view| {
+                view.child(div().w(px(28.)).h(px(28.)))
+            })
             .child(
                 icon_button(
                     "toggle-workspace",
@@ -181,12 +238,16 @@ impl WorkspaceView {
             !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty();
         column()
             .w_full()
-            .max_w(px(if self.selected.is_none() { 768. } else { 920. }))
+            .max_w(px(if self.selected.is_none() {
+                composer::LANDING_WIDTH + 24.
+            } else {
+                composer::CONVERSATION_WIDTH + 24.
+            }))
             .min_w_0()
             .self_center()
             .flex_shrink_0()
             .px(px(12.))
-            .pb_3()
+            .pb(px(if self.selected.is_none() { 16. } else { 12. }))
             .pt_2()
             .when_some(self.voice.notice.clone(), |d, notice| {
                 d.child(
@@ -231,7 +292,7 @@ impl WorkspaceView {
                     .w_full()
                     .min_w_0()
                     .relative()
-                    .rounded(px(19.2))
+                    .rounded(px(composer::RADIUS))
                     .border_1()
                     .border_color(crate::palette::composer_border())
                     .bg(crate::palette::composer_background())
@@ -307,16 +368,18 @@ impl WorkspaceView {
                         div()
                             .w_full()
                             .px_3()
-                            .pt_3()
-                            .pb_2()
-                            .min_h(px(76.))
+                            .pt(px(composer::EDITOR_PAD_TOP))
+                            .pb(px(composer::EDITOR_PAD_BOTTOM))
+                            .min_h(px(composer::EDITOR_MIN
+                                + composer::EDITOR_PAD_TOP
+                                + composer::EDITOR_PAD_BOTTOM))
                             .child(self.input.clone()),
                     )
                     .child(
                         row()
                             .relative()
-                            .px_2()
-                            .pt(px(6.))
+                            .px(px(10.))
+                            .pt(px(4.))
                             .pb_2()
                             .gap_1()
                             .child(
@@ -529,17 +592,17 @@ impl WorkspaceView {
                     .child(icon("archive-minimalistic").size(px(24.)).text_color(rgb(MUTED)))
                     .child(label(if self.transcript_blocked() { "Loading saved conversation…" } else { "No messages in this archived chat." }).text_color(rgb(MUTED))))
             })
-            .when(self.messages.is_empty() && !archived, |d| {
+            .when(self.messages.is_empty() && !archived && self.selected.is_none(), |d| {
                 let title = if self.project.is_some() {
                     format!("What should we build in {}?", self.project_name())
                 } else {
-                    "What should we build?".to_owned()
+                    "What should we build today?".to_owned()
                 };
-                d.child(column().flex_1().justify_center().items_center().w_full().gap_3()
+                d.child(column().flex_1().justify_center().items_center().w_full().gap_2()
                     .child(div().text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::MEDIUM).child(title))
-                    .child(control("welcome-without-project", "Start without a project")
+                    .when(self.project.is_some() || self.cloud.mode, |view| view.child(control("welcome-without-project", "Start without a project")
                         .text_color(rgb(MUTED)).text_size(px(12.))
-                        .on_click(cx.listener(|this, _, _, cx| { this.project = None; cx.notify(); }))))
+                        .on_click(cx.listener(|this, _, _, cx| { this.project = None; this.cloud.mode = false; cx.notify(); })))))
             })
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);

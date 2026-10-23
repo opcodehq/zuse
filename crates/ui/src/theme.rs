@@ -1011,7 +1011,7 @@ impl Theme {
     pub fn settings_frame_bg(&self) -> Hsla {
         match self.variant_id.as_ref() {
             "zuse-dark" => zuse_viewport::settings_style::FRAME_BG,
-            "zuse-light" => self.bg_selected,
+            "zuse-light" => hsla(105. / 360., 0.18, 0.94, 1.),
             _ => self.surface_raised,
         }
     }

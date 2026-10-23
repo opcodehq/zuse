@@ -664,10 +664,10 @@ impl SettingsSection {
             SettingsSection::Files => "Files",
             SettingsSection::Notifications => "Notifications",
             SettingsSection::Voice => "Voice",
-            SettingsSection::Shortcuts => "Shortcuts",
+            SettingsSection::Shortcuts => "Keyboard shortcuts",
             SettingsSection::General => "General",
             SettingsSection::Appshots => "Appshots",
-            SettingsSection::Archived => "Archived sessions",
+            SettingsSection::Archived => "Archived chats",
         }
     }
 }
@@ -8042,7 +8042,11 @@ impl Shell {
             // Tab remains the explicit way to enter its navigation or content.
             window.focus(&self.settings_focus, cx);
         }
-        let sidebar_width = 208.0;
+        let sidebar_width = if window.viewport_size().width <= px(800.) {
+            48.
+        } else {
+            208.
+        };
         settings::widgets::set_sidebar_width(sidebar_width, cx);
         let nav = self.render_settings_nav(section, &theme, window, cx);
         let outlet = self.settings_outlet(section, window, cx);
@@ -8161,6 +8165,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let compact = window.viewport_size().width <= px(800.);
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::Cloud => icons::CLOUD,
             SettingsSection::Devices => icons::SETTINGS_REMOTE,
@@ -8191,7 +8196,7 @@ impl Shell {
                 .child(
                     div()
                         .flex_none()
-                        .px(px(10.))
+                        .px(px(if compact { 6. } else { 10. }))
                         .pt(px(12.))
                         .pb(px(12.))
                         .flex()
@@ -8231,6 +8236,7 @@ impl Shell {
                                         key.clone(),
                                         hover_key,
                                     )
+                                    .when(compact, |view| view.justify_center().px(px(6.)))
                                     .role(gpui::Role::Tab)
                                     .aria_label(item.label())
                                     .aria_selected(selected)
@@ -8276,7 +8282,9 @@ impl Shell {
                                             .size(px(16.0))
                                             .text_color(tab_text),
                                     )
-                                    .child(SharedString::from(item.label()))
+                                    .when(!compact, |view| {
+                                        view.child(SharedString::from(item.label()))
+                                    })
                                 }),
                         ),
                 ),
@@ -12090,26 +12098,28 @@ impl Shell {
                         .line_height(crate::typography::ui_rems(32.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.text_strong)
-                        .child(project.map_or_else(
-                            || "What should we build?".to_owned(),
+                        .child(project.as_ref().map_or_else(
+                            || "What should we build today?".to_owned(),
                             |name| format!("What should we build in {name}?"),
                         )),
                 )
-                .child(
-                    div()
-                        .id("landing-without-project")
-                        .role(gpui::Role::Button)
-                        .cursor_pointer()
-                        .text_size(px(12.))
-                        .text_color(theme.text_muted)
-                        .hover(|d| d.text_color(theme.text))
-                        .child("Start without a project")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.state
-                                .update(cx, |state, cx| state.select_space(None, cx));
-                            this.focus_composer(cx);
-                        })),
-                )
+                .when(project.is_some(), |view| {
+                    view.child(
+                        div()
+                            .id("landing-without-project")
+                            .role(gpui::Role::Button)
+                            .cursor_pointer()
+                            .text_size(px(12.))
+                            .text_color(theme.text_muted)
+                            .hover(|d| d.text_color(theme.text))
+                            .child("Start without a project")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.state
+                                    .update(cx, |state, cx| state.select_space(None, cx));
+                                this.focus_composer(cx);
+                            })),
+                    )
+                })
                 .into_any_element()
         };
 
