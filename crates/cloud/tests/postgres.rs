@@ -1889,6 +1889,10 @@ mod runtime_engine {
         std::fs::write(&path, &api.origin).unwrap();
         tokio::time::timeout(Duration::from_secs(900), async {
             while !path.with_extension("done").exists() {
+                if path.with_extension("offline").exists() && !path.with_extension("offline-ready").exists() {
+                    if let Some(mut child)=provider.child.lock().await.take() { stop_guest(&mut child).await; }
+                    std::fs::write(path.with_extension("offline-ready"),"runtime stopped; account API remains online").unwrap();
+                }
                 allocation_due(&api).await;
                 if let Err(error) = api
                     .control
@@ -2516,6 +2520,13 @@ for line in sys.stdin:
                     let projection_lost_ack = projection_lost_ack.clone();
                     let quiesced_lost_ack = quiesced_lost_ack.clone();
                     async move {
+                        if let Some(path)=std::env::var_os("ZUSE_CLOUD_TEST_HTTP_TRACE") {
+                            use std::io::Write;
+                            if request.uri().path().starts_with("/v1/cloud/workspaces/") {
+                                let mut file=std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+                                writeln!(file,"{} {}",request.method(),request.uri().path()).unwrap();
+                            }
+                        }
                         let (request, quiesced) = if quiesced_lost_ack.load(Ordering::SeqCst)
                             && request.uri().path().ends_with("/runtime/lifecycle")
                         {

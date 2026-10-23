@@ -164,7 +164,13 @@ impl Pickers {
                                 ))),
                         )
                         .child(div().text_color(theme.text_muted).child("Beta"))
-                        .when(!ready, |view| view.child(div().text_color(theme.text_muted).child("Update cloud image")))
+                        .when(!ready, |view| {
+                            view.child(
+                                div()
+                                    .text_color(theme.text_muted)
+                                    .child("Update cloud image"),
+                            )
+                        })
                         .child(popover::radio_dot(&theme, selected))
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.select_cloud(row.clone(), cx)),
@@ -182,7 +188,7 @@ impl Pickers {
                             .id(("cloud-existing", index))
                             .child(crate::icons::icon(crate::icons::CLOUD).size(px(14.)))
                             .child(SharedString::from(format!(
-                                "Connect · {}",
+                                "Open · {}",
                                 row["title"]
                                     .as_str()
                                     .or(row["branch"].as_str())
@@ -209,7 +215,7 @@ impl Pickers {
                                         .into(),
                                 };
                                 this.close(cx);
-                                crate::open_cloud_window(target, cx);
+                                crate::cloud_history::saved::open(target, cx);
                             }))
                     }),
             )

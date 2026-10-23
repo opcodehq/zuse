@@ -200,6 +200,23 @@ impl ArchivedPage {
                                             crate::cloud_history::Event::Restored(id) => {
                                                 page.cloud.restored(id)
                                             }
+                                            crate::cloud_history::Event::Connect(session) => {
+                                                if let (Some(engine), Some(head), Some(owner)) = (
+                                                    page.state.read(cx).engine(),
+                                                    page.cloud.head.as_ref(),
+                                                    page.cloud_owner.as_ref(),
+                                                ) {
+                                                    crate::open_cloud_window(
+                                                        crate::state::CloudTarget {
+                                                            controller: engine.controller(),
+                                                            subject: owner.clone(),
+                                                            workspace: head.workspace_id.clone(),
+                                                            initial_session: session.clone(),
+                                                        },
+                                                        cx,
+                                                    );
+                                                }
+                                            }
                                         }
                                         page.cloud_history = None;
                                         page.cloud_history_sub = None;
