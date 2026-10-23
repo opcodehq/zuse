@@ -7,9 +7,28 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 
 #[derive(Clone, Debug)]
-pub struct PaymentEvent {
-    pub event_id: String,
-    pub subscription_id: String,
+pub enum PaymentEvent {
+    Subscription {
+        event_id: String,
+        subscription_id: String,
+    },
+    Prepaid(CreditEvent),
+}
+impl PaymentEvent {
+    pub fn event_id(&self) -> &str {
+        match self {
+            Self::Subscription { event_id, .. } => event_id,
+            Self::Prepaid(event) => &event.event_id,
+        }
+    }
+    pub fn subscription_id(&self) -> Option<&str> {
+        match self {
+            Self::Subscription {
+                subscription_id, ..
+            } => Some(subscription_id),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Subscription {
@@ -146,6 +165,10 @@ impl EventConfig {
         let v: Value = serde_json::from_slice(body).map_err(|_| invalid())?;
         let event_id = text(&v, "id").map_err(|_| invalid())?.to_owned();
         let object = &v["data"]["object"];
+        if let Some(event) = CreditEvent::from_verified(&event_id, &v)? {
+            return Ok(Some(PaymentEvent::Prepaid(event)));
+        }
+
         let id = match v["type"].as_str() {
             Some(
                 "customer.subscription.created"
@@ -160,7 +183,7 @@ impl EventConfig {
             }
             _ => None,
         };
-        Ok(id.map(|id| PaymentEvent {
+        Ok(id.map(|id| PaymentEvent::Subscription {
             event_id,
             subscription_id: id.into(),
         }))
@@ -222,7 +245,7 @@ impl EventConfig {
                 | "subscription.revoked"
                 | "subscription.uncanceled"
                 | "subscription.updated",
-            ) => Ok(Some(PaymentEvent {
+            ) => Ok(Some(PaymentEvent::Subscription {
                 event_id: event_id.into(),
                 subscription_id: text(&v["data"], "id").map_err(|_| invalid())?.into(),
             })),
@@ -359,27 +382,36 @@ impl BillingControl {
         let Some(event) = provider.verify_event(headers, body, now)? else {
             return Ok(json!({"ok":true,"ignored":true}));
         };
-        if event.event_id.is_empty()
-            || event.event_id.len() > 1024
-            || event.subscription_id.is_empty()
-            || event.subscription_id.len() > 1024
+        let (event_id, subscription_id) = match event {
+            PaymentEvent::Prepaid(event) => {
+                return self.process_credit(provider.as_ref(), &event, now).await;
+            }
+            PaymentEvent::Subscription {
+                event_id,
+                subscription_id,
+            } => (event_id, subscription_id),
+        };
+        if event_id.is_empty()
+            || event_id.len() > 1024
+            || subscription_id.is_empty()
+            || subscription_id.len() > 1024
         {
             return Err(invalid());
         }
         let mut tx = self.pool.begin().await?;
         // Serialize before fetching canonical state, so old/parallel notifications cannot rewind it.
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,68129))")
-            .bind(format!("{id}:{}", event.subscription_id))
+            .bind(format!("{id}:{}", subscription_id))
             .execute(&mut *tx)
             .await?;
-        let sub = match provider.subscription(&event.subscription_id).await {
+        let sub = match provider.subscription(&subscription_id).await {
             Err(e) if e.code == "subscription_unlinked" => {
                 return Ok(json!({"ok":true,"deferred":"subscription-unlinked"}));
             }
             other => other?,
         };
         sub.validate()?;
-        if sub.id != event.subscription_id {
+        if sub.id != subscription_id {
             return Err(unavailable());
         }
         if !self.accounts.contains(&sub.owner) {
@@ -414,7 +446,7 @@ impl BillingControl {
                 "billing_machine_processing_unavailable",
             ));
         }
-        let consumed:Option<String>=sqlx::query_scalar("INSERT INTO api_billing_events(provider,event_id,payload,received_at,processed_at) VALUES($1,$2,NULL,$3,$3) ON CONFLICT(provider,event_id) DO NOTHING RETURNING event_id").bind(id).bind(&event.event_id).bind(now).fetch_optional(&mut *tx).await?;
+        let consumed:Option<String>=sqlx::query_scalar("INSERT INTO api_billing_events(provider,event_id,payload,received_at,processed_at) VALUES($1,$2,NULL,$3,$3) ON CONFLICT(provider,event_id) DO NOTHING RETURNING event_id").bind(id).bind(&event_id).bind(now).fetch_optional(&mut *tx).await?;
         if consumed.is_none() {
             tx.commit().await?;
             return Ok(json!({"ok":true,"duplicate":true,"provisioningQueued":false}));

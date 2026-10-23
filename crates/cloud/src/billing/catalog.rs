@@ -11,12 +11,14 @@ const MAX_SAFE: i64 = 9_007_199_254_740_991;
 #[derive(Clone)]
 pub struct BillingControl {
     pub(super) pool: PgPool,
+    pub(super) effects_pool: PgPool,
     pub(super) accounts: Arc<HashSet<String>>,
     pub(super) payments: Option<Arc<super::PaymentProviders>>,
 }
 impl BillingControl {
     pub fn from_pool(pool: PgPool, accounts: Vec<String>) -> Self {
         Self {
+            effects_pool: pool.clone(),
             pool,
             payments: None,
             accounts: Arc::new(accounts.into_iter().collect()),
@@ -39,7 +41,28 @@ impl BillingControl {
             .connect(url)
             .await
             .map_err(|_| anyhow::anyhow!("Cannot connect cloud billing writer"))?;
-        Ok(Self::from_pool(pool, accounts))
+        // Receipts must commit while the control transaction keeps its ownership fence.
+        // A separate pool prevents waiters on that fence from occupying every receipt connection.
+        let effects_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .after_connect(|conn, _| {
+                Box::pin(async move {
+                    sqlx::query("SET statement_timeout='10s'")
+                        .execute(&mut *conn)
+                        .await?;
+                    sqlx::query("SET lock_timeout='5s'")
+                        .execute(&mut *conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(url)
+            .await
+            .map_err(|_| anyhow::anyhow!("Cannot connect cloud billing delivery writer"))?;
+        let mut control = Self::from_pool(pool, accounts);
+        control.effects_pool = effects_pool;
+        Ok(control)
     }
     pub(super) async fn owned_transaction(
         &self,

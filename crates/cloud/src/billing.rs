@@ -4,7 +4,8 @@ mod payments;
 use crate::error::ApiError;
 pub use catalog::BillingControl;
 pub use payments::{
-    CheckoutSummary, CustomerPage, PaymentEvent, PaymentProviders, PortalProvider, Subscription,
+    CheckoutSummary, CreditDispute, CreditEvent, CreditPurchase, CustomerPage, PaymentEvent,
+    PaymentProviders, PortalProvider, Subscription,
 };
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};

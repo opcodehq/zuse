@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 pub(super) const CLOUD_OFFER: &str = "cloud-workspace-standard-v1";
 pub(super) struct CheckoutSettings {
-    signer: TicketSigner,
+    pub(super) signer: TicketSigner,
 }
 pub(super) struct ProviderCheckout {
     pub offers: HashMap<String, String>,
@@ -157,7 +157,7 @@ impl PaymentProviders {
 fn reconcile() -> ApiError {
     ApiError::conflict("billing_customer_reconciliation_required")
 }
-async fn stripe_customer(
+pub(super) async fn stripe_customer(
     pool: &PgPool,
     provider: &dyn PortalProvider,
     owner: &str,
@@ -305,7 +305,7 @@ impl BillingControl {
             return Err(ApiError::conflict("machine_subscription_exists"));
         }
         let customer = if provider.provider_id() == "stripe" {
-            Some(stripe_customer(&self.pool, provider.as_ref(), owner, now).await?)
+            Some(stripe_customer(&self.effects_pool, provider.as_ref(), owner, now).await?)
         } else {
             None
         };

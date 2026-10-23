@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, settlement/export, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, settlement/export, provider credentials, images, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -1726,3 +1726,69 @@ and `.context/cloud-checkout-browser-acceptance.json`. Screenshots:
 `.context/cloud-checkout-browser.png` and `.context/cloud-checkout-browser-activated.png`.
 Native and wasm builds pass; billing regression and action-retry checks are recorded
 in `.context/cloud-checkout-regression.log` and `.context/cloud-checkout-retry-tests.log`.
+
+### Prepaid invoice credits
+
+Rust now serves the original `/v1/billing/prepaid`, `/prepaid/checkout` and
+`/prepaid/complete` contracts. Provider selection retains existing non-ended
+Stripe/Polar ownership. Stripe reads the verified original customer's USD invoice
+balance; positive debt and available credit remain separate. Unsupported providers
+report unavailable purchases, while existing Stripe balances remain readable when
+purchases are disabled. Checkout accepts the reference $10/$25/$50/$100 amounts,
+validates the configured active one-dollar, non-recurring USD price, reuses the
+original customer reservation and allows card payments.
+
+Signed completion/refund/dispute notifications fetch canonical checkout, captured
+payment, charge, line-item and complete paginated refund evidence. Customer,
+account metadata, configured price, currency, quantity and supported funding amount
+must agree before any balance adjustment. Unpaid sessions do not fund credit.
+Refund totals and dispute amounts are bounded by the purchase; ambiguous mixed
+refund/dispute evidence requires reconciliation. Reinstatement applies the original
+withdrawal and reinstatement keys in order, handling reversed event delivery.
+
+Funding/reversals retain original `prepaid:purchase:*`, `prepaid:refund:*` and
+`prepaid:dispute:*` keys in `api_stripe_meter_deliveries`. Serialized receipt payloads
+keep the original field names and order. A committed delivery lease precedes every
+remote balance transaction; acknowledged receipts never resend. Lost responses
+retry the same provider idempotency key. Old uncertain writes stop after 23 hours
+and retain actionable reconciliation state. Existing settled receipts remain
+authoritative beyond that window. No provider customer/subscription IDs, cloud
+usage ledger, allowance or cap are replaced.
+
+The billing authority uses a separate bounded delivery connection pool so durable
+receipts can commit while a control transaction holds the billing ownership fence.
+Customer reservations use that pool too. Catalog connections remain read-only,
+and production billing ownership/checkout flags remain unchanged.
+
+Native/browser controls reuse existing settings components for balance, debit,
+fixed amount selection, Buy credits, disabled purchases and Refresh. Host-authority
+RPC scopes replies to the admitted account/organization, never automatically replays
+a credit checkout and never acquires a workspace execution connection. Monetary
+labels use exact integer cents. The purchase description retains the reference
+invoice application/rollover semantics. Configure `STRIPE_PREPAID_CREDIT_PRICE_ID`
+with the existing Stripe/webhook/live-checkout configuration to enable sales.
+
+Verification: ten billing library checks pass, including actual signed HTTP routes,
+isolated PostgreSQL and Stripe HTTP adapters. Funding tests lose an accepted balance
+adjustment response, redeliver concurrently, reuse original historical receipts,
+handle paginated refunds and out-of-order dispute reinstatement, reject an invalid
+price and foreign customer metadata, fence legacy-owned writes and refuse old
+uncertain adjustments. Allowance/cap preservation is asserted. Three billing
+integration regressions and mutation retry classification pass. Receipts:
+`.context/cloud-credits-acceptance.log`, `.context/cloud-credits-regression.log` and
+`.context/cloud-credits-retry-tests.log`.
+
+The compiled native Linux and browser flows opened $25 and $50 checkout respectively
+and refreshed a verified $50 funding from $15 to $65. Native system/browser URL
+launches were intercepted only for the fixture provider host; no live purchase was
+made. Browser wire observation confirms no `CloudEnvironment`. The API fixture
+checks the exact purchase amounts and final balance. Receipts:
+`.context/cloud-credits-ui-api.log`, `.context/cloud-credits-native-acceptance.json`
+and `.context/cloud-credits-browser-acceptance.json`. Screenshots:
+`.context/cloud-credits-native-funded.png` and `.context/cloud-credits-browser-funded.png`.
+Native and wasm builds pass.
+
+The adapters follow [Stripe's invoice balance contract](https://docs.stripe.com/api/customer_balance_transactions)
+and [Checkout contract](https://docs.stripe.com/api/checkout/sessions/create).
+Live paid-provider and Mac acceptance remain open. This does not close settlement,
+metered exports, persistent-machine billing, image administration or the rest of C.

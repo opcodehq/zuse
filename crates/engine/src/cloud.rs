@@ -25,6 +25,8 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_BILLING_SUMMARY
             | zuse_protocol::methods::CLOUD_BILLING_USAGE
             | zuse_protocol::methods::CLOUD_BILLING_CAP
+            | zuse_protocol::methods::CLOUD_PREPAID_BALANCE
+            | zuse_protocol::methods::CLOUD_PREPAID_CHECKOUT
             | zuse_protocol::methods::CLOUD_BILLING_ENTITLEMENTS
             | zuse_protocol::methods::CLOUD_BILLING_CHECKOUT
             | zuse_protocol::methods::CLOUD_BILLING_PORTAL
@@ -175,6 +177,15 @@ impl CloudApi {
                     Some("billing_subscription_mismatch") => {
                         "The existing subscription could not be verified. Open Manage billing or contact support."
                     }
+                    Some("invalid_prepaid_amount") => {
+                        "Choose $10, $25, $50 or $100 of prepaid credit."
+                    }
+                    Some("billing_credit_reconciliation_required") => {
+                        "This credit purchase needs payment reconciliation. Refresh the balance and contact support before purchasing again."
+                    }
+                    Some("workspace_access_denied") => {
+                        "You need an administrator or billing role to manage this account's billing."
+                    }
                     Some("billing_provider_ambiguous") => {
                         "This account has subscriptions with multiple billing providers. Contact support to select the correct portal."
                     }
@@ -216,6 +227,24 @@ impl CloudApi {
             .await
             .map_err(|_| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
         let result = match method {
+            zuse_protocol::methods::CLOUD_PREPAID_BALANCE
+            | zuse_protocol::methods::CLOUD_PREPAID_CHECKOUT => {
+                let org = auth.state().org_id().map(str::to_owned);
+                let (path, body) = if method == zuse_protocol::methods::CLOUD_PREPAID_CHECKOUT {
+                    let request: zuse_protocol::cloud_billing::PrepaidCheckoutRequest =
+                        serde_json::from_value(params)?;
+                    (
+                        vec!["v1", "billing", "prepaid", "checkout"],
+                        Some(serde_json::to_value(request)?),
+                    )
+                } else {
+                    (vec!["v1", "billing", "prepaid"], None)
+                };
+                let value = self
+                    .request_scoped(&token, &path, body, org.as_deref(), &[])
+                    .await?;
+                json!({"accountId":account,"organizationId":org,"data":value})
+            }
             zuse_protocol::methods::CLOUD_BILLING_ENTITLEMENTS
             | zuse_protocol::methods::CLOUD_BILLING_CHECKOUT => {
                 let org = auth.state().org_id().map(str::to_owned);

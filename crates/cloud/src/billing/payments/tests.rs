@@ -40,6 +40,7 @@ async fn stripe_portal_verifies_original_customer_before_any_session() {
     let origin = format!("http://{}/v1/", listener.local_addr().unwrap());
     let task = tokio::spawn(axum::serve(listener, app).into_future());
     let stripe = StripePortal {
+        credit_price: None,
         checkout: None,
         events: None,
         http: ProviderHttp {

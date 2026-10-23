@@ -27,6 +27,10 @@ pub struct CloudBillingPage {
     portal_task: Option<Task<()>>,
     subscription_task: Option<Task<()>>,
     subscribed: Option<bool>,
+    credits: Option<zuse_protocol::cloud_billing::PrepaidBalance>,
+    credit_task: Option<Task<()>>,
+    credit_amount: i64,
+    credit_error: Option<String>,
     summary: Option<BillingSummary>,
     items: Vec<BillingUsageItem>,
     cursor: Option<String>,
@@ -49,6 +53,10 @@ impl CloudBillingPage {
             portal_task: None,
             subscription_task: None,
             subscribed: None,
+            credits: None,
+            credit_task: None,
+            credit_amount: 2500,
+            credit_error: None,
             summary: None,
             items: vec![],
             cursor: None,
@@ -70,6 +78,7 @@ impl CloudBillingPage {
         };
         if !more {
             self.load_subscriptions(cx);
+            self.load_credits(false, cx);
         }
         self.loaded = true;
         self.error = None;
@@ -253,6 +262,81 @@ impl CloudBillingPage {
         }));
         cx.notify();
     }
+    fn load_credits(&mut self, buy: bool, cx: &mut Context<Self>) {
+        if self.credit_task.is_some() {
+            return;
+        }
+        if buy && !self.credits.as_ref().is_some_and(|v| v.available) {
+            return;
+        }
+        let Some(owner) = active_owner(self.state.read(cx)) else {
+            return;
+        };
+        let Some(engine) = self.state.read(cx).engine().map(|e| e.controller()) else {
+            return;
+        };
+        let amount = self.credit_amount;
+        self.credit_error = None;
+        let job = gpui_tokio::Tokio::spawn(cx, async move {
+            engine
+                .client()
+                .call_scoped(
+                    if buy {
+                        methods::CLOUD_PREPAID_CHECKOUT
+                    } else {
+                        methods::CLOUD_PREPAID_BALANCE
+                    },
+                    if buy {
+                        json!({"amountCents":amount})
+                    } else {
+                        json!({})
+                    },
+                )
+                .await
+        });
+        self.credit_task = Some(cx.spawn(async move |this, cx| {
+            let result = job.await;
+            let _ = this.update(cx, |this, cx| {
+                if active_owner(this.state.read(cx)).as_ref() != Some(&owner) {
+                    return;
+                }
+                this.credit_task = None;
+                match result {
+                    Ok(Ok(value)) if bound(&value, &owner) => {
+                        if buy {
+                            if let Some(url) = value["data"]["checkoutUrl"]
+                                .as_str()
+                                .filter(|s| s.starts_with("https://"))
+                            {
+                                cx.open_url(url);
+                            } else {
+                                this.credit_error = Some(
+                                    "The provider returned an invalid credit checkout link.".into(),
+                                );
+                            }
+                        } else {
+                            match serde_json::from_value(value["data"].clone()) {
+                                Ok(balance) => this.credits = Some(balance),
+                                Err(_) => {
+                                    this.credit_error = Some(
+                                        "Could not read the prepaid balance. Refresh to retry."
+                                            .into(),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Ok(Err(e)) => this.credit_error = Some(e.to_string()),
+                    _ => {
+                        this.credit_error =
+                            Some("Could not load prepaid credits. Refresh to retry.".into())
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
     fn save(&mut self, cx: &mut Context<Self>) {
         if self.task.is_some() {
             return;
@@ -335,6 +419,10 @@ impl Render for CloudBillingPage {
             self.portal_task = None;
             self.subscription_task = None;
             self.subscribed = None;
+            self.credits = None;
+            self.credit_task = None;
+            self.credit_amount = 2500;
+            self.credit_error = None;
             self.summary = None;
             self.items.clear();
             self.cursor = None;
@@ -373,6 +461,75 @@ impl Render for CloudBillingPage {
                         .id("open-cloud-billing-portal")
                         .child(if self.portal_task.is_some() { "Opening…" } else if self.subscribed==Some(false){"Subscribe to Cloud"}else if self.subscribed.is_none(){"Loading…"}else{ "Manage billing" })
                         .on_click(cx.listener(|this, _, _, cx| this.billing_link(cx))))));
+        }
+        if self.owner.is_some() {
+            let enabled =
+                self.credits.as_ref().is_some_and(|v| v.available) && self.credit_task.is_none();
+            let mut amounts = div().flex().gap(px(6.)).flex_1();
+            for amount in zuse_protocol::cloud_billing::PREPAID_CREDIT_AMOUNTS {
+                amounts = amounts.child(
+                    widgets::action_button(
+                        &theme,
+                        if self.credit_amount == amount {
+                            widgets::ActionTone::Solid
+                        } else {
+                            widgets::ActionTone::Quiet
+                        },
+                    )
+                    .id(("credit-amount", amount as usize))
+                    .role(Role::RadioButton)
+                    .aria_selected(self.credit_amount == amount)
+                    .child(SharedString::from(zuse_model::cloud_billing::cents(amount)))
+                    .when(!enabled, |view| view.opacity(0.5))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if enabled {
+                            this.credit_amount = amount;
+                            cx.notify();
+                        }
+                    })),
+                );
+            }
+            let balance = self
+                .credits
+                .as_ref()
+                .map(|v| {
+                    format!(
+                        "Balance: {}",
+                        zuse_model::cloud_billing::cents(v.credit_cents)
+                    )
+                })
+                .unwrap_or_else(|| "Loading balance…".into());
+            let mut credits=widgets::group(&theme,"Prepaid credits","Applies automatically to future Zuse invoices, including subscriptions. Unused credit rolls forward. Your usage allowance and spending cap stay the same.")
+                .child(widgets::card_row(&theme,false).child(div().flex_1().child(widgets::row_title(&theme,balance)))
+                    .child(widgets::action_button(&theme,widgets::ActionTone::Quiet).id("refresh-prepaid-credits").child("Refresh").on_click(cx.listener(|this,_,_,cx|this.load_credits(false,cx)))))
+                .child(widgets::card_row(&theme,false).child(amounts)
+                    .child(widgets::action_button(&theme,widgets::ActionTone::Solid).id("buy-prepaid-credits").child(if self.credit_task.is_some(){"Loading…"}else{"Buy credits"}).when(!enabled,|view|view.opacity(0.5)).on_click(cx.listener(|this,_,_,cx|this.load_credits(true,cx)))));
+            if let Some(balance) = &self.credits {
+                if balance.debit_cents > 0 {
+                    credits =
+                        credits.child(widgets::card_row(&theme, false).child(widgets::row_title(
+                            &theme,
+                            format!(
+                                "Outstanding balance: {}",
+                                zuse_model::cloud_billing::cents(balance.debit_cents)
+                            ),
+                        )));
+                }
+                if !balance.available {
+                    credits =
+                        credits.child(widgets::card_row(&theme, false).child(widgets::row_title(
+                            &theme,
+                            "Credit purchases are not enabled for this workspace yet.",
+                        )));
+                }
+            }
+            if let Some(error) = &self.credit_error {
+                credits = credits.child(
+                    widgets::card_row(&theme, false)
+                        .child(widgets::row_title(&theme, error.clone())),
+                );
+            }
+            body = body.child(credits);
         }
         if let Some(error) = &self.error {
             body = body.child(

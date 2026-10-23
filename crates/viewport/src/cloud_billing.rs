@@ -11,6 +11,9 @@ pub(super) struct Billing {
     owner: Option<(String, Option<String>)>,
     requests: HashMap<u64, (&'static str, Option<(String, Option<String>)>)>,
     subscribed: Option<bool>,
+    credits: Option<zuse_protocol::cloud_billing::PrepaidBalance>,
+    credit_amount: Option<i64>,
+    credit_error: Option<String>,
     summary: Option<BillingSummary>,
     items: Vec<BillingUsageItem>,
     cursor: Option<String>,
@@ -26,6 +29,10 @@ impl WorkspaceView {
         self.billing.error = None;
         self.billing.notice = None;
         if !more {
+            let credit_id = self.call(methods::CLOUD_PREPAID_BALANCE, json!({}));
+            self.billing
+                .requests
+                .insert(credit_id, ("credits", self.billing.owner.clone()));
             let id = self.call(methods::CLOUD_BILLING_ENTITLEMENTS, json!({}));
             self.billing
                 .requests
@@ -81,6 +88,41 @@ impl WorkspaceView {
             .requests
             .insert(id, ("portal", self.billing.owner.clone()));
         self.billing.error = None;
+        cx.notify();
+    }
+    fn refresh_credits(&mut self, buy: bool, cx: &mut Context<Self>) {
+        if self.billing.owner.is_none()
+            || self
+                .billing
+                .requests
+                .values()
+                .any(|(kind, _)| kind.starts_with("credit"))
+        {
+            return;
+        }
+        if buy && !self.billing.credits.as_ref().is_some_and(|v| v.available) {
+            return;
+        }
+        let id = self.call(
+            if buy {
+                methods::CLOUD_PREPAID_CHECKOUT
+            } else {
+                methods::CLOUD_PREPAID_BALANCE
+            },
+            if buy {
+                json!({"amountCents":self.billing.credit_amount.unwrap_or(2500)})
+            } else {
+                json!({})
+            },
+        );
+        self.billing.requests.insert(
+            id,
+            (
+                if buy { "credit-checkout" } else { "credits" },
+                self.billing.owner.clone(),
+            ),
+        );
+        self.billing.credit_error = None;
         cx.notify();
     }
     fn save_billing_cap(&mut self, cx: &mut Context<Self>) {
@@ -152,6 +194,11 @@ impl WorkspaceView {
             return true;
         }
         if let Some(error) = frame["err"].as_str() {
+            if kind.starts_with("credit") {
+                self.billing.credit_error = Some(error.into());
+                cx.notify();
+                return true;
+            }
             if self.billing.subscribed != Some(false)
                 || error != "An active cloud billing period is required."
             {
@@ -172,7 +219,25 @@ impl WorkspaceView {
         }) {
             return true;
         }
-        if kind == "entitlements" {
+        if kind == "credits" {
+            match serde_json::from_value(value["data"].clone()) {
+                Ok(balance) => self.billing.credits = Some(balance),
+                Err(_) => {
+                    self.billing.credit_error =
+                        Some("Could not read the prepaid balance. Refresh to retry.".into())
+                }
+            }
+        } else if kind == "credit-checkout" {
+            if let Some(url) = value["data"]["checkoutUrl"]
+                .as_str()
+                .filter(|v| v.starts_with("https://"))
+            {
+                cx.open_url(url);
+            } else {
+                self.billing.credit_error =
+                    Some("The provider returned an invalid credit checkout link.".into());
+            }
+        } else if kind == "entitlements" {
             self.billing.subscribed = zuse_model::cloud_billing::cloud_subscribed(
                 &value["data"],
                 chrono::Utc::now().timestamp_millis(),
@@ -264,6 +329,88 @@ impl WorkspaceView {
                     .child(s::title_text(if self.billing.subscribed==Some(false){"Cloud subscription"}else{"Billing portal"}))
                     .child(s::button("open-cloud-billing-portal", if self.billing.requests.values().any(|(kind, _)| *kind == "portal") { "Opening…" } else if self.billing.subscribed==Some(false){"Subscribe to Cloud"}else if self.billing.subscribed.is_none(){"Loading…"}else { "Manage billing" })
                         .on_click(cx.listener(|this, _, _, cx| this.open_billing_portal(cx)))))));
+        }
+        if self.billing.owner.is_some() {
+            let credit_busy = self
+                .billing
+                .requests
+                .values()
+                .any(|(kind, _)| kind.starts_with("credit"));
+            let enabled =
+                self.billing.credits.as_ref().is_some_and(|v| v.available) && !credit_busy;
+            let mut amounts = row().gap_2().flex_1();
+            for (amount, title) in [
+                (1000, "$10.00"),
+                (2500, "$25.00"),
+                (5000, "$50.00"),
+                (10000, "$100.00"),
+            ] {
+                amounts = amounts.child(
+                    s::choice(
+                        ("credit-amount", amount as usize),
+                        title,
+                        self.billing.credit_amount.unwrap_or(2500) == amount,
+                    )
+                    .when(!enabled, |view| view.opacity(0.5))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if enabled {
+                            this.billing.credit_amount = Some(amount);
+                            cx.notify();
+                        }
+                    })),
+                );
+            }
+            let balance = self
+                .billing
+                .credits
+                .as_ref()
+                .map(|v| {
+                    format!(
+                        "Balance: {}",
+                        zuse_model::cloud_billing::cents(v.credit_cents)
+                    )
+                })
+                .unwrap_or_else(|| "Loading balance…".into());
+            let mut body =
+                column()
+                    .gap_3()
+                    .p_3()
+                    .child(row().justify_between().child(label(balance)).child(
+                        s::button("refresh-prepaid-credits", "Refresh").on_click(
+                            cx.listener(|this, _, _, cx| this.refresh_credits(false, cx)),
+                        ),
+                    ))
+                    .child(
+                        row().gap_3().child(amounts).child(
+                            s::button(
+                                "buy-prepaid-credits",
+                                if credit_busy {
+                                    "Loading…"
+                                } else {
+                                    "Buy credits"
+                                },
+                            )
+                            .when(!enabled, |view| view.opacity(0.5))
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh_credits(true, cx))),
+                        ),
+                    );
+            if let Some(balance) = &self.billing.credits {
+                if balance.debit_cents > 0 {
+                    body = body.child(label(format!(
+                        "Outstanding balance: {}",
+                        zuse_model::cloud_billing::cents(balance.debit_cents)
+                    )));
+                }
+                if !balance.available {
+                    body = body.child(label(
+                        "Credit purchases are not enabled for this workspace yet.",
+                    ));
+                }
+            }
+            if let Some(error) = &self.billing.credit_error {
+                body = body.child(label(error.clone()));
+            }
+            view=view.child(s::frame().child(s::header("Prepaid credits","Applies automatically to future Zuse invoices, including subscriptions. Unused credit rolls forward. Your usage allowance and spending cap stay the same.")).child(s::card().child(body)));
         }
         if let Some(error) = &self.billing.error {
             view = view.child(label(error.clone()));

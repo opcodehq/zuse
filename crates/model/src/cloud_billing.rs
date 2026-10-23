@@ -80,3 +80,13 @@ pub fn cloud_subscribed(value: &serde_json::Value, now: i64) -> Option<bool> {
             && ent["paidThrough"].as_i64().is_none_or(|end| end > now)
     }))
 }
+
+pub fn cents(value: i64) -> String {
+    let amount = value.unsigned_abs();
+    format!(
+        "{}${}.{:02}",
+        if value < 0 { "-" } else { "" },
+        amount / 100,
+        amount % 100
+    )
+}

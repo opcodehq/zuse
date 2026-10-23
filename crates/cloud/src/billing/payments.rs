@@ -1,6 +1,8 @@
 //! Provider-owned billing management. Existing customers and subscriptions keep their identity.
 use super::BillingControl;
 mod checkout;
+mod credits;
+pub use credits::{CreditDispute, CreditEvent, CreditPurchase};
 pub mod events;
 use crate::{error::ApiError, store::Store};
 use async_trait::async_trait;
@@ -45,6 +47,45 @@ pub trait PortalProvider: Send + Sync {
         _owner: &str,
         _id: &str,
     ) -> Result<Option<CheckoutSummary>, ApiError> {
+        Err(unavailable())
+    }
+    fn prepaid_available(&self) -> bool {
+        false
+    }
+    async fn prepaid_balance(
+        &self,
+        _owner: &str,
+        _customer: Option<&str>,
+    ) -> Result<zuse_protocol::cloud_billing::PrepaidBalance, ApiError> {
+        Ok(zuse_protocol::cloud_billing::PrepaidBalance {
+            available: false,
+            credit_cents: 0,
+            debit_cents: 0,
+            currency: "usd".into(),
+        })
+    }
+    async fn prepaid_checkout(
+        &self,
+        _owner: &str,
+        _customer: &str,
+        _amount: i64,
+        _success: &str,
+    ) -> Result<String, ApiError> {
+        Err(unavailable())
+    }
+    async fn credit_purchase(
+        &self,
+        _event: &CreditEvent,
+    ) -> Result<Option<CreditPurchase>, ApiError> {
+        Err(unavailable())
+    }
+    async fn credit_adjustment(
+        &self,
+        _customer: &str,
+        _amount: i64,
+        _key: &str,
+        _purchase: &str,
+    ) -> Result<(), ApiError> {
         Err(unavailable())
     }
     fn verify_event(
@@ -108,6 +149,9 @@ impl PaymentProviders {
                     return_url,
                     events: events::EventConfig::from_env("STRIPE", "PRICE")?,
                     checkout: checkout::ProviderCheckout::from_env("STRIPE", "PRICE")?,
+                    credit_price: std::env::var("STRIPE_PREPAID_CREDIT_PRICE_ID")
+                        .ok()
+                        .filter(|v| !v.trim().is_empty()),
                     configuration: std::env::var("STRIPE_PORTAL_CONFIGURATION_ID")
                         .ok()
                         .filter(|s| !s.is_empty()),
@@ -211,6 +255,7 @@ impl ProviderHttp {
     }
 }
 struct StripePortal {
+    credit_price: Option<String>,
     checkout: Option<checkout::ProviderCheckout>,
     events: Option<events::EventConfig>,
     http: ProviderHttp,
@@ -219,6 +264,56 @@ struct StripePortal {
 }
 #[async_trait]
 impl PortalProvider for StripePortal {
+    fn prepaid_available(&self) -> bool {
+        self.credit_price.is_some() && self.events.is_some()
+    }
+    async fn prepaid_balance(
+        &self,
+        owner: &str,
+        customer: Option<&str>,
+    ) -> Result<zuse_protocol::cloud_billing::PrepaidBalance, ApiError> {
+        self.credit_balance(owner, customer).await
+    }
+    async fn prepaid_checkout(
+        &self,
+        owner: &str,
+        customer: &str,
+        amount: i64,
+        success: &str,
+    ) -> Result<String, ApiError> {
+        self.credit_checkout(owner, customer, amount, success).await
+    }
+    async fn credit_purchase(
+        &self,
+        event: &CreditEvent,
+    ) -> Result<Option<CreditPurchase>, ApiError> {
+        self.purchase(event).await
+    }
+    async fn credit_adjustment(
+        &self,
+        customer: &str,
+        amount: i64,
+        key: &str,
+        purchase: &str,
+    ) -> Result<(), ApiError> {
+        ProviderHttp::json(
+            self.http
+                .request(
+                    reqwest::Method::POST,
+                    &["customers", customer, "balance_transactions"],
+                )?
+                .header("Idempotency-Key", key)
+                .form(&[
+                    ("amount", amount.to_string()),
+                    ("currency", "usd".into()),
+                    ("description", "Zuse prepaid invoice balance".into()),
+                    ("metadata[zuse_operation]", key.into()),
+                    ("metadata[checkout_id]", purchase.into()),
+                ]),
+        )
+        .await?;
+        Ok(())
+    }
     fn supports_checkout(&self, offer: &str) -> bool {
         self.events.is_some()
             && self

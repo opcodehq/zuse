@@ -70,7 +70,8 @@ fn signatures_bind_exact_bytes_timestamps_and_polar_delivery_id() {
             .stripe_event(&headers, body.as_bytes(), now)
             .unwrap()
             .unwrap()
-            .subscription_id,
+            .subscription_id()
+            .unwrap(),
         "sub_original"
     );
     assert!(
@@ -96,7 +97,7 @@ fn signatures_bind_exact_bytes_timestamps_and_polar_delivery_id() {
             .polar_event(&headers, body.as_bytes(), now)
             .unwrap()
             .unwrap()
-            .event_id,
+            .event_id(),
         "polar-delivery-original"
     );
     let standard = config(
@@ -264,6 +265,7 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         "stripe".into(),
         vec![
             Arc::new(StripePortal {
+                credit_price: None,
                 checkout: None,
                 http: http(),
                 events: Some(config("whsec_fixture", "price_cloud")),

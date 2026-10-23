@@ -78,3 +78,18 @@ pub struct BillingUsageRequest {
 pub struct BillingCheckoutRequest {
     pub offer_id: String,
 }
+
+pub const PREPAID_CREDIT_AMOUNTS: [i64; 4] = [1000, 2500, 5000, 10000];
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepaidBalance {
+    pub available: bool,
+    pub credit_cents: i64,
+    pub debit_cents: i64,
+    pub currency: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepaidCheckoutRequest {
+    pub amount_cents: i64,
+}
