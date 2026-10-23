@@ -136,6 +136,7 @@ pub struct DefaultModelSelection {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WorkspacePreferences {
+    pub display_name: String,
     pub sidebar_view: SidebarView,
     pub appearance: AppearanceMode,
     pub reduce_motion: motion::ReduceMotion,

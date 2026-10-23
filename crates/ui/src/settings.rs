@@ -829,6 +829,7 @@ pub const SKILL_COMPLETION_HARNESSES: [(zuse_protocol::HarnessId, &str); 9] = [
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiSettings {
+    pub display_name: String,
     pub dictation_enabled: bool,
     /// Dictation microphone as a `zuse_voice::InputDevice` id; `None`
     /// follows the system default.
@@ -1046,6 +1047,7 @@ pub struct UiSettings {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            display_name: String::new(),
             dictation_enabled: false,
             dictation_input: None,
             window_geometry: None,
@@ -1699,6 +1701,7 @@ impl UiSettings {
             }};
         }
         merge!(
+            display_name,
             dictation_enabled,
             dictation_input,
             window_geometry,

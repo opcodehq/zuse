@@ -65,6 +65,9 @@ pub fn sidebar_border() -> Hsla {
 pub fn card_border() -> Hsla {
     tone(CARD_BORDER, hsla(110. / 360., 0.13, 0.89, 1.))
 }
+pub fn destructive_text() -> Hsla {
+    tone(hsla(0., 0.921, 0.604, 1.), hsla(0., 0.742, 0.529, 1.))
+}
 pub fn frame() -> Div {
     div()
         .flex()

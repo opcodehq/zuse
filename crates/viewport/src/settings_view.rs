@@ -239,6 +239,7 @@ impl WorkspaceView {
                 .child(self.account_settings(cx))
                 .child(self.appearance_settings(cx))
                 .child(self.completion_sound_settings(cx))
+                .child(self.motion_settings(cx))
                 .child(self.worktree_settings_card(cx))
                 .child(self.thread_naming_settings_card(cx))
                 .into_any_element(),
@@ -300,6 +301,24 @@ impl WorkspaceView {
                     .into_any_element()
             };
         column()
+            .id("workspace-settings")
+            .tab_group()
+            .tab_stop(false)
+            .on_key_down(|event: &KeyDownEvent, window, cx| {
+                let modifiers = event.keystroke.modifiers;
+                if event.keystroke.key == "tab"
+                    && !modifiers.control
+                    && !modifiers.alt
+                    && !modifiers.platform
+                {
+                    if modifiers.shift {
+                        window.focus_prev(cx);
+                    } else {
+                        window.focus_next(cx);
+                    }
+                    cx.stop_propagation();
+                }
+            })
             .flex_1()
             .size_full()
             .min_h_0()
@@ -315,6 +334,7 @@ impl WorkspaceView {
                     .child(
                         row()
                             .id("settings-back")
+                            .tab_index(0)
                             .role(Role::Button)
                             .aria_label("Back to app")
                             .cursor_pointer()
@@ -370,45 +390,35 @@ impl WorkspaceView {
             .into_any_element()
     }
     fn account_settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        let user = &self.cloud_account["user"];
-        let signed_in = user.is_object();
-        let name = user["name"]
-            .as_str()
-            .or_else(|| user["email"].as_str())
-            .unwrap_or("Not signed in");
-        let action = s::button(
-            "general-account-sign-in",
-            if signed_in { "Sign out" } else { "Sign in" },
-        )
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.call(
-                if signed_in {
-                    methods::CLOUD_ACCOUNT_SIGN_OUT
-                } else {
-                    methods::CLOUD_ACCOUNT_SIGN_IN
-                },
-                json!({}),
-            );
-            cx.notify();
-        }));
-        let description = if signed_in {
-            user["email"]
-                .as_str()
-                .map(zuse_protocol::presentation::masked_email)
-                .unwrap_or_default()
-        } else {
-            "You're using Zuse locally. Sign in to sync and connect your tools.".to_owned()
+        let mut status = self.cloud_account.clone();
+        if let Some(error) = &self.account_action_error {
+            if !status.is_object() {
+                status = json!({});
+            }
+            status["error"] = json!(error);
+        }
+        let properties = crate::account_settings::Properties {
+            status,
+            display_name: self.preferences.display_name.clone(),
+            loaded: !self.cloud_account.is_null() || self.account_action_error.is_some(),
+            available: self.connected,
+            busy: self.pending.values().any(|method| {
+                matches!(
+                    method.as_str(),
+                    methods::CLOUD_ACCOUNT_SIGN_IN | methods::CLOUD_ACCOUNT_SIGN_OUT
+                )
+            }),
+            colors: crate::account_settings::Colors {
+                text: rgb(TEXT).into(),
+                muted: rgb(MUTED).into(),
+                background: s::card_bg(),
+                border: s::card_border(),
+                danger: s::destructive_text(),
+            },
         };
-        let account = s::setting_row(true)
-            .child(s::details(name.to_owned(), description))
-            .child(action);
-        s::frame()
-            .child(s::header("Account", "Sign in to sync your account across devices and (soon) drive remote agents from your phone."))
-            .child(s::card().child(account))
-            .when_some(self.cloud_account["error"].as_str().map(str::to_owned), |view,error| view.child(s::description_text(error).px_3().py_2()))
-            .when_some(self.cloud_account["login"]["url"].as_str().filter(|url|url.starts_with("https://")).map(str::to_owned), |view,url| {
-                view.child(s::button("general-authorize-account","Open sign-in").on_click(move|_,_,cx|cx.open_url(&url)))
-            }).into_any_element()
+        self.account_card
+            .update(cx, |card, cx| card.set_properties(properties, cx));
+        self.account_card.clone().into_any_element()
     }
     fn appearance_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         use zuse_protocol::presentation::AppearanceMode;
@@ -425,6 +435,7 @@ impl WorkspaceView {
                     .enumerate()
                     .map(|(index, mode)| {
                         s::choice(("general-theme", index), mode.label(), selected == mode)
+                            .when(selected == mode, |view| view.bg(rgb(BG)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.preferences.appearance = mode;
                                 this.save_preferences();
@@ -432,6 +443,24 @@ impl WorkspaceView {
                             }))
                     }),
             );
+        s::frame()
+            .child(s::header(
+                "Appearance",
+                "Choose the app theme, or follow your system setting.",
+            ))
+            .child(
+                s::card().child(
+                    s::setting_row(true)
+                        .child(s::details(
+                            "Theme",
+                            "Choose the app theme, or follow your system setting.",
+                        ))
+                        .child(choices),
+                ),
+            )
+            .into_any_element()
+    }
+    fn motion_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let motion = row()
             .id("reduce-motion-options")
             .role(Role::RadioGroup)
@@ -455,16 +484,12 @@ impl WorkspaceView {
                     }),
             );
         let paused = self.preferences.pause_animations_in_background;
-        s::frame()
-            .child(s::header("Appearance", "Choose the app theme and animation behavior."))
+        s::frame().child(s::header("Motion","Choose how the app animates."))
             .child(s::card()
-                .child(s::setting_row(false).child(s::details("Theme", "Choose the app theme, or follow your system setting.")).child(choices))
-                .child(s::setting_row(false).child(s::details("Reduce motion", "Follow system motion preferences, keep animations still, or allow motion.")).child(motion))
-                .child(s::setting_row(true).child(s::details("Pause animations in background", "Keep animations still while the app is out of focus."))
+                .child(s::setting_row(true).child(s::details("Reduce motion","Follow system motion preferences, keep animations still, or allow motion.")).child(motion))
+                .child(s::setting_row(false).child(s::details("Pause animations in background","Keep animations still while the app is out of focus."))
                     .child(s::toggle("pause-animations-background",paused,"Pause animations in background").tab_index(0)
-                        .on_click(cx.listener(|this,_,_,cx|{this.preferences.pause_animations_in_background=!this.preferences.pause_animations_in_background;this.save_preferences();cx.notify();}))))
-            )
-            .into_any_element()
+                        .on_click(cx.listener(|this,_,_,cx|{this.preferences.pause_animations_in_background=!this.preferences.pause_animations_in_background;this.save_preferences();cx.notify();}))))).into_any_element()
     }
     fn default_model_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         use super::model_picker::TriggerBounds;

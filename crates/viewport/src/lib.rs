@@ -1,6 +1,7 @@
 //! Browser-compatible GPUI views. Native process/filesystem access stays behind RPC.
 
 mod access;
+pub mod account_settings;
 pub mod activity;
 pub mod assets;
 #[cfg(test)]
@@ -204,6 +205,7 @@ pub struct WorkspaceView {
     sessions: Vec<Value>,
     notification_baselines: HashMap<String, zuse_protocol::notifications::SessionNotificationState>,
     completion_preset_menu: bool,
+    completion_preset_closed: Option<web_time::Instant>,
     completion_preset_active: usize,
     completion_preset_focus: FocusHandle,
     completion_switch_focus: FocusHandle,
@@ -285,6 +287,9 @@ pub struct WorkspaceView {
     directory_append: bool,
     accounts: Value,
     cloud_account: Value,
+    account_action_error: Option<String>,
+    account_card: Entity<account_settings::AccountCard>,
+    _account_card_events: Subscription,
     browser_local: bool,
     plugin_state: zuse_protocol::plugin_state::PluginState,
     plugin_request: Option<u64>,
@@ -484,6 +489,22 @@ impl WorkspaceView {
         });
         let worktree_settings = worktree_settings::WorktreeSettingsView::new(window, cx);
         let browser = browser::Browser::new(window, cx);
+        let account_card=cx.new(|cx|account_settings::AccountCard::new(window,cx));
+        let account_card_events=cx.subscribe(&account_card,|this,_,event,cx|{
+            use account_settings::Event;
+            match event {
+                Event::SignIn|Event::SignOut=>{
+                    if !this.connected || this.pending.values().any(|method|matches!(method.as_str(),methods::CLOUD_ACCOUNT_SIGN_IN|methods::CLOUD_ACCOUNT_SIGN_OUT)) {return;}
+                    this.account_action_error=None;
+                    this.call(if matches!(event,Event::SignIn){methods::CLOUD_ACCOUNT_SIGN_IN}else{methods::CLOUD_ACCOUNT_SIGN_OUT},json!({}));
+                }
+                Event::DisplayName{account,value}=>{
+                    if this.cloud_account["user"]["id"]!=account.as_str() {return;}
+                    this.preferences.display_name=value.clone();this.save_preferences();
+                }
+            }
+            cx.notify();
+        });
         let cloud_sync_path = cx.new(|cx| input::TextInput::new("Absolute folder on host", window, cx));
         let cloud_branch = cx.new(|cx| input::TextInput::new("Branch (main)", window, cx));
         let cloud_model = cx.new(|cx| input::TextInput::new("Model (sonnet)", window, cx));
@@ -563,7 +584,7 @@ impl WorkspaceView {
             provider_codes: HashMap::new(),
             provider_error: None,
             settings_section: settings_view::Section::General,
-            settings_nav_focus: cx.focus_handle(),
+            settings_nav_focus: cx.focus_handle().tab_stop(true),
             settings_nav_active: 0,
             provider_updates: vec![],
             provider_updates_watch: None,
@@ -601,10 +622,11 @@ impl WorkspaceView {
             sessions: vec![],
             notification_baselines: HashMap::new(),
             completion_preset_menu: false,
+            completion_preset_closed: None,
             completion_preset_active: 0,
-            completion_preset_focus: cx.focus_handle(),
-            completion_switch_focus: cx.focus_handle(),
-            provider_notice_focus: cx.focus_handle(),
+            completion_preset_focus: cx.focus_handle().tab_stop(true),
+            completion_switch_focus: cx.focus_handle().tab_stop(true),
+            provider_notice_focus: cx.focus_handle().tab_stop(true),
             provider_policy_focus: cx.focus_handle(),
             repos: vec![],
             spaces: vec![],
@@ -682,6 +704,9 @@ impl WorkspaceView {
             directory_append: false,
             accounts: Value::Null,
             cloud_account: Value::Null,
+            account_action_error: None,
+            account_card,
+            _account_card_events: account_card_events,
             browser_local: false,
             plugin_state: Default::default(),
             plugin_request: None,
@@ -999,6 +1024,9 @@ impl WorkspaceView {
             return;
         }
         if let Some(error) = frame.get("err").and_then(Value::as_str) {
+            if matches!(method.as_str(),methods::CLOUD_ACCOUNT_SIGN_IN|methods::CLOUD_ACCOUNT_SIGN_OUT|methods::CLOUD_ACCOUNT_STATUS) {
+                self.account_action_error=Some(error.into());
+            }
             self.error = Some(error.into());
             if let Some(draft) = self.send_draft.remove(&id) {
                 self.restore_failed_draft(draft, cx);
@@ -1074,6 +1102,7 @@ impl WorkspaceView {
                 }
 
                 methods::CLOUD_ACCOUNT_SIGN_IN => {
+                    self.account_action_error=None;
                     if let Some(url) = value["url"]
                         .as_str()
                         .filter(|url| url.starts_with("https://"))
@@ -1084,6 +1113,7 @@ impl WorkspaceView {
                 methods::CLOUD_ACCOUNT_STATUS => {
                     let changed = self.cloud_account["user"]["id"] != value["user"]["id"];
                     self.cloud_account = value.clone();
+                    if changed || value["login"].is_object() {self.account_action_error=None;}
                     self.managed_account_updated(changed);
                     if changed {
                         self.plugin_detail = None;

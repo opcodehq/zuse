@@ -67,10 +67,14 @@ impl WorkspaceView {
             }
             "up" | "down" | "home" | "end" => {
                 if !self.completion_preset_menu {
-                    self.completion_preset_active = CompletionSoundPreset::ALL
-                        .iter()
-                        .position(|preset| *preset == self.preferences.completion_sound.preset)
-                        .unwrap_or(0);
+                    self.completion_preset_active = match key {
+                        "home" => 0,
+                        "end" => count - 1,
+                        _ => CompletionSoundPreset::ALL
+                            .iter()
+                            .position(|preset| *preset == self.preferences.completion_sound.preset)
+                            .unwrap_or(0),
+                    };
                 } else {
                     self.completion_preset_active = match key {
                         "up" => (self.completion_preset_active + count - 1) % count,
@@ -80,19 +84,6 @@ impl WorkspaceView {
                     };
                 }
                 self.completion_preset_menu = true;
-            }
-            "enter" | "space" if !event.is_held => {
-                if self.completion_preset_menu {
-                    self.preferences.completion_sound.preset =
-                        CompletionSoundPreset::ALL[self.completion_preset_active];
-                    self.save_preferences();
-                } else {
-                    self.completion_preset_active = CompletionSoundPreset::ALL
-                        .iter()
-                        .position(|preset| *preset == self.preferences.completion_sound.preset)
-                        .unwrap_or(0);
-                }
-                self.completion_preset_menu = !self.completion_preset_menu;
             }
             _ => return,
         }
@@ -111,86 +102,114 @@ impl WorkspaceView {
         .tab_index(0)
         .on_click(cx.listener(move |this, _, window, cx| {
             window.focus(&this.completion_switch_focus, cx);
-            this.preferences.completion_sound.enabled = !enabled;
+            this.preferences.completion_sound.enabled = !this.preferences.completion_sound.enabled;
             this.completion_preset_menu = false;
             this.save_preferences();
             cx.notify();
         }));
         let selector = column()
             .id("completion-preset-select")
-            .track_focus(&self.completion_preset_focus)
-            .on_key_down(cx.listener(Self::on_completion_preset_key))
             .relative()
             .child(
                 s::button("general-completion-preset", preset.label())
                     .w(px(160.))
+                    .h(px(24.))
+                    .px(px(7.))
                     .justify_between()
                     .role(Role::ComboBox)
+                    .track_focus(&self.completion_preset_focus.clone().tab_stop(enabled))
                     .tab_index(0)
+                    .on_key_down(cx.listener(Self::on_completion_preset_key))
                     .aria_label("Completion sound preset")
                     .aria_expanded(self.completion_preset_menu)
-                    .when(!enabled, |button| button.opacity(0.5))
+                    .when(!enabled, |button| button.opacity(0.64).cursor_default())
                     .child(icon("alt-arrow-down").size(px(14.)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if enabled {
-                            window.focus(&this.completion_preset_focus, cx);
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        if !this.preferences.completion_sound.enabled {
+                            return;
+                        }
+                        window.focus(&this.completion_preset_focus, cx);
+                        if event.is_keyboard() && this.completion_preset_menu {
+                            this.preferences.completion_sound.preset =
+                                CompletionSoundPreset::ALL[this.completion_preset_active];
+                            this.save_preferences();
+                            this.completion_preset_menu = false;
+                        } else {
+                            let just_closed = !event.is_keyboard()
+                                && this.completion_preset_closed.is_some_and(|time| {
+                                    time.elapsed() < std::time::Duration::from_millis(300)
+                                });
                             this.completion_preset_active = CompletionSoundPreset::ALL
                                 .iter()
-                                .position(|choice| *choice == preset)
+                                .position(|choice| {
+                                    *choice == this.preferences.completion_sound.preset
+                                })
                                 .unwrap_or(0);
-                            this.completion_preset_menu = !this.completion_preset_menu;
-                            cx.notify();
+                            this.completion_preset_menu =
+                                !this.completion_preset_menu && !just_closed;
                         }
+                        this.completion_preset_closed = None;
+                        cx.notify();
                     })),
             )
             .when(enabled && self.completion_preset_menu, |view| {
                 view.child(
-                    column()
-                        .id("completion-preset-list")
-                        .role(Role::ListBox)
-                        .aria_label("Completion sound presets")
-                        .absolute()
-                        .top_full()
-                        .mt_1()
-                        .right_0()
-                        .w(px(160.))
-                        .p_1()
-                        .rounded(px(10.))
-                        .border_1()
-                        .border_color(rgb(BORDER))
-                        .bg(s::card_bg())
-                        .shadow_lg()
-                        .children(CompletionSoundPreset::ALL.into_iter().enumerate().map(
-                            |(index, choice)| {
-                                row()
-                                    .id(("completion-sound-preset", index))
-                                    .role(Role::ListBoxOption)
-                                    .aria_selected(choice == preset)
-                                    .cursor_pointer()
-                                    .h(px(28.))
-                                    .px_2()
-                                    .gap_2()
-                                    .rounded(px(7.))
-                                    .text_size(px(12.))
-                                    .text_color(rgb(TEXT))
-                                    .when(index == self.completion_preset_active, |view| {
-                                        view.bg(s::frame_bg())
-                                    })
-                                    .hover(|view| view.bg(s::frame_bg()))
-                                    .child(div().flex_1().child(choice.label()))
-                                    .when(choice == preset, |view| {
-                                        view.child(
-                                            icon("check").size(px(14.)).text_color(rgb(MUTED)),
-                                        )
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.preferences.completion_sound.preset = choice;
-                                        this.completion_preset_menu = false;
-                                        this.save_preferences();
-                                        cx.notify();
-                                    }))
-                            },
-                        )),
+                    deferred(
+                        column()
+                            .id("completion-preset-list")
+                            .role(Role::ListBox)
+                            .aria_label("Completion sound presets")
+                            .absolute()
+                            .top_full()
+                            .mt_1()
+                            .right_0()
+                            .w(px(160.))
+                            .p_1()
+                            .rounded(px(10.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(crate::palette::rgb(crate::shell::RAISED))
+                            .shadow_lg()
+                            .occlude()
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                this.completion_preset_menu = false;
+                                this.completion_preset_closed = Some(web_time::Instant::now());
+                                cx.notify();
+                            }))
+                            .children(CompletionSoundPreset::ALL.into_iter().enumerate().map(
+                                |(index, choice)| {
+                                    row()
+                                        .id(("completion-sound-preset", index))
+                                        .role(Role::ListBoxOption)
+                                        .aria_selected(choice == preset)
+                                        .cursor_pointer()
+                                        .h(px(28.))
+                                        .px_2()
+                                        .gap_2()
+                                        .rounded(px(7.))
+                                        .text_size(px(12.))
+                                        .text_color(rgb(TEXT))
+                                        .when(index == self.completion_preset_active, |view| {
+                                            view.bg(s::frame_bg())
+                                        })
+                                        .hover(|view| view.bg(s::frame_bg()))
+                                        .child(div().flex_1().child(choice.label()))
+                                        .when(choice == preset, |view| {
+                                            view.child(
+                                                icon("check").size(px(14.)).text_color(rgb(MUTED)),
+                                            )
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.preferences.completion_sound.preset = choice;
+                                            this.completion_preset_menu = false;
+                                            this.save_preferences();
+                                            cx.notify();
+                                        }))
+                                },
+                            )),
+                    )
+                    .priority(2),
                 )
             });
         let controls = row()
@@ -202,9 +221,11 @@ impl WorkspaceView {
             .child(selector)
             .child(
                 s::button("general-preview-sound", "Preview")
-                    .when(!enabled, |button| button.opacity(0.5))
+                    .tab_index(0)
+                    .tab_stop(enabled)
+                    .when(!enabled, |button| button.opacity(0.64).cursor_default())
                     .on_click(cx.listener(move |this, _, _, _| {
-                        if enabled {
+                        if this.preferences.completion_sound.enabled {
                             this.play_completion_sound();
                         }
                     })),
@@ -224,7 +245,7 @@ impl WorkspaceView {
             this.save_preferences();
             cx.notify();
         }));
-        let settings_row = s::setting_row(false).flex_col().items_stretch().gap_2()
+        let settings_row = s::setting_row(false).flex_col().flex_nowrap().items_stretch().gap_2()
             .child(row().items_start().gap(px(10.)).child(s::details("Agent completion sound", "Play a short sound when any agent turn finishes, including agents working in background chats.")).child(row().h(px(28.)).child(toggle)))
             .child(controls);
         s::frame()

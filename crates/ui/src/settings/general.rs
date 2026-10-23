@@ -50,7 +50,12 @@ impl ShortcutsPage {
                             }))
                     }),
             );
-        let appearance = widgets::group(theme, "Appearance", "").child(
+        let appearance = widgets::group(
+            theme,
+            "Appearance",
+            "Choose the app theme, or follow your system setting.",
+        )
+        .child(
             widgets::section_card(theme).mt_0().child(
                 widgets::card_row(theme, true)
                     .child(general_details(
@@ -76,7 +81,7 @@ impl ShortcutsPage {
             .cursor_pointer()
             .on_click(cx.listener(move |_, _, _, cx| {
                 crate::settings::update(SavePolicy::Immediate, cx, |settings| {
-                    settings.agent_update_notifications = !updates
+                    settings.agent_update_notifications = !settings.agent_update_notifications
                 });
                 cx.refresh_windows();
             }));
@@ -93,7 +98,7 @@ impl ShortcutsPage {
             .cursor_pointer()
             .on_click(cx.listener(move |_, _, _, cx| {
                 crate::settings::update(SavePolicy::Immediate, cx, |settings| {
-                    settings.sound_completion_enabled = !sound
+                    settings.sound_completion_enabled = !settings.sound_completion_enabled
                 });
                 cx.refresh_windows();
             }));
@@ -126,22 +131,32 @@ impl ShortcutsPage {
                 }
             })
             .render(&self.completion_preset_select, cx)
+            .h(px(24.))
+            .px(px(7.))
+            .bg(theme.surface_card)
+            .border_color(theme.border)
+            .text_size(crate::typography::ui_rems(11.))
             .into_any_element()
         } else {
             widgets::text_action(theme, widgets::ActionTone::Outlined, preset.label())
                 .w(px(160.))
-                .opacity(0.5)
+                .h(px(24.))
+                .px(px(7.))
+                .justify_between()
+                .text_size(crate::typography::ui_rems(11.))
+                .child(crate::icons::icon(crate::icons::ALT_ARROW_DOWN).size(px(14.)))
+                .opacity(0.64)
                 .into_any_element()
         };
         let notifications=widgets::group(theme,"Notifications","")
             .child(widgets::section_card(theme).mt_0()
                 .child(widgets::card_row(theme,true).child(general_details(theme,"Provider update notifications","Show a notification when a newer version of an agent provider is available. Off by default.")).child(update_switch))
-                .child(widgets::card_row(theme,false).flex_col().items_stretch().gap(px(8.))
+                .child(widgets::card_row(theme,false).flex_col().flex_nowrap().items_stretch().gap(px(8.))
                     .child(div().flex().items_start().gap(px(10.)).child(general_details(theme,"Agent completion sound","Play a short sound when any agent turn finishes, including agents working in background chats.")).child(div().flex().items_center().h(px(28.)).child(sound_switch)))
                     .child(div().flex().items_center().flex_wrap().gap(px(8.)).when(!sound,|controls|controls.opacity(0.6))
                         .child(crate::icons::icon(crate::icons::VOLUME_LOUD).size(px(16.)).text_color(theme.text_muted))
                         .child(selector)
-                        .child(widgets::text_action(theme,widgets::ActionTone::Outlined,"Preview").id("general-preview-sound").when(!sound, |button| button.opacity(0.5)).on_click(move|_,_,_|{if sound{crate::sound::play_with_completion_preset(crate::sound::Sound::Done, preset);}})))));
+                        .child(widgets::text_action(theme,widgets::ActionTone::Outlined,"Preview").id("general-preview-sound").tab_index(0).tab_stop(sound).when(!sound, |button| button.opacity(0.64)).on_click(move|_,_,_|{if sound{crate::sound::play_with_completion_preset(crate::sound::Sound::Done, preset);}})))));
         div()
             .flex()
             .flex_col()
@@ -160,7 +175,7 @@ fn general_details(theme: &Theme, title: &str, description: &str) -> gpui::Div {
         .child(widgets::row_title(theme, title.to_owned()))
         .child(
             div()
-                .text_size(crate::typography::text_xs())
+                .text_size(crate::typography::ui_rems(11.))
                 .line_height(crate::typography::ui_rems(16.))
                 .text_color(theme.text_muted)
                 .child(description.to_owned()),

@@ -49,6 +49,9 @@ pub struct PluginsCard {
     _search: Subscription,
     _installed_search: Subscription,
     account: AccountStatus,
+    account_loaded: bool,
+    account_view: Option<Entity<zuse_viewport::account_settings::AccountCard>>,
+    account_view_events: Option<Subscription>,
     plugins: zuse_protocol::plugin_state::PluginState,
     error: Option<String>,
     epoch: u64,
@@ -79,6 +82,7 @@ impl PluginsCard {
                 this.setup = None;
                 this.setup_events = None;
                 this.account = AccountStatus::default();
+                this.account_loaded = false;
                 this.plugins = Default::default();
             } else if this.watch.is_none() {
                 this.attach(cx);
@@ -109,6 +113,9 @@ impl PluginsCard {
             _search: search_events,
             _installed_search: installed_events,
             account: AccountStatus::default(),
+            account_loaded: false,
+            account_view: None,
+            account_view_events: None,
             plugins: Default::default(),
             error: None,
             epoch: 0,
@@ -158,6 +165,7 @@ impl PluginsCard {
                                 let changed = card.account.user.as_ref().map(|u| &u.id)
                                     != account.user.as_ref().map(|u| &u.id);
                                 card.account = account;
+                                card.account_loaded = true;
                                 if changed {
                                     card.browse_selected = None;
                                     card.detail_menu = Default::default();
@@ -167,7 +175,7 @@ impl PluginsCard {
                                     card.plugins = Default::default();
                                     card.action = None;
                                     card.busy = false;
-                                    if card.account.user.is_some() {
+                                    if card.account.user.is_some() && !card.account_only {
                                         card.request(
                                             methods::PLUGINS,
                                             json!({"action":"list"}),
@@ -1274,68 +1282,69 @@ impl PluginsCard {
             .into_any_element()
     }
 
-    fn render_account(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let signed_in = self.signed_in();
-        let title = self
-            .account
-            .user
-            .as_ref()
-            .map(|user| {
-                user.name
-                    .clone()
-                    .unwrap_or_else(|| zuse_protocol::presentation::masked_email(&user.email))
-            })
-            .unwrap_or_else(|| "Not signed in".into());
-        let description = self.account.user.as_ref().map(|user|zuse_protocol::presentation::masked_email(&user.email)).unwrap_or_else(||"You're using Zuse (Beta) locally without an account. Sign in to sync and unlock remote agents.".into());
-        let account = widgets::card_row(theme, true)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(widgets::row_title(theme, title))
-                    .child(
-                        div()
-                            .text_size(crate::typography::text_xs())
-                            .line_height(crate::typography::ui_rems(16.))
-                            .text_color(theme.text_muted)
-                            .child(description),
-                    ),
-            )
-            .child(
-                widgets::text_action(
-                    theme,
-                    widgets::ActionTone::Outlined,
-                    if signed_in { "Sign out" } else { "Sign in" },
-                )
-                .id("general-account-sign-in")
-                .tab_index(0)
-                .role(gpui::Role::Button)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.request(
-                        if signed_in {
-                            methods::CLOUD_ACCOUNT_SIGN_OUT
-                        } else {
-                            methods::CLOUD_ACCOUNT_SIGN_IN
-                        },
-                        json!({}),
-                        cx,
-                    )
-                })),
-            );
-        widgets::group(theme,"Account","Sign in to sync your account across devices and (soon) drive remote agents from your phone.")
-            .child(widgets::section_card(theme).mt_0().child(account))
-            .when_some(self.account.login.clone(),|view,login|view.child(widgets::text_action(theme,widgets::ActionTone::Outlined,"Continue in browser").id("general-open-login")
-                .on_click(move|_,_,cx|{if login.url.starts_with("https://"){cx.open_url(&login.url);}})))
-            .when_some(self.error.clone().or_else(||self.account.error.clone()),|view,error|view.child(widgets::error_strip(theme,error)))
-            .into_any_element()
+    fn render_account(
+        &mut self,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use zuse_viewport::account_settings::{AccountCard, Colors, Event, Properties};
+        if self.account_view.is_none() {
+            let view = cx.new(|cx| AccountCard::new(window, cx));
+            self.account_view_events = Some(cx.subscribe(&view, |this, _, event, cx| {
+                match event {
+                    Event::SignIn => this.request(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}), cx),
+                    Event::SignOut => this.request(methods::CLOUD_ACCOUNT_SIGN_OUT, json!({}), cx),
+                    Event::DisplayName { account, value } => {
+                        if this
+                            .account
+                            .user
+                            .as_ref()
+                            .is_none_or(|user| &user.id != account)
+                        {
+                            return;
+                        }
+                        crate::settings::update(
+                            crate::settings::SavePolicy::Immediate,
+                            cx,
+                            |settings| settings.display_name = value.clone(),
+                        );
+                        cx.refresh_windows();
+                    }
+                }
+                cx.notify();
+            }));
+            self.account_view = Some(view);
+        }
+        let mut status = serde_json::to_value(&self.account).unwrap_or_default();
+        if let Some(error) = &self.error {
+            status["error"] = json!(error);
+        }
+        let properties = Properties {
+            status,
+            display_name: crate::settings::current(cx).display_name,
+            loaded: self.account_loaded || self.error.is_some(),
+            available: self.state.read(cx).engine().is_some(),
+            busy: self.busy,
+            colors: Colors {
+                text: theme.text,
+                muted: theme.text_muted,
+                background: theme.surface_card,
+                border: theme.border,
+                danger: zuse_viewport::settings_style::destructive_text(),
+            },
+        };
+        let view = self.account_view.as_ref().unwrap();
+        view.update(cx, |view, cx| view.set_properties(properties, cx));
+        view.clone().into_any_element()
     }
 }
 
 impl Render for PluginsCard {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
         if self.account_only {
-            return self.render_account(&theme, cx);
+            return self.render_account(&theme, window, cx);
         }
         if !self.signed_in() {
             let status = self.render_status(&theme, cx);
