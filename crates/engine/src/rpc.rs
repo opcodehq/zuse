@@ -1940,23 +1940,30 @@ impl AuthRpc {
     }
 
     pub fn handles(method: &str) -> bool {
-        matches!(
-            method,
-            methods::AUTH_STATUS
-                | methods::SIGN_IN
-                | methods::SIGN_IN_HEADLESS
-                | methods::COMPLETE_SIGN_IN
-                | methods::SIGN_OUT
-                | methods::LIST_ORGS
-                | methods::CREATE_ORG
-                | methods::SELECT_ORG
-        )
+        crate::cloud::handles(method)
+            || matches!(
+                method,
+                methods::AUTH_STATUS
+                    | methods::SIGN_IN
+                    | methods::SIGN_IN_HEADLESS
+                    | methods::COMPLETE_SIGN_IN
+                    | methods::SIGN_OUT
+                    | methods::LIST_ORGS
+                    | methods::CREATE_ORG
+                    | methods::SELECT_ORG
+            )
     }
 }
 
 #[async_trait]
 impl RpcService for AuthRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if crate::cloud::handles(method) {
+            let result = crate::cloud::handle(&self.auth, method, params)
+                .await
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+            return RpcReply::value(&result);
+        }
         match method {
             methods::AUTH_STATUS => Ok(RpcReply::Stream(watch_stream(self.auth.watch_state()))),
             methods::SIGN_IN => {

@@ -666,3 +666,5 @@ fn deliver_appshot(
         appshots::foreground_after_capture();
     }
 }
+
+mod cloud_history;

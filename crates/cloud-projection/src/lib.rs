@@ -10,19 +10,17 @@ use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
-use zuse_model::{SessionMessageEntry, TranscriptBaseline, TranscriptFrame, TranscriptUpdate};
+#[cfg(test)]
+use zuse_model::{SessionMessageEntry, TranscriptUpdate};
+use zuse_model::{TranscriptBaseline, TranscriptFrame};
+#[cfg(test)]
 use zuse_protocol::Chat;
 
 pub const FORMAT: &str = "zuse-rust-transcript-v1";
 pub const HEAD_LIMIT: usize = 1024 * 1024;
 pub const PAGE_LIMIT: usize = 4 * 1024 * 1024;
 pub const PLAIN_LIMIT: usize = 32 * 1024 * 1024;
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Cursor {
-    pub epoch: String,
-    pub version: i64,
-}
+pub use zuse_model::cloud::{Cursor, Head, Page};
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Upload {
@@ -33,35 +31,6 @@ pub struct Upload {
     pub before_sequence: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload_format: Option<String>,
-}
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Head {
-    pub schema_version: u32,
-    pub payload_format: String,
-    pub workspace_id: String,
-    pub session_id: String,
-    pub runtime_generation: i64,
-    pub cursor: Cursor,
-    pub chat: Chat,
-    pub conversations: Vec<Chat>,
-    pub transcript: TranscriptUpdate,
-    pub queue: serde_json::Value,
-    pub queue_paused: bool,
-    pub older_message_sequence: Option<i64>,
-}
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Page {
-    pub schema_version: u32,
-    pub payload_format: String,
-    pub workspace_id: String,
-    pub session_id: String,
-    pub runtime_generation: i64,
-    pub cursor: Cursor,
-    pub before_sequence: i64,
-    pub entries: Vec<SessionMessageEntry>,
-    pub older_message_sequence: Option<i64>,
 }
 /// Does not implement Debug or Serialize, and owns a zeroized copy of the workspace key.
 pub struct TranscriptKey(zeroize::Zeroizing<Vec<u8>>);

@@ -549,7 +549,7 @@ impl WorkspaceView {
             .into_any_element()
     }
 
-    fn transcript(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn transcript(&self, cx: &mut Context<Self>) -> AnyElement {
         let archived = self
             .selected
             .as_ref()
@@ -1212,6 +1212,13 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.cached_only {
+            return column()
+                .size_full()
+                .min_h_0()
+                .child(self.transcript(cx))
+                .into_any_element();
+        }
         self.sync_motion(cx);
         self.sync_browser_visibility();
         self.sync_browser_voice_visibility(cx);
@@ -1381,7 +1388,7 @@ impl Render for WorkspaceView {
                             })
                     })
                     .child(if self.settings {
-                        self.settings_view(cx)
+                        self.settings_view(window, cx)
                     } else if self.project_picker {
                         self.project_picker_view(cx)
                     } else {
@@ -1403,6 +1410,7 @@ impl Render for WorkspaceView {
             .when(self.thread_dialog.is_some(), |d| {
                 d.child(self.thread_dialog_view(cx))
             })
+            .into_any_element()
     }
 }
 

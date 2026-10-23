@@ -14,15 +14,17 @@ pub(super) enum Section {
     Plugins,
     Usage,
     Shortcuts,
+    Archived,
 }
 impl Section {
-    const NAV: [Self; 6] = [
+    const NAV: [Self; 7] = [
         Self::General,
         Self::Providers,
         Self::Defaults,
         Self::Plugins,
         Self::Devices,
         Self::Shortcuts,
+        Self::Archived,
     ];
     fn title(self) -> &'static str {
         match self {
@@ -33,6 +35,7 @@ impl Section {
             Self::Plugins => "Plugins",
             Self::Usage => "Accounts & usage",
             Self::Shortcuts => "Keyboard shortcuts",
+            Self::Archived => "Archived chats",
         }
     }
     fn icon(self) -> &'static str {
@@ -44,6 +47,7 @@ impl Section {
             Self::Plugins => "settings-plugins",
             Self::Usage => "clock-circle",
             Self::Shortcuts => "keyboard",
+            Self::Archived => "archive-minimalistic",
         }
     }
     fn description(self) -> &'static str {
@@ -57,6 +61,7 @@ impl Section {
             Self::Plugins => "Your Zuse account and the tools shared across your agents.",
             Self::Usage => "Provider accounts, plans and current usage.",
             Self::Shortcuts => "Keyboard shortcuts for the browser workspace.",
+            Self::Archived => "Read saved cloud conversations or return them to Active.",
         }
     }
 }
@@ -158,8 +163,15 @@ impl WorkspaceView {
             }))
             .into_any_element()
     }
-    pub(super) fn settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn settings_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let section = self.settings_section;
+        if section == Section::Archived {
+            self.load_cloud_archive();
+        }
         let compact = self.content_width < 800.;
         let navigation = column()
             .id("settings-navigation")
@@ -230,7 +242,52 @@ impl WorkspaceView {
             Section::Plugins => self.cloud_settings(cx),
             Section::Usage => self.usage_settings(cx),
             Section::Shortcuts => self.shortcuts_settings(),
+            Section::Archived => self.cloud_archive_list(cx),
         };
+        let content_panel =
+            if section == Section::Archived && self.cloud_archive.state.head.is_some() {
+                self.cloud_archive_history(window, cx)
+            } else {
+                column()
+                    .id("settings-content")
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_y_scroll()
+                    .p(px(if compact { 16. } else { 24. }))
+                    .child(
+                        column()
+                            .w_full()
+                            .max_w(px(if section == Section::Shortcuts {
+                                1152.
+                            } else {
+                                768.
+                            }))
+                            .mx_auto()
+                            .gap_5()
+                            .child(
+                                column()
+                                    .gap_1()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .pb(px(16.))
+                                    .child(
+                                        div()
+                                            .text_size(px(20.))
+                                            .line_height(px(28.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(section.title()),
+                                    )
+                                    .child(
+                                        s::description_text(section.description())
+                                            .text_size(px(12.))
+                                            .line_height(px(20.)),
+                                    ),
+                            )
+                            .child(content),
+                    )
+                    .into_any_element()
+            };
         column()
             .flex_1()
             .size_full()
@@ -297,46 +354,7 @@ impl WorkspaceView {
                     .min_h_0()
                     .items_stretch()
                     .child(navigation)
-                    .child(
-                        column()
-                            .id("settings-content")
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .overflow_y_scroll()
-                            .p(px(if compact { 16. } else { 24. }))
-                            .child(
-                                column()
-                                    .w_full()
-                                    .max_w(px(if section == Section::Shortcuts {
-                                        1152.
-                                    } else {
-                                        768.
-                                    }))
-                                    .mx_auto()
-                                    .gap_5()
-                                    .child(
-                                        column()
-                                            .gap_1()
-                                            .border_b_1()
-                                            .border_color(rgb(BORDER))
-                                            .pb(px(16.))
-                                            .child(
-                                                div()
-                                                    .text_size(px(20.))
-                                                    .line_height(px(28.))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child(section.title()),
-                                            )
-                                            .child(
-                                                s::description_text(section.description())
-                                                    .text_size(px(12.))
-                                                    .line_height(px(20.)),
-                                            ),
-                                    )
-                                    .child(content),
-                            ),
-                    ),
+                    .child(content_panel),
             )
             .into_any_element()
     }

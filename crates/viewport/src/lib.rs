@@ -7,6 +7,7 @@ pub mod assets;
 mod attachment_tests;
 pub mod branding;
 mod browser;
+mod cloud_history;
 mod composer_alerts;
 mod connection;
 pub mod context_status;
@@ -77,6 +78,8 @@ pub struct Transport {
 use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 
 pub struct WorkspaceView {
+    cloud_archive: cloud_history::ArchiveView,
+    cached_only: bool,
     managed_access: managed_access::ManagedAccess,
     managed_name: Entity<input::TextInput>,
     voice: voice::Voice,
@@ -421,6 +424,8 @@ impl WorkspaceView {
             browser,
             workspace_focus,
             input,
+            cloud_archive: Default::default(),
+            cached_only: false,
             requests: transport.requests,
             next_id: 1,
             pending: HashMap::new(),
@@ -659,6 +664,9 @@ impl WorkspaceView {
     }
 
     fn call(&mut self, method: &str, params: Value) -> u64 {
+        if self.cached_only {
+            return 0;
+        }
         let id = self.next_id;
         self.next_id += 1;
         self.pending.insert(id, method.into());
@@ -673,6 +681,9 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if self.receive_cloud_archive(&frame, cx) {
+            return;
+        }
         if self.receive_environment(&frame, cx) {
             return;
         }

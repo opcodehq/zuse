@@ -43,11 +43,31 @@ pub struct ArchivedPage {
     page: usize,
     task: Option<Task<()>>,
     _observe: Subscription,
+    cloud: zuse_model::cloud::ArchivedCloud,
+    cloud_loaded: bool,
+    cloud_task: Option<Task<()>>,
+    cloud_history: Option<Entity<crate::cloud_history::CloudHistory>>,
+    cloud_history_sub: Option<Subscription>,
+    cloud_owner: Option<String>,
+    cloud_commands: std::collections::HashMap<String, String>,
 }
 
 impl ArchivedPage {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let observe = cx.observe(&state, |_, _, cx| cx.notify());
+        let owner = state.read(cx).auth_user().map(|u| u.id.clone());
+        let observe = cx.observe(&state, |page: &mut Self, state, cx| {
+            let owner = state.read(cx).auth_user().map(|u| u.id.clone());
+            if owner != page.cloud_owner {
+                page.cloud_owner = owner;
+                page.cloud.clear();
+                page.cloud_loaded = false;
+                page.cloud_task = None;
+                page.cloud_history = None;
+                page.cloud_history_sub = None;
+                page.cloud_commands.clear();
+            }
+            cx.notify();
+        });
         Self {
             state,
             scroll: widgets::PageScroll::default(),
@@ -58,9 +78,289 @@ impl ArchivedPage {
             page: 0,
             task: None,
             _observe: observe,
+            cloud: Default::default(),
+            cloud_loaded: false,
+            cloud_task: None,
+            cloud_history: None,
+            cloud_history_sub: None,
+            cloud_owner: owner,
+            cloud_commands: Default::default(),
         }
     }
 
+    fn load_cloud(&mut self, cx: &mut Context<Self>) {
+        if self.cloud_loaded || self.cloud.loading || self.cloud_owner.is_none() {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        self.cloud.loading = true;
+        let owner = self.cloud_owner.clone();
+        self.cloud_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(zuse_engine::cloud::LIST, serde_json::json!({}))
+                .await;
+            let _ = this.update(cx, |page, cx| {
+                if page.cloud_owner != owner {
+                    return;
+                }
+                page.cloud.loading = false;
+                page.cloud_loaded = true;
+                match result {
+                    Ok(value) => {
+                        if let (Some(account), Ok(rows)) = (
+                            value["accountId"].as_str(),
+                            serde_json::from_value(value["workspaces"].clone()),
+                        ) {
+                            page.cloud.list(account.into(), rows);
+                        }
+                    }
+                    Err(zuse_rpc::RpcError::Failed(error)) => page.cloud.error = Some(error),
+                    Err(_) => {
+                        page.cloud.error =
+                            Some("Cloud sessions are unavailable. Reconnect and try again.".into())
+                    }
+                }
+                cx.notify();
+            });
+        }));
+    }
+    fn open_cloud(&mut self, row: zuse_model::cloud::Workspace, cx: &mut Context<Self>) {
+        if self.cloud.loading || self.cloud.busy {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let Some(revision) = self.cloud.select(&row.workspace_id) else {
+            return;
+        };
+        let owner = self.cloud_owner.clone();
+        let request = row.workspace_id.clone();
+        self.cloud_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    zuse_engine::cloud::READ,
+                    serde_json::json!({"workspaceId":request}),
+                )
+                .await;
+            let _ = this.update(cx, |page, cx| {
+                if page.cloud_owner != owner || page.cloud.revision != revision {
+                    return;
+                }
+                page.cloud.loading = false;
+                match result {
+                    Ok(value) => {
+                        if let (Ok(head), Ok(row)) = (
+                            serde_json::from_value(value["head"].clone()),
+                            serde_json::from_value(value["workspace"].clone()),
+                        ) {
+                            if page.cloud.receive(revision, head) {
+                                let head = page.cloud.head.clone().unwrap();
+                                let view = cx.new(|cx| {
+                                    crate::cloud_history::CloudHistory::new(
+                                        engine.clone(),
+                                        row,
+                                        head,
+                                        cx,
+                                    )
+                                });
+                                page.cloud_history_sub = Some(cx.subscribe(
+                                    &view,
+                                    |page, _, event: &crate::cloud_history::Event, cx| {
+                                        match event {
+                                            crate::cloud_history::Event::Back => page.cloud.back(),
+                                            crate::cloud_history::Event::Restored(id) => {
+                                                page.cloud.restored(id)
+                                            }
+                                        }
+                                        page.cloud_history = None;
+                                        page.cloud_history_sub = None;
+                                        cx.notify();
+                                    },
+                                ));
+                                page.cloud_history = Some(view);
+                            }
+                        }
+                    }
+                    Err(zuse_rpc::RpcError::Failed(error)) => page.cloud.error = Some(error),
+                    Err(_) => {
+                        page.cloud.error =
+                            Some("Saved cloud history is unavailable. Try again.".into())
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+    fn unarchive_cloud(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.cloud.busy {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let command = self
+            .cloud_commands
+            .entry(id.clone())
+            .or_insert_with(|| uuid::Uuid::new_v4().to_string())
+            .clone();
+        self.cloud.busy = true;
+        self.cloud.error = None;
+        let owner = self.cloud_owner.clone();
+        self.cloud_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(
+                    zuse_engine::cloud::UNARCHIVE,
+                    serde_json::json!({"workspaceId":id,"commandId":command}),
+                )
+                .await;
+            let _ = this.update(cx, |page, cx| {
+                if page.cloud_owner != owner {
+                    return;
+                }
+                page.cloud.busy = false;
+                match result {
+                    Ok(_) => {
+                        page.cloud.restored(&id);
+                        page.cloud_commands.remove(&id);
+                    }
+                    Err(zuse_rpc::RpcError::Failed(error)) => page.cloud.error = Some(error),
+                    Err(_) => {
+                        page.cloud.error = Some("Unarchive could not finish. Try again.".into())
+                    }
+                };
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+    fn cloud_section(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let rows: Vec<_> = self
+            .cloud
+            .rows
+            .iter()
+            .filter(|r| r.archived())
+            .cloned()
+            .collect();
+        if self.cloud_owner.is_none() {
+            return None;
+        }
+        let empty = rows.is_empty() && !self.cloud.loading && self.cloud.error.is_none();
+        let theme = Theme::of(cx).for_settings_surface();
+        let busy = self.cloud.busy || self.cloud.loading;
+        Some(
+            div()
+                .mt(px(24.))
+                .child(widgets::group_with_action(
+                    &theme,
+                    "Cloud sessions",
+                    "",
+                    Some(
+                        widgets::ghost_action(&theme)
+                            .id("cloud-archive-refresh")
+                            .role(gpui::Role::Button)
+                            .aria_label("Refresh cloud sessions")
+                            .child("Refresh")
+                            .on_click(cx.listener(|page, _, _, cx| {
+                                if !page.cloud.loading && !page.cloud.busy {
+                                    page.cloud_loaded = false;
+                                    page.cloud.error = None;
+                                    page.load_cloud(cx);
+                                    cx.notify();
+                                }
+                            }))
+                            .into_any_element(),
+                    ),
+                ))
+                .child(
+                    widgets::section_card(&theme)
+                        .when(empty, |view| {
+                            view.child(
+                                div()
+                                    .p(px(16.))
+                                    .text_size(px(12.))
+                                    .text_color(theme.text_muted)
+                                    .child("No archived cloud sessions."),
+                            )
+                        })
+                        .when(self.cloud.loading, |view| {
+                            view.child(
+                                div()
+                                    .p(px(16.))
+                                    .text_size(px(12.))
+                                    .text_color(theme.text_muted)
+                                    .child("Loading cloud sessions…"),
+                            )
+                        })
+                        .when_some(self.cloud.error.clone(), |view, error| {
+                            view.child(
+                                div()
+                                    .p(px(16.))
+                                    .text_size(px(12.))
+                                    .text_color(theme.text_muted)
+                                    .child(error),
+                            )
+                        })
+                        .children(rows.into_iter().enumerate().map(|(index, row)| {
+                            let open = row.clone();
+                            let id = row.workspace_id.clone();
+                            let archived = row.state == "archived";
+                            widgets::card_row(&theme, index == 0)
+                                .child(
+                                    crate::icons::icon(crate::icons::ARCHIVE_MINIMALISTIC)
+                                        .size(px(16.))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child(
+                                    div()
+                                        .id(("archived-cloud-open", index))
+                                        .role(gpui::Role::Button)
+                                        .aria_label("Open archived cloud thread")
+                                        .tab_index(0)
+                                        .flex_1()
+                                        .min_w_0()
+                                        .cursor_pointer()
+                                        .text_size(px(13.))
+                                        .child(row.label().to_owned())
+                                        .on_click(cx.listener(move |page, _, _, cx| {
+                                            page.open_cloud(open.clone(), cx)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(theme.text_muted)
+                                        .child("Cloud"),
+                                )
+                                .child(
+                                    widgets::ghost_action(&theme)
+                                        .id(("cloud-restore-row", index))
+                                        .role(gpui::Role::Button)
+                                        .aria_label("Unarchive cloud thread")
+                                        .tab_index(0)
+                                        .opacity(if busy || !archived { 0.45 } else { 1. })
+                                        .child(if archived {
+                                            "Unarchive"
+                                        } else {
+                                            "Archiving…"
+                                        })
+                                        .on_click(cx.listener(move |page, _, _, cx| {
+                                            if archived {
+                                                page.unarchive_cloud(id.clone(), cx);
+                                            }
+                                        })),
+                                )
+                        })),
+                )
+                .into_any_element(),
+        )
+    }
     fn unarchive(&mut self, chat_id: String, cx: &mut Context<Self>) {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
@@ -223,6 +523,10 @@ impl popover::ScrollRailHost for ArchivedPage {
 
 impl Render for ArchivedPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.load_cloud(cx);
+        if let Some(history) = &self.cloud_history {
+            return history.clone().into_any_element();
+        }
         crate::toast::take_error(&mut self.error, cx);
         let dialog = self.render_delete_all_dialog(window.viewport_size(), cx);
         let theme = Theme::of(cx).for_settings_surface();
@@ -545,13 +849,15 @@ impl Render for ArchivedPage {
                                                 .children(pagination),
                                         ),
                                     ),
-                                ),
+                                )
+                                .children(self.cloud_section(cx)),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),
             )
             .children(scrollbar)
             .children(dialog)
+            .into_any_element()
     }
 }
 

@@ -15,6 +15,19 @@ pub(super) struct TranscriptState {
 }
 
 impl WorkspaceView {
+    pub(super) fn install_cached_history(&mut self, head: &zuse_model::cloud::Head) {
+        let mut chat = head.chat.clone();
+        chat.archived = true;
+        self.selected = serde_json::to_value(chat).ok();
+        self.messages.clear();
+        if apply_transcript_frame(&mut self.messages, head.transcript.frame.clone()).is_ok() {
+            self.transcript_state.ready = true;
+            self.context_usage = head.transcript.context_usage;
+        }
+        self.cached_only = true;
+        self.error = None;
+    }
+
     pub(super) fn transcript_refresh_pending(&self) -> bool {
         self.transcript_watch.is_some() || self.transcript_state.timer.is_some()
     }
@@ -212,6 +225,30 @@ mod tests {
             _events: events,
             requests: rx,
         }
+    }
+    #[gpui::test]
+    fn cached_history_cannot_dispatch_execution_even_with_a_connected_host(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut f = fixture(cx);
+        while f.requests.try_recv().is_ok() {}
+        f.window
+            .update(cx, |view, _, cx| {
+                view.cached_only = true;
+                view.connected = true;
+                assert!(!view.require_connection(cx));
+                assert_eq!(view.call(methods::MUTATE, json!({})), 0);
+                assert_eq!(
+                    view.call(methods::QUEUE_COMMAND, json!({"text":"do not execute"})),
+                    0
+                );
+                assert_eq!(
+                    view.call("CloudUnarchive", json!({"workspaceId":"other-workspace"})),
+                    0
+                );
+            })
+            .unwrap();
+        assert!(f.requests.try_recv().is_err());
     }
     fn watch(f: &Fixture, cx: &mut gpui::TestAppContext) -> u64 {
         f.window

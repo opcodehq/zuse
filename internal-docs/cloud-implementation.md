@@ -11,11 +11,11 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
-| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Encrypted transcript contracts, R2 transport, journaled native guest projections and cached read transport added; rendered cached UI/files, backup/retirement/restore/delete and migration remain | Retained guest-process and archived-history acceptance passed; live provider and recovery acceptance pending |
-| F: complete GPUI parity | Existing partial UI; complete reference comparison pending | Pending |
+| E: archive lifecycle | Existing local reclamation; legacy-compatible manifests/status; durable guest quiescence, same-machine pause, ten-day archive retention, asleep unarchive and retained-machine resume implemented. Encrypted transcript contracts, R2 transport, journaled native guest projections, cached read transport and native/browser archived transcript views added; archived files, backup/retirement/restore/delete and migration remain | Retained guest-process, host-broker and rendered browser archive acceptance passed; live provider and recovery acceptance pending |
+| F: complete GPUI parity | Archived cloud transcript screens added to native/browser settings; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive workflow pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection added; ownership handoff, guest conversion, archive migration and live cutover pending | Pending |
 
 Do not mark a milestone complete from compilation alone. Record tested behavior and remaining gates here.
@@ -906,8 +906,62 @@ decryption, archived reads while compute stays asleep, and same-machine resume.
 Codec paging preserves all 150 fixture entries and queue context. Guest/API builds,
 strict scoped lint, client compilation and formatting pass.
 
-Remaining: rendered UI hydration and screenshots; archived files/attachments/
+Remaining: archived files/attachments/
 sidecars/diffs; durable quiescence-receipt recovery; full verified machine backup,
 retirement, replacement restore and deletion; legacy cursor/import migration and
 live provider/R2 acceptance. This is a working native projection path, not full
 archive or UI completion.
+
+### Rendered archived cloud history
+
+The host now brokers `CloudWorkspaces`, `CloudHistory` and `CloudUnarchive`
+through its existing sign-in authority. Access tokens remain inside the host;
+viewports receive account-scoped workspace metadata and decrypted saved history.
+Local profiles do not send their synthetic identity to the production cloud API.
+Only explicitly negotiated Rust workspaces are offered by this first UI path.
+
+Native Settings → Archived and browser Settings → Archived chats use the shared
+archive model. Opening a saved conversation hydrates the existing transcript
+renderer in separate state without an execution connection. Native child state
+has no engine; browser child state has no live transport and rejects RPC calls.
+Unarchive uses the original durable lifecycle action with a stable command ID;
+it returns the workspace to Active while compute remains paused. Loading,
+archiving, failures and retry are exposed. Sign-in changes clear cached views and
+invalidate pending responses. Browser connection loss does not replay Unarchive.
+
+This is not full archive/UI parity. Remaining work includes conversation tab
+selection, cached archived files/diffs/attachments, the full active cloud catalog
+and composer workflow, organization selection, legacy history import/adapters,
+verified backup/retirement/replacement restore/permanent deletion, and complete
+reference screen comparison. Standalone CLI WorkOS onboarding is still pending;
+production browsers need an existing WorkOS-authenticated host.
+
+Verified in the actual compiled GPUI browser against the isolated PostgreSQL/API
+and guest-process fixture: archive publication and guest quiescence completed;
+opening saved history preserved the original workspace/session and held queue;
+the real Unarchive action returned that same workspace to `paused`, without
+provider wake/launch or automatic execution RPCs. The fixture uses encrypted
+in-memory object storage and a deterministic provider/model, not live R2/provider
+acceptance. Source-machine retention and original identities are checked by the
+PostgreSQL fixture after the browser signals completion.
+
+Focused checks passed: two host cloud-origin/development-identity guards, two
+archive reducer tests, the protocol read-versus-mutation retry contract, two
+ciphertext/paging tests, and a native GPUI test proving a cached viewport cannot
+dispatch execution even if marked connected. Native UI compilation and the
+complete browser WASM build also passed. The browser and guest acceptance receipt is
+`.context/cloud-archive-browser-acceptance.json`. Rendered images were inspected:
+`.context/cloud-archived-before.png`, `.context/cloud-archived-list.png` and
+`.context/cloud-archived-history.png`. No native Mac visual acceptance or live
+provider acceptance is claimed.
+
+To repeat the browser acceptance, run the existing ignored
+`runtime_engine::rust_cloud_archive_quiesces_retains_and_lazily_resumes_original_machine`
+PostgreSQL test with `--features runtime-acceptance` and an explicit isolated
+`ZUSE_CLOUD_TEST_DATABASE_URL`, built `ZUSE_CLOUD_TEST_GUEST_BIN`, and absolute
+`ZUSE_CLOUD_UI_FIXTURE_FILE` ready-file path. When that file appears, run
+`node scripts/acceptance/cloud-archive.mjs` with the same ready-file variable and
+current `dist/web`. The browser drives the real host, saves screenshots/receipt,
+and writes the corresponding `.done` file; the fixture verifies paused compute
+before removing its isolated schema. Keep this test identity and fixture loopback
+only. Normal acceptance does not set the UI fixture variable.

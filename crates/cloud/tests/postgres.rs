@@ -22,6 +22,12 @@ struct TestIdentity;
 #[async_trait]
 impl Identity for TestIdentity {
     async fn verify(&self, token: &str) -> Result<Principal, ApiError> {
+        let token =
+            if token == "dev-user" && std::env::var_os("ZUSE_CLOUD_UI_FIXTURE_FILE").is_some() {
+                "bob"
+            } else {
+                token
+            };
         if !["alice", "bob", "admin", "member", "billing"].contains(&token) {
             return Err(ApiError::unauthorized("invalid_workos_token"));
         }
@@ -3852,6 +3858,34 @@ for line in sys.stdin:
             provider.launches.load(Ordering::SeqCst),
         );
         assert_eq!(counts, (0, 0));
+        // Optional local UI acceptance harness: the actual API, encrypted objects,
+        // PostgreSQL and archived guest fixture stay alive until the browser finishes.
+        // This is test-only and uses the existing synthetic `bob` identity.
+        if let Ok(path) = std::env::var("ZUSE_CLOUD_UI_FIXTURE_FILE") {
+            let path = std::path::PathBuf::from(path);
+            std::fs::write(&path, &api.origin).unwrap();
+            tokio::time::timeout(Duration::from_secs(1800), async {
+                while !path.with_extension("done").exists() {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            })
+            .await
+            .expect("browser archive acceptance timed out");
+            let state: String = sqlx::query_scalar(
+                "SELECT state FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
+            )
+            .fetch_one(&api.pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                state, "paused",
+                "browser Unarchive must leave compute paused"
+            );
+            assert_eq!(provider.wakes.load(Ordering::SeqCst), 0);
+            assert_eq!(provider.launches.load(Ordering::SeqCst), 0);
+            api.finish().await;
+            return;
+        }
         let (status, paused) = runtime_post_for_url(
             &format!("{}/v1/cloud/workspaces/ws-bob/unarchive", api.origin),
             "bob",

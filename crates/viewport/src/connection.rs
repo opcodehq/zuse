@@ -5,6 +5,9 @@ use zuse_protocol::browser_link::InterruptedRequest;
 
 impl WorkspaceView {
     pub(super) fn require_connection(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.cached_only {
+            return false;
+        }
         if self.connected {
             true
         } else {
@@ -105,6 +108,7 @@ impl WorkspaceView {
         for (_, action) in self.queue_actions.drain() {
             self.queue_unconfirmed.insert(action.chat);
         }
+        self.interrupt_cloud_archive();
         self.pending.clear();
         self.stop_transcript();
         // This card is read-only: keep it usable while retrying the same host.
@@ -179,6 +183,7 @@ impl WorkspaceView {
         }
         .into();
         for method in [
+            methods::AUTH_STATUS,
             methods::CLOUD_ACCOUNT_STATUS,
             methods::LIST_HARNESSES,
             methods::WATCH_CHATS,

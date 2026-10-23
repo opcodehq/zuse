@@ -1597,3 +1597,5 @@ fn replace_empty_device_id(temp_path: &Path, path: &Path) -> std::io::Result<()>
         std::fs::hard_link(temp_path, path)
     }
 }
+
+pub mod cloud;
