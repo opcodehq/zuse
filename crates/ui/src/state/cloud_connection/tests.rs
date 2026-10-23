@@ -11,7 +11,7 @@ struct Controller {
 impl RpcService for Controller {
     async fn handle(&self, method: &str, params: Value) -> Result<RpcReply, RpcError> {
         match method {
-            methods::AUTH_STATUS => {
+            methods::CLOUD_ACCOUNT_STATUS => {
                 let rx = self.account.subscribe();
                 let initial = rx.borrow().clone();
                 Ok(RpcReply::Stream(Box::pin(
@@ -48,7 +48,7 @@ impl RpcService for Controller {
 #[tokio::test]
 async fn native_cloud_tools_share_workspace_authority_and_end_on_account_change() {
     let (account, _) = watch::channel(
-        json!({"state":"signedIn","user":{"id":"owner","email":"owner@example.test","name":null},"orgId":null}),
+        json!({"user":{"id":"owner","email":"owner@example.test","name":null},"login":null,"error":null}),
     );
     let root = Arc::new(Controller {
         account,
@@ -81,7 +81,7 @@ async fn native_cloud_tools_share_workspace_authority_and_end_on_account_change(
     assert_eq!(reply["id"], 43);
     assert_eq!(reply["ok"]["root"], true);
     assert_eq!(root.calls.lock().unwrap().len(), 1);
-    root.account.send_replace(json!({"state":"signedOut"}));
+    root.account.send_replace(json!({"user":null,"login":null,"error":null}));
     tokio::time::timeout(std::time::Duration::from_secs(2), source.closed.cancelled())
         .await
         .unwrap();

@@ -57,14 +57,10 @@ impl WorkspaceView {
         if self
             .pending
             .get(&id)
-            .is_some_and(|m| m == methods::AUTH_STATUS)
+            .is_some_and(|m| m == methods::CLOUD_ACCOUNT_STATUS)
         {
             if let Some(value) = frame.get("item").or_else(|| frame.get("ok")) {
-                let owner = match serde_json::from_value::<zuse_protocol::AuthState>(value.clone())
-                {
-                    Ok(zuse_protocol::AuthState::SignedIn { user, .. }) => Some(user.id),
-                    _ => None,
-                };
+                let owner = value["user"]["id"].as_str().filter(|_| value["orgId"].is_null()).map(str::to_owned);
                 if owner != self.cloud_archive.owner {
                     let mut state = self.cloud_archive.state.clone();
                     state.clear();
@@ -76,7 +72,7 @@ impl WorkspaceView {
                 }
                 cx.notify();
             }
-            return true;
+            return false;
         }
         let list = self.cloud_archive.list == Some(id);
         let read = self.cloud_archive.read.filter(|(req, _)| *req == id);

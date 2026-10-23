@@ -52,29 +52,10 @@ try {
   page.screenshot('ui-parity-archive.png');
 
   page.click(70,212); await sleep(350);
-  page.screenshot('ui-parity-cloud-setup.png');
-  const before = page.evaluate('window.__uiParity.methods.filter(method => method === "CloudBillingSummary").length');
-  page.click(528,163);
-  page.wait(`window.__uiParity.methods.filter(method => method === 'CloudBillingSummary').length > ${before}`);
-  await sleep(200);
-  page.screenshot('ui-parity-cloud-usage.png');
-  page.click(416,163); page.run(['press','End']); await sleep(100);
+  page.screenshot('ui-parity-cloud-signed-out.png');
+  assert.equal(page.evaluate('window.__uiParity.methods.filter(method => method === "CloudBillingSummary").length'),0,'Signed-out Cloud must not request billing with a synthetic workspace identity');
   page.run(['set','viewport','760','900']); await sleep(200);
   page.screenshot('ui-parity-settings-compact.png');
-  const compact = fs.readFileSync('.context/ui-parity-settings-compact.png').toString('base64');
-  const focus = page.evaluate(`(async () => {
-    const image = new Image(); image.src = 'data:image/png;base64,${compact}'; await image.decode();
-    const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
-    const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
-    const pixels = context.getImageData(0,0,image.width,image.height).data;
-    let min = image.width, max = -1;
-    for (let y=130;y<180;y++) for (let x=50;x<300;x++) {
-      const i=(y*image.width+x)*4;
-      if (pixels[i+1] > pixels[i]+35 && pixels[i+1] > pixels[i+2]+70) {min=Math.min(min,x); max=Math.max(max,x);}
-    }
-    return {min,max};
-  })()`);
-  assert.ok(focus.min >= 176 && focus.max <= 288 && focus.max > focus.min, 'End must move keyboard focus to the selected Usage tab');
   const proof = page.evaluate('window.__uiParity');
   assert.equal(proof.mutations.filter(change => change.op === 'setChatArchived').length, 1);
   assert.equal(proof.methods.filter(method => ['QueueMessage','QueueCommand','CloudCreate','CloudBillingPortal','CloudBillingCheckout','CloudPrepaidCheckout'].includes(method)).length, 0);
@@ -82,10 +63,10 @@ try {
     compiledGpui: true, realEngine: true, referenceCommit: '43e14c1',
     composer: {width:768,height:106,pixelBoundsVerified:true},
     localArchiveSearch: true, restoresOnlyChosenThread: true, savedArchivePreview: true,
-    backToArchives: true, cloudSetupUsageTabs: true, cloudTabsKeyboardFocus: true, compactSettings: true, agentWrites: 0,
+    backToArchives: true, cloudSignedOutGate: true, noSyntheticBillingRequests: true, compactSettings: true, agentWrites: 0,
     liveAccountAcceptance: false,
   });
-  console.log('UI parity acceptance passed: composer geometry, local archive filter/restore/preview, cloud tabs, compact settings; zero provider turns.');
+  console.log('UI parity acceptance passed: composer geometry, local archive filter/restore/preview, signed-out cloud gate, compact settings; zero provider turns.');
 } catch (error) {
   console.error('UI parity acceptance failed: ' + error.message); process.exitCode = 1;
 } finally {page?.close(); await host?.close();}

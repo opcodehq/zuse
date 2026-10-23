@@ -101,7 +101,7 @@ impl Composer {
         let Some(workspace) = engine.cloud_workspace() else {
             return;
         };
-        let Some(subject) = state.auth_user().map(|u| u.id.clone()) else {
+        let Some(subject) = state.cloud_user_id().map(str::to_owned) else {
             return;
         };
         let target = crate::state::CloudTarget {
@@ -177,7 +177,7 @@ impl Composer {
         };
         let controller = engine.controller();
         let staged = self.staged().to_vec();
-        let Some(subject) = state.auth_user().map(|user| user.id.clone()) else {
+        let Some(subject) = state.cloud_user_id().map(str::to_owned) else {
             return true;
         };
         if self.cloud.owner.as_deref() != Some(subject.as_str()) {
@@ -186,16 +186,8 @@ impl Composer {
                 ..Default::default()
             };
         }
-        if matches!(
-            &state.auth,
-            Some(zuse_protocol::AuthState::SignedIn {
-                org_id: Some(_),
-                ..
-            })
-        ) {
-            self.failure = Some(
-                "Switch to your personal account before starting this cloud workspace.".into(),
-            );
+        if state.cloud_account.as_ref().is_some_and(|value|value["orgId"].is_string()) {
+            self.failure = Some("Switch to your personal account before starting this cloud workspace.".into());
             self.failure_key = None;
             cx.notify();
             return true;

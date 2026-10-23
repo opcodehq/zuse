@@ -3,7 +3,7 @@ use super::*;
 use crate::state::CloudTarget;
 use gpui::{App, Subscription, Window, WindowBounds, WindowOptions, size};
 use serde_json::{Value, json};
-use zuse_protocol::{AuthState, methods};
+use zuse_protocol::methods;
 
 pub(crate) fn open(target: CloudTarget, cx: &mut App) {
     let (bounds, display_id) = crate::restored_main_window_bounds(cx);
@@ -36,7 +36,7 @@ struct Saved {
     progress: Option<Task<()>>,
 }
 fn matches(target: &CloudTarget, value: Value) -> bool {
-    matches!(serde_json::from_value::<AuthState>(value),Ok(AuthState::SignedIn{user,org_id:None}) if user.id==target.subject)
+    value["user"]["id"].as_str()==Some(target.subject.as_str()) && value["orgId"].is_null()
 }
 impl Saved {
     fn new(target: CloudTarget, window: gpui::AnyWindowHandle, cx: &mut Context<Self>) -> Self {
@@ -63,7 +63,7 @@ impl Saved {
         self.progress = None;
         let target = self.target.clone();
         self.watch=Some(cx.spawn(async move |this,cx| {
-            let result=target.controller.client().subscribe_scoped(methods::AUTH_STATUS,json!({})).await;
+            let result=target.controller.client().subscribe_scoped(methods::CLOUD_ACCOUNT_STATUS,json!({})).await;
             let mut auth=match result {
                 Ok(auth)=>auth,
                 Err(error)=>{let _=this.update(cx,|this,cx|this.failed(error.to_string(),cx));return;}

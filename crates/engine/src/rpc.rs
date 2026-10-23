@@ -1935,15 +1935,22 @@ async fn opening_doc_messages_stream(
 #[derive(Clone)]
 pub struct AuthRpc {
     auth: Auth,
+    cloud: crate::cloud::identity::CloudIdentity,
     uploads: Option<Uploads>,
 }
 
 impl AuthRpc {
     pub fn new(auth: Auth) -> Self {
         Self {
+            cloud: crate::cloud::identity::CloudIdentity::workspace(auth.clone()),
             auth,
             uploads: None,
         }
+    }
+
+    pub fn with_account(mut self, account: Option<crate::account::Account>) -> Self {
+        self.cloud = self.cloud.with_account(account);
+        self
     }
 
     pub fn with_uploads(mut self, uploads: Uploads) -> Self {
@@ -1971,7 +1978,7 @@ impl AuthRpc {
 impl RpcService for AuthRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
         if matches!(method, methods::CLOUD_ENVIRONMENT | methods::CLOUD_RPC) {
-            return crate::cloud::environment::handle(&self.auth, method, params).await;
+            return crate::cloud::environment::handle(&self.cloud, method, params).await;
         }
         if method == methods::CLOUD_CREATE
             && params["attachmentTransfers"]
@@ -1981,27 +1988,27 @@ impl RpcService for AuthRpc {
             let uploads = self.uploads.clone().ok_or_else(|| {
                 RpcError::Failed("Open your workspace before uploading cloud attachments.".into())
             })?;
-            let result = crate::cloud::launch::create(&self.auth, uploads, params)
+            let result = crate::cloud::launch::create(&self.cloud, uploads, params)
                 .await
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
             return RpcReply::value(&result);
         }
         #[cfg(unix)]
         if matches!(method,methods::CLOUD_SYNC_STATUS|methods::CLOUD_SYNC_CONFIGURE|methods::CLOUD_SYNC_RETRY) {
-            let auth=self.auth.clone();let method=method.to_owned();
+            let auth=self.cloud.clone();let method=method.to_owned();
             let result=tokio::spawn(async move {crate::cloud::sync::handle(auth,&method,params).await})
                 .await.map_err(|_|RpcError::Failed("Cloud sync request was interrupted. Reopen its status.".into()))?
                 .map_err(|error|RpcError::Failed(error.to_string()))?;
             return RpcReply::value(&result);
         }
         if method == methods::CLOUD_PAUSE {
-            let value = crate::cloud::environment::pause(&self.auth, params)
+            let value = crate::cloud::environment::pause(&self.cloud, params)
                 .await
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
             return RpcReply::value(&value);
         }
         if crate::cloud::handles(method) {
-            let result = crate::cloud::handle(&self.auth, method, params)
+            let result = crate::cloud::handle(&self.cloud, method, params)
                 .await
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
             return RpcReply::value(&result);
@@ -2294,6 +2301,7 @@ impl RpcService for EngineRpc {
         }
         if AuthRpc::handles(method) {
             return AuthRpc::new(self.auth()?.clone())
+                .with_account(self.account.clone())
                 .with_uploads(self.uploads.clone())
                 .handle(method, params)
                 .await;
@@ -2666,7 +2674,12 @@ impl RpcService for EngineRpc {
                     .account
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
-                Ok(RpcReply::Stream(watch_stream(account.watch())))
+                let stream = match self.auth() {
+                    Ok(auth) => crate::cloud::identity::CloudIdentity::workspace(auth.clone())
+                        .with_account(Some(account.clone())).status_stream(),
+                    Err(_) => watch_stream(account.watch()),
+                };
+                Ok(RpcReply::Stream(stream))
             }
             methods::CLOUD_ACCOUNT_SIGN_IN => {
                 let account = self
@@ -5005,6 +5018,23 @@ impl RpcService for EngineRpc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cloud_catalog_uses_general_account_instead_of_workspace_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(temp.path()).unwrap(),
+            std::sync::Arc::new(HarnessRegistry::new()), HarnessId::Codex, None,
+        ).unwrap();
+        assert!(core.account.status().user.is_none());
+        assert!(core.auth().state().is_signed_in());
+        let RpcReply::Value(value) = core.rpc_service()
+            .handle(methods::CLOUD_WORKSPACES, serde_json::json!({})).await.unwrap()
+        else { panic!("Cloud catalog must be a value"); };
+        assert!(value["accountId"].is_null(), "Signed-out General must not become a dev cloud account");
+        assert_eq!(value["workspaces"], serde_json::json!([]));
+        core.sessions.shutdown().await;
+    }
 
     #[tokio::test]
     async fn voice_owner_is_shared_across_services_and_shutdown_retires_it() {

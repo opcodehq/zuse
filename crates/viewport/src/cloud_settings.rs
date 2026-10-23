@@ -93,3 +93,80 @@ pub fn tabs<T: 'static>(
             }),
         )
 }
+
+/// The reference account gate is shared across both Cloud settings hosts.
+pub fn account_gate(action: impl IntoElement, error: Option<&str>) -> Div {
+    use crate::shell::MUTED;
+    let mut copy = div().flex_1().min_w_0().flex().flex_col()
+        .child(s::title_text("Sign in to set up cloud workspaces"))
+        .child(div().mt(px(2.)).max_w(px(576.)).text_size(px(11.))
+            .line_height(px(16.)).text_color(palette::rgb(MUTED))
+            .child("Choose a plan, connect repositories, and authorize your coding agents from one account."))
+        .child(div().mt(px(4.)).text_size(px(10.)).line_height(px(13.5))
+            .text_color(palette::rgb(MUTED).opacity(0.75))
+            .child("Local chats stay on this computer and remain available without an account."));
+    if let Some(error) = error {
+        copy = copy.child(
+            div()
+                .mt(px(4.))
+                .text_size(px(11.))
+                .text_color(s::destructive_text())
+                .child(error.to_owned()),
+        );
+    }
+    div()
+        .w_full()
+        .min_h(px(76.))
+        .flex()
+        .items_center()
+        .gap(px(16.))
+        // The reference uses an inset ring; compensate for the layout border.
+        .p(px(11.))
+        .rounded(px(10.))
+        .bg(s::card_bg())
+        .border_1()
+        .border_color(
+            palette::tone(
+                hsla(132. / 360., 0.04, 0.125, 1.),
+                hsla(110. / 360., 0.13, 0.89, 1.),
+            )
+            .opacity(0.7),
+        )
+        .child(copy)
+        .child(div().flex_shrink_0().child(action))
+}
+
+pub fn sign_in_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+    let lime = palette::tone(
+        hsla(83. / 360., 0.72, 0.46, 1.),
+        hsla(83. / 360., 0.74, 0.43, 1.),
+    );
+    let label = label.into();
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label.clone())
+        .tab_index(0)
+        .cursor_pointer()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .h(px(28.))
+        .px(px(11.))
+        .rounded(px(7.))
+        .border_1()
+        .text_size(px(10.))
+        .font_weight(FontWeight::MEDIUM)
+        .line_height(px(13.3333))
+        .bg(lime)
+        .border_color(lime)
+        .text_color(hsla(132. / 360., 0.30, 0.07, 1.))
+        .on_key_down(|event: &KeyDownEvent, _, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                cx.stop_propagation();
+            }
+        })
+        .hover(move |button| button.bg(lime.opacity(0.9)))
+        .child(label)
+}

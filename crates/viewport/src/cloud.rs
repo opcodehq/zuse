@@ -207,14 +207,10 @@ impl WorkspaceView {
         if self
             .pending
             .get(&frame["id"].as_u64().unwrap_or(0))
-            .is_some_and(|m| m == methods::AUTH_STATUS)
+            .is_some_and(|m| m == methods::CLOUD_ACCOUNT_STATUS)
         {
             if let Some(value) = frame.get("ok").or_else(|| frame.get("item")) {
-                let owner = match serde_json::from_value::<zuse_protocol::AuthState>(value.clone())
-                {
-                    Ok(zuse_protocol::AuthState::SignedIn { user, .. }) => Some(user.id),
-                    _ => None,
-                };
+                let owner = value["user"]["id"].as_str().filter(|_| value["orgId"].is_null()).map(str::to_owned);
                 if self.cloud.account.is_some() && owner != self.cloud.account {
                     self.close_cloud();
                     self.cloud = Cloud::default();

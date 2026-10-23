@@ -18,7 +18,7 @@ impl Shell {
     fn cloud_info_target(&self, cx: &App) -> Option<(String, String)> {
         let state = self.state.read(cx);
         Some((
-            state.auth_user()?.id.clone(),
+            state.cloud_user_id()?.to_owned(),
             state.engine()?.cloud_workspace()?,
         ))
     }

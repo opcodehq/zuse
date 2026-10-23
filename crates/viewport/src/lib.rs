@@ -794,7 +794,7 @@ impl WorkspaceView {
         if frame["id"]
             .as_u64()
             .and_then(|id| self.pending.get(&id))
-            .is_some_and(|m| m == methods::AUTH_STATUS)
+            .is_some_and(|m| m == methods::CLOUD_ACCOUNT_STATUS)
         {
             if let Some(value) = frame.get("item").or_else(|| frame.get("ok")) {
                 let owner = value["user"]["id"]

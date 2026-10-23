@@ -2742,6 +2742,7 @@ mod tests {
     fn round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let settings = UiSettings {
+            display_name: "Avery Parker".into(),
             default_model: Some(zuse_protocol::presentation::DefaultModelSelection {
                 provider: zuse_protocol::HarnessId::Codex,
                 model: "catalog-model".into(),

@@ -1,11 +1,13 @@
 //! Host-authorized control plane access. No access token crosses the viewport RPC boundary.
 pub mod environment;
 pub mod launch;
+pub mod identity;
 #[cfg(unix)]
 pub mod sync;
 #[cfg(unix)]
 pub mod mirror;
-use crate::auth::Auth;
+// The cloud modules share this account authority, independently of workspace login.
+use identity::CloudIdentity as Auth;
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -311,18 +313,31 @@ impl CloudApi {
         // A dev/local profile has no production cloud identity. Loopback is solely useful for local acceptance.
         if !auth.workos_enabled() && !self.loopback {
             return if method == LIST {
-                Ok(json!({"accountId":auth.user_id(),"workspaces":[]}))
+                Ok(json!({"accountId":null,"workspaces":[]}))
             } else {
                 anyhow::bail!("Sign in to access cloud workspaces.")
             };
         }
-        let account = auth
-            .user_id()
-            .ok_or_else(|| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
+        let Some(account) = auth.user_id() else {
+            return if method == LIST {
+                Ok(json!({"accountId":null,"workspaces":[]}))
+            } else {
+                anyhow::bail!("Sign in to access cloud workspaces.")
+            };
+        };
+        let organization = auth.state().org_id().map(str::to_owned);
+        if let Some(expected) = params.get("expectedAccountId") {
+            ensure!(expected.as_str() == Some(account.as_str())
+                && params["expectedOrganizationId"].as_str() == auth.state().org_id(),
+                "Your account changed. Reopen this view.");
+        }
         let token = auth
             .access_token()
             .await
             .map_err(|_| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
+        ensure!(auth.user_id().as_deref() == Some(account.as_str())
+            && auth.state().org_id() == organization.as_deref(),
+            "Your account changed. Reopen this view.");
         #[cfg(unix)]
         if matches!(method,LIST|READ|DELETE|UNARCHIVE|CLEANUP_MIRROR|zuse_protocol::methods::CLOUD_WORKSPACE) {
             self.syncs.hydrate(self,auth,&account)?;
@@ -330,7 +345,7 @@ impl CloudApi {
         let result = match method {
             zuse_protocol::methods::CLOUD_PREPAID_BALANCE
             | zuse_protocol::methods::CLOUD_PREPAID_CHECKOUT => {
-                let org = auth.state().org_id().map(str::to_owned);
+                let org = organization.clone();
                 let (path, body) = if method == zuse_protocol::methods::CLOUD_PREPAID_CHECKOUT {
                     let request: zuse_protocol::cloud_billing::PrepaidCheckoutRequest =
                         serde_json::from_value(params)?;
@@ -348,7 +363,7 @@ impl CloudApi {
             }
             zuse_protocol::methods::CLOUD_BILLING_ENTITLEMENTS
             | zuse_protocol::methods::CLOUD_BILLING_CHECKOUT => {
-                let org = auth.state().org_id().map(str::to_owned);
+                let org = organization.clone();
                 let (operation, body) = if method == zuse_protocol::methods::CLOUD_BILLING_CHECKOUT
                 {
                     let request: zuse_protocol::cloud_billing::BillingCheckoutRequest =
@@ -369,7 +384,7 @@ impl CloudApi {
                 json!({"accountId":account,"organizationId":org,"data":value})
             }
             zuse_protocol::methods::CLOUD_BILLING_PORTAL => {
-                let org = auth.state().org_id().map(str::to_owned);
+                let org = organization.clone();
                 let value = self
                     .request_scoped(
                         &token,
@@ -407,7 +422,7 @@ impl CloudApi {
                     }
                     _ => "summary",
                 };
-                let org = auth.state().org_id().map(str::to_owned);
+                let org = organization.clone();
                 let value = self
                     .request_scoped(
                         &token,
@@ -426,7 +441,7 @@ impl CloudApi {
             | zuse_protocol::methods::CLOUD_PROJECT_CONNECT
             | zuse_protocol::methods::CLOUD_PROJECT_REMOVE
             | zuse_protocol::methods::CLOUD_GITHUB => {
-                let org = auth.state().org_id().map(str::to_owned);
+                let org = organization.clone();
                 ensure!(
                     params["expectedAccountId"].as_str() == Some(account.as_str())
                         && params["expectedOrganizationId"].as_str() == org.as_deref()
@@ -676,7 +691,7 @@ impl CloudApi {
             _ => anyhow::bail!("Unknown cloud operation."),
         };
         ensure!(
-            auth.user_id().as_deref() == Some(&account),
+            auth.user_id().as_deref() == Some(&account) && auth.state().org_id() == organization.as_deref(),
             "Your account changed. Reopen this view."
         );
         Ok(result)
@@ -704,6 +719,72 @@ mod tests {
         }
         assert!(CloudApi::new("https://api-rust.zuse.sh").is_ok());
         assert!(CloudApi::new("http://127.0.0.1:27655").is_ok());
+    }
+    #[tokio::test]
+    async fn general_account_authorizes_cloud_and_retires_after_sign_out() {
+        use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+        let dir = tempfile::tempdir().unwrap();
+        let account = crate::account::Account::fixture_signed_in(
+            dir.path(), crate::account::API_URL.into(), "general-account");
+        let identity = Auth::new(crate::auth::AuthConfig::new(
+            "http://127.0.0.1:1", dir.path())).with_account(Some(account.clone()));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = CloudApi::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            while !bytes.windows(4).any(|v| v == b"\r\n\r\n") {
+                let mut buf = [0; 1024];
+                let n = socket.read(&mut buf).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&buf[..n]);
+            }
+            let headers = String::from_utf8(bytes).unwrap();
+            assert!(headers.starts_with("GET /v1/cloud/projects "));
+            assert!(headers.to_ascii_lowercase().contains("authorization: bearer fixture."));
+            assert!(!headers.contains("dev-user"));
+            let body = r#"{"projects":[]}"#;
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+        });
+        let value = api.handle(&identity, zuse_protocol::methods::CLOUD_PROJECTS,
+            json!({"expectedAccountId":"general-account"})).await.unwrap();
+        assert_eq!(value["accountId"], "general-account");
+        assert!(value["organizationId"].is_null());
+        server.await.unwrap();
+        let mut status = identity.status_stream();
+        use futures::StreamExt;
+        assert_eq!(status.next().await.unwrap()["user"]["id"], "general-account");
+        let mut changes = identity.watch_state();
+        account.sign_out().unwrap();
+        let signed_out = status.next().await.unwrap();
+        assert!(signed_out["user"].is_null());
+        assert!(signed_out["orgId"].is_null());
+        changes.changed().await.unwrap();
+        assert!(identity.user_id().is_none());
+        assert!(identity.access_token().await.is_err());
+        let catalog = api.handle(&identity, LIST, json!({})).await.unwrap();
+        assert!(catalog["accountId"].is_null());
+        assert!(api.handle(&identity, zuse_protocol::methods::CLOUD_BILLING_SUMMARY,
+            json!({})).await.unwrap_err().to_string().contains("Sign in"));
+    }
+    #[tokio::test]
+    async fn account_switch_fences_old_repository_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let account = crate::account::Account::fixture_signed_in(
+            dir.path(), crate::account::API_URL.into(), "first");
+        let identity = Auth::new(crate::auth::AuthConfig::new(
+            "http://127.0.0.1:1", dir.path())).with_account(Some(account.clone()));
+        let mut changes = identity.watch_state();
+        account.fixture_install("second");
+        changes.changed().await.unwrap();
+        assert_eq!(identity.user_id().as_deref(), Some("second"));
+        let api = CloudApi::new("http://127.0.0.1:1").unwrap();
+        let error = api.handle(&identity, zuse_protocol::methods::CLOUD_PROJECT_REMOVE,
+            json!({"expectedAccountId":"first","projectId":"project"})).await.unwrap_err();
+        assert!(error.to_string().contains("account changed"));
+        let error = api.handle(&identity, zuse_protocol::methods::CLOUD_BILLING_CAP,
+            json!({"expectedAccountId":"first","overageCapMicros":0,"idempotencyKey":"old"})).await.unwrap_err();
+        assert!(error.to_string().contains("account changed"));
     }
     #[tokio::test]
     async fn local_profiles_never_send_synthetic_identity_to_production() {

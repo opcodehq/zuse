@@ -452,7 +452,10 @@ impl EngineCore {
             if let Some(old) = task.take() {
                 old.abort();
             }
-            *task = Some(cloud::start_mirror_reconciliation(auth.clone()));
+            *task = Some(cloud::start_mirror_reconciliation(
+                cloud::identity::CloudIdentity::workspace(auth.clone())
+                    .with_account(Some(self.account.clone())),
+            ));
         }
         *self
             .auth

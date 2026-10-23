@@ -4,16 +4,18 @@ use gpui::{prelude::*, *};
 use serde_json::{Value, json};
 use zuse_model::cloud_billing::{cap_dollars, cap_micros, usd};
 use zuse_protocol::{
-    AuthState,
     cloud_billing::{BillingSummary, BillingUsageItem, BillingUsagePage},
 };
 use zuse_rpc::methods;
 type Owner = (String, Option<String>);
 fn active_owner(state: &AppState) -> Option<Owner> {
-    match state.auth.as_ref()? {
-        AuthState::SignedIn { user, org_id } => Some((user.id.clone(), org_id.clone())),
-        _ => None,
-    }
+    Some((state.cloud_user_id()?.to_owned(), state.cloud_account.as_ref()?["orgId"].as_str().map(str::to_owned)))
+}
+
+fn request_params(owner: &Owner, mut params: Value) -> Value {
+    params["expectedAccountId"] = json!(owner.0);
+    params["expectedOrganizationId"] = json!(owner.1);
+    params
 }
 fn bound(value: &Value, owner: &Owner) -> bool {
     value["accountId"].as_str() == Some(owner.0.as_str())
@@ -27,6 +29,8 @@ pub struct CloudBillingPage {
     state: Entity<AppState>,
     owner: Option<Owner>,
     loaded: bool,
+    account_task: Option<Task<()>>,
+    account_error: Option<String>,
     task: Option<Task<()>>,
     portal_task: Option<Task<()>>,
     subscription_task: Option<Task<()>>,
@@ -103,6 +107,8 @@ impl CloudBillingPage {
             state,
             owner: None,
             loaded: false,
+            account_task: None,
+            account_error: None,
             task: None,
             portal_task: None,
             subscription_task: None,
@@ -119,6 +125,29 @@ impl CloudBillingPage {
             cap,
             cap_request: None,
         }
+    }
+    fn sign_in(&mut self, cx: &mut Context<Self>) {
+        if self.account_task.is_some() { return; }
+        if let Some(url) = self.state.read(cx).cloud_account.as_ref()
+            .and_then(|status| status["login"]["url"].as_str())
+            .filter(|url| url.starts_with("https://")) {
+            cx.open_url(url);
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().map(|engine| engine.controller()) else { return; };
+        self.account_error = None;
+        self.account_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine.client().call_scoped(methods::CLOUD_ACCOUNT_SIGN_IN, json!({})).await;
+            let _ = this.update(cx, |this, cx| {
+                this.account_task = None;
+                match result {
+                    Ok(value) => if let Some(url) = value["url"].as_str().filter(|url| url.starts_with("https://")) { cx.open_url(url); },
+                    Err(error) => this.account_error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
     }
     fn load(&mut self, more: bool, cx: &mut Context<Self>) {
         if self.task.is_some() {
@@ -137,14 +166,15 @@ impl CloudBillingPage {
         self.loaded = true;
         self.error = None;
         let cursor = if more { self.cursor.clone() } else { None };
+        let expected = owner.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
             futures::try_join!(
                 engine
                     .client()
-                    .call_scoped(methods::CLOUD_BILLING_SUMMARY, json!({})),
+                    .call_scoped(methods::CLOUD_BILLING_SUMMARY, request_params(&expected, json!({}))),
                 engine.client().call_scoped(
                     methods::CLOUD_BILLING_USAGE,
-                    json!({"limit":10,"cursor":cursor})
+                    request_params(&expected, json!({"limit":10,"cursor":cursor}))
                 )
             )
         });
@@ -213,10 +243,11 @@ impl CloudBillingPage {
         let Some(engine) = self.state.read(cx).engine().map(|e| e.controller()) else {
             return;
         };
+        let expected = owner.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
             engine
                 .client()
-                .call_scoped(methods::CLOUD_BILLING_ENTITLEMENTS, json!({}))
+                .call_scoped(methods::CLOUD_BILLING_ENTITLEMENTS, request_params(&expected, json!({})))
                 .await
         });
         self.subscription_task = Some(cx.spawn(async move |this, cx| {
@@ -267,6 +298,7 @@ impl CloudBillingPage {
             return;
         };
         self.error = None;
+        let expected = owner.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
             engine
                 .client()
@@ -276,11 +308,11 @@ impl CloudBillingPage {
                     } else {
                         methods::CLOUD_BILLING_CHECKOUT
                     },
-                    if subscribed {
+                    request_params(&expected, if subscribed {
                         json!({})
                     } else {
                         json!({"offerId":"cloud-workspace-standard-v1"})
-                    },
+                    }),
                 )
                 .await
         });
@@ -331,6 +363,7 @@ impl CloudBillingPage {
         };
         let amount = self.credit_amount;
         self.credit_error = None;
+        let expected = owner.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
             engine
                 .client()
@@ -340,11 +373,11 @@ impl CloudBillingPage {
                     } else {
                         methods::CLOUD_PREPAID_BALANCE
                     },
-                    if buy {
+                    request_params(&expected, if buy {
                         json!({"amountCents":amount})
                     } else {
                         json!({})
-                    },
+                    }),
                 )
                 .await
         });
@@ -417,12 +450,13 @@ impl CloudBillingPage {
         let key = self.cap_request.as_ref().unwrap().1.clone();
         self.error = None;
         self.notice = None;
+        let expected = owner.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
             engine
                 .client()
                 .call_scoped(
                     methods::CLOUD_BILLING_CAP,
-                    json!({"overageCapMicros":amount,"idempotencyKey":key}),
+                    request_params(&expected, json!({"overageCapMicros":amount,"idempotencyKey":key})),
                 )
                 .await
         });
@@ -510,6 +544,19 @@ impl Render for CloudBillingPage {
                     .into_any_element(),
             ),
         ));
+        if self.owner.is_none() {
+            if self.state.read(cx).cloud_account.is_some() {
+                let pending = self.account_task.is_some();
+                let login = self.state.read(cx).cloud_account.as_ref().is_some_and(|value| value["login"].is_object());
+                let error = self.account_error.as_deref().or_else(|| self.state.read(cx).cloud_account.as_ref().and_then(|value|value["error"].as_str()));
+                body = body.child(zuse_viewport::cloud_settings::account_gate(
+                    zuse_viewport::cloud_settings::sign_in_button("cloud-account-sign-in",
+                        if pending { "Signing in…" } else if login { "Continue sign-in" } else { "Sign in" })
+                        .when(pending, |view| view.opacity(0.6))
+                        .on_click(cx.listener(|this, _, _, cx| this.sign_in(cx))), error));
+            }
+            return body.into_any_element();
+        }
         body = body.child(div().mt(px(20.)).mb(px(16.)).child(
             zuse_viewport::cloud_settings::tabs(
                 self.tab,
@@ -705,5 +752,6 @@ impl Render for CloudBillingPage {
             .size_full()
             .overflow_y_scroll()
             .child(body)
+            .into_any_element()
     }
 }

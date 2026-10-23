@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 const [ipc,ready,assets]=process.argv.slice(2);
 const clients=new Set(),events=[];
-let state={user:null,login:null,error:null},hold=false,failNext=false,loginTimer;
+let state={user:null,login:null,error:null},hold=false,failNext=false,loginTimer,cloud=false,holdCloud=false;
+const delayed=[];
 const emit=(client,frame)=>{try{client.send(JSON.stringify(frame));}catch{}};
 const publish=()=>{if(!hold)for(const client of clients)for(const [id,method]of client.data.handled)if(method==='CloudAccountStatus')emit(client,{id,item:state});};
 const headers={'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp','Cache-Control':'no-store'};
@@ -16,6 +17,9 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
     if(Object.hasOwn(value,'state'))state=value.state;
     if(Object.hasOwn(value,'hold'))hold=value.hold;
     if(Object.hasOwn(value,'failNext'))failNext=value.failNext;
+    if(Object.hasOwn(value,'cloud'))cloud=value.cloud;
+    if(Object.hasOwn(value,'holdCloud'))holdCloud=value.holdCloud;
+    if(!holdCloud)for(const [client,frame]of delayed.splice(0))emit(client,frame);
     publish();
    }
    return Response.json({state,events,hold},{headers});
@@ -39,7 +43,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
   },
   message(client,message){
    const text=message.toString(),frame=JSON.parse(text);
-   if(frame.cancel&&client.data.handled.delete(frame.id))return;
+   if(frame.cancel){events.push({cancel:frame.id});if(client.data.handled.delete(frame.id))return;}
    if(frame.method==='CloudAccountStatus'){
     client.data.handled.set(frame.id,frame.method);if(!hold)emit(client,{id:frame.id,item:state});return;
    }
@@ -50,10 +54,21 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
     loginTimer=setTimeout(()=>{
      state={user:null,login:{url:'https://identity.example.test/device',userCode:'PARITY-CODE',expiresAt:Math.floor(Date.now()/1000)+600},error:null};
      publish();emit(client,{id:frame.id,ok:state.login});
-    },300);return;
+    },cloud?1200:300);return;
    }
    if(frame.method==='CloudAccountSignOut'){
     events.push({method:frame.method});clearTimeout(loginTimer);state={user:null,login:null,error:null};publish();emit(client,{id:frame.id,ok:{ok:true}});return;
+   }
+   if(cloud&&['CloudProjects','CloudGithub','CloudImage','CloudBillingSummary','CloudBillingUsage','CloudBillingEntitlements','CloudPrepaidBalance','CloudContext','CloudWorkspaces'].includes(frame.method)){
+    const owner=state.user?.id??null;
+    events.push({id:frame.id,method:frame.method,owner,expectedAccountId:frame.params?.expectedAccountId??null});
+    const project={projectId:'project-'+owner,repositoryIdentity:'github.com/'+owner+'/workspace',repositoryUrl:'https://github.com/'+owner+'/workspace',displayName:'Workspace',defaultBranch:'main',visibility:'private',state:'ready',activeBuilds:{},latestBuilds:{},createdAt:1,updatedAt:1};
+    const image={storage:null,state:'none',generation:null,providerId:null,runtimeVersion:null,progressPhase:null,errorCode:null,repositories:[],builds:[],builtAt:null,updatedAt:1};
+    const summary={currency:'USD',status:'active',periodStart:1790812800000,periodEnd:1793491200000,basePriceMicros:40000000,includedProviderCostMicros:35000000,providerCostMicros:5000000,storageCostMicros:0,includedUsedMicros:5000000,includedRemainingMicros:30000000,overageProviderCostMicros:0,overageChargeMicros:0,overageCapMicros:25000000,markupBasisPoints:500,currentInvoiceEstimateMicros:40000000,usageProvisional:false};
+    const data={CloudProjects:{projects:[project]},CloudGithub:{configured:true,canManageInstallations:true,user:null,installations:[],repositories:[]},CloudImage:image,CloudBillingSummary:summary,CloudBillingUsage:{items:[{entryId:'entry-'+owner,resourceKind:'workspace',usageKind:'compute',resourceId:'workspace-'+owner,provider:'boxd',startedAt:1792663200000,endedAt:1792749600000,vcpuCount:2,memoryMib:4096,providerCostMicros:5000000,status:'settled'}],nextCursor:null},CloudBillingEntitlements:{entitlements:[{offerId:'cloud-workspace-standard-v1',status:'active',paidThrough:1793491200000}]},CloudPrepaidBalance:{available:true,creditCents:2500,debitCents:0,currency:'USD'}}[frame.method];
+    const value=frame.method==='CloudContext'?{accountId:owner,projects:[]}:frame.method==='CloudWorkspaces'?{accountId:owner,workspaces:[]}:{accountId:owner,organizationId:null,data};
+    const response={id:frame.id,ok:value};
+    if(holdCloud)delayed.push([client,response]);else emit(client,response);return;
    }
    if(frame.method==='Plugins'){
     emit(client,{id:frame.id,ok:{kind:'snapshot',tenantId:'personal:'+state.user?.id,tenants:[],catalog:[],connections:[],canManage:true,endpoint:'https://fixture.invalid/mcp'}});return;

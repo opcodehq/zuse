@@ -826,6 +826,8 @@ pub struct AppState {
     pub workspace_scope: Option<WorkspaceScope>,
     /// Auth stream value; `None` until the engine reports one (M4).
     pub auth: Option<AuthState>,
+    /// Account identity for cloud features, independent of device/workspace auth.
+    pub cloud_account: Option<serde_json::Value>,
     pub devices: Vec<Device>,
     // Last published device presentation. Heartbeats refresh the underlying
     // timestamps without invalidating every view when no displayed value changed.
@@ -1007,6 +1009,7 @@ impl AppState {
             connection: ConnectionStatus::Connecting,
             workspace_scope: None,
             auth: None,
+            cloud_account: None,
             devices: Vec::new(),
             device_presentation: None,
             session_presence_presentation: Vec::new(),
@@ -1601,6 +1604,16 @@ impl AppState {
                 false
             }
         }
+    }
+
+    pub fn apply_cloud_account(&mut self, value: serde_json::Value) -> bool {
+        if self.cloud_account.as_ref() == Some(&value) { return false; }
+        self.cloud_account = Some(value);
+        true
+    }
+
+    pub fn cloud_user_id(&self) -> Option<&str> {
+        self.cloud_account.as_ref()?["user"]["id"].as_str()
     }
 
     /// The signed-in user, if the engine reports one.
@@ -2754,6 +2767,7 @@ impl AppState {
     /// workspace doc in M4) fail their subscribe and are skipped gracefully.
     fn attach_engine(&mut self, handle: EngineHandle, cx: &mut Context<Self>) {
         self.reset_configuration_transport();
+        self.cloud_account = None;
         // The attachment notification precedes the first connectivity frame.
         // Make that bootstrap gap explicit so the shell resets its alert
         // baseline instead of comparing the new runtime with the old one.
@@ -2842,6 +2856,12 @@ impl AppState {
                 handle.clone(),
                 methods::AUTH_STATUS,
                 AppState::apply_auth_value,
+            ),
+            spawn_watch(
+                cx,
+                handle.controller(),
+                methods::CLOUD_ACCOUNT_STATUS,
+                AppState::apply_cloud_account,
             ),
             spawn_local_device_probe(cx, handle.clone()),
         ]);

@@ -23,23 +23,30 @@ pub(super) struct Billing {
     cap_request: Option<(i64, String)>,
 }
 impl WorkspaceView {
+    fn call_billing(&mut self, method: &str, mut params: Value) -> u64 {
+        if let Some((account, organization)) = &self.billing.owner {
+            params["expectedAccountId"] = json!(account);
+            params["expectedOrganizationId"] = json!(organization);
+        }
+        self.call(method, params)
+    }
     pub(super) fn refresh_billing(&mut self, more: bool) {
-        if !self.billing.requests.is_empty() {
+        if self.billing.owner.is_none() || !self.billing.requests.is_empty() {
             return;
         }
         self.billing.error = None;
         self.billing.notice = None;
         if !more {
-            let credit_id = self.call(methods::CLOUD_PREPAID_BALANCE, json!({}));
+            let credit_id = self.call_billing(methods::CLOUD_PREPAID_BALANCE, json!({}));
             self.billing
                 .requests
                 .insert(credit_id, ("credits", self.billing.owner.clone()));
-            let id = self.call(methods::CLOUD_BILLING_ENTITLEMENTS, json!({}));
+            let id = self.call_billing(methods::CLOUD_BILLING_ENTITLEMENTS, json!({}));
             self.billing
                 .requests
                 .insert(id, ("entitlements", self.billing.owner.clone()));
         }
-        let summary = self.call(methods::CLOUD_BILLING_SUMMARY, json!({}));
+        let summary = self.call_billing(methods::CLOUD_BILLING_SUMMARY, json!({}));
         self.billing
             .requests
             .insert(summary, ("summary", self.billing.owner.clone()));
@@ -48,7 +55,7 @@ impl WorkspaceView {
         } else {
             None
         };
-        let usage = self.call(
+        let usage = self.call_billing(
             methods::CLOUD_BILLING_USAGE,
             json!({"cursor":cursor,"limit":10}),
         );
@@ -73,7 +80,7 @@ impl WorkspaceView {
         let Some(subscribed) = self.billing.subscribed else {
             return;
         };
-        let id = self.call(
+        let id = self.call_billing(
             if subscribed {
                 methods::CLOUD_BILLING_PORTAL
             } else {
@@ -104,7 +111,7 @@ impl WorkspaceView {
         if buy && !self.billing.credits.as_ref().is_some_and(|v| v.available) {
             return;
         }
-        let id = self.call(
+        let id = self.call_billing(
             if buy {
                 methods::CLOUD_PREPAID_CHECKOUT
             } else {
@@ -127,7 +134,7 @@ impl WorkspaceView {
         cx.notify();
     }
     fn save_billing_cap(&mut self, cx: &mut Context<Self>) {
-        if !self.billing.requests.is_empty() {
+        if self.billing.owner.is_none() || !self.billing.requests.is_empty() {
             return;
         }
         let Some(amount) = cap_micros(&self.billing_cap.read(cx).value(cx)) else {
@@ -144,7 +151,7 @@ impl WorkspaceView {
             self.billing.cap_request = Some((amount, uuid::Uuid::new_v4().to_string()));
         }
         let key = self.billing.cap_request.as_ref().unwrap().1.clone();
-        let id = self.call(
+        let id = self.call_billing(
             methods::CLOUD_BILLING_CAP,
             json!({"overageCapMicros":amount,"idempotencyKey":key}),
         );
@@ -162,7 +169,7 @@ impl WorkspaceView {
         if self
             .pending
             .get(&id)
-            .is_some_and(|m| m == methods::AUTH_STATUS)
+            .is_some_and(|m| m == methods::CLOUD_ACCOUNT_STATUS)
         {
             if let Some(value) = frame.get("item").or_else(|| frame.get("ok")) {
                 let owner = value["user"]["id"]
@@ -310,6 +317,23 @@ impl WorkspaceView {
         true
     }
     pub(super) fn billing_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.billing.owner.is_none() {
+            if self.cloud_account.is_null() && self.account_action_error.is_none() { return div().into_any_element(); }
+            let pending = self.pending.values().any(|method| method == methods::CLOUD_ACCOUNT_SIGN_IN);
+            let login = self.cloud_account["login"]["url"].as_str().map(str::to_owned);
+            return crate::cloud_settings::account_gate(
+                crate::cloud_settings::sign_in_button("cloud-account-sign-in", if pending { "Signing in…" } else if login.is_some() { "Continue sign-in" } else { "Sign in" })
+                    .when(pending, |view| view.opacity(0.6))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(url) = login.as_ref().filter(|url| url.starts_with("https://")) {
+                            cx.open_url(url);
+                        } else if !pending {
+                            this.account_card.update(cx, |_, cx| cx.emit(crate::account_settings::Event::SignIn));
+                        }
+                    })),
+                self.account_action_error.as_deref().or_else(|| self.cloud_account["error"].as_str()),
+            ).into_any_element();
+        }
         let busy = !self.billing.requests.is_empty();
         let mut view = column().gap_4().child(crate::cloud_settings::tabs(
             self.billing.tab,

@@ -19,17 +19,15 @@ struct Source {
     _watch: AbortOnDropHandle<()>,
 }
 fn binding(value: &Value) -> Option<(String, Option<String>)> {
-    match serde_json::from_value::<AuthState>(value.clone()).ok()? {
-        AuthState::SignedIn { user, org_id } => Some((user.id, org_id)),
-        _ => None,
-    }
+    Some((value["user"]["id"].as_str()?.to_owned(), value["orgId"].as_str().map(str::to_owned)))
 }
+
 impl Source {
     async fn open(target: CloudTarget) -> Result<Arc<Self>, RpcError> {
         let mut auth = target
             .controller
             .client()
-            .subscribe_scoped(methods::AUTH_STATUS, json!({}))
+            .subscribe_scoped(methods::CLOUD_ACCOUNT_STATUS, json!({}))
             .await?;
         let first = tokio::time::timeout(std::time::Duration::from_secs(10), auth.recv())
             .await
