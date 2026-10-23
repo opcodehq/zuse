@@ -14,7 +14,7 @@ completed UI images in the final user-facing report.
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
-| E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Remaining: local mirror cleanup, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
+| E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Archived cloud transcript screens added to native/browser settings; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
 
@@ -1049,7 +1049,7 @@ ZUSE_CLOUD_TEST_GUEST_BIN="$PWD/target/debug/zuse-cloud-runtime" \
 ```
 
 Remaining before production recovery enablement: complete retained and replacement-resource
-billing, local mirror cleanup, source-image publication and live-provider
+billing, complete local sync/custom-path import, source-image publication and live-provider
 continuation acceptance. Ordinary storage admission still refuses populated unbound
 storage; the separately authorized restore-adoption path is described below. Recovery
 remains default-off. Expiry alone never authorizes destruction: explicit recovery
@@ -1095,7 +1095,7 @@ stopped and the retained source is paused before restoring its bearer. Unarchive
 after the barrier lets retirement finish. Interactive resume now durably requests
 replacement restoration. Its implementation and remaining production gates are
 described below; this policy must remain off until live acceptance passes. Delayed work is fenced by deletion state; the permanent-delete backend and
-tombstone implementation and Delete UI are described below. Local mirror cleanup
+tombstone implementation and Delete UI are described below. Full local sync/custom-path import
 remain outstanding.
 
 Backup running observations feed the original idempotent usage outbox as
@@ -1176,7 +1176,7 @@ Runtime checks additionally reject missing grants, wrong archive digest, machine
 generation and enrollment identities before creating a storage marker.
 
 Production recovery is still default-off. Live Boxd image/build acceptance,
-supported agent-native SDK continuation, provider resource settlement, local mirror cleanup and existing legacy-workspace/archive migration
+supported agent-native SDK continuation, provider resource settlement, full local sync/custom-path import and existing legacy-workspace/archive migration
 remain required.
 This implementation does not convert a legacy Python runtime database into a
 Rust engine profile.
@@ -1268,7 +1268,7 @@ object tests cover multiple pages, partial delete failures, malformed XML,
 percent/Unicode names and malicious listing scope. Recovery acceptance also passes
 with the additional per-object cancellation checks.
 
-Ownership-manifest cleanup of local mirrors, existing-archive migration and live
+Full local sync/custom-path import, existing-archive migration and live
 provider/R2 acceptance remain required before the archive milestone is complete.
 
 ### Native and browser deletion controls
@@ -1303,3 +1303,72 @@ retry classification (1 test), and host cloud credential/origin guards (2 tests)
 The broader engine test command hit sandbox disk capacity while linking unrelated
 integration binaries; those generated binaries were removed and the intended
 `--lib cloud::tests` check passed. No broader engine-suite pass is claimed.
+
+
+### Reference local mirror cleanup
+
+`crates/engine/src/cloud/mirror.rs` reads the original `.zuse-sync.json` v1
+ownership format, including interrupted `pending` publications. Older markers
+without a version establish no file ownership. The host discovers matching markers
+under the reference default `~/.zuse/cloud` tree; an explicit
+`ZUSE_CLOUD_MIRROR_ROOT` selects an alternative managed root for acceptance or
+configuration. It does not search unrelated home folders or accept a renderer
+supplied deletion path.
+
+A confirmed `archived`, `deleting` or `deleted` catalog state admits cleanup.
+`archiving`, paused, disconnected, disabled or ready state alone does not. A host
+startup/login metadata reconciler runs independently of the Settings screen.
+Repeated catalog reads report cached local progress instead of restarting cleanup.
+A new ready-to-archived cycle permits a new cleanup. Local hashing runs off the
+async executor and cannot wake cloud compute.
+
+Cleanup validates ownership and any sibling download cache before removal. It
+hashes current regular-file bytes, verifies mode/size and mutation identity, compares
+links without following them, and removes only unchanged manifest-owned entries.
+Local edits, unowned `.env` files and extra files stay. It prunes only empty parents
+of removed entries, updates the ownership marker with a flushed rename, and removes
+a fully empty mirror. Matching workspace-owned caches are purged; a missing
+checkout can still have its explicitly known cache cleaned. Interrupted publication,
+foreign markers and root symlink ancestors preserve data and return an actionable error.
+Changed file-parent symlinks are left alone.
+Unix descriptor-relative operations anchor file access and removal below the checked
+root rather than resolving a symlink into another tree.
+
+Native/browser archived views show pending and failed local cleanup with Retry
+cleanup. A cloud tombstone stays visible while local cleanup is pending or failed;
+confirmed server deletion alone does not hide an unresolved local error. The retry
+RPC rechecks the authenticated catalog state and returns the same workspace with
+host-local status. It does not invoke a cloud lifecycle mutation.
+
+Nine filesystem/lifecycle tests, two host cloud credential guards, four shared
+archived-state tests and RPC retry classification pass. The compiled browser
+workflow ran against the actual host/API/isolated PostgreSQL and packaged guest:
+interrupted publication kept all local data; the Retry cleanup action removed an
+unchanged synced file and its owned cache, while preserving a newer edit, local-only
+`.env`, extra file and local `.git/HEAD`. It then completed the full cloud deletion
+confirmation/failure/retry/tombstone workflow. The worker verified exact source
+machine retirement, absence of workspace objects and zero compute wakes. Its
+provider/object store are deterministic; live-provider acceptance is still pending.
+Native Linux UI checking and the browser build pass. Mac visual acceptance remains
+pending. Screenshots are `.context/cloud-mirror-cleanup-error.png` and
+`.context/cloud-mirror-cleanup-completed.png`; the receipt is
+`.context/cloud-delete-browser-acceptance.json`. Enable the extended driver with
+`ZUSE_CLOUD_MIRROR_ACCEPTANCE=1` and a fresh isolated UI fixture file.
+
+Cache payload cleanup retains its ownership marker until all payloads are removed.
+A failed final directory unlink restores that marker so retry still has ownership
+proof. Focused failure injection checks this boundary and subsequent retry. This
+sandbox permits directory access despite chmod mode bits, so permission-based fault
+injection does not exercise that failure; the test injects the final unlink error
+explicitly instead.
+
+This adds cleanup of discoverable reference mirrors. The live Git snapshot/transfer
+worker, sync preference/path controls, custom legacy target registration/import,
+joining that future transfer worker before cleanup, and orphan cache discovery
+without a known checkout remain required. It does not claim full local sync parity.
+
+
+Next implementation focus: complete the shared interactive cloud environment
+connection and the create/send/reopen UI workflow. Full live sync remains on the
+ledger alongside the other tools and migration work; default mirror cleanup does
+not close those requirements.

@@ -1,4 +1,6 @@
 //! Host-authorized control plane access. No access token crosses the viewport RPC boundary.
+#[cfg(unix)]
+pub mod mirror;
 use crate::auth::Auth;
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
@@ -10,16 +12,19 @@ use zuse_model::cloud::{Head, Workspace};
 
 pub const LIST: &str = zuse_protocol::methods::CLOUD_WORKSPACES;
 pub const READ: &str = zuse_protocol::methods::CLOUD_HISTORY;
+pub const CLEANUP_MIRROR: &str = zuse_protocol::methods::CLOUD_CLEANUP_MIRROR;
 pub const DELETE: &str = zuse_protocol::methods::CLOUD_DELETE;
 pub const UNARCHIVE: &str = zuse_protocol::methods::CLOUD_UNARCHIVE;
 pub fn handles(method: &str) -> bool {
-    matches!(method, LIST | READ | UNARCHIVE | DELETE)
+    matches!(method, LIST | READ | UNARCHIVE | DELETE | CLEANUP_MIRROR)
 }
 pub struct CloudApi {
     origin: reqwest::Url,
     http: reqwest::Client,
     history: zuse_cloud_projection::reader::Reader,
     loopback: bool,
+    #[cfg(unix)]
+    mirrors: mirror::Manager,
 }
 impl CloudApi {
     pub fn new(origin: &str) -> Result<Self> {
@@ -38,6 +43,17 @@ impl CloudApi {
                 .build()?,
             history,
             loopback,
+            #[cfg(unix)]
+            mirrors: mirror::Manager::new(
+                std::env::var_os("ZUSE_CLOUD_MIRROR_ROOT")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::var_os("HOME")
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_else(std::env::temp_dir)
+                            .join(".zuse/cloud")
+                    }),
+            ),
         })
     }
     fn shared() -> Result<Arc<Self>> {
@@ -52,6 +68,19 @@ impl CloudApi {
         })
         .clone()
         .map_err(anyhow::Error::msg)
+    }
+    fn local_cleanup(&self, account: &str, row: &mut Workspace, retry: bool) {
+        let admitted = matches!(row.state.as_str(), "archived" | "deleting" | "deleted");
+        #[cfg(unix)]
+        {
+            row.local_mirror_cleanup =
+                self.mirrors
+                    .observe(account, &row.workspace_id, admitted, retry);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (account, row, retry, admitted);
+        }
     }
     async fn request(&self, token: &str, path: &[&str], body: Option<Value>) -> Result<Value> {
         let mut url = self.origin.clone();
@@ -115,6 +144,9 @@ impl CloudApi {
                     .request(&token, &["v1", "cloud", "workspaces"], None)
                     .await?;
                 let mut rows: Vec<Workspace> = serde_json::from_value(value["workspaces"].clone())?;
+                for row in &mut rows {
+                    self.local_cleanup(&account, row, false);
+                }
                 rows.retain(|row| row.rpc_protocol.as_deref() == Some("zuse-rpc-v1"));
                 json!({"accountId":account,"workspaces":rows})
             }
@@ -167,6 +199,23 @@ impl CloudApi {
                 head.older_message_sequence = None;
                 json!({"accountId":account,"workspace":workspace,"head":head})
             }
+            CLEANUP_MIRROR => {
+                let id = params["workspaceId"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Select a workspace."))?;
+                let value = self
+                    .request(&token, &["v1", "cloud", "workspaces", id], None)
+                    .await?;
+                let mut value = value.get("workspace").cloned().unwrap_or(value);
+                let mut row: Workspace = serde_json::from_value(value.clone())?;
+                ensure!(
+                    matches!(row.state.as_str(), "archived" | "deleting" | "deleted"),
+                    "The workspace must finish archiving before local cleanup."
+                );
+                self.local_cleanup(&account, &mut row, true);
+                value["localMirrorCleanup"] = serde_json::to_value(row.local_mirror_cleanup)?;
+                json!({"accountId": account, "workspace": value})
+            }
             UNARCHIVE | DELETE => {
                 let id = params["workspaceId"]
                     .as_str()
@@ -191,6 +240,10 @@ impl CloudApi {
                         Some(json!({"workspaceId":id,"commandId":command})),
                     )
                     .await?;
+                let mut value = value;
+                let mut workspace: Workspace = serde_json::from_value(value.clone())?;
+                self.local_cleanup(&account, &mut workspace, false);
+                value["localMirrorCleanup"] = serde_json::to_value(workspace.local_mirror_cleanup)?;
                 json!({"accountId":account,"workspace":value})
             }
             _ => anyhow::bail!("Unknown cloud operation."),
@@ -249,4 +302,38 @@ mod tests {
             .is_err()
         );
     }
+}
+
+/// Reconcile reference mirrors at boot/login even when the archived screen is closed.
+/// Only the metadata catalog is read: this loop cannot allocate or resume compute.
+pub struct MirrorReconciler(tokio::task::JoinHandle<()>);
+impl MirrorReconciler {
+    pub fn abort(&self) {
+        self.0.abort();
+    }
+    pub async fn stop(&mut self) {
+        self.0.abort();
+        let _ = (&mut self.0).await;
+    }
+}
+impl Drop for MirrorReconciler {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+pub fn start_mirror_reconciliation(auth: Auth) -> MirrorReconciler {
+    MirrorReconciler(tokio::spawn(async move {
+        let mut changes = auth.watch_state();
+        loop {
+            if auth.user_id().is_some() {
+                if let Ok(api) = CloudApi::shared() {
+                    let _ = api.handle(&auth, LIST, json!({})).await;
+                }
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(30)) => {},
+                result = changes.changed() => if result.is_err() { break; },
+            }
+        }
+    }))
 }

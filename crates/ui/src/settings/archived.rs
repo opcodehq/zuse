@@ -139,7 +139,7 @@ impl ArchivedPage {
                             }
                         }
                         cx.notify();
-                        page.cloud.deleting()
+                        page.cloud.needs_poll()
                     })
                     .unwrap_or(false);
                 if !again {
@@ -265,6 +265,9 @@ impl ArchivedPage {
         cx.notify();
     }
     fn delete_cloud(&mut self, id: String, cx: &mut Context<Self>) {
+        self.mutate_cloud(id, zuse_engine::cloud::DELETE, cx)
+    }
+    fn mutate_cloud(&mut self, id: String, method: &'static str, cx: &mut Context<Self>) {
         if self.cloud.busy {
             return;
         }
@@ -276,7 +279,7 @@ impl ArchivedPage {
         self.cloud.error = None;
         let command = self
             .cloud_commands
-            .entry(format!("delete:{id}"))
+            .entry(format!("{method}:{id}"))
             .or_insert_with(|| uuid::Uuid::new_v4().to_string())
             .clone();
         let owner = self.cloud_owner.clone();
@@ -284,7 +287,7 @@ impl ArchivedPage {
             let result = engine
                 .client()
                 .call(
-                    zuse_engine::cloud::DELETE,
+                    method,
                     serde_json::json!({"workspaceId":id,"commandId":command}),
                 )
                 .await;
@@ -303,9 +306,8 @@ impl ArchivedPage {
                     }
                     Err(zuse_rpc::RpcError::Failed(error)) => page.cloud.error = Some(error),
                     Err(_) => {
-                        page.cloud.error = Some(
-                            "Deletion request interrupted. Refresh to check its progress.".into(),
-                        )
+                        page.cloud.error =
+                            Some("Cloud request interrupted. Refresh to check its progress.".into())
                     }
                 }
                 page.cloud_loaded = false;
@@ -416,6 +418,9 @@ impl ArchivedPage {
                             let open = row.clone();
                             let id = row.workspace_id.clone();
                             let archived = row.state == "archived";
+                            let deleted = row.state == "deleted";
+                            let cleanup_failed = row.cleanup_failed();
+                            let cleanup_id = id.clone();
                             let delete = id.clone();
                             let deleting = row.deleting();
                             let retry = row.delete_failed();
@@ -434,20 +439,33 @@ impl ArchivedPage {
                                         .flex_1()
                                         .min_w_0()
                                         .cursor_pointer()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(3.))
                                         .text_size(px(13.))
                                         .child(row.label().to_owned())
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(theme.text_muted)
+                                                .child(
+                                                    (if let Some(label) = row.cleanup_label() {
+                                                        label
+                                                    } else if deleting {
+                                                        row.deletion_label()
+                                                    } else {
+                                                        "Cloud"
+                                                    })
+                                                    .to_owned(),
+                                                ),
+                                        )
                                         .on_click(cx.listener(move |page, _, _, cx| {
-                                            page.open_cloud(open.clone(), cx)
+                                            if !deleting && !deleted {
+                                                page.open_cloud(open.clone(), cx)
+                                            }
                                         })),
                                 )
-                                .child(div().text_size(px(11.)).text_color(theme.text_muted).child(
-                                    if deleting {
-                                        row.deletion_label()
-                                    } else {
-                                        "Cloud"
-                                    },
-                                ))
-                                .when(!deleting, |view| {
+                                .when(!deleting && !deleted, |view| {
                                     view.child(
                                         widgets::ghost_action(&theme)
                                             .id(("cloud-restore-row", index))
@@ -467,32 +485,51 @@ impl ArchivedPage {
                                             })),
                                     )
                                 })
-                                .child(
-                                    widgets::ghost_action(&theme)
-                                        .id(("cloud-delete-row", index))
-                                        .role(gpui::Role::Button)
-                                        .aria_label(if retry {
-                                            "Retry cloud deletion"
-                                        } else {
-                                            "Delete cloud thread"
-                                        })
-                                        .child(if deleting {
-                                            if retry { "Retry delete" } else { "Deleting…" }
-                                        } else {
-                                            "Delete…"
-                                        })
-                                        .on_click(cx.listener(move |page, _, _, cx| {
-                                            if page.cloud.busy {
-                                                return;
-                                            }
-                                            if retry {
-                                                page.delete_cloud(delete.clone(), cx);
-                                            } else if !deleting {
-                                                page.cloud_delete_confirm = Some(delete.clone());
-                                                cx.notify();
-                                            }
-                                        })),
-                                )
+                                .when(!deleted, |view| {
+                                    view.child(
+                                        widgets::ghost_action(&theme)
+                                            .id(("cloud-delete-row", index))
+                                            .role(gpui::Role::Button)
+                                            .aria_label(if retry {
+                                                "Retry cloud deletion"
+                                            } else {
+                                                "Delete cloud thread"
+                                            })
+                                            .child(if deleting {
+                                                if retry { "Retry delete" } else { "Deleting…" }
+                                            } else {
+                                                "Delete…"
+                                            })
+                                            .on_click(cx.listener(move |page, _, _, cx| {
+                                                if page.cloud.busy {
+                                                    return;
+                                                }
+                                                if retry {
+                                                    page.delete_cloud(delete.clone(), cx);
+                                                } else if !deleting {
+                                                    page.cloud_delete_confirm =
+                                                        Some(delete.clone());
+                                                    cx.notify();
+                                                }
+                                            })),
+                                    )
+                                })
+                                .when(cleanup_failed, |view| {
+                                    view.child(
+                                        widgets::ghost_action(&theme)
+                                            .id(("cloud-mirror-cleanup-row", index))
+                                            .role(gpui::Role::Button)
+                                            .aria_label("Retry local mirror cleanup")
+                                            .child("Retry cleanup")
+                                            .on_click(cx.listener(move |page, _, _, cx| {
+                                                page.mutate_cloud(
+                                                    cleanup_id.clone(),
+                                                    zuse_engine::cloud::CLEANUP_MIRROR,
+                                                    cx,
+                                                )
+                                            })),
+                                    )
+                                })
                         })),
                 )
                 .into_any_element(),

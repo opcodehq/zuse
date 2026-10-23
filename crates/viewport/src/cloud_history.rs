@@ -8,6 +8,7 @@ use crate::{
 use zuse_model::cloud::{ArchivedCloud, Head, Workspace};
 const LIST: &str = zuse_protocol::methods::CLOUD_WORKSPACES;
 const READ: &str = zuse_protocol::methods::CLOUD_HISTORY;
+const CLEANUP_MIRROR: &str = zuse_protocol::methods::CLOUD_CLEANUP_MIRROR;
 const DELETE: &str = zuse_protocol::methods::CLOUD_DELETE;
 const UNARCHIVE: &str = zuse_protocol::methods::CLOUD_UNARCHIVE;
 #[derive(Default)]
@@ -148,7 +149,7 @@ impl WorkspaceView {
             self.cloud_archive.view = None;
             self.cloud_archive.commands.remove(&workspace);
         }
-        if self.cloud_archive.state.deleting() && self.cloud_archive.poll.is_none() {
+        if self.cloud_archive.state.needs_poll() && self.cloud_archive.poll.is_none() {
             self.cloud_archive.poll = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor()
                     .timer(std::time::Duration::from_secs(2))
@@ -199,6 +200,9 @@ impl WorkspaceView {
         true
     }
     fn delete_cloud(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.mutate_cloud(id, DELETE, cx)
+    }
+    fn mutate_cloud(&mut self, id: &str, method: &'static str, cx: &mut Context<Self>) {
         if self.cloud_archive.action.is_some() {
             return;
         }
@@ -206,12 +210,12 @@ impl WorkspaceView {
         let command = self
             .cloud_archive
             .commands
-            .entry(format!("delete:{id}"))
+            .entry(format!("{method}:{id}"))
             .or_insert_with(|| uuid::Uuid::new_v4().to_string())
             .clone();
         self.cloud_archive.state.busy = true;
         self.cloud_archive.state.error = None;
-        let req = self.call(DELETE, json!({"workspaceId":id,"commandId":command}));
+        let req = self.call(method, json!({"workspaceId":id,"commandId":command}));
         self.cloud_archive.action = Some((req, id.into(), true));
         cx.notify();
     }
@@ -273,6 +277,9 @@ impl WorkspaceView {
                     let restore = open.clone();
                     let delete = open.clone();
                     let deleting = w.deleting();
+                    let deleted = w.state == "deleted";
+                    let cleanup_failed = w.cleanup_failed();
+                    let cleanup_id = open.clone();
                     let retry = w.delete_failed();
                     s::setting_row(index == 0)
                         .child(
@@ -285,21 +292,23 @@ impl WorkspaceView {
                                 .cursor_pointer()
                                 .child(s::details(
                                     w.label().to_owned(),
-                                    if deleting {
+                                    (if let Some(label) = w.cleanup_label() {
+                                        label
+                                    } else if deleting {
                                         w.deletion_label()
                                     } else if w.state == "archiving" {
                                         "Archiving…"
                                     } else {
                                         "Cloud · Archived"
-                                    },
+                                    }).to_owned(),
                                 ))
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    if !deleting {
+                                    if !deleting && !deleted {
                                         this.open_cloud_archive(&open, cx)
                                     }
                                 })),
                         )
-                        .when(!deleting,|view|view.child(
+                        .when(!deleting && !deleted,|view|view.child(
                             s::button(("cloud-archive-restore", index), "Unarchive")
                                 .opacity(
                                     if self.cloud_archive.state.busy || w.state != "archived" {
@@ -312,7 +321,7 @@ impl WorkspaceView {
                                     this.unarchive_cloud(&restore, cx)
                                 })),
                         ))
-                        .child(
+                        .when(!deleted, |view| view.child(
                             s::button(("cloud-delete-row", index), if deleting {
                                 if retry { "Retry delete" } else { "Deleting…" }
                             } else {
@@ -331,7 +340,13 @@ impl WorkspaceView {
                                     cx.notify();
                                 }
                             })),
-                        )
+                        ))
+                        .when(cleanup_failed, |view| view.child(
+                            s::button(("cloud-mirror-cleanup-row", index), "Retry cleanup")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.mutate_cloud(&cleanup_id, CLEANUP_MIRROR, cx)
+                                }))
+                        ))
                 })),
             )
             .when(rows.is_empty(), |view| {

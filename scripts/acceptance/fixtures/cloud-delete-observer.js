@@ -1,7 +1,7 @@
 // Observe actual host RPC metadata; no credentials or encrypted envelopes are collected.
 (() => {
   const Native = WebSocket;
-  const proof = window.__cloudArchiveProof = {methods: [], list: null, history: null, unarchive: null, deletions: []};
+  const proof = window.__cloudArchiveProof = {methods: [], list: null, history: null, unarchive: null, deletions: [], cleanups: []};
   const pending = new Map();
   window.WebSocket = class extends Native {
     constructor(...args) {
@@ -22,6 +22,7 @@
           }
           if (method === 'CloudUnarchive') proof.unarchive = frame.ok.workspace;
           if (method === 'CloudDelete') proof.deletions.push(frame.ok.workspace);
+          if (method === 'CloudCleanupMirror') proof.cleanups.push(frame.ok.workspace);
         } catch {}
       });
     }

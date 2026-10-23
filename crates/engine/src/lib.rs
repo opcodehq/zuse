@@ -186,6 +186,7 @@ pub struct EngineCore {
     updater: std::sync::Mutex<Option<zuse_update::Updater>>,
     /// The updater's token-change wake forwarder — owned so shutdown can end it.
     updater_wake: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    cloud_mirror_reconcile: std::sync::Mutex<Option<cloud::MirrorReconciler>>,
     /// Exclusive data-dir lock — held for the engine's lifetime (single-instance).
     _instance_lock: InstanceLock,
 }
@@ -432,6 +433,7 @@ impl EngineCore {
             links: std::sync::Mutex::new(None),
             updater: std::sync::Mutex::new(None),
             updater_wake: std::sync::Mutex::new(None),
+            cloud_mirror_reconcile: std::sync::Mutex::new(None),
             _instance_lock: lock,
         })
     }
@@ -442,6 +444,16 @@ impl EngineCore {
 
     /// Attach the auth service (before building the RPC service / relays).
     pub fn set_auth(&self, auth: Auth) {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let mut task = self
+                .cloud_mirror_reconcile
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(old) = task.take() {
+                old.abort();
+            }
+            *task = Some(cloud::start_mirror_reconciliation(auth.clone()));
+        }
         *self
             .auth
             .lock()
@@ -604,6 +616,14 @@ impl EngineCore {
         // not release another queued command while credentials are draining.
         self.doc_host.pause_all_queues();
         self.account.retire();
+        let reconcile = self
+            .cloud_mirror_reconcile
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(mut task) = reconcile {
+            task.stop().await;
+        }
         self.managed_host.close().await;
         self.browser_access.close().await;
         self.relay_access.close().await;

@@ -38,6 +38,23 @@ pub struct Page {
     pub entries: Vec<SessionMessageEntry>,
     pub older_message_sequence: Option<i64>,
 }
+#[derive(Default, Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalMirrorCleanup {
+    pub state: String,
+    pub removed: usize,
+    pub preserved: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+impl LocalMirrorCleanup {
+    pub fn pending() -> Self {
+        Self {
+            state: "pending".into(),
+            ..Self::default()
+        }
+    }
+}
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Workspace {
@@ -53,6 +70,8 @@ pub struct Workspace {
     pub title: Option<String>,
     #[serde(default)]
     pub rpc_protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_mirror_cleanup: Option<LocalMirrorCleanup>,
 }
 impl Workspace {
     pub fn archived(&self) -> bool {
@@ -62,7 +81,28 @@ impl Workspace {
         self.desired_state == "deleted" && self.state != "deleted"
     }
     pub fn archive_visible(&self) -> bool {
-        self.archived() || self.deleting()
+        self.archived()
+            || self.deleting()
+            || (self.state == "deleted" && (self.cleanup_pending() || self.cleanup_failed()))
+    }
+    pub fn cleanup_pending(&self) -> bool {
+        self.local_mirror_cleanup
+            .as_ref()
+            .is_some_and(|s| s.state == "pending")
+    }
+    pub fn cleanup_failed(&self) -> bool {
+        self.local_mirror_cleanup
+            .as_ref()
+            .is_some_and(|s| s.state == "error")
+    }
+    pub fn cleanup_label(&self) -> Option<&str> {
+        self.local_mirror_cleanup
+            .as_ref()
+            .and_then(|s| match s.state.as_str() {
+                "pending" => Some("Cleaning up the local mirror…"),
+                "error" => s.error.as_deref(),
+                _ => None,
+            })
     }
     pub fn delete_failed(&self) -> bool {
         self.deleting() && self.status_code.starts_with("cloud_")
@@ -174,6 +214,11 @@ impl ArchivedCloud {
     pub fn deleting(&self) -> bool {
         self.rows.iter().any(Workspace::deleting)
     }
+    pub fn needs_poll(&self) -> bool {
+        self.rows
+            .iter()
+            .any(|r| r.deleting() || r.cleanup_pending())
+    }
     pub fn back(&mut self) {
         self.selected = None;
         self.head = None;
@@ -203,6 +248,7 @@ mod tests {
             revision: 1,
             title: None,
             rpc_protocol: Some("zuse-rpc-v1".into()),
+            local_mirror_cleanup: None,
         }
     }
     #[test]
@@ -261,6 +307,27 @@ mod tests {
         row.status_code = "deleted".into();
         state.list("account".into(), vec![row]);
         assert!(!state.deleting());
+        assert!(!state.rows[0].archive_visible());
+    }
+    #[test]
+    fn tombstones_stay_visible_until_local_cleanup_finishes_or_is_retried() {
+        let mut row = workspace("cloud");
+        row.state = "deleted".into();
+        row.desired_state = "deleted".into();
+        row.local_mirror_cleanup = Some(LocalMirrorCleanup::pending());
+        let mut state = ArchivedCloud::default();
+        state.list("account".into(), vec![row.clone()]);
+        assert!(state.needs_poll());
+        assert!(state.rows[0].archive_visible());
+        assert!(state.select("cloud").is_none());
+        row.local_mirror_cleanup.as_mut().unwrap().state = "error".into();
+        state.list("account".into(), vec![row.clone()]);
+        assert!(!state.needs_poll());
+        assert!(state.rows[0].cleanup_failed());
+        assert!(state.rows[0].archive_visible());
+        row.local_mirror_cleanup.as_mut().unwrap().state = "complete".into();
+        state.list("account".into(), vec![row]);
+        assert!(!state.needs_poll());
         assert!(!state.rows[0].archive_visible());
     }
 }
