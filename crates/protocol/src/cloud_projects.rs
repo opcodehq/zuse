@@ -112,3 +112,43 @@ pub struct ImageBuildRequest {
     pub provider_id: Option<String>,
     pub idempotency_key: String,
 }
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudImageRepository {
+    pub project_id: String,
+    pub repository_identity: String,
+    pub display_name: String,
+    pub default_branch: String,
+    pub source_commit: Option<String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudImageBuild {
+    pub build_id: String,
+    pub state: String,
+    pub mode: ImageBuildMode,
+    pub active: bool,
+    pub progress_phase: Option<String>,
+    pub error_code: Option<String>,
+    pub log_text: Option<String>,
+    pub runtime_version: String,
+    pub configuration_digest: String,
+    pub repositories: Vec<CloudImageRepository>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAccountImage {
+    pub state: String,
+    pub generation: Option<String>,
+    pub provider_id: Option<String>,
+    pub runtime_version: Option<String>,
+    pub progress_phase: Option<String>,
+    pub error_code: Option<String>,
+    pub repositories: Vec<CloudImageRepository>,
+    pub builds: Vec<CloudImageBuild>,
+    pub built_at: Option<i64>,
+    pub updated_at: i64,
+}

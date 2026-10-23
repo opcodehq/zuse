@@ -164,6 +164,13 @@ struct Identity;
 #[async_trait]
 impl crate::auth::Identity for Identity {
     async fn verify(&self, token: &str) -> Result<Principal, ApiError> {
+        let token = if token == "dev-user"
+            && std::env::var_os("ZUSE_CLOUD_IMAGES_UI_FIXTURE_FILE").is_some()
+        {
+            "alice"
+        } else {
+            token
+        };
         Ok(Principal {
             account_id: format!("user-{token}"),
         })
@@ -582,6 +589,83 @@ async fn image_build_retries_verifies_promotes_and_preserves_last_ready() {
             .iter()
             .all(|b| b["state"] == "failed")
     );
+    if let Ok(path) = std::env::var("ZUSE_CLOUD_IMAGES_UI_FIXTURE_FILE") {
+        let retained: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-alice'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM api_cloud_project_builds WHERE build_id LIKE 'history-%'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE api_cloud_project_builds SET state='failed' WHERE state='queued'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE TABLE api_cloud_billing_meter_reconciliations(period_id text,provider text,created_at bigint)").execute(&pool).await.unwrap();
+        provider.0.lock().unwrap().corrupt = false;
+        let provider = Arc::new(provider);
+        let fixture = axum::Router::new().route(
+            "/catalog",
+            axum::routing::get(|| async {
+                axum::Json(
+                    json!({"configured":false,"user":null,"installations":[],"repositories":[]}),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let catalog = format!("http://{}/catalog", listener.local_addr().unwrap());
+        let authority = tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
+        let mut github = crate::github::LegacyGithub::new("https://api.zuse.sh").unwrap();
+        github.test_url(catalog.parse().unwrap());
+        let app = crate::routes::router(
+            crate::routes::AppState {
+                store: store.clone().with_github_authority(github),
+                identity: Arc::new(Identity),
+                organizations_enabled: true,
+                organization_ids: Arc::new(vec!["org-team".into()]),
+                runtime: None,
+                gateway: Arc::new(crate::gateway::Hub::default()),
+            },
+            vec![],
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let worker_control = control.clone();
+        let worker_provider = provider.clone();
+        let worker = tokio::spawn(async move {
+            loop {
+                worker_control
+                    .work_once(&*worker_provider, None)
+                    .await
+                    .unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        });
+        let file = std::path::Path::new(&path);
+        std::fs::write(file, format!("http://{address}")).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(900), async {
+            while !file.with_extension("done").exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Image UI acceptance timed out");
+        worker.abort();
+        server.abort();
+        authority.abort();
+        let after: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-alice'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(after, retained);
+        assert!(provider.0.lock().unwrap().machines.is_empty());
+    }
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin)

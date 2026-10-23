@@ -345,6 +345,7 @@ pub(crate) fn lock_appearance() -> std::sync::MutexGuard<'static, ()> {
 /// Point the context-free paint helpers at an appearance. Called by
 /// [`Theme::install`]; exposed for tests that build a theme without an `App`.
 pub fn set_current_appearance(appearance: Appearance) {
+    zuse_viewport::palette::set_light(!appearance.is_dark());
     let encoded = match appearance {
         Appearance::Dark => 0,
         Appearance::Light => 1,

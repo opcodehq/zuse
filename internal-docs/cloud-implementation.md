@@ -12,10 +12,10 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker, guest image preparation, owned account-image build/status APIs and durable Boxd capture/read-back/promotion/retirement worker, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status APIs and durable Boxd capture/read-back/promotion/retirement worker, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
-| F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
+| F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray, archived cloud transcript screens and shared Cloud repositories/image controls added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
 
 Do not mark a milestone complete from compilation alone. Record tested behavior and remaining gates here.
@@ -2221,3 +2221,52 @@ Verification:
 Live Boxd base-image provisioning, image administration UI, custom snapshot imports,
 provider-key workflows and full lifecycle/cutover acceptance remain open. This is
 not Milestone C completion or a production rollout.
+
+
+## Shared image administration UI
+
+Native Cloud settings and browser Cloud settings now render the same repository /
+image component. It reuses existing settings frames, compact rows, buttons and SVG
+icons. The readiness row distinguishes missing, outdated, building, ready, failed,
+authentication and unavailable states. Build/update, rebuild and uncertain-request
+retry use the actual account-image API. An uncertain request retains its admission
+key until acknowledged; account changes cancel pending callbacks and clear scoped
+state. Account-host disconnection clears pending controls and preserves the retry
+key. Polling uses bounded error retries and control-plane reads, never an execution
+connection. Repository changes refresh image readiness.
+
+Build history initially shows five attempts and can reveal the remaining entries.
+Each attempt expands logs, Copy logs and pinned repository/runtime settings;
+active generation, result, timestamp and duration remain visible in the row. The
+host owns authentication, checks expected account/organization before effects and
+exposes shared `CloudImage` / `CloudImageBuild` RPC methods. Viewports receive no
+bearer token. Organization members cannot activate administrative controls. Native
+appearance changes now update the shared palette, fixing dark cards in light Cloud
+settings. Complete reference styling and full-screen parity remain Milestone F.
+
+Verified:
+
+- Compiled browser -> host -> Axum -> isolated PostgreSQL -> durable deterministic
+  machine worker: failed-image retry/update and clean rebuild both progressed to
+  Ready. Each user action admitted one key. Foreign account/organization requests
+  were rejected; the request trace contains no `CloudEnvironment`.
+  `.context/cloud-images-browser-acceptance.json`,
+  `.context/cloud-images-browser-proof.json`; repeatable scenario:
+  `scripts/acceptance/cloud-images.mjs`.
+- Final native Linux build: the actual Rebuild button created one additional
+  attempt; API observations progressed Building -> Ready with a new active
+  generation. History pagination, log/settings expansion and light palette were
+  inspected in the rendered app. `.context/cloud-images-native-acceptance.json`.
+- The fixture test completed successfully after browser/native interaction and
+  verified the original workspace row was unchanged and no builder machines were
+  left running. `.context/cloud-images-ui-api.log`.
+- Final native and browser builds passed:
+  `.context/cloud-images-native-final-build.log`,
+  `.context/cloud-images-web-final-build.log`; host:
+  `.context/cloud-images-host-build.log`. Final rendered artifacts:
+  `.context/cloud-images-native.png` and `.context/cloud-images-browser.png`.
+
+These checks use actual HTTP/RPC and PostgreSQL, with a deterministic provider.
+They do not establish live Boxd or Mac acceptance. Image deletion controls, custom
+snapshot import/selection, other provider administration, complete settings routes
+and live migration/cutover remain open. No milestone is marked complete here.

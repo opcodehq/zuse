@@ -11,6 +11,7 @@ use zuse_protocol::{
     cloud_projects::{CloudProject, GithubCatalog, GithubRepository, ProjectList},
     methods,
 };
+mod images;
 pub type Owner = (String, Option<String>);
 #[derive(Clone)]
 pub enum Request {
@@ -28,6 +29,7 @@ struct Pending {
     owner: Owner,
 }
 pub struct RepositoryPanel {
+    image: images::ImageView,
     owner: Option<Owner>,
     next: u64,
     pending: BTreeMap<u64, Pending>,
@@ -48,6 +50,7 @@ impl RepositoryPanel {
         let search = cx.new(|cx| TextInput::new("Search repositories…", window, cx));
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
         Self {
+            image: Default::default(),
             owner: None,
             next: 0,
             pending: BTreeMap::new(),
@@ -71,6 +74,7 @@ impl RepositoryPanel {
             cx.emit(Request::Cancel { id: *id });
         }
         self.pending.clear();
+        self.image = Default::default();
         self.owner = owner;
         self.loaded = false;
         self.projects.clear();
@@ -103,13 +107,14 @@ impl RepositoryPanel {
         cx.emit(Request::Call { id, method, params });
     }
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        if !self.pending.is_empty() || self.owner.is_none() {
+        if self.repository_busy() || self.owner.is_none() {
             return;
         }
         self.loaded = true;
         self.error = None;
         self.call("list", methods::CLOUD_PROJECTS, json!({}), cx);
         self.call("github", methods::CLOUD_GITHUB, json!({}), cx);
+        self.refresh_image(cx);
         cx.notify();
     }
     pub fn receive(&mut self, id: u64, result: Result<Value, String>, cx: &mut Context<Self>) {
@@ -117,6 +122,10 @@ impl RepositoryPanel {
             return;
         };
         if self.owner.as_ref() != Some(&pending.owner) {
+            return;
+        }
+        if matches!(pending.kind, "image" | "image-build") {
+            self.receive_image(pending, result, cx);
             return;
         }
         let value = match result {
@@ -154,6 +163,7 @@ impl RepositoryPanel {
             },
             "connect" | "remove" => match serde_json::from_value::<CloudProject>(data) {
                 Ok(project) => {
+                    self.refresh_image(cx);
                     if pending.kind == "remove" {
                         self.projects.retain(|p| p.project_id != project.project_id);
                         self.notice =
@@ -183,6 +193,19 @@ impl RepositoryPanel {
         }
         cx.notify();
     }
+    pub fn interrupted(&mut self, cx: &mut Context<Self>) {
+        self.pending.clear();
+        self.queue.clear();
+        self.image.interrupted();
+        self.error =
+            Some("Account connection interrupted. Refresh to check repository changes.".into());
+        cx.notify();
+    }
+    fn repository_busy(&self) -> bool {
+        self.pending
+            .values()
+            .any(|p| !matches!(p.kind, "image" | "image-build"))
+    }
     fn can_manage(&self) -> bool {
         self.owner.as_ref().is_some_and(|(_, org)| {
             org.is_none()
@@ -210,7 +233,7 @@ impl Render for RepositoryPanel {
         if !self.loaded && self.owner.is_some() {
             self.refresh(cx);
         }
-        let busy = !self.pending.is_empty();
+        let busy = self.repository_busy();
         let can_manage = self.can_manage();
         let mut card = s::card();
         if self.projects.is_empty() {
@@ -261,7 +284,7 @@ impl Render for RepositoryPanel {
                         )
                         .when(busy || !can_manage, |b| b.opacity(0.5))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.pending.is_empty() {
+                            if this.repository_busy() || !this.can_manage() {
                                 return;
                             }
                             this.error = None;
@@ -285,7 +308,7 @@ impl Render for RepositoryPanel {
             s::button("add-cloud-repositories", "+ Repository")
                 .when(busy || !available || !can_manage, |b| b.opacity(0.5))
                 .on_click(cx.listener(|this, _, _, cx| {
-                    if !this.pending.is_empty()
+                    if this.repository_busy()
                         || !this.can_manage()
                         || !this
                             .github
@@ -401,7 +424,7 @@ impl Render for RepositoryPanel {
                                 format!("Add {}", self.selected.len()),
                             )
                             .on_click(cx.listener(|this, _, _, cx| {
-                                if !this.pending.is_empty() || this.selected.is_empty() {
+                                if this.repository_busy() || this.selected.is_empty() {
                                     return;
                                 }
                                 this.queue = this
@@ -463,6 +486,6 @@ impl Render for RepositoryPanel {
         if let Some(notice) = &self.notice {
             view = view.child(div().px_3().py_2().text_size(px(11.)).child(notice.clone()));
         }
-        view
+        column().gap_4().child(view).child(self.render_image(cx))
     }
 }

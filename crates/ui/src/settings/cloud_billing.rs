@@ -492,7 +492,7 @@ impl Render for CloudBillingPage {
             &theme,
             "Cloud",
             None,
-            "Usage and billing for the selected account.",
+            "Manage repositories, images and billing for the selected account.",
             Some(
                 widgets::action_button(&theme, widgets::ActionTone::Quiet)
                     .child(if busy { "Loading…" } else { "Refresh" })

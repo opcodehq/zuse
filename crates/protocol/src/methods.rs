@@ -423,3 +423,5 @@ pub const CLOUD_PROJECTS: &str = "CloudProjects";
 pub const CLOUD_PROJECT_CONNECT: &str = "CloudProjectConnect";
 pub const CLOUD_PROJECT_REMOVE: &str = "CloudProjectRemove";
 pub const CLOUD_GITHUB: &str = "CloudGithubCatalog";
+pub const CLOUD_IMAGE: &str = "CloudImage";
+pub const CLOUD_IMAGE_BUILD: &str = "CloudImageBuild";

@@ -20,6 +20,8 @@ pub fn handles(method: &str) -> bool {
     matches!(
         method,
         LIST | READ
+            | zuse_protocol::methods::CLOUD_IMAGE
+            | zuse_protocol::methods::CLOUD_IMAGE_BUILD
             | zuse_protocol::methods::CLOUD_PROJECTS
             | zuse_protocol::methods::CLOUD_PROJECT_CONNECT
             | zuse_protocol::methods::CLOUD_PROJECT_REMOVE
@@ -368,7 +370,9 @@ impl CloudApi {
                     .await?;
                 json!({"accountId":account,"organizationId":org,"data":value})
             }
-            zuse_protocol::methods::CLOUD_PROJECTS
+            zuse_protocol::methods::CLOUD_IMAGE
+            | zuse_protocol::methods::CLOUD_IMAGE_BUILD
+            | zuse_protocol::methods::CLOUD_PROJECTS
             | zuse_protocol::methods::CLOUD_PROJECT_CONNECT
             | zuse_protocol::methods::CLOUD_PROJECT_REMOVE
             | zuse_protocol::methods::CLOUD_GITHUB => {
@@ -380,6 +384,28 @@ impl CloudApi {
                     "Your account changed. Refresh repositories."
                 );
                 let value = match method {
+                    zuse_protocol::methods::CLOUD_IMAGE => {
+                        self.request_scoped(
+                            &token,
+                            &["v1", "cloud", "image"],
+                            None,
+                            org.as_deref(),
+                            &[],
+                        )
+                        .await?
+                    }
+                    zuse_protocol::methods::CLOUD_IMAGE_BUILD => {
+                        let request: zuse_protocol::cloud_projects::ImageBuildRequest =
+                            serde_json::from_value(params)?;
+                        self.request_scoped(
+                            &token,
+                            &["v1", "cloud", "image", "build"],
+                            Some(serde_json::to_value(request)?),
+                            org.as_deref(),
+                            &[],
+                        )
+                        .await?
+                    }
                     zuse_protocol::methods::CLOUD_PROJECT_CONNECT => {
                         let request: zuse_protocol::cloud_projects::ProjectConnectRequest =
                             serde_json::from_value(params)?;

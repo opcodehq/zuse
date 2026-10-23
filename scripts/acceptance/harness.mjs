@@ -87,6 +87,7 @@ export function browser(prefix) {
     return result.data;
   }
   return {
+    session,
     run,
     evaluate: source => run(['eval','--stdin'],source).result,
     click(x,y) { run(['mouse','move',String(Math.round(x)),String(Math.round(y))]); run(['mouse','down']); run(['mouse','up']); },

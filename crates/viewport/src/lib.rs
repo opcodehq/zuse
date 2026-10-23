@@ -445,6 +445,16 @@ impl WorkspaceView {
             }
             let _ = this.update(cx, |this, cx| {
                 this.status = "Disconnected".into();
+                for remote in this
+                    .repository_requests
+                    .drain()
+                    .map(|(remote, _)| remote)
+                    .collect::<Vec<_>>()
+                {
+                    this.pending.remove(&remote);
+                }
+                this.repository_panel
+                    .update(cx, |panel, cx| panel.interrupted(cx));
                 cx.notify();
             });
         });
