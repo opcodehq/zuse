@@ -1672,6 +1672,7 @@ fn forwardable(method: &str) -> bool {
             | methods::SEARCH_HOME_FOLDERS
             | methods::RELEASE_HOME_FOLDER_SEARCH
             | methods::SEARCH_FILES
+            | methods::WORKSPACE_SYNC_SNAPSHOT
             | methods::LIST_WORKSPACE_DIRECTORY
             | methods::SEARCH_WORKSPACE_FILES
             | methods::WARM_WORKSPACE_SEARCH
@@ -1747,6 +1748,7 @@ fn is_stream_method(method: &str) -> bool {
             | methods::WATCH_CHAT_CONFIG
             | methods::WATCH_QUEUE
             | methods::SUBSCRIBE_TERMINAL
+            | methods::WORKSPACE_SYNC_SNAPSHOT
             | methods::WATCH_CHECKOUT_DIFFS
             | methods::WATCH_WORKSPACE_GIT_STATUS
             | methods::WATCH_CHECKOUT_CHANGE_REQUEST
@@ -4385,6 +4387,14 @@ impl RpcService for EngineRpc {
                 .await
                 .map_err(|_| RpcError::Failed("file search timed out".into()))??;
                 RpcReply::value(&matches)
+            }
+            #[cfg(unix)]
+            methods::WORKSPACE_SYNC_SNAPSHOT => {
+                let request: crate::cloud::mirror::SnapshotRequest = parse_params(params)?;
+                let resolved = self.workspace_files.resolve_target(&request.target).await.map_err(RpcError::from)?;
+                let stream = crate::cloud::mirror::snapshot_stream(resolved.root, resolved.checkout_id, request.have)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                Ok(RpcReply::Stream(stream))
             }
             methods::LIST_WORKSPACE_DIRECTORY => {
                 let request: zuse_protocol::ListWorkspaceDirectoryRequest = parse_params(params)?;

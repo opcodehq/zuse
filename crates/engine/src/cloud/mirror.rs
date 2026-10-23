@@ -10,6 +10,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+mod transfer;
+pub use transfer::{SnapshotRequest, SnapshotResult, snapshot_stream, sync_once};
+
 const MARKER: &str = ".zuse-sync.json";
 const MANIFEST_LIMIT: u64 = 32 * 1024 * 1024;
 #[derive(Clone, Deserialize, Serialize)]
@@ -23,7 +26,7 @@ struct Manifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pending: Vec<Entry>,
 }
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 struct Entry {
     path: String,
     hash: String,
@@ -60,7 +63,7 @@ impl Manifest {
             self.files.clear();
             self.pending.clear();
         }
-        for list in [&self.files, &self.pending] {
+        for (index, list) in [&self.files, &self.pending].into_iter().enumerate() {
             let mut paths = HashSet::new();
             for f in list {
                 ensure!(
@@ -88,6 +91,11 @@ impl Manifest {
                         && s.bytes().all(|b| b.is_ascii_digit() || b == b':')),
                     "Invalid local sync source stamp."
                 );
+            }
+            // A pending journal is the union of old and new paths, including
+            // file/directory replacements. Cleanup refuses every pending journal.
+            if index == 1 {
+                continue;
             }
             for f in list {
                 let mut parent = Path::new(&f.path).parent();
@@ -287,11 +295,11 @@ mod unix {
             unix::{ffi::OsStrExt, fs::MetadataExt},
         },
     };
-    pub struct Dir(File);
-    fn name(path: &Path) -> Result<CString> {
+    pub struct Dir(pub(super) File);
+    pub(super) fn name(path: &Path) -> Result<CString> {
         Ok(CString::new(path.as_os_str().as_bytes())?)
     }
-    fn openat(parent: &File, path: &Path, flags: i32) -> std::io::Result<File> {
+    pub(super) fn openat(parent: &File, path: &Path, flags: i32) -> std::io::Result<File> {
         let path = name(path).map_err(std::io::Error::other)?;
         let fd = unsafe {
             libc::openat(
@@ -327,7 +335,7 @@ mod unix {
             }
             Ok(Some(dir))
         }
-        fn parent(&self, path: &Path) -> Result<(Self, PathBuf)> {
+        pub(super) fn parent(&self, path: &Path) -> Result<(Self, PathBuf)> {
             let mut dir = Self(self.0.try_clone()?);
             let mut parts = path.components().peekable();
             while let Some(Component::Normal(p)) = parts.next() {

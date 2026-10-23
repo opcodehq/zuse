@@ -13,7 +13,7 @@ completed UI images in the final user-facing report.
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, app captures/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect, cached reopening with conversation selection, encrypted first-message file delivery, and attached Pause/explicit retained-machine resume added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
 | C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status/delete APIs, durable Boxd capture/read-back/promotion/retirement/cleanup worker and shared image deletion confirmation, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
-| D: tools/integrations | Shared hosted RPC, scoped browser uploads and chat-owned retained-terminal discovery added; browser file/edit/Git and native terminal keyboard/reopen acceptance added; remaining tools, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads, browser file/edit/Git, terminal catalog/detach/reopen and native keyboard input pass with fixture runtime; remaining tool flows pending |
+| D: tools/integrations | Shared hosted RPC, scoped browser uploads, chat-owned retained-terminal discovery and verified Git-aware mirror transfer/publication added; browser file/edit/Git and native terminal keyboard/reopen acceptance added; remaining tools, sync controllers/UI/device bridge/org automation pending | Guest text/PNG bytes, image reads, browser file/edit/Git, terminal catalog/detach/reopen and native keyboard input pass with fixture runtime; remaining tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray, archived cloud transcript screens and shared Cloud repositories/image controls added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
 | G: migration/cutover | Read-only inspection and original-format archive filesystem import added; populated runtime conversion, ownership handoff, archive migration and live cutover pending | Pending |
@@ -2521,3 +2521,47 @@ terminal selection with a synchronized checkout, remaining tool/integration flow
 full screen parity, live-provider/Mac acceptance and migration remain open. Terminal
 processes survive client detachment; runtime pause/shutdown still intentionally
 stops them. This chunk does not complete Milestone D or F.
+
+### Live mirror snapshot transfer and publication
+
+The guest now exposes `WorkspaceSyncSnapshot` through the existing authorized
+workspace target resolver and stream forwarding. It selects tracked and
+nonignored files with Git, traverses initialized submodules, excludes `.git` and
+the reserved ownership marker, preserves symlinks as links, and transfers binary
+files in bounded chunks. Changed files are hashed and checked for concurrent
+modification; a failed capture emits no successful completion barrier.
+
+The receiving engine stages and verifies every object before publishing user
+files. Verified cached hashes avoid retransmitting unchanged bytes. Publication
+uses descriptor-relative parent traversal and atomic file replacement, preserves
+unrelated local paths, and records a reference-compatible pending ownership
+journal before changing files. Retry handles interrupted file/directory
+transitions. Archive cleanup refuses pending journals and accepts completed
+manifests, retaining locally edited files under the existing cleanup policy.
+Active sync remains remote-authoritative for synchronized paths, matching the
+reference behavior. Unchanged files keep their inode and modification time;
+unchanged passes avoid rewriting the ownership manifest. Empty parents of deleted
+cloud-owned paths are reclaimed while nonempty directories are preserved. Obsolete
+cached objects are pruned after successful sync.
+
+The stream has explicit limits of 100,000 files, 100 GiB of file bytes, and the
+existing 32 MiB ownership manifest/journal limit; exceeding a limit fails rather
+than publishing a partial snapshot. Paths and link targets must be UTF-8, as in
+the reference snapshot contract. Symlink ancestors and foreign/nonempty unowned
+targets are refused.
+
+Verification includes real Git/filesystem capture and publication, binary chunks,
+empty files, ignored-file exclusion, symlinks, zero-byte incremental transfer,
+cloud deletions, unrelated-file preservation, corrupt/incomplete transfer refusal,
+file/directory transitions, pending-journal retry, and archive cleanup. The engine
+RPC scenario additionally exercises the actual dispatch/stream transport and
+receiver, normalized destination paths, cache reuse and obsolete-object pruning.
+Final test receipts: `.context/cloud-sync-mirror-verified-tests.log` and
+`.context/cloud-sync-rpc-verified-tests.log`.
+
+This is the transfer/publication layer, not a completed local-sync product flow.
+The account/workspace controller still needs persisted configuration, lifecycle
+cancellation/cleanup fencing, background scheduling, progress/retry presentation,
+default/custom-path management and the native/browser environment controls. Those
+remain on Milestone D/E; do not enable a Sync toggle without those operations.
+No full milestone or live-provider sync acceptance is completed by this layer.

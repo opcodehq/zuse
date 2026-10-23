@@ -145,7 +145,8 @@ pub const RELEASE_HOME_FOLDER_SEARCH: &str = "ReleaseHomeFolderSearch";
 /// Fuzzy relative-path search rooted in a known chat or space checkout.
 pub const SEARCH_FILES: &str = "SearchFiles";
 // Device-local workspace filesystem operations. All are relay-forwardable;
-// WatchWorkspaceFiles is the only streaming method in this group.
+// WatchWorkspaceFiles and WorkspaceSyncSnapshot stream their replies.
+pub const WORKSPACE_SYNC_SNAPSHOT: &str = "WorkspaceSyncSnapshot";
 pub const LIST_WORKSPACE_DIRECTORY: &str = "ListWorkspaceDirectory";
 pub const SEARCH_WORKSPACE_FILES: &str = "SearchWorkspaceFiles";
 /// Start or keep alive a workspace's search index (fire-and-forget warm).
@@ -312,6 +313,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | WATCH_DOC_MESSAGES
         | WATCH_QUEUE
         | LIST_TERMINALS
+        | WORKSPACE_SYNC_SNAPSHOT
         | LIST_WORKSPACE_DIRECTORY
         | READ_WORKSPACE_FILE
         | READ_ATTACHMENT_CHUNK
