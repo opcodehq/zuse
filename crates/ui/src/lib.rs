@@ -325,6 +325,31 @@ pub(crate) fn open_account_window(target: state::AccountTarget, cx: &mut App) {
     cx.activate(true);
 }
 
+pub(crate) fn open_cloud_window(target: state::CloudTarget, cx: &mut App) {
+    open_cloud_window_with_draft(target, None, cx);
+}
+pub(crate) fn open_cloud_window_with_draft(target: state::CloudTarget, draft: Option<(String, String, bool)>, cx: &mut App) {
+    let Some(reopen) = cx.try_global::<ReopenState>() else {
+        return;
+    };
+    let mut boot = reopen.boot.clone();
+    // Window drafts and tab restoration belong to this account/workspace.
+    // This directory never hosts an embedded engine or account credentials.
+    use sha2::{Digest, Sha256};
+    let key = Sha256::digest(format!("{}\0{}", target.subject, target.workspace).as_bytes());
+    boot.data_dir = boot.data_dir.join("cloud-ui").join(format!("{key:x}"));
+    boot.target = Some(state::RemoteTarget::Cloud(target));
+    let state = cx.new(|cx| {
+        let mut state = state::AppState::new();
+        state.pending_cloud_resume = draft;
+        state.watch_clock_transitions(cx);
+        state
+    });
+    state::AppState::bootstrap(state.clone(), boot.clone(), cx);
+    open_main_window(state, boot, cx);
+    cx.activate(true);
+}
+
 /// Bring Zuse forward, reopening the main window first if ⌘W closed it.
 pub(crate) fn activate_main_window(cx: &mut App) {
     cx.activate(true);
@@ -666,3 +691,5 @@ fn deliver_appshot(
         appshots::foreground_after_capture();
     }
 }
+
+mod cloud_history;

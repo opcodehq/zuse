@@ -7,6 +7,10 @@ pub mod assets;
 mod attachment_tests;
 pub mod branding;
 mod browser;
+mod cloud;
+mod cloud_billing;
+mod cloud_history;
+pub mod cloud_repositories;
 mod composer_alerts;
 mod connection;
 pub mod context_status;
@@ -77,6 +81,16 @@ pub struct Transport {
 use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 
 pub struct WorkspaceView {
+    cloud_archive: cloud_history::ArchiveView,
+    cloud: cloud::Cloud,
+    repository_panel: Entity<cloud_repositories::RepositoryPanel>,
+    repository_requests: HashMap<u64, u64>,
+    billing: cloud_billing::Billing,
+    billing_cap: Entity<input::TextInput>,
+    cloud_branch: Entity<input::TextInput>,
+    cloud_sync_path: Entity<input::TextInput>,
+    cloud_model: Entity<input::TextInput>,
+    cached_only: bool,
     managed_access: managed_access::ManagedAccess,
     managed_name: Entity<input::TextInput>,
     voice: voice::Voice,
@@ -287,7 +301,7 @@ impl WorkspaceView {
         let workspace_focus = cx.focus_handle();
         window.focus(&workspace_focus, cx);
         let input = cx.new(|cx| {
-            input::TextInput::multiline("Ask to make changes or ask a question…", window, cx)
+            input::TextInput::multiline("Ask to make changes at the @ mentioned files or run slash commands…", window, cx)
         });
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         let project_input =
@@ -297,6 +311,27 @@ impl WorkspaceView {
             this.plugin_catalog_page = 0;
             cx.notify();
         })
+        .detach();
+        let repository_panel = cx.new(|cx| cloud_repositories::RepositoryPanel::new(window, cx));
+        cx.subscribe(
+            &repository_panel,
+            |this, _, event: &cloud_repositories::Request, _cx| match event {
+                cloud_repositories::Request::Call { id, method, params } => {
+                    let remote = this.call(method, params.clone());
+                    this.repository_requests.insert(remote, *id);
+                }
+                cloud_repositories::Request::Cancel { id } => {
+                    if let Some(remote) = this
+                        .repository_requests
+                        .iter()
+                        .find_map(|(remote, local)| (*local == *id).then_some(*remote))
+                    {
+                        this.repository_requests.remove(&remote);
+                        this.cancel(remote);
+                    }
+                }
+            },
+        )
         .detach();
         let session_search = cx.new(|cx| input::TextInput::new("Search sessions…", window, cx));
         cx.observe(&session_search, |_, _, cx| cx.notify()).detach();
@@ -411,16 +446,39 @@ impl WorkspaceView {
             }
             let _ = this.update(cx, |this, cx| {
                 this.status = "Disconnected".into();
+                for remote in this
+                    .repository_requests
+                    .drain()
+                    .map(|(remote, _)| remote)
+                    .collect::<Vec<_>>()
+                {
+                    this.pending.remove(&remote);
+                }
+                this.repository_panel
+                    .update(cx, |panel, cx| panel.interrupted(cx));
                 cx.notify();
             });
         });
         let worktree_settings = worktree_settings::WorktreeSettingsView::new(window, cx);
         let browser = browser::Browser::new(window, cx);
+        let cloud_sync_path = cx.new(|cx| input::TextInput::new("Absolute folder on host", window, cx));
+        let cloud_branch = cx.new(|cx| input::TextInput::new("Branch (main)", window, cx));
+        let cloud_model = cx.new(|cx| input::TextInput::new("Model (sonnet)", window, cx));
         let view = Self {
             environment: Default::default(),
             browser,
             workspace_focus,
             input,
+            cloud_archive: Default::default(),
+            cloud: Default::default(),
+            repository_panel,
+            repository_requests: HashMap::new(),
+            billing: Default::default(),
+            billing_cap: cx.new(|cx| input::TextInput::new("Monthly cap in dollars", window, cx)),
+            cloud_branch,
+            cloud_sync_path,
+            cloud_model,
+            cached_only: false,
             requests: transport.requests,
             next_id: 1,
             pending: HashMap::new(),
@@ -659,6 +717,9 @@ impl WorkspaceView {
     }
 
     fn call(&mut self, method: &str, params: Value) -> u64 {
+        if self.cached_only {
+            return 0;
+        }
         let id = self.next_id;
         self.next_id += 1;
         self.pending.insert(id, method.into());
@@ -673,6 +734,47 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if frame["id"]
+            .as_u64()
+            .and_then(|id| self.pending.get(&id))
+            .is_some_and(|m| m == methods::AUTH_STATUS)
+        {
+            if let Some(value) = frame.get("item").or_else(|| frame.get("ok")) {
+                let owner = value["user"]["id"]
+                    .as_str()
+                    .map(|id| (id.to_owned(), value["orgId"].as_str().map(str::to_owned)));
+                self.repository_panel
+                    .update(cx, |panel, cx| panel.bind_owner(owner, cx));
+            }
+        }
+        if let Some((remote, local)) = frame["id"].as_u64().and_then(|id| {
+            self.repository_requests
+                .remove(&id)
+                .map(|local| (id, local))
+        }) {
+            self.pending.remove(&remote);
+            let result = if let Some(error) = frame["err"].as_str() {
+                Err(error.to_owned())
+            } else {
+                frame
+                    .get("ok")
+                    .or_else(|| frame.get("item"))
+                    .cloned()
+                    .ok_or_else(|| "Repository response was interrupted.".into())
+            };
+            self.repository_panel
+                .update(cx, |panel, cx| panel.receive(local, result, cx));
+            return;
+        }
+        if self.receive_billing(&frame, cx) {
+            return;
+        }
+        if self.receive_cloud(&frame, cx) {
+            return;
+        }
+        if self.receive_cloud_archive(&frame, cx) {
+            return;
+        }
         if self.receive_environment(&frame, cx) {
             return;
         }
@@ -1010,6 +1112,17 @@ impl WorkspaceView {
                 methods::WATCH_CHATS => {
                     self.workspace_synced = true;
                     self.chats = value.as_array().cloned().unwrap_or_default();
+                    if let Some(chat) = self
+                        .cloud
+                        .initial_session
+                        .as_deref()
+                        .and_then(|id| self.chats.iter().find(|c| c["id"] == id))
+                        .cloned()
+                    {
+                        if self.select(chat, cx) {
+                            self.cloud.initial_session = None;
+                        }
+                    }
                     if let Some(selected) = &self.selected {
                         if let Some(chat) = self
                             .chats
@@ -1310,6 +1423,15 @@ impl WorkspaceView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cloud.cached {
+            if !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty() {
+                let _ = self.requests.unbounded_send(json!({"ui":"resumeCloud","send":true}));
+            }
+            return;
+        }
+        if self.submit_cloud_delete(window, cx) {
+            return;
+        }
         if self.browser_input_focused(window, cx) {
             return;
         }
@@ -1329,6 +1451,10 @@ impl WorkspaceView {
             return;
         }
         if self.settings {
+            return;
+        }
+        if self.cloud.mode && self.selected.is_none() {
+            self.submit_cloud(cx);
             return;
         }
         if self.queue_edit.is_some() {

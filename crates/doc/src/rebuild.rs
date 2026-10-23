@@ -68,6 +68,20 @@ pub fn rebuild_thin_doc(source: &SessionDoc) -> Result<ThinRebuild, DocError> {
         thin.push_message(&entry)?;
     }
 
+    if let Some(paused) = source.queue_paused() {
+        thin.set_queue_paused(paused)?;
+    }
+    for item in source.read_queue()? {
+        thin.push_queued(&item)?;
+        if let Some(request) = source.queued_run_request(&item.id)? {
+            thin.set_queued_run_context(
+                &item.id,
+                Some(&request),
+                source.queued_request_is_held(&item.id)?,
+            )?;
+        }
+    }
+
     let mut commands_copied = 0;
     for command in source.read_commands()? {
         // Only unresolved work crosses the epoch: resolved/expired ledger
@@ -139,6 +153,25 @@ mod tests {
     use crate::schema::{MessageRole, SessionMessageEntry};
     use crate::{MessageStatus, SessionCommandEntry, SessionCommandPayload};
     use zuse_protocol::{ToolCall, ToolDiff};
+
+    #[test]
+    fn queued_cloud_request_and_pause_survive_snapshot_and_epoch_rebuild() {
+        let source = SessionDoc::init("original-chat").unwrap();
+        let item = crate::QueuedMessage::new("original-message", "Original queued prompt", "owner");
+        source.push_queued(&item).unwrap();
+        source.set_queue_paused(true).unwrap();
+        let request:zuse_protocol::RunRequest=serde_json::from_value(serde_json::json!({"prompt":"Original queued prompt","harness":"mock","model":"original-model","reasoning":"high","modelOptions":{"fast":"enabled"},"cwd":"/workspace","sandbox":"workspace-write"})).unwrap();
+        source
+            .set_queued_run_request(&item.id, Some(&request))
+            .unwrap();
+        let loro = loro::LoroDoc::new();
+        loro.import(&source.export_snapshot().unwrap()).unwrap();
+        let restored = SessionDoc::from_doc(loro);
+        let rebuilt = rebuild_thin_doc(&restored).unwrap().doc;
+        assert_eq!(rebuilt.queue_paused(), Some(true));
+        assert_eq!(rebuilt.read_queue().unwrap(), vec![item.clone()]);
+        assert_eq!(rebuilt.queued_run_request(&item.id).unwrap(), Some(request));
+    }
 
     /// ~4KB of varied output — repeated text would compress away inside the
     /// Loro snapshot and hide the size win the assertion checks.

@@ -96,6 +96,7 @@ mod thread_search;
 use side_chats::SideChatTab;
 mod tabs;
 mod top_bar;
+mod cloud_info;
 mod voice_stage;
 use voice_stage::VOICE_STAGE_ORB_SCALE;
 
@@ -128,6 +129,7 @@ actions!(
         OpenModelPicker,
         NewSession,
         OpenSettings,
+        OpenDevices,
         NextSession,
         PrevSession,
         ArchiveSession
@@ -542,6 +544,7 @@ pub fn apply_keymap(
 /// The settings sections (feature-inventory §1.5 routes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsSection {
+    Cloud,
     Devices,
     /// Which harnesses the composer offers (enable/disable toggles) —
     /// labeled "Providers".
@@ -564,12 +567,13 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 12] = [
+    pub const ALL: [SettingsSection; 13] = [
         SettingsSection::General,
         SettingsSection::Harnesses,
         SettingsSection::Defaults,
         SettingsSection::Plugins,
         SettingsSection::Devices,
+        SettingsSection::Cloud,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Voice,
@@ -608,6 +612,7 @@ impl SettingsSection {
     /// Stable name shared by `ui-settings.json` and `ZUSE_OPEN_ROUTE`.
     fn slug(self) -> &'static str {
         match self {
+            SettingsSection::Cloud => "cloud",
             SettingsSection::Devices => "devices",
             SettingsSection::Harnesses => "providers",
             SettingsSection::Defaults => "defaults",
@@ -627,6 +632,7 @@ impl SettingsSection {
     /// Inverse of [`Self::slug`], plus the pages' former names.
     fn from_slug(slug: &str) -> Option<Self> {
         Some(match slug {
+            "cloud" => SettingsSection::Cloud,
             "devices" => SettingsSection::Devices,
             "providers" | "harnesses" => SettingsSection::Harnesses,
             "defaults" | "default-models" => SettingsSection::Defaults,
@@ -648,6 +654,7 @@ impl SettingsSection {
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
+            SettingsSection::Cloud => "Cloud",
             SettingsSection::Devices => "Remote access",
             SettingsSection::Harnesses => "Providers",
             SettingsSection::Defaults => "Default models",
@@ -2077,6 +2084,7 @@ pub struct Shell {
     /// The titlebar's "Open in" menu and the apps it found.
     open_in: open_in::OpenIn,
     branch_menu: top_bar::BranchMenu,
+    cloud_info: cloud_info::CloudInfo,
     /// Host-owned project Actions cached per (device, space).
     project_actions: crate::project_actions::ProjectActionsController,
     /// Diff surfaces by id — each tab its own [`Changes`] viewer with its own
@@ -2147,6 +2155,7 @@ pub struct Shell {
     pending_pull_request: Option<(String, Option<String>)>,
     pull_request_cache:
         std::rc::Rc<std::cell::RefCell<crate::pull_request_detail::PullRequestCache>>,
+    cloud_billing_page: Option<Entity<settings::cloud_billing::CloudBillingPage>>,
     devices_page: Option<Entity<DevicesPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
@@ -2476,6 +2485,7 @@ impl Shell {
         let composer_events = cx.subscribe(&composer, {
             let transcript = transcript.clone();
             move |this: &mut Shell, _, event: &ComposerEvent, cx| match event {
+                ComposerEvent::ResumeCloud { .. } => {},
                 ComposerEvent::WorkspaceCommand(command) => {
                     this.pending_workspace_command = Some(*command);
                     cx.notify();
@@ -2629,6 +2639,7 @@ impl Shell {
             right_plus: popover::Popup::default(),
             open_in: open_in::OpenIn::default(),
             branch_menu: top_bar::BranchMenu::default(),
+            cloud_info: cloud_info::CloudInfo::default(),
             project_actions: crate::project_actions::ProjectActionsController::default(),
             diffs: std::collections::HashMap::new(),
             files: std::collections::HashMap::new(),
@@ -2676,6 +2687,7 @@ impl Shell {
             pull_request_pane: Default::default(),
             pending_pull_request: None,
             pull_request_cache: Default::default(),
+            cloud_billing_page: None,
             devices_page: None,
             archived_page: None,
             appearance_page: None,
@@ -4731,6 +4743,15 @@ impl Shell {
         cx.notify();
     }
 
+    pub(crate) fn cloud_pause_can_close(&self, cx: &App) -> bool {
+        !self.cloud_pause_has_unsaved_work(cx) && !self.composer.read(cx).cloud_has_draft(cx)
+    }
+
+    pub(crate) fn cloud_pause_has_unsaved_work(&self, cx: &App) -> bool {
+        !self.all_file_edits_flushed(cx)
+            || self.side_chats.values().any(|side| side.composer.read(cx).has_draft(cx))
+    }
+
     pub fn prepare_window_close(&mut self, cx: &mut Context<Self>) -> bool {
         self.prepare_exit(PendingExit::CloseWindow, cx)
     }
@@ -5745,6 +5766,19 @@ impl Shell {
                     .into_any_element()
             }
 
+            SettingsSection::Cloud => {
+                if self.cloud_billing_page.is_none() {
+                    let state = self.state.clone();
+                    self.cloud_billing_page = Some(
+                        cx.new(|cx| settings::cloud_billing::CloudBillingPage::new(state, window, cx)),
+                    );
+                }
+                self.cloud_billing_page
+                    .as_ref()
+                    .unwrap()
+                    .clone()
+                    .into_any_element()
+            }
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     let state = self.state.clone();
@@ -8128,6 +8162,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let section_icon = |item: SettingsSection| match item {
+            SettingsSection::Cloud => icons::CLOUD,
             SettingsSection::Devices => icons::SETTINGS_REMOTE,
             SettingsSection::Harnesses => icons::SETTINGS_PROVIDERS,
             SettingsSection::Defaults => icons::SETTINGS_DEFAULTS,
@@ -10478,8 +10513,12 @@ impl Shell {
             let state = self.state.read(cx);
             let (_, identity) =
                 sidebar_account_identity(state.workspace_scope, self.sync_flow, state.auth_user());
-            let cloud = matches!(state.workspace_scope, Some(WorkspaceScope::Synced))
-                && state.auth_user().is_some();
+            let cloud = state
+                .engine()
+                .and_then(|engine| engine.cloud_workspace())
+                .is_some()
+                || (matches!(state.workspace_scope, Some(WorkspaceScope::Synced))
+                    && state.auth_user().is_some());
             let working = state
                 .sidebar_chats(Utc::now(), None)
                 .into_iter()
@@ -12014,6 +12053,20 @@ impl Shell {
                                 .id("onboarding-add-space")
                                 .mt(px(20.0))
                                 .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
+                        )
+                        .child(
+                            div()
+                                .id("onboarding-without-project")
+                                .mt(px(12.))
+                                .cursor_pointer()
+                                .text_size(crate::typography::text_sm())
+                                .text_color(theme.text_muted)
+                                .hover(|view| view.text_color(theme.text))
+                                .child("Start without a project")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.state.update(cx, |state, cx| state.select_space(None, cx));
+                                    this.focus_composer(cx);
+                                })),
                         ),
                 ))
                 .into_any_element()
@@ -14354,6 +14407,9 @@ impl Render for Shell {
             // Native Settings menu item and the platform convention (Cmd+, on
             // macOS, Ctrl+, elsewhere) toggle the modal from any section.
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.toggle_settings(cx)))
+            .on_action(cx.listener(|this, _: &OpenDevices, _, cx| {
+                this.open_settings(SettingsSection::Devices, cx)
+            }))
             .on_action(cx.listener(|this, _: &NextSession, window, cx| {
                 this.cycle_navigation(true, window, cx)
             }))

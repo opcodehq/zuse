@@ -323,6 +323,7 @@ pub struct TerminalPanel {
     focus_handle: FocusHandle,
     focus_pending: bool,
     chats: HashMap<String, ChatTabs>,
+    catalogs: HashMap<String, Task<()>>,
     /// Shell-driven visibility gate: no RPC happens while closed (lazy).
     open: bool,
     /// Right-pane surface host mode: the SHELL owns the tab strip (surface
@@ -369,6 +370,7 @@ impl TerminalPanel {
             focus_handle: cx.focus_handle(),
             focus_pending: false,
             chats: HashMap::new(),
+            catalogs: HashMap::new(),
             open: false,
             embedded: false,
             resize_suspended: false,
@@ -628,8 +630,54 @@ impl TerminalPanel {
             return;
         }
         if self.chats.get(&chat).is_none_or(|c| c.tabs.is_empty()) {
-            self.open_tab(chat, cx);
+            self.restore_or_open(chat, cx);
         }
+    }
+
+    fn restore_or_open(&mut self, chat: String, cx: &mut Context<Self>) {
+        if self.catalogs.contains_key(&chat) {
+            return;
+        }
+        let Some(engine) = self.engine(cx) else {
+            return;
+        };
+        let target = self.chat_target(&chat, cx);
+        let key = chat.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let result = engine.client().call_as::<Vec<TerminalSession>>(
+                methods::LIST_TERMINALS,
+                with_target(serde_json::json!({"chatId": chat}), &target),
+            ).await;
+            let _ = this.update(cx, |panel, cx| {
+                panel.catalogs.remove(&chat);
+                match result {
+                    Ok(sessions) => {
+                        for session in sessions {
+                            if panel.chats.get(&chat).is_some_and(|tabs| {
+                                tabs.tabs.iter().any(|tab| {
+                                    tab.terminal_id.as_deref() == Some(session.id.as_str())
+                                })
+                            }) {
+                                continue;
+                            }
+                            let key = panel.reserve_tab_for_chat(chat.clone(), session.shell.clone(), cx);
+                            panel.attach_reserved_session(&chat, key, session, target.clone(), cx);
+                        }
+                        if panel.chats.get(&chat).is_none_or(|tabs| tabs.tabs.is_empty()) {
+                            panel.open_tab(chat, cx);
+                        }
+                    }
+                    Err(error) => {
+                        let key = panel.reserve_tab_for_chat(chat.clone(), "Terminal unavailable", cx);
+                        panel.fail_reserved_tab(&chat, key, &format!(
+                            "Could not load retained terminals: {error}. Close this tab and reopen the terminal panel to retry."
+                        ), cx);
+                    }
+                }
+                cx.notify();
+            });
+        });
+        self.catalogs.insert(key, task);
     }
 
     /// A restored project id with no WatchSpaces row yet: opening now would
@@ -697,6 +745,7 @@ impl TerminalPanel {
                 })
                 .unwrap_or((80, 24));
 
+            let created = existing_session.is_none();
             let session = match existing_session {
                 Some(session) => session,
                 None => {
@@ -745,17 +794,20 @@ impl TerminalPanel {
                 })
                 .unwrap_or(false);
             if !attached {
-                // Tab was closed before the open completed — release the PTY.
-                let _ = engine
-                    .client()
-                    .call(
-                        methods::CLOSE_TERMINAL,
-                        with_target(
-                            serde_json::json!({ "terminalId": terminal_id }),
-                            &target,
-                        ),
-                    )
-                    .await;
+                // Only a newly allocated PTY belongs to this pending open.
+                // Detaching a restored view must preserve the existing shell.
+                if created {
+                    let _ = engine
+                        .client()
+                        .call(
+                            methods::CLOSE_TERMINAL,
+                            with_target(
+                                serde_json::json!({ "terminalId": terminal_id }),
+                                &target,
+                            ),
+                        )
+                        .await;
+                }
                 return;
             }
 

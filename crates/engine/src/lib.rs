@@ -186,6 +186,7 @@ pub struct EngineCore {
     updater: std::sync::Mutex<Option<zuse_update::Updater>>,
     /// The updater's token-change wake forwarder — owned so shutdown can end it.
     updater_wake: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    cloud_mirror_reconcile: std::sync::Mutex<Option<cloud::MirrorReconciler>>,
     /// Exclusive data-dir lock — held for the engine's lifetime (single-instance).
     _instance_lock: InstanceLock,
 }
@@ -254,7 +255,11 @@ impl EngineCore {
         registry.load_prefs(data_dir);
         let pairings = zuse_remote::authority::Authority::open(profile.store_root())
             .map_err(|error| EngineError::Other(error.to_string()))?;
-        let store = Arc::new(DocsStore::open(profile.store_root())?);
+        let store = Arc::new(if profile.durable_command_commits() {
+            DocsStore::open_durable(profile.store_root())?
+        } else {
+            DocsStore::open(profile.store_root())?
+        });
         let store_for_import = store.clone();
         let journal = Arc::new(RunJournal::open(profile.store_root().join("journals"))?);
         let sessions = SessionsEngine::new(device_id.clone(), journal, registry.clone());
@@ -428,6 +433,7 @@ impl EngineCore {
             links: std::sync::Mutex::new(None),
             updater: std::sync::Mutex::new(None),
             updater_wake: std::sync::Mutex::new(None),
+            cloud_mirror_reconcile: std::sync::Mutex::new(None),
             _instance_lock: lock,
         })
     }
@@ -438,6 +444,16 @@ impl EngineCore {
 
     /// Attach the auth service (before building the RPC service / relays).
     pub fn set_auth(&self, auth: Auth) {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let mut task = self
+                .cloud_mirror_reconcile
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(old) = task.take() {
+                old.abort();
+            }
+            *task = Some(cloud::start_mirror_reconciliation(auth.clone()));
+        }
         *self
             .auth
             .lock()
@@ -600,6 +616,14 @@ impl EngineCore {
         // not release another queued command while credentials are draining.
         self.doc_host.pause_all_queues();
         self.account.retire();
+        let reconcile = self
+            .cloud_mirror_reconcile
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(mut task) = reconcile {
+            task.stop().await;
+        }
         self.managed_host.close().await;
         self.browser_access.close().await;
         self.relay_access.close().await;
@@ -1593,3 +1617,5 @@ fn replace_empty_device_id(temp_path: &Path, path: &Path) -> std::io::Result<()>
         std::fs::hard_link(temp_path, path)
     }
 }
+
+pub mod cloud;

@@ -22,6 +22,7 @@ macro_rules! assets {
 }
 assets!(
     "zuse-logo",
+    "cloud-dither",
     "plus",
     "pen-new-square",
     "archive-minimalistic",

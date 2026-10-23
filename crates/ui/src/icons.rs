@@ -91,6 +91,7 @@ icon_assets![
     (PULL_REQUEST_CLOSED, "pull-request-closed"),
     (GIT_MERGE, "git-merge"),
     (CLOUD, "cloud"),
+    (DITHER_CLOUD, "cloud-dither"),
     (TAG, "tag"),
     (KEY_MINIMALISTIC, "key-minimalistic"),
     (KEYBOARD, "keyboard"),

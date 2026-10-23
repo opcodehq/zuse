@@ -24,6 +24,7 @@ pub mod composer;
 mod custom_acp;
 pub mod defaults;
 pub mod devices;
+pub mod cloud_billing;
 pub mod files;
 pub mod harnesses;
 mod managed_access;

@@ -1,0 +1,14 @@
+{
+  "source": "Synthetic fixture from the pinned JavaScript SHA-256/JSON.stringify meter delivery contract",
+  "nowMs": 1800000000000,
+  "event": {
+    "accountId": "user-alice",
+    "eventName": "zuse_cloud_overage_cent",
+    "units": 123,
+    "idempotencyKey": "legacy-meter-command",
+    "occurredAtMs": 1800000000000,
+    "metadata": {}
+  },
+  "identifier": "zuse_7e042f61d4f2193486b5ab32318e022c4d916bcf54d3ba4d25d47feb8ab40f91",
+  "serializedPayload": "{\"event_name\":\"zuse_cloud_overage_cent\",\"identifier\":\"zuse_7e042f61d4f2193486b5ab32318e022c4d916bcf54d3ba4d25d47feb8ab40f91\",\"timestamp\":1800000000,\"payload\":{\"stripe_customer_id\":\"cus_original\",\"value\":\"123\"}}"
+}

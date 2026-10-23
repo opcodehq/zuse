@@ -22,6 +22,7 @@ path = "tests/fixtures/pi_rpc.rs"
 required-features = ["native-fixture"]
 
 [dependencies]
+zeroize = "1"
 zuse-voice-media.workspace = true
 zuse-protocol.workspace = true
 base64 = "0.22"

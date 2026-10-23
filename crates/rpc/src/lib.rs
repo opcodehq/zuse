@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 mod chat_config;
 mod client;
 pub use chat_config::ChatConfigTarget;
+pub mod cloud;
 pub mod managed;
 mod paired;
 pub mod reconnect;
@@ -28,7 +29,7 @@ pub use paired::{connect_paired, connect_paired_channel};
 pub mod device_room;
 mod server;
 
-pub use client::{RpcClient, RpcSubscription, connect_ws};
+pub use client::{RpcClient, RpcForward, RpcSubscription, connect_ws};
 pub use device_room::{
     DeviceFrameHeader, DeviceLink, HostRelay, HostRelayConfig, LinkCache, LinkCacheConfig,
     NudgeHandler, PeerLiveness, PeerLivenessProbe, StaticToken, TokenError, TokenSource,

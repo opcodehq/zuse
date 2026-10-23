@@ -8,6 +8,10 @@ pub mod attachment_mentions;
 pub mod change_request_assessment;
 pub mod chat_config;
 pub mod chat_mentions;
+pub mod cloud;
+pub mod cloud_billing;
+pub mod cloud_commands;
+pub mod cloud_gateway;
 pub mod custom_acp;
 pub mod device_paths;
 pub mod entities;
@@ -23,6 +27,7 @@ pub mod presentation;
 pub mod preview;
 pub mod projectless;
 pub mod recovery;
+pub mod session_commands;
 pub mod sidebar_pins;
 pub mod view;
 pub mod visual_session;
@@ -66,3 +71,11 @@ pub mod notifications;
 
 pub mod plugin_setup;
 pub mod plugin_state;
+
+pub mod cloud_auth;
+
+pub mod cloud_lifecycle;
+
+pub mod cloud_projects;
+
+pub mod cloud_assets;

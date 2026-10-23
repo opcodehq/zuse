@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+zuse-cloud-projection.workspace = true
 jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto"] }
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 ed25519-dalek = { version = "2", features = ["pkcs8"] }

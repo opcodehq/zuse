@@ -145,7 +145,8 @@ pub const RELEASE_HOME_FOLDER_SEARCH: &str = "ReleaseHomeFolderSearch";
 /// Fuzzy relative-path search rooted in a known chat or space checkout.
 pub const SEARCH_FILES: &str = "SearchFiles";
 // Device-local workspace filesystem operations. All are relay-forwardable;
-// WatchWorkspaceFiles is the only streaming method in this group.
+// WatchWorkspaceFiles and WorkspaceSyncSnapshot stream their replies.
+pub const WORKSPACE_SYNC_SNAPSHOT: &str = "WorkspaceSyncSnapshot";
 pub const LIST_WORKSPACE_DIRECTORY: &str = "ListWorkspaceDirectory";
 pub const SEARCH_WORKSPACE_FILES: &str = "SearchWorkspaceFiles";
 /// Start or keep alive a workspace's search index (fire-and-forget warm).
@@ -166,6 +167,7 @@ pub const UPSERT_PROJECT_ACTION: &str = "UpsertProjectAction";
 pub const DELETE_PROJECT_ACTION: &str = "DeleteProjectAction";
 pub const RUN_PROJECT_ACTION: &str = "RunProjectAction";
 // Terminals (ControlRpc, relay-forwardable; SubscribeTerminal streams).
+pub const LIST_TERMINALS: &str = "ListTerminals";
 pub const OPEN_TERMINAL: &str = "OpenTerminal";
 pub const SUBSCRIBE_TERMINAL: &str = "SubscribeTerminal";
 pub const WRITE_TERMINAL: &str = "WriteTerminal";
@@ -239,6 +241,22 @@ pub const LINK_MANAGED_HOST: &str = "LinkManagedHost";
 pub const UNLINK_MANAGED_HOST: &str = "UnlinkManagedHost";
 pub const LIST_ACCOUNT_DEVICES: &str = "ListAccountDevices";
 pub const REVOKE_ACCOUNT_DEVICE: &str = "RevokeAccountDevice";
+/// Host-authorized cloud catalog and saved history; neither wakes compute.
+pub const CLOUD_CONTEXT: &str = "CloudContext";
+pub const CLOUD_CREATE: &str = "CloudCreate";
+pub const CLOUD_ENVIRONMENT: &str = "CloudEnvironment";
+pub const CLOUD_RPC: &str = "CloudRpc";
+pub const CLOUD_WORKSPACES: &str = "CloudWorkspaces";
+pub const CLOUD_HISTORY: &str = "CloudHistory";
+/// Explicit lifecycle mutation. Never automatically retry on reconnect.
+pub const CLOUD_CLEANUP_MIRROR: &str = "CloudCleanupMirror";
+pub const CLOUD_DELETE: &str = "CloudDelete";
+pub const CLOUD_UNARCHIVE: &str = "CloudUnarchive";
+pub const CLOUD_SYNC_STATUS: &str = "CloudSyncStatus";
+pub const CLOUD_SYNC_CONFIGURE: &str = "CloudSyncConfigure";
+pub const CLOUD_SYNC_RETRY: &str = "CloudSyncRetry";
+pub const CLOUD_PAUSE: &str = "CloudPause";
+pub const CLOUD_WORKSPACE: &str = "CloudWorkspace";
 pub const CLOUD_ACCOUNT_STATUS: &str = "CloudAccountStatus";
 pub const CLOUD_ACCOUNT_SIGN_IN: &str = "CloudAccountSignIn";
 pub const CLOUD_ACCOUNT_SIGN_OUT: &str = "CloudAccountSignOut";
@@ -274,6 +292,18 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | WATCH_MANAGED_HOST
         | LIST_ACCOUNT_DEVICES
         | CLOUD_ACCOUNT_STATUS
+        | CLOUD_CONTEXT
+        | CLOUD_PROJECTS
+        | CLOUD_GITHUB
+        | CLOUD_PREPAID_BALANCE
+        | CLOUD_BILLING_ENTITLEMENTS
+        | CLOUD_BILLING_SUMMARY
+        | CLOUD_BILLING_USAGE
+        | CLOUD_WORKSPACES
+        | CLOUD_HISTORY
+        | CLOUD_WORKSPACE
+        | CLOUD_SYNC_STATUS
+        | AUTH_STATUS
         | LOCAL_DEVICE
         | LIST_HARNESSES
         | WATCH_CHATS
@@ -286,6 +316,8 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | LIST_AGENT_ACCOUNTS
         | WATCH_DOC_MESSAGES
         | WATCH_QUEUE
+        | LIST_TERMINALS
+        | WORKSPACE_SYNC_SNAPSHOT
         | LIST_WORKSPACE_DIRECTORY
         | READ_WORKSPACE_FILE
         | READ_ATTACHMENT_CHUNK
@@ -325,10 +357,29 @@ mod retry_tests {
             SWITCH_REF,
             PLUGINS,
             MODEL_CONNECT,
+            CLOUD_UNARCHIVE,
+            CLOUD_PAUSE,
+            CLOUD_SYNC_CONFIGURE,
+            CLOUD_SYNC_RETRY,
+            CLOUD_DELETE,
+            CLOUD_CLEANUP_MIRROR,
+            CLOUD_CREATE,
+            CLOUD_PROJECT_CONNECT,
+            CLOUD_PROJECT_REMOVE,
+            CLOUD_PREPAID_CHECKOUT,
+            CLOUD_BILLING_CHECKOUT,
+            CLOUD_BILLING_CAP,
+            CLOUD_BILLING_PORTAL,
+            CLOUD_ENVIRONMENT,
+            CLOUD_RPC,
             "FutureMethod",
         ] {
             assert!(!retryable_read(method, &serde_json::json!({})));
         }
+        assert!(retryable_read(CLOUD_CONTEXT, &serde_json::Value::Null));
+        assert!(retryable_read(CLOUD_WORKSPACES, &serde_json::Value::Null));
+        assert!(retryable_read(CLOUD_HISTORY, &serde_json::Value::Null));
+        assert!(retryable_read(AUTH_STATUS, &serde_json::Value::Null));
         assert!(retryable_read(LIST_PAIRINGS, &serde_json::Value::Null));
         assert!(retryable_read(
             BROWSER_ACCESS_STATUS,
@@ -371,3 +422,21 @@ pub const SELECT_PLUGIN_WORKSPACE: &str = "SelectPluginWorkspace";
 /// User-owned Git workflow; only the workspace read may reconnect automatically.
 pub const GET_GIT_WORKSPACE: &str = "GetGitWorkspace";
 pub const GIT_WORKSPACE_ACTION: &str = "GitWorkspaceAction";
+
+/// Account-scoped cloud administration; handled by the host authority.
+pub const CLOUD_BILLING_SUMMARY: &str = "CloudBillingSummary";
+pub const CLOUD_BILLING_USAGE: &str = "CloudBillingUsage";
+pub const CLOUD_PREPAID_BALANCE: &str = "CloudPrepaidBalance";
+pub const CLOUD_PREPAID_CHECKOUT: &str = "CloudPrepaidCheckout";
+pub const CLOUD_BILLING_ENTITLEMENTS: &str = "CloudBillingEntitlements";
+pub const CLOUD_BILLING_CHECKOUT: &str = "CloudBillingCheckout";
+pub const CLOUD_BILLING_PORTAL: &str = "CloudBillingPortal";
+pub const CLOUD_BILLING_CAP: &str = "CloudBillingSetCap";
+
+pub const CLOUD_PROJECTS: &str = "CloudProjects";
+pub const CLOUD_PROJECT_CONNECT: &str = "CloudProjectConnect";
+pub const CLOUD_PROJECT_REMOVE: &str = "CloudProjectRemove";
+pub const CLOUD_GITHUB: &str = "CloudGithubCatalog";
+pub const CLOUD_IMAGE: &str = "CloudImage";
+pub const CLOUD_IMAGE_BUILD: &str = "CloudImageBuild";
+pub const CLOUD_IMAGE_DELETE: &str = "CloudImageDelete";

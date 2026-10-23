@@ -1672,6 +1672,7 @@ fn forwardable(method: &str) -> bool {
             | methods::SEARCH_HOME_FOLDERS
             | methods::RELEASE_HOME_FOLDER_SEARCH
             | methods::SEARCH_FILES
+            | methods::WORKSPACE_SYNC_SNAPSHOT
             | methods::LIST_WORKSPACE_DIRECTORY
             | methods::SEARCH_WORKSPACE_FILES
             | methods::WARM_WORKSPACE_SEARCH
@@ -1702,6 +1703,7 @@ fn forwardable(method: &str) -> bool {
             | methods::DISCARD_WORKING_TREE
             | methods::GET_CHECKOUT_FILE_DIFF_TEXT
             // Terminals live on the chat's host device.
+            | methods::LIST_TERMINALS
             | methods::OPEN_TERMINAL
             | methods::SUBSCRIBE_TERMINAL
             | methods::WRITE_TERMINAL
@@ -1746,6 +1748,7 @@ fn is_stream_method(method: &str) -> bool {
             | methods::WATCH_CHAT_CONFIG
             | methods::WATCH_QUEUE
             | methods::SUBSCRIBE_TERMINAL
+            | methods::WORKSPACE_SYNC_SNAPSHOT
             | methods::WATCH_CHECKOUT_DIFFS
             | methods::WATCH_WORKSPACE_GIT_STATUS
             | methods::WATCH_CHECKOUT_CHANGE_REQUEST
@@ -1932,31 +1935,77 @@ async fn opening_doc_messages_stream(
 #[derive(Clone)]
 pub struct AuthRpc {
     auth: Auth,
+    uploads: Option<Uploads>,
 }
 
 impl AuthRpc {
     pub fn new(auth: Auth) -> Self {
-        Self { auth }
+        Self {
+            auth,
+            uploads: None,
+        }
+    }
+
+    pub fn with_uploads(mut self, uploads: Uploads) -> Self {
+        self.uploads = Some(uploads);
+        self
     }
 
     pub fn handles(method: &str) -> bool {
-        matches!(
-            method,
-            methods::AUTH_STATUS
-                | methods::SIGN_IN
-                | methods::SIGN_IN_HEADLESS
-                | methods::COMPLETE_SIGN_IN
-                | methods::SIGN_OUT
-                | methods::LIST_ORGS
-                | methods::CREATE_ORG
-                | methods::SELECT_ORG
-        )
+        crate::cloud::handles(method)
+            || matches!(
+                method,
+                methods::AUTH_STATUS
+                    | methods::SIGN_IN
+                    | methods::SIGN_IN_HEADLESS
+                    | methods::COMPLETE_SIGN_IN
+                    | methods::SIGN_OUT
+                    | methods::LIST_ORGS
+                    | methods::CREATE_ORG
+                    | methods::SELECT_ORG
+            )
     }
 }
 
 #[async_trait]
 impl RpcService for AuthRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if matches!(method, methods::CLOUD_ENVIRONMENT | methods::CLOUD_RPC) {
+            return crate::cloud::environment::handle(&self.auth, method, params).await;
+        }
+        if method == methods::CLOUD_CREATE
+            && params["attachmentTransfers"]
+                .as_array()
+                .is_some_and(|v| !v.is_empty())
+        {
+            let uploads = self.uploads.clone().ok_or_else(|| {
+                RpcError::Failed("Open your workspace before uploading cloud attachments.".into())
+            })?;
+            let result = crate::cloud::launch::create(&self.auth, uploads, params)
+                .await
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
+            return RpcReply::value(&result);
+        }
+        #[cfg(unix)]
+        if matches!(method,methods::CLOUD_SYNC_STATUS|methods::CLOUD_SYNC_CONFIGURE|methods::CLOUD_SYNC_RETRY) {
+            let auth=self.auth.clone();let method=method.to_owned();
+            let result=tokio::spawn(async move {crate::cloud::sync::handle(auth,&method,params).await})
+                .await.map_err(|_|RpcError::Failed("Cloud sync request was interrupted. Reopen its status.".into()))?
+                .map_err(|error|RpcError::Failed(error.to_string()))?;
+            return RpcReply::value(&result);
+        }
+        if method == methods::CLOUD_PAUSE {
+            let value = crate::cloud::environment::pause(&self.auth, params)
+                .await
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
+            return RpcReply::value(&value);
+        }
+        if crate::cloud::handles(method) {
+            let result = crate::cloud::handle(&self.auth, method, params)
+                .await
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+            return RpcReply::value(&result);
+        }
         match method {
             methods::AUTH_STATUS => Ok(RpcReply::Stream(watch_stream(self.auth.watch_state()))),
             methods::SIGN_IN => {
@@ -2245,6 +2294,7 @@ impl RpcService for EngineRpc {
         }
         if AuthRpc::handles(method) {
             return AuthRpc::new(self.auth()?.clone())
+                .with_uploads(self.uploads.clone())
                 .handle(method, params)
                 .await;
         }
@@ -4346,6 +4396,14 @@ impl RpcService for EngineRpc {
                 .map_err(|_| RpcError::Failed("file search timed out".into()))??;
                 RpcReply::value(&matches)
             }
+            #[cfg(unix)]
+            methods::WORKSPACE_SYNC_SNAPSHOT => {
+                let request: crate::cloud::mirror::SnapshotRequest = parse_params(params)?;
+                let resolved = self.workspace_files.resolve_target(&request.target).await.map_err(RpcError::from)?;
+                let stream = crate::cloud::mirror::snapshot_stream(resolved.root, resolved.checkout_id, request.have)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                Ok(RpcReply::Stream(stream))
+            }
             methods::LIST_WORKSPACE_DIRECTORY => {
                 let request: zuse_protocol::ListWorkspaceDirectoryRequest = parse_params(params)?;
                 let page = tokio::time::timeout(
@@ -4649,6 +4707,10 @@ impl RpcService for EngineRpc {
                 .map_err(|err| RpcError::Failed(err.to_string()))?;
                 RpcReply::value(&run)
             }
+            methods::LIST_TERMINALS => {
+                let p: ChatParams = parse_params(params)?;
+                RpcReply::value(&self.terminals.list_owned(&p.chat_id))
+            }
             methods::OPEN_TERMINAL => {
                 let p: OpenTerminalParams = parse_params(params)?;
                 // Prefer an explicit real path (new-chat canvas has no row
@@ -4676,7 +4738,7 @@ impl RpcService for EngineRpc {
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
                 let session = self
                     .terminals
-                    .open(&cwd, p.cols, p.rows)
+                    .open_owned(&p.chat_id, &cwd, p.cols, p.rows)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&session)
             }
@@ -4799,7 +4861,9 @@ impl RpcService for EngineRpc {
                 // Bytes just landed on this device: any command deferred on
                 // them (queued-attachment refs) is executable NOW.
                 self.doc_host.kick_drains();
-                RpcReply::value(&serde_json::json!({ "path": path }))
+                RpcReply::value(
+                    &serde_json::json!({ "path": path, "uploadId": p.upload_id, "fileName": p.file_name }),
+                )
             }
             methods::READ_ATTACHMENT_CHUNK => {
                 let p: ReadAttachmentChunkParams = parse_params(params)?;

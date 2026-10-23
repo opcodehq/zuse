@@ -13,6 +13,7 @@ pub(super) struct OpeningTerminal {
     id: u64,
     host: Option<String>,
     scope: String,
+    catalog: bool,
 }
 impl WorkspaceView {
     pub(super) fn terminal_scope(&self) -> String {
@@ -36,7 +37,31 @@ impl WorkspaceView {
             .and_then(|chat| chat["deviceId"].as_str())
             .map(str::to_owned);
         let id = self.call(methods::OPEN_TERMINAL, json!({"chatId":self.selected.as_ref().map(|chat| chat["id"].clone()).unwrap_or(json!("browser-canvas")),"cwd":self.cwd(),"cols":80,"rows":28,"targetDeviceId":host}));
-        self.terminal_open = Some(OpeningTerminal { id, host, scope });
+        self.terminal_open = Some(OpeningTerminal {
+            id,
+            host,
+            scope,
+            catalog: false,
+        });
+        cx.notify();
+    }
+    pub(super) fn discover_browser_terminals(&mut self, cx: &mut Context<Self>) {
+        if !self.require_connection(cx) || self.terminal_open.is_some() {
+            return;
+        }
+        let scope = self.terminal_scope();
+        let host = self
+            .selected
+            .as_ref()
+            .and_then(|chat| chat["deviceId"].as_str())
+            .map(str::to_owned);
+        let id = self.call(methods::LIST_TERMINALS,json!({"chatId":self.selected.as_ref().map(|c|c["id"].clone()).unwrap_or(json!("browser-canvas")),"targetDeviceId":host}));
+        self.terminal_open = Some(OpeningTerminal {
+            id,
+            host,
+            scope,
+            catalog: true,
+        });
         cx.notify();
     }
     pub(super) fn receive_terminal_open(
@@ -57,6 +82,20 @@ impl WorkspaceView {
         }
         let request = self.terminal_open.take().unwrap();
         self.pending.remove(&id);
+        if request.catalog {
+            match serde_json::from_value::<Vec<zuse_protocol::TerminalSession>>(frame["ok"].clone()) {
+                Ok(sessions) => {
+                    let empty=sessions.is_empty();
+                    for session in sessions {
+                        self.attach_browser_terminal(session.id,session.shell,request.scope.clone(),request.host.clone(),cx);
+                    }
+                    if empty && request.scope==self.terminal_scope() { self.open_browser_terminal(cx); }
+                }
+                Err(_) => self.error=Some(frame["err"].as_str().unwrap_or("Could not load retained terminals. Reopen the terminal panel to retry.").into()),
+            }
+            cx.notify();
+            return true;
+        }
         match serde_json::from_value::<zuse_protocol::TerminalSession>(frame["ok"].clone()) {
             Ok(terminal) => self.attach_browser_terminal(terminal.id, terminal.shell, request.scope, request.host, cx),
             Err(_) => self.error = Some(frame["err"].as_str().unwrap_or("The terminal could not be confirmed. Check the engine before opening another.").into()),

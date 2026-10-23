@@ -445,3 +445,10 @@ SVG colors are adapted to the application palette. The package license and notic
 are retained in `crates/icons/assets/files/LICENSE` and `NOTICE`.
 
 Plugin brand images are bundled from the same public integrations logo service used by the existing Zuse application (`https://integrations.sh/logo/`). Brand images identify their respective integrations; their trademarks remain with their owners.
+
+## Cloud provider protocol
+
+The selected Boxd protobuf field definitions in `crates/cloud/src/providers/boxd_wire.rs`
+are adapted from the MIT-licensed `@boxd-sh/sdk` version 0.2.14, copyright 2026 Azin.
+The full notice is retained in `crates/cloud/src/providers/LICENSE.boxd`.
+Source: https://registry.npmjs.org/@boxd-sh/sdk/0.2.14.

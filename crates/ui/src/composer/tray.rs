@@ -557,6 +557,12 @@ impl Composer {
     ) -> Option<AnyElement> {
         let theme = Theme::of(cx).clone();
         let mut rows = Vec::new();
+        if let Some(message) = self.cloud.message.clone() {
+            rows.push(TrayRow::Pill(
+                TrayPill::new("native-cloud-startup", message).glyph(crate::icons::CLOUD),
+            ));
+        }
+        rows.extend(self.live_cloud_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.connection_row(cx).map(TrayRow::Pill));
         rows.extend(self.attachment_row(&theme, cx).map(TrayRow::Element));
         let (sign_in, error) = self.provider_rows(&theme, cx);

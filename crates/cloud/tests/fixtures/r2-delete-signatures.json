@@ -1,0 +1,25 @@
+{
+  "generator": "botocore 1.42.97 S3SigV4Auth",
+  "access": "ACCESS",
+  "secret": "SECRET",
+  "vectors": [
+    {
+      "method": "GET",
+      "path": "/bucket/",
+      "query": "encoding-type=url&list-type=2&max-keys=100&prefix=workspaces%2Fone%252Ftwo%2F",
+      "host": "fixture.r2.cloudflarestorage.com",
+      "date": "20261023T030405Z",
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "authorization": "AWS4-HMAC-SHA256 Credential=ACCESS/20261023/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=be0f9250c600dc8e3498045ffd5fc76f72df20fc1a3a03a1aa38fe87a6feb480"
+    },
+    {
+      "method": "DELETE",
+      "path": "/bucket/workspaces/one%252Ftwo/%25%20%C3%A9/head",
+      "query": "",
+      "host": "fixture.r2.cloudflarestorage.com",
+      "date": "20261023T030405Z",
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "authorization": "AWS4-HMAC-SHA256 Credential=ACCESS/20261023/auto/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=b0933fb5bc630149bd9ca8999359e49b77f8e7cadb71a64213d2859bb6176ca1"
+    }
+  ]
+}

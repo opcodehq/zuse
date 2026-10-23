@@ -2,8 +2,7 @@
 use super::*;
 use crate::assets::icon;
 use crate::shell::{
-    BG, BORDER, FAINT, MUTED, RAISED, SURFACE, TEXT, column, icon_button, label,
-    provider_icon, row,
+    BG, BORDER, FAINT, MUTED, RAISED, SURFACE, TEXT, column, icon_button, label, provider_icon, row,
 };
 use zuse_protocol::presentation::{SidebarView, project_identity};
 
@@ -90,7 +89,7 @@ impl WorkspaceView {
                         .child(div().min_w_0().truncate().text_size(px(12.)).child(title))
                         .role(Role::Tab).aria_selected(active).max_w(px(180.)).flex_shrink_0()
                         .when(active, |d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
-                        .on_click(cx.listener(move |this, _, _, cx| { this.select(chat.clone(), cx); }))
+                        .on_click(cx.listener(move |this, _, _, cx| { if this.cloud.cached { let _ = this.requests.unbounded_send(json!({"ui":"selectCachedCloudSession","sessionId":chat["id"]})); } else { this.select(chat.clone(), cx); } }))
                 })))
             .when(selected["archived"] != true, |d| d.child(icon_button("add-thread-conversation", "plus", "New chat in this thread")
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -414,6 +413,9 @@ impl WorkspaceView {
                         )
                     }),
             )
+            .when(!self.cloud.workspaces.is_empty(), |view| {
+                view.child(self.cloud_recent(cx))
+            })
             .child(
                 row()
                     .p_4()
@@ -438,7 +440,9 @@ impl WorkspaceView {
                                 div()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child(if self.account_remote {
+                                    .child(if self.cloud.guest {
+                                        "Cloud workspace"
+                                    } else if self.account_remote {
                                         "Account workspace"
                                     } else if self.paired {
                                         "Paired workspace"
@@ -456,7 +460,9 @@ impl WorkspaceView {
                                     )
                                     .child(
                                         label(if self.connected {
-                                            if self.account_remote {
+                                            if self.cloud.guest {
+                                                "Cloud runtime"
+                                            } else if self.account_remote {
                                                 "Account computer"
                                             } else if self.paired {
                                                 "Paired engine"

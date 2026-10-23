@@ -89,6 +89,8 @@ impl Drop for WatchPreparation {
 // ---------------------------------------------------------------------------
 
 mod account_connection;
+mod cloud_connection;
+pub use cloud_connection::CloudTarget;
 mod remote_connection;
 pub use account_connection::{AccountTarget, RemoteTarget};
 
@@ -128,6 +130,15 @@ pub enum EngineMode {
 #[async_trait]
 trait EngineBackend: Send + Sync {
     fn client(&self) -> &RpcClient;
+    fn controller(&self) -> Option<EngineHandle> {
+        None
+    }
+    fn cloud_workspace(&self) -> Option<String> {
+        None
+    }
+    fn initial_chat(&self) -> Option<String> {
+        None
+    }
     fn mode(&self) -> EngineMode;
     fn remote_status(&self) -> Option<tokio::sync::watch::Receiver<remote_connection::Status>> {
         None
@@ -216,7 +227,13 @@ impl RpcService for DeferredEngineRpc {
                 Err(message) => Err(RpcError::Failed(message)),
             };
         }
-        if AuthRpc::handles(method) {
+        // Launch files belong to the resolved profile upload store. Account-only
+        // controls remain available during onboarding; file launches wait for it.
+        let launch_files = method == methods::CLOUD_CREATE
+            && params["attachmentTransfers"]
+                .as_array()
+                .is_some_and(|files| !files.is_empty());
+        if AuthRpc::handles(method) && !launch_files {
             return self.auth.handle(method, params).await;
         }
 
@@ -314,6 +331,7 @@ impl EngineHandle {
     pub async fn bootstrap(config: EngineBootConfig) -> anyhow::Result<EngineHandle> {
         if let Some(target) = config.target {
             return match target {
+                RemoteTarget::Cloud(target) => cloud_connection::bootstrap(target).await,
                 RemoteTarget::Account(target) => account_connection::bootstrap(target).await,
                 RemoteTarget::Paired(target) => remote_connection::paired(target).await,
             };
@@ -580,6 +598,12 @@ impl EngineHandle {
         self.inner.retry_connection()
     }
 
+    pub(crate) fn controller(&self) -> Self {
+        self.inner.controller().unwrap_or_else(|| self.clone())
+    }
+    pub(crate) fn cloud_workspace(&self) -> Option<String> {
+        self.inner.cloud_workspace()
+    }
     pub fn client(&self) -> &RpcClient {
         self.inner.client()
     }
@@ -848,6 +872,9 @@ pub struct AppState {
     /// (a chat implies ITS project/device) and put back on return, so the
     /// canvas always reopens where the user left it.
     pub(crate) canvas_target: Option<CanvasTarget>,
+    pub(crate) cloud_project: Option<serde_json::Value>,
+    initial_cloud_chat: Option<String>,
+    pub(crate) pending_cloud_resume: Option<(String, String, bool)>,
     pub selected_chat: Option<String>,
     /// Boot auto-select happened (or a manual selection superseded it).
     pub auto_selected: bool,
@@ -997,7 +1024,10 @@ impl AppState {
             no_project: false,
             selected_device: None,
             canvas_target: None,
+            cloud_project: None,
+            initial_cloud_chat: None,
             selected_chat: None,
+            pending_cloud_resume: None,
             transcript: Vec::new(),
             queue: Vec::new(),
             context_usage: None,
@@ -2440,8 +2470,7 @@ impl AppState {
 
     fn checkout_diff_stat(&self, chat: &Chat) -> Option<&CheckoutDiffStat> {
         let stats = &self.checkout_diff_stats;
-        chat
-            .checkout_id
+        chat.checkout_id
             .as_deref()
             .and_then(|id| stats.iter().find(|stat| stat.checkout_id == id))
             .or_else(|| {
@@ -2738,6 +2767,7 @@ impl AppState {
         if !supports_harness_updates {
             self.harness_updates.clear();
         }
+        self.initial_cloud_chat = handle.inner.initial_chat();
         self.engine = Some(handle.clone());
         let mut watch_tasks = Vec::with_capacity(10);
         if let Some(task) = spawn_deferred_engine_watch(cx, handle.clone()) {
@@ -3247,6 +3277,12 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                     // Identical re-published lists skip the re-sort fan-out:
                     // watch reconciliation and a whole-shell re-render.
                     let changed = state.apply_chats(parsed);
+                    if let Some(id) = state.initial_cloud_chat.clone() {
+                        if state.chats.iter().any(|chat| chat.id == id) {
+                            state.initial_cloud_chat = None;
+                            state.select_chat(Some(id), cx);
+                        }
+                    }
                     state.reconcile_configuration_watch(cx);
                     let linked = state.apply_pending_deep_link(cx);
                     if changed {

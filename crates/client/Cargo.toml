@@ -12,6 +12,7 @@ publish.workspace = true
 # frontend (iOS, Android, tests, CLIs).
 
 [dependencies]
+zuse-cloud-projection.workspace = true
 zuse-voice-session.workspace = true
 zuse-protocol.workspace = true
 zuse-doc.workspace = true

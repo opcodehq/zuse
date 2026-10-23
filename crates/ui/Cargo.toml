@@ -63,6 +63,7 @@ name = "compact-picker-fixture"
 required-features = ["compact-picker-fixture"]
 
 [dependencies]
+zuse-model.workspace = true
 zuse-icons.workspace = true
 zuse-remote.workspace = true
 zuse-voice-media.workspace = true

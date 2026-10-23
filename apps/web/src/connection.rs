@@ -57,6 +57,9 @@ fn local_action(frame: &Value, events: &Sender) -> bool {
     if crate::voice_media::handle(frame) {
         return true;
     }
+    if crate::cloud_upload::handle(frame) {
+        return true;
+    }
     if crate::drafts::handle(frame, events) {
         return true;
     }
@@ -93,7 +96,12 @@ fn reject(events: &Sender, frame: &Value) {
             let _=events.unbounded_send(json!({"id":id,"err":"The engine is not connected. This request was not sent.","outcomeUnknown":false}));
         }
     } else if frame["ui"] == "pickAttachments" || frame["ui"] == "pasteAttachments" {
-        let _=events.unbounded_send(json!({"attachment":{"error":"Reconnect to the engine before uploading files."},"generation":frame["generation"],"epoch":frame["epoch"],"uploadRejected":true}));
+        let mut result = json!({"attachment":{"error":"Reconnect to the engine before uploading files."},"generation":frame["generation"],"epoch":frame["epoch"],"uploadRejected":true});
+        if frame.get("cloudViewport").is_some() {
+            result["cloudViewport"] = frame["cloudViewport"].clone();
+            result["epoch"] = frame["cloudEpoch"].clone();
+        }
+        let _ = events.unbounded_send(result);
     }
 }
 async fn wait_offline(
@@ -386,6 +394,14 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             }
             if frame["ui"] == "pickAttachments" || frame["ui"] == "pasteAttachments" {
                 if frame["epoch"].as_u64() == Some(epoch) {
+                    let cloud = crate::cloud_upload::Target::from_frame(&frame);
+                    if frame.get("cloudViewport").is_some() && cloud.is_none() {
+                        reject(&events, &frame);
+                        continue;
+                    }
+                    let upload_target = cloud
+                        .map(crate::attachments::UploadTarget::Cloud)
+                        .or_else(|| upload_target.clone());
                     if frame["ui"] == "pasteAttachments" {
                         crate::attachments::pasted(&frame, events.clone(), upload_target.clone());
                         continue;

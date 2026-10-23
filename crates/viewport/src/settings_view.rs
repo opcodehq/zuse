@@ -8,24 +8,29 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Section {
     General,
+    Cloud,
     Providers,
     Defaults,
     Devices,
     Plugins,
     Usage,
     Shortcuts,
+    Archived,
 }
 impl Section {
-    const NAV: [Self; 6] = [
+    const NAV: [Self; 8] = [
         Self::General,
         Self::Providers,
         Self::Defaults,
         Self::Plugins,
         Self::Devices,
+        Self::Cloud,
         Self::Shortcuts,
+        Self::Archived,
     ];
     fn title(self) -> &'static str {
         match self {
+            Self::Cloud => "Cloud",
             Self::General => "General",
             Self::Providers => "Providers",
             Self::Defaults => "Default models",
@@ -33,10 +38,12 @@ impl Section {
             Self::Plugins => "Plugins",
             Self::Usage => "Accounts & usage",
             Self::Shortcuts => "Keyboard shortcuts",
+            Self::Archived => "Archived chats",
         }
     }
     fn icon(self) -> &'static str {
         match self {
+            Self::Cloud => "cloud",
             Self::General => "settings-general",
             Self::Providers => "settings-providers",
             Self::Defaults => "settings-defaults",
@@ -44,10 +51,12 @@ impl Section {
             Self::Plugins => "settings-plugins",
             Self::Usage => "clock-circle",
             Self::Shortcuts => "keyboard",
+            Self::Archived => "archive-minimalistic",
         }
     }
     fn description(self) -> &'static str {
         match self {
+            Self::Cloud => "Cloud usage, monthly allowance and overage cap.",
             Self::General => "Workspace defaults and your personal app preferences.",
             Self::Providers => {
                 "Verify what’s installed, signed in, and which subscription each provider runs on."
@@ -57,6 +66,7 @@ impl Section {
             Self::Plugins => "Your Zuse account and the tools shared across your agents.",
             Self::Usage => "Provider accounts, plans and current usage.",
             Self::Shortcuts => "Keyboard shortcuts for the browser workspace.",
+            Self::Archived => "Read saved cloud conversations or return them to Active.",
         }
     }
 }
@@ -66,6 +76,9 @@ impl WorkspaceView {
         self.completion_preset_menu = false;
         self.default_permission_menu = false;
         self.model_picker = false;
+        if section == Section::Cloud {
+            self.refresh_billing(false);
+        }
         if section == Section::General {
             self.refresh_worktree_settings();
             self.refresh_title_settings();
@@ -158,8 +171,15 @@ impl WorkspaceView {
             }))
             .into_any_element()
     }
-    pub(super) fn settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn settings_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let section = self.settings_section;
+        if section == Section::Archived {
+            self.load_cloud_archive();
+        }
         let compact = self.content_width < 800.;
         let navigation = column()
             .id("settings-navigation")
@@ -226,11 +246,57 @@ impl WorkspaceView {
                 .child(self.providers_settings(cx))
                 .child(self.usage_settings(cx))
                 .into_any_element(),
+            Section::Cloud => self.billing_settings(cx),
             Section::Devices => self.pairing_settings(cx),
             Section::Plugins => self.cloud_settings(cx),
             Section::Usage => self.usage_settings(cx),
             Section::Shortcuts => self.shortcuts_settings(),
+            Section::Archived => self.cloud_archive_list(window, cx),
         };
+        let content_panel =
+            if section == Section::Archived && self.cloud_archive.state.head.is_some() {
+                self.cloud_archive_history(window, cx)
+            } else {
+                column()
+                    .id("settings-content")
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_y_scroll()
+                    .p(px(if compact { 16. } else { 24. }))
+                    .child(
+                        column()
+                            .w_full()
+                            .max_w(px(if section == Section::Shortcuts {
+                                1152.
+                            } else {
+                                768.
+                            }))
+                            .mx_auto()
+                            .gap_5()
+                            .child(
+                                column()
+                                    .gap_1()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .pb(px(16.))
+                                    .child(
+                                        div()
+                                            .text_size(px(20.))
+                                            .line_height(px(28.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(section.title()),
+                                    )
+                                    .child(
+                                        s::description_text(section.description())
+                                            .text_size(px(12.))
+                                            .line_height(px(20.)),
+                                    ),
+                            )
+                            .child(content),
+                    )
+                    .into_any_element()
+            };
         column()
             .flex_1()
             .size_full()
@@ -297,46 +363,7 @@ impl WorkspaceView {
                     .min_h_0()
                     .items_stretch()
                     .child(navigation)
-                    .child(
-                        column()
-                            .id("settings-content")
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .overflow_y_scroll()
-                            .p(px(if compact { 16. } else { 24. }))
-                            .child(
-                                column()
-                                    .w_full()
-                                    .max_w(px(if section == Section::Shortcuts {
-                                        1152.
-                                    } else {
-                                        768.
-                                    }))
-                                    .mx_auto()
-                                    .gap_5()
-                                    .child(
-                                        column()
-                                            .gap_1()
-                                            .border_b_1()
-                                            .border_color(rgb(BORDER))
-                                            .pb(px(16.))
-                                            .child(
-                                                div()
-                                                    .text_size(px(20.))
-                                                    .line_height(px(28.))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child(section.title()),
-                                            )
-                                            .child(
-                                                s::description_text(section.description())
-                                                    .text_size(px(12.))
-                                                    .line_height(px(20.)),
-                                            ),
-                                    )
-                                    .child(content),
-                            ),
-                    ),
+                    .child(content_panel),
             )
             .into_any_element()
     }

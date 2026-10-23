@@ -16,11 +16,16 @@ pub struct AccountTarget {
 #[derive(Clone)]
 pub enum RemoteTarget {
     Paired(zuse_remote::PairedTarget),
+    Cloud(super::CloudTarget),
     Account(AccountTarget),
 }
 impl std::fmt::Debug for RemoteTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Cloud(target) => f
+                .debug_struct("Cloud")
+                .field("workspace", &target.workspace)
+                .finish_non_exhaustive(),
             Self::Paired(_) => f.write_str("Paired"),
             Self::Account(target) => f
                 .debug_struct("Account")

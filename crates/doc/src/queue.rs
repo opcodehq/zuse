@@ -101,6 +101,76 @@ impl QueuedMessage {
 }
 
 impl SessionDoc {
+    /// Host-owned resume policy. Missing means an older document without a cloud resume grant.
+    pub fn queue_paused(&self) -> Option<bool> {
+        match self.doc().get_map("meta").get("queuePaused") {
+            Some(loro::ValueOrContainer::Value(loro::LoroValue::Bool(value))) => Some(value),
+            _ => None,
+        }
+    }
+    pub fn set_queue_paused(&self, paused: bool) -> Result<(), DocError> {
+        if self.queue_paused() == Some(paused) {
+            return Ok(());
+        }
+        self.doc().get_map("meta").insert("queuePaused", paused)?;
+        self.doc().commit();
+        Ok(())
+    }
+    /// The original run settings travel with a row across runtime restarts.
+    pub fn queued_run_request(
+        &self,
+        id: &str,
+    ) -> Result<Option<zuse_protocol::RunRequest>, DocError> {
+        let Some(value) = self.queued_run_context(id)? else {
+            return Ok(None);
+        };
+        let request = if value.get("version") == Some(&serde_json::json!(1)) {
+            value["request"].clone()
+        } else {
+            value
+        };
+        Ok(Some(serde_json::from_value(request)?))
+    }
+    fn queued_run_context(&self, id: &str) -> Result<Option<serde_json::Value>, DocError> {
+        match self.doc().get_map("queuedRunRequests").get(id) {
+            Some(loro::ValueOrContainer::Value(loro::LoroValue::String(value))) => {
+                Ok(Some(serde_json::from_str(&value)?))
+            }
+            None => Ok(None),
+            _ => Err(DocError::Schema("invalid queued run request".into())),
+        }
+    }
+    pub fn queued_request_is_held(&self, id: &str) -> Result<bool, DocError> {
+        Ok(self.queued_run_context(id)?.is_some_and(|value| {
+            value.get("version") != Some(&serde_json::json!(1)) || value["held"] == true
+        }))
+    }
+    pub fn set_queued_run_request(
+        &self,
+        id: &str,
+        request: Option<&zuse_protocol::RunRequest>,
+    ) -> Result<(), DocError> {
+        self.set_queued_run_context(id, request, true)
+    }
+    pub fn set_queued_run_context(
+        &self,
+        id: &str,
+        request: Option<&zuse_protocol::RunRequest>,
+        held: bool,
+    ) -> Result<(), DocError> {
+        let requests = self.doc().get_map("queuedRunRequests");
+        if let Some(request) = request {
+            requests.insert(
+                id,
+                serde_json::json!({"version":1,"held":held,"request":request}).to_string(),
+            )?;
+        } else {
+            requests.delete(id)?;
+        }
+        self.doc().commit();
+        Ok(())
+    }
+
     /// The queue in send order. Malformed rows skip rather than poison the read.
     pub fn read_queue(&self) -> Result<Vec<QueuedMessage>, DocError> {
         let raw = self

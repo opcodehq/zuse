@@ -1371,6 +1371,11 @@ impl WorkspaceHost {
         self.inner.save_snapshot();
     }
 
+    /// Fallible durability barrier for cloud lifecycle receipts.
+    pub fn flush_checked(&self) -> Result<(), EngineError> {
+        self.inner.persist_snapshot().map(|_| ())
+    }
+
     /// Shutdown: stamp our `lastSeenAt` (the only periodic-ish row write besides
     /// boot) and flush the snapshot.
     pub fn shutdown(&self) {

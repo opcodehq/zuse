@@ -90,3 +90,6 @@ pub(crate) fn write<T>(lock: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGua
 pub(crate) fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
+
+/// Engine-free cached cloud transcript reads; never wakes compute.
+pub use zuse_cloud_projection::reader::Reader as CloudHistoryReader;

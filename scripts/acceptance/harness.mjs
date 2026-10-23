@@ -40,10 +40,10 @@ export function rpc(socket) {
     socket.send(JSON.stringify({id, method, params}));
   });
 }
-export async function engine(prefix) {
-  const root = path.join(workspace, '.context', `${prefix}-runtime-${randomUUID()}`);
+export async function engine(prefix, options = {}) {
+  const root = options.profileRoot ?? path.join(workspace, '.context', `${prefix}-runtime-${randomUUID()}`);
   fs.mkdirSync(root, {mode:0o700,recursive:true});
-  const log = path.join(root, 'server.private.log');
+  const log = path.join(root, options.profileRoot ? `server-${randomUUID()}.private.log` : 'server.private.log');
   const descriptor = fs.openSync(log, 'a', 0o600);
   const child = spawn(path.join(workspace, 'target/debug/zuse-server'), [
     '--listen=127.0.0.1:0','--ipc-port=0',`--data-dir=${path.join(root,'profile')}`,`--assets=${path.join(workspace,'dist/web')}`,
@@ -87,6 +87,7 @@ export function browser(prefix) {
     return result.data;
   }
   return {
+    session,
     run,
     evaluate: source => run(['eval','--stdin'],source).result,
     click(x,y) { run(['mouse','move',String(Math.round(x)),String(Math.round(y))]); run(['mouse','down']); run(['mouse','up']); },

@@ -138,6 +138,70 @@ impl Uploads {
         }
     }
 
+    /// Install a content-verified cloud asset without replacing newer or unrelated files.
+    pub fn import_cloud_asset(
+        &self,
+        asset: &zuse_protocol::cloud_assets::Asset,
+        bytes: &[u8],
+    ) -> Result<String, EngineError> {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use sha2::{Digest, Sha256};
+        use std::io::Write;
+        let fail =
+            || EngineError::Other("Cloud attachment integrity or destination conflict".into());
+        if bytes.len() != asset.size_bytes
+            || bytes.len() > zuse_protocol::cloud_assets::MAX_BYTES
+            || URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)) != asset.sha256
+        {
+            return Err(fail());
+        }
+        let base = self.inner.dir.join("cloud-assets");
+        let directory = base.join(format!("{:x}", Sha256::digest(asset.asset_id.as_bytes())));
+        std::fs::create_dir_all(&base)?;
+        if std::fs::symlink_metadata(&base)?.file_type().is_symlink() {
+            return Err(fail());
+        }
+        std::fs::create_dir_all(&directory)?;
+        if std::fs::symlink_metadata(&directory)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(fail());
+        }
+        let target = directory.join(sanitize(&asset.original_name));
+        let check = || -> Result<(), EngineError> {
+            let metadata = std::fs::symlink_metadata(&target)?;
+            if !metadata.is_file() || metadata.len() != bytes.len() as u64 {
+                return Err(fail());
+            }
+            let current = std::fs::read(&target)?;
+            if current != bytes {
+                return Err(fail());
+            }
+            Ok(())
+        };
+        if std::fs::symlink_metadata(&target).is_ok() {
+            check()?;
+            return Ok(target.to_string_lossy().into());
+        }
+        let temp = directory.join(format!(".incoming-{}", uuid::Uuid::new_v4().simple()));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        let result = std::fs::hard_link(&temp, &target);
+        let _ = std::fs::remove_file(&temp);
+        if let Err(error) = result {
+            if error.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(error.into());
+            }
+            check()?;
+        }
+        std::fs::File::open(&directory)?.sync_all()?;
+        Ok(target.to_string_lossy().into())
+    }
     /// The durable uploads dir (a path-jail root).
     pub fn dir(&self) -> &Path {
         &self.inner.dir
@@ -527,6 +591,29 @@ fn mime_by_ext(path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cloud_assets_verify_content_and_preserve_changed_destinations() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use sha2::{Digest, Sha256};
+        let root = tempfile::tempdir().unwrap();
+        let uploads = Uploads::from_root(root.path());
+        let bytes = b"original cloud file";
+        let asset = zuse_protocol::cloud_assets::Asset {
+            asset_id: "asset_original_identity".into(),
+            mime_type: "text/plain".into(),
+            original_name: "../context.txt".into(),
+            size_bytes: bytes.len(),
+            sha256: URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)),
+        };
+        assert!(uploads.import_cloud_asset(&asset, b"corrupt").is_err());
+        let path = uploads.import_cloud_asset(&asset, bytes).unwrap();
+        assert_eq!(uploads.import_cloud_asset(&asset, bytes).unwrap(), path);
+        assert!(Path::new(&path).starts_with(root.path().join("cloud-assets")));
+        std::fs::write(&path, b"newer user work").unwrap();
+        assert!(uploads.import_cloud_asset(&asset, bytes).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), b"newer user work");
+    }
 
     #[test]
     fn visual_assets_sit_beside_the_script_and_leave_with_it() {
