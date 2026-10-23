@@ -29,6 +29,10 @@ pub struct PluginSetup {
     target: SetupTarget,
     return_to: PluginReturnTo,
     name: Entity<InputState>,
+    dialog_focus: FocusHandle,
+    cancel_focus: FocusHandle,
+    submit_focus: FocusHandle,
+    auth_focus: [FocusHandle; 3],
     url: Entity<InputState>,
     header: Entity<InputState>,
     secret: Entity<InputState>,
@@ -76,8 +80,8 @@ impl PluginSetup {
                 input
             })
         };
-        let name = field("Connection name", false);
-        let url = field("https://example.com/mcp", false);
+        let name = field("Internal tools", false);
+        let url = field("https://mcp.example.com/mcp", false);
         let header = field("X-API-Key", false);
         let secret = field("API key", true);
         let subscriptions = [&name, &url, &header, &secret]
@@ -85,13 +89,18 @@ impl PluginSetup {
             .map(|input| {
                 cx.subscribe(input, |this, input, event: &InputEvent, cx| {
                     match event {
+                        InputEvent::PressEnter { shift: false, .. } => {
+                            this.submit(cx);
+                            return;
+                        }
                         InputEvent::ClipboardReadFailed => {
                             this.error = Some(crate::input::CLIPBOARD_PASTE_ERROR);
                         }
                         InputEvent::ClipboardWriteFailed => {
                             this.error = Some(crate::input::CLIPBOARD_COPY_ERROR);
                         }
-                        InputEvent::Change | InputEvent::ClipboardWriteSucceeded
+                        InputEvent::Change => this.error = None,
+                        InputEvent::ClipboardWriteSucceeded
                             if matches!(
                                 this.error,
                                 Some(
@@ -121,6 +130,10 @@ impl PluginSetup {
             target,
             return_to,
             name,
+            dialog_focus: cx.focus_handle(),
+            cancel_focus: cx.focus_handle().tab_stop(true),
+            submit_focus: cx.focus_handle().tab_stop(true),
+            auth_focus: std::array::from_fn(|_| cx.focus_handle()),
             url,
             header,
             secret,
@@ -131,6 +144,15 @@ impl PluginSetup {
             colors,
             _inputs: subscriptions,
         }
+    }
+    pub fn set_connection_label(
+        &mut self,
+        label: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.name
+            .update(cx, |input, cx| input.set_value(label, window, cx));
     }
     fn submit(&mut self, cx: &mut Context<Self>) {
         if self.busy {
@@ -179,7 +201,8 @@ impl PluginSetup {
     }
 }
 impl Render for PluginSetup {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let viewport = window.viewport_size();
         let server = matches!(self.target, SetupTarget::Server);
         let needs_key = match &self.target {
             SetupTarget::Catalog(p) => p.api_key_header.is_some(),
@@ -190,13 +213,8 @@ impl Render for PluginSetup {
             div()
                 .flex()
                 .flex_col()
-                .gap(px(5.))
-                .child(
-                    div()
-                        .text_color(self.colors.muted)
-                        .text_size(px(11.))
-                        .child(title),
-                )
+                .gap(px(6.))
+                .child(div().font_weight(FontWeight::MEDIUM).child(title))
                 .child(
                     div()
                         .id(title)
@@ -207,8 +225,11 @@ impl Render for PluginSetup {
                         })
                         .border_1()
                         .border_color(self.colors.border)
-                        .rounded(px(6.))
-                        .p(px(8.))
+                        .rounded(px(7.))
+                        .h(px(28.))
+                        .px(px(9.))
+                        .flex()
+                        .items_center()
                         .child(input),
                 )
         };
@@ -218,27 +239,284 @@ impl Render for PluginSetup {
                 .tab_index(0)
                 .role(Role::Button)
                 .cursor_pointer()
-                .px(px(10.))
-                .py(px(5.))
-                .rounded(px(6.))
-                .border_1()
-                .border_color(self.colors.border)
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(px(28.))
+                .px(px(15.))
+                .rounded(px(7.))
+                .text_size(px(12.))
                 .child(title)
         };
-        div().id("plugin-setup-form").flex().flex_col().gap(px(12.)).p(px(16.)).rounded(px(10.)).border_1().border_color(self.colors.border).bg(self.colors.background).text_color(self.colors.text).text_size(px(12.))
-            .child(div().font_weight(FontWeight::MEDIUM).child(if server {"Add MCP server"} else {"Connect plugin"}))
-            .child(field("Name",self.name.clone()))
-            .when(server,|d|d.child(field("Server URL",self.url.clone())).child(div().flex().flex_wrap().gap(px(6.)).children([(ServerAuth::Automatic,"Automatic"),(ServerAuth::Bearer,"Bearer token"),(ServerAuth::Header,"API key header")].into_iter().enumerate().map(|(i,(auth,title))| {
-                div().id(("plugin-auth",i)).tab_index(0).role(Role::RadioButton).aria_label(title).cursor_pointer().px(px(10.)).py(px(5.)).rounded(px(6.)).border_1().border_color(if self.auth==auth {self.colors.text} else {self.colors.border}).child(title).on_click(cx.listener(move|this,_,_,cx|{if !this.busy {this.auth=auth;this.error=None;cx.notify();}}))
-            }))))
-            .when(server && self.auth==ServerAuth::Header,|d|d.child(field("Header name",self.header.clone())))
-            .when(needs_key,|d|d.child(field("API key",self.secret.clone())))
-            .when(server && self.auth==ServerAuth::Automatic,|d|d.child(div().text_size(px(11.)).text_color(self.colors.muted).child("Use the server’s sign-in flow, or connect without authentication when supported.")))
-            .when_some(self.error,|d,error|d.child(div().id("plugin-setup-error").role(Role::Alert).text_color(self.colors.danger).child(error)))
-            .when_some(self.menu.as_ref(), |d, menu| d.child(crate::input::edit_menu::render(menu,cx)))
-            .child(div().flex().justify_end().gap(px(8.))
-                .child(button("cancel-plugin-setup","Cancel").on_click(cx.listener(|_,_,_,cx|cx.emit(SetupEvent::Cancel))))
-                .child(button("submit-plugin-setup",if self.busy {"Working…"} else {"Connect"}).on_click(cx.listener(|this,_,_,cx|this.submit(cx)))))
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .px(px(16.))
+            .pt(px(4.))
+            .pb(px(16.))
+            .child(field("Name", self.name.clone()));
+        if server {
+            body=body.child(field("Server URL",self.url.clone())).child(
+                div().flex().flex_col().gap(px(6.))
+                    .child(div().font_weight(FontWeight::MEDIUM).child("Authentication"))
+                    .child(div().id("plugin-auth-tabs").role(Role::TabList).aria_label("Authentication")
+                        .h(px(28.)).flex().items_center().p(px(2.)).gap(px(2.)).rounded(px(7.))
+                        .bg(crate::settings_style::frame_bg().opacity(0.55))
+                        .children([(ServerAuth::Automatic,"Sign in or none"),(ServerAuth::Bearer,"Bearer token"),(ServerAuth::Header,"Custom header")].into_iter().enumerate().map(|(i,(auth,title))| {
+                            let handles=self.auth_focus.clone();
+                            div().id(("plugin-auth",i)).role(Role::Tab).aria_label(title).aria_selected(self.auth==auth)
+                                .track_focus(&self.auth_focus[i].clone().tab_stop(self.auth==auth)).tab_index(if self.auth==auth {0}else{-1})
+                                .cursor_pointer().flex_1().min_w_0().h(px(24.)).flex().items_center().justify_center()
+                                .px(px(10.)).rounded(px(5.)).text_size(px(11.)).font_weight(FontWeight::MEDIUM)
+                                .text_color(if self.auth==auth {self.colors.text}else{self.colors.muted})
+                                .when(self.auth==auth,|d|d.bg(crate::palette::rgb(crate::shell::BG))).child(title)
+                                .on_click(cx.listener(move|this,_,_,cx|{if !this.busy {this.auth=auth;this.error=None;cx.notify();}}))
+                                .on_key_down(cx.listener(move|this,event:&KeyDownEvent,window,cx|{
+                                    let index=match event.keystroke.key.as_str(){"right"=>(i+1)%3,"left"=>(i+2)%3,"home"=>0,"end"=>2,_=>return};
+                                    if !this.busy {this.auth=[ServerAuth::Automatic,ServerAuth::Bearer,ServerAuth::Header][index];this.error=None;window.focus(&handles[index],cx);cx.notify();}
+                                    cx.stop_propagation();
+                                }))
+                        })))
+                    .when(self.auth==ServerAuth::Automatic,|d|d.child(div().text_color(self.colors.muted)
+                        .child("Zuse detects whether the server needs you to sign in or is open to everyone.")))
+            );
+        }
+        if server && self.auth == ServerAuth::Header {
+            body = body.child(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(field("Header name", self.header.clone())),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex_grow(1.5)
+                            .min_w_0()
+                            .child(field("Value", self.secret.clone())),
+                    ),
+            );
+        } else if needs_key {
+            body = body.child(field(
+                if server { "Token" } else { "API key" },
+                self.secret.clone(),
+            ));
+        }
+        if server && needs_key {
+            body = body.child(
+                div()
+                    .text_color(self.colors.muted)
+                    .child("Keys are encrypted on Zuse servers and never reach agent machines."),
+            );
+        }
+        body = body.when_some(self.error, |d, error| {
+            d.child(
+                div()
+                    .id("plugin-setup-error")
+                    .role(Role::Alert)
+                    .rounded(px(7.))
+                    .bg(self.colors.danger.opacity(0.08))
+                    .px(px(10.))
+                    .py(px(6.))
+                    .line_height(px(20.))
+                    .text_color(self.colors.danger)
+                    .child(error),
+            )
+        });
+        let form = div()
+            .id("plugin-setup-form")
+            .role(Role::Dialog)
+            .aria_label(if server {
+                "Add MCP server"
+            } else {
+                "Connect plugin"
+            })
+            .track_focus(&self.dialog_focus)
+            .tab_group()
+            .tab_stop(false)
+            .w(px(448.).min(viewport.width - px(32.)))
+            .max_h(viewport.height - px(32.))
+            .overflow_y_scroll()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "escape" => {
+                        cx.emit(SetupEvent::Cancel);
+                        cx.stop_propagation();
+                    }
+                    "tab" => {
+                        if event.keystroke.modifiers.shift {
+                            window.focus_prev(cx);
+                        } else {
+                            window.focus_next(cx);
+                        }
+                        if !this.dialog_focus.contains_focused(window, cx) {
+                            if event.keystroke.modifiers.shift {
+                                window.focus(&this.submit_focus, cx);
+                            } else {
+                                window.focus(&this.name.read(cx).focus_handle(cx), cx);
+                            }
+                        }
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }))
+            .flex_none()
+            .relative()
+            .flex()
+            .flex_col()
+            .rounded(px(12.))
+            .border_1()
+            .border_color(self.colors.border)
+            .bg(self.colors.background)
+            .text_color(self.colors.text)
+            .text_size(px(12.))
+            .line_height(px(18.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .p(px(16.))
+                    .pb(px(10.))
+                    .child(
+                        div()
+                            .pr(px(20.))
+                            .text_size(px(15.))
+                            .line_height(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(if server {
+                                "Add MCP server"
+                            } else {
+                                "Connect plugin"
+                            }),
+                    )
+                    .when(server, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(self.colors.muted)
+                                .child(if self.tenant.starts_with("organization:") {
+                                    "Adding to your organization workspace."
+                                } else {
+                                    "Adding to your personal workspace."
+                                }),
+                        )
+                    }),
+            )
+            .child(body)
+            .when_some(self.menu.as_ref(), |d, menu| {
+                d.child(crate::input::edit_menu::render(menu, cx))
+            })
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(6.))
+                    .px(px(16.))
+                    .py(px(10.))
+                    .border_t_1()
+                    .border_color(self.colors.border.opacity(0.6))
+                    .bg(crate::settings_style::frame_bg().opacity(0.72))
+                    .rounded_b(px(11.))
+                    .child(
+                        button("cancel-plugin-setup", "Cancel")
+                            .track_focus(&self.cancel_focus)
+                            .hover(|d| d.bg(self.colors.border.opacity(0.4)))
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(SetupEvent::Cancel)))
+                            .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    cx.emit(SetupEvent::Cancel);
+                                    cx.stop_propagation();
+                                }
+                            })),
+                    )
+                    .child(
+                        button(
+                            "submit-plugin-setup",
+                            if self.busy {
+                                "Working…"
+                            } else if server {
+                                "Add server"
+                            } else {
+                                "Connect"
+                            },
+                        )
+                        .track_focus(&self.submit_focus)
+                        .border_1()
+                        .border_color(crate::palette::rgb(0x89ca21))
+                        .bg(crate::palette::rgb(0x89ca21))
+                        .text_color(rgb(0x18210b))
+                        .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
+                        .on_key_down(cx.listener(
+                            |this, event: &KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.submit(cx);
+                                    cx.stop_propagation();
+                                }
+                            },
+                        )),
+                    ),
+            )
+            .child(
+                div()
+                    .id("close-plugin-setup")
+                    .role(Role::Button)
+                    .aria_label("Close")
+                    .cursor_pointer()
+                    .absolute()
+                    .top(px(8.))
+                    .right(px(8.))
+                    .size(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(7.))
+                    .hover(|d| d.bg(self.colors.border.opacity(0.4)))
+                    .child(
+                        crate::assets::icon("close")
+                            .size(px(14.))
+                            .text_color(self.colors.muted),
+                    )
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(SetupEvent::Cancel))),
+            );
+        deferred(
+            anchored()
+                .anchor(Anchor::TopLeft)
+                .position(point(px(0.), px(0.)))
+                .child(
+                    div()
+                        .id("plugin-dialog-backdrop")
+                        .w(viewport.width)
+                        .h(viewport.height)
+                        .p(px(16.))
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .occlude()
+                        .bg(black().opacity(0.32))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                if !this.busy {
+                                    cx.emit(SetupEvent::Cancel);
+                                }
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .child(div().flex_1())
+                        .child(form)
+                        .child(div().flex_1().flex_grow(3.)),
+                ),
+        )
+        .priority(3)
     }
 }
 
@@ -273,7 +551,7 @@ impl crate::WorkspaceView {
         let colors = SetupColors {
             text: crate::palette::rgb(crate::shell::TEXT).into(),
             muted: crate::palette::rgb(crate::shell::MUTED).into(),
-            background: crate::settings_style::card_bg(),
+            background: crate::palette::rgb(crate::shell::RAISED).into(),
             border: crate::settings_style::card_border(),
             danger: crate::palette::rgb(0xf87171).into(),
         };

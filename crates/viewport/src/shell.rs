@@ -708,104 +708,6 @@ impl WorkspaceView {
             .into_any_element()
     }
 
-    fn plugin_catalog_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        use crate::plugin_catalog as catalog;
-        let signed_in = self.cloud_account["user"].is_object();
-        let items = catalog::catalog(
-            &self.plugin_state.snapshot,
-            &self.plugin_search.read(cx).value(cx),
-            self.plugin_connected_only,
-        );
-        let pages = items.len().div_ceil(40).max(1);
-        let page = self.plugin_catalog_page.min(pages - 1);
-        column().gap_3()
-            .child(row().gap_2()
-                .child(div().flex_1().min_w_0().px_3().py_2().rounded_lg().bg(crate::settings_style::frame_bg()).child(self.plugin_search.clone()))
-                .child(control("plugin-catalog-filter", if self.plugin_connected_only { "Connected" } else { "Browse all" })
-                    .on_click(cx.listener(|this, _, _, cx| { this.plugin_connected_only = !this.plugin_connected_only; this.plugin_catalog_page = 0; cx.notify(); }))))
-            .when(items.is_empty(), |d| d.child(label("No plugins match this view.")))
-            .child(row().flex_wrap().gap_3().children(items.into_iter().skip(page * 40).take(40).enumerate().map(|(index, definition)| {
-                let connected = catalog::connected(&self.plugin_state.snapshot, &definition.id);
-                let custom = definition.custom;
-                let remove_id = definition.id.clone();
-                catalog::tile(&definition, connected, rgb(TEXT).into(), rgb(MUTED).into(), crate::settings_style::frame_bg())
-                    .id(("plugin-catalog-item", index)).w(relative(if self.content_width < 650. { 1. } else { 0.48 }))
-                    .role(Role::Button).aria_label(format!("Connect {}", definition.name)).cursor_pointer().hover(|d| d.bg(rgb(RAISED)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if connected { return; }
-                        if !signed_in { this.call(methods::CLOUD_ACCOUNT_SIGN_IN, json!({})); cx.notify(); return; }
-                        if definition.api_key_header.is_some() { this.open_plugin_setup(crate::plugin_setup::SetupTarget::Catalog(definition.clone()), window, cx); }
-                        else { this.plugin_action(json!({"action":"connect","tenantId":this.plugin_state.snapshot["tenantId"],"pluginId":definition.id,"label":definition.name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":{"kind":"web"}})); }
-                        cx.notify();
-                    }))
-                    .when(custom && signed_in, |tile| tile.child(control(("remove-plugin-server", index), "Remove")
-                        .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.ask_plugin_removal(zuse_protocol::plugin_state::Removal::Server, &remove_id, cx); }))))
-            })))
-            .when(pages > 1, |d| d.child(row().justify_between()
-                .child(control("plugins-previous", "Previous").on_click(cx.listener(|this,_,_,cx| {this.plugin_catalog_page=this.plugin_catalog_page.saturating_sub(1);cx.notify();})))
-                .child(label(format!("{} / {pages}",page+1)))
-                .child(control("plugins-next", "Next").on_click(cx.listener(move |this,_,_,cx| {this.plugin_catalog_page=(this.plugin_catalog_page+1).min(pages-1);cx.notify();})))))
-            .into_any_element()
-    }
-
-    pub(super) fn cloud_settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        crate::settings_style::frame()
-            .child(crate::settings_style::header(
-                "Plugins",
-                "Connect your tools so agents can work across them in any chat.",
-            ))
-            .child(crate::settings_style::card().child(self.cloud_settings_contents(cx)))
-            .into_any_element()
-    }
-    fn cloud_settings_contents(&self, cx: &mut Context<Self>) -> AnyElement {
-        use crate::settings_style::button as control;
-        let signed_in = self.cloud_account["user"].is_object();
-        let tenant = self.plugin_state.snapshot["tenantId"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned();
-        let busy = self.plugin_request.is_some();
-        column().gap_3().p_3()
-            .child(row().gap_3()
-                .child(column().flex_1().gap_1()
-                    .child(div().text_size(px(13.)).child(self.cloud_account["user"]["email"].as_str().map(zuse_protocol::presentation::masked_email).unwrap_or_else(|| "Connect your Zuse account".to_owned())))
-                    .child(label("Hosted connections are shared across your agents. Local agents work without signing in.")))
-                .child(control("cloud-sign-in",if signed_in {"Sign out"} else {"Sign in"})
-
-                    .on_click(cx.listener(move |this,_,_,cx| {this.call(if signed_in {methods::CLOUD_ACCOUNT_SIGN_OUT} else {methods::CLOUD_ACCOUNT_SIGN_IN},json!({}));cx.notify();}))))
-            .when_some(self.cloud_account["error"].as_str().map(str::to_owned),|d,e|d.child(label(e)))
-            .when_some(self.cloud_account["login"]["url"].as_str().filter(|u|u.starts_with("https://")).map(str::to_owned),|d,url| {
-                d.child(row().gap_3().child(label(format!("Authorization code: {}",self.cloud_account["login"]["userCode"].as_str().unwrap_or_default())))
-                    .child(control("authorize-account","Continue in browser").on_click(move |_,_,cx|cx.open_url(&url))))
-            })
-            .when(signed_in,|d|d
-                .child(control("add-plugin-server","Add MCP server").on_click(cx.listener(|this,_,window,cx|this.open_plugin_setup(crate::plugin_setup::SetupTarget::Server,window,cx))))
-                .when(self.plugin_state.snapshot["canManage"]==false,|d|d.child(label("Only workspace administrators can manage these connections.")))
-                .when_some(self.plugin_setup.clone(),|d,form|d.child(form))
-                .when_some(self.plugin_state.notice.clone(),|d,notice|d.child(div().id("plugin-notice").role(Role::Status).child(label(notice))))
-                .when_some(self.plugin_state.confirmation.as_ref(),|d,confirmation|d.child(column().gap_2().p_3().border_1().rounded_lg().border_color(rgb(BORDER))
-                    .child(label(confirmation.title())).child(label(confirmation.label.clone()))
-                    .child(row().gap_2().child(control("dismiss-plugin-removal","Keep it").on_click(cx.listener(|this,_,_,cx|{this.plugin_state.confirmation=None;cx.notify();})))
-                        .child(control("confirm-plugin-removal",confirmation.button()).on_click(cx.listener(|this,_,_,cx|this.confirm_plugin_removal(cx)))))))
-                .child(row().child(label("Connected plugins")).child(div().flex_1()).child(control("refresh-plugins",if busy {"Loading…"} else {"Refresh"}).on_click(cx.listener(|this,_,_,cx|{this.plugin_action(json!({"action":"list"}));cx.notify();}))))
-                // Organization workspaces stay hidden until they return as their own feature.
-                .children(self.plugin_state.snapshot["connections"].as_array().into_iter().flatten().enumerate().map(|(i,c)| {
-                    let id=c["id"].as_str().unwrap_or_default().to_owned();let tenant=tenant.clone();let enabled=c["enabled"]!=false;let remove_id=id.clone();
-                    row().gap_2().p_2().child(label(c["label"].as_str().unwrap_or("Plugin").to_owned())).child(label(c["state"].as_str().unwrap_or_default().to_owned())).child(div().flex_1())
-                        .child(control(("toggle-plugin",i),if enabled {"Disable"} else {"Enable"}).on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"setEnabled","tenantId":tenant,"connectionId":id,"enabled":!enabled}));cx.notify();})))
-                        .child(control(("disconnect-plugin",i),"Disconnect").on_click(cx.listener(move|this,_,_,cx|this.ask_plugin_removal(zuse_protocol::plugin_state::Removal::Connection,&remove_id,cx))))
-                }))
-            )
-            .child(self.plugin_catalog_view(cx))
-            .when_some(self.plugin_state.attempt["authorizationUrl"].as_str().filter(|url|url.starts_with("https://")).map(str::to_owned), |d,url|d.child(control("authorize-hosted-plugin", "Continue in browser").on_click(move |_,_,cx|cx.open_url(&url))))
-            .when(self.plugin_state.active_attempt(),|d| {
-                let attempt=self.plugin_state.attempt["id"].clone();let tenant=tenant.clone();
-                d.child(row().gap_3().child(label(self.plugin_state.attempt["state"].as_str().unwrap_or("Connecting").to_owned())).child(control("poll-plugin","Check connection").on_click(cx.listener(move |this,_,_,cx|{this.plugin_action(json!({"action":"poll","tenantId":tenant,"attemptId":attempt}));cx.notify();})))
-                    .child(control("cancel-plugin-attempt","Cancel sign-in").on_click(cx.listener(|this,_,_,cx|{this.plugin_action(json!({"action":"cancel","tenantId":this.plugin_state.snapshot["tenantId"],"attemptId":this.plugin_state.attempt["id"]}));cx.notify();}))))
-            })
-            .into_any_element()
-    }
-
     fn project_picker_view(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .p_6()
@@ -1355,6 +1257,17 @@ impl Render for WorkspaceView {
                     cx.notify();
                     return;
                 }
+                if this.plugins_add_menu { this.plugins_add_menu=false; cx.notify(); return; }
+                if this.plugin_setup.take().is_some() {
+                    this.plugin_setup_events=None;
+                    window.focus(if this.settings {&this.settings_nav_focus}else{&this.workspace_focus},cx);
+                    cx.notify();return;
+                }
+                if this.plugins_browse {
+                    if this.plugin_detail_menu.open {this.plugin_detail_menu.close();}
+                    else if this.plugin_detail.take().is_none() { this.close_plugins_browse(); this.settings=true; }
+                    cx.notify(); return;
+                }
                 if this.settings {
                     if this.model_picker && this.picker_in_settings() {
                         let target = this.picker_target;
@@ -1417,13 +1330,15 @@ impl Render for WorkspaceView {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .when(!self.settings, |view| {
+                    .when(!self.settings && !self.plugins_browse, |view| {
                         view.child(self.header(cx))
                             .when(self.selected.is_some(), |d| {
                                 d.child(self.conversation_tabs(cx))
                             })
                     })
-                    .child(if self.settings {
+                    .child(if self.plugins_browse {
+                        self.plugins_page_view(cx)
+                    } else if self.settings {
                         self.settings_view(window, cx)
                     } else if self.project_picker {
                         self.project_picker_view(cx)

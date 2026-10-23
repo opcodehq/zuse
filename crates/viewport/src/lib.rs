@@ -31,8 +31,10 @@ mod notifications;
 mod pairing;
 pub mod palette;
 pub mod plugin_catalog;
+pub mod plugin_detail;
 mod plugin_management;
 pub mod plugin_setup;
+mod plugin_views;
 mod previews;
 mod project_actions;
 mod provider_settings;
@@ -217,6 +219,13 @@ pub struct WorkspaceView {
     session_search: Entity<input::TextInput>,
     archive_search: Entity<input::TextInput>,
     plugin_search: Entity<input::TextInput>,
+    plugin_installed_search: Entity<input::TextInput>,
+    plugins_browse: bool,
+    plugins_return_right: Option<bool>,
+    plugins_add_menu: bool,
+    plugins_add_closed: Option<web_time::Instant>,
+    plugin_detail: Option<String>,
+    plugin_detail_menu: plugin_detail::Menu,
     plugin_connected_only: bool,
     plugin_catalog_page: usize,
     agent_picker: bool,
@@ -317,6 +326,9 @@ impl WorkspaceView {
         let archive_search =
             cx.new(|cx| input::TextInput::new("Filter archived chats", window, cx));
         cx.observe(&archive_search, |_, _, cx| cx.notify()).detach();
+        let plugin_installed_search = cx.new(|cx| input::TextInput::new("Search", window, cx));
+        cx.observe(&plugin_installed_search, |_, _, cx| cx.notify())
+            .detach();
         let plugin_search = cx.new(|cx| input::TextInput::new("Search plugins", window, cx));
         cx.observe(&plugin_search, |this: &mut Self, _, cx| {
             this.plugin_catalog_page = 0;
@@ -603,6 +615,13 @@ impl WorkspaceView {
             search_open: false,
             session_search,
             plugin_search,
+            plugin_installed_search,
+            plugins_browse: false,
+            plugins_return_right: None,
+            plugins_add_menu: false,
+            plugins_add_closed: None,
+            plugin_detail: None,
+            plugin_detail_menu: Default::default(),
             archive_search,
             plugin_connected_only: false,
             plugin_catalog_page: 0,
@@ -1067,6 +1086,9 @@ impl WorkspaceView {
                     self.cloud_account = value.clone();
                     self.managed_account_updated(changed);
                     if changed {
+                        self.plugin_detail = None;
+                        self.plugin_detail_menu = Default::default();
+                        self.plugins_add_menu = false;
                         self.plugin_setup = None;
                         self.plugin_setup_events = None;
                         self.plugin_state = Default::default();
@@ -1322,6 +1344,7 @@ impl WorkspaceView {
         {
             return false;
         }
+        self.close_plugins_browse();
         self.stash_draft(cx);
         self.composer_generation += 1;
         self.attachments.clear();
@@ -1406,6 +1429,7 @@ impl WorkspaceView {
         {
             return false;
         }
+        self.close_plugins_browse();
         self.stash_draft(cx);
         self.composer_generation += 1;
         self.attachments.clear();

@@ -480,6 +480,7 @@ impl WorkspaceView {
                     .child(
                         icon_button("settings", "settings-minimalistic", "Settings & usage")
                             .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_plugins_browse();
                                 this.settings = !this.settings;
                                 if this.settings {
                                     this.refresh_worktree_settings();

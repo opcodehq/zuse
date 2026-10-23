@@ -40,7 +40,11 @@ pub fn tabs<T: 'static>(
                     .role(Role::Tab)
                     .aria_label(label)
                     .aria_selected(selected == tab)
-                    .track_focus(&focus[if tab == Tab::Setup { 0 } else { 1 }])
+                    .track_focus(
+                        &focus[if tab == Tab::Setup { 0 } else { 1 }]
+                            .clone()
+                            .tab_stop(selected == tab),
+                    )
                     .tab_index(if selected == tab { 0 } else { -1 })
                     .cursor_pointer()
                     .flex_1()

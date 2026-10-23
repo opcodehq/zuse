@@ -40,6 +40,8 @@ pub struct PluginsCard {
     installed_search: Entity<ComposerInput>,
     /// The browse page shows only connected plugins ("Connected" tab).
     connected_only: bool,
+    browse_selected: Option<String>,
+    detail_menu: zuse_viewport::plugin_detail::Menu,
     add_menu_open: bool,
     /// When the Add menu last closed from an outside press, so the trigger's
     /// own click doesn't reopen it.
@@ -100,6 +102,8 @@ impl PluginsCard {
             search,
             installed_search,
             connected_only: false,
+            browse_selected: None,
+            detail_menu: Default::default(),
             add_menu_open: false,
             add_menu_closed: None,
             _search: search_events,
@@ -155,6 +159,8 @@ impl PluginsCard {
                                     != account.user.as_ref().map(|u| &u.id);
                                 card.account = account;
                                 if changed {
+                                    card.browse_selected = None;
+                                    card.detail_menu = Default::default();
                                     card.setup = None;
                                     card.setup_events = None;
                                     card.epoch = card.epoch.wrapping_add(1);
@@ -207,7 +213,7 @@ impl PluginsCard {
         let colors = SetupColors {
             text: theme.text,
             muted: theme.text_muted,
-            background: theme.surface_card,
+            background: theme.surface_dialog,
             border: theme.border,
             danger: theme.danger,
         };
@@ -385,15 +391,19 @@ impl PluginsCard {
         cx: &mut Context<Self>,
     ) {
         use zuse_viewport::plugin_catalog as catalog;
-        if catalog::connected(&self.plugins.snapshot, &definition.id) {
+        if self.busy || self.plugins.snapshot["canManage"] == false {
             return;
         }
+        let label = catalog::next_label(&self.plugins.snapshot, &definition);
         if !self.signed_in() {
             self.sign_in(cx);
             return;
         }
         if definition.api_key_header.is_some() {
             self.open_setup(SetupTarget::Catalog(definition), window, cx);
+            if let Some(form) = &self.setup {
+                form.update(cx, |form, cx| form.set_connection_label(label, window, cx));
+            }
         } else {
             let tenant = self.plugins.snapshot["tenantId"].clone();
             self.request(
@@ -402,7 +412,7 @@ impl PluginsCard {
                     "action": "connect",
                     "tenantId": tenant,
                     "pluginId": definition.id,
-                    "label": definition.name,
+                    "label": label,
                     "requestId": uuid::Uuid::new_v4().to_string(),
                     "returnTo": {"kind": "desktop", "port": 0},
                 }),
@@ -527,13 +537,7 @@ impl PluginsCard {
             );
         }
         if let Some(form) = self.setup.clone() {
-            items.push(
-                widgets::section_card(theme)
-                    .mt_0()
-                    .p(px(12.))
-                    .child(form)
-                    .into_any_element(),
-            );
+            items.push(div().absolute().child(form).into_any_element());
         }
         if let Some(confirmation) = self.plugins.confirmation.as_ref() {
             items.push(
@@ -655,8 +659,7 @@ impl PluginsCard {
         )
     }
 
-    /// One catalog row: logo, name, description, and a trailing + (or a
-    /// check once connected). The whole row connects.
+    /// The title opens plugin details; the trailing action connects an account.
     fn render_browse_row(
         &self,
         theme: &Theme,
@@ -665,17 +668,11 @@ impl PluginsCard {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use zuse_viewport::plugin_catalog as catalog;
-        let connected = catalog::connected(&self.plugins.snapshot, &definition.id);
-        let removable = definition.custom && self.signed_in();
-        let remove_id = definition.id.clone();
-        let group = SharedString::from(format!("plugin-row-{section}-{index}"));
-        let icon_group = group.clone();
-        let hover = theme.settings_frame_bg().opacity(0.45);
-        let wash = theme.glass_hover();
+        let connected =
+            zuse_viewport::plugin_catalog::connected(&self.plugins.snapshot, &definition.id);
+        let selected = definition.id.clone();
         div()
             .id((section, index))
-            .group(group.clone())
             .flex_1()
             .min_w_0()
             .flex()
@@ -683,77 +680,101 @@ impl PluginsCard {
             .gap(px(8.))
             .p(px(8.))
             .rounded(px(10.))
-            .role(gpui::Role::Button)
-            .aria_label(format!(
-                "{} {}",
-                if connected { "Connected:" } else { "Connect" },
-                definition.name
-            ))
-            .when(!connected, |row| {
-                row.cursor_pointer().hover(move |s| s.bg(hover))
-            })
-            .child(catalog_ui::plugin_logo(
-                theme,
-                &definition.domain,
-                &definition.name,
-                36.,
-            ))
-            .child(catalog_ui::title_block(
-                theme,
-                definition.name.clone(),
-                definition.description.clone(),
-                crate::typography::TEXT_SM,
-                crate::typography::TEXT_XS,
-            ))
-            .when(removable, |row| {
-                row.child(
-                    widgets::ghost_action(theme)
-                        .id((section, index + 10_000))
-                        .opacity(0.)
-                        .group_hover(group.clone(), |s| s.opacity(1.))
-                        .child("Remove")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.ask_removal(
-                                zuse_protocol::plugin_state::Removal::Server,
-                                &remove_id,
-                                cx,
-                            );
-                        })),
-                )
-            })
+            .hover(|view| view.bg(theme.settings_frame_bg().opacity(0.45)))
             .child(
                 div()
-                    .size(px(28.))
-                    .flex_none()
-                    .rounded(px(7.))
+                    .id((SharedString::from(format!("{section}-details")), index))
+                    .role(gpui::Role::Button)
+                    .tab_index(0)
+                    .aria_label(format!("Open {} details", definition.name))
+                    .cursor_pointer()
+                    .flex_1()
+                    .min_w_0()
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .text_color(theme.text_muted)
-                    .when(!connected, |el| el.group_hover(group, move |s| s.bg(wash)))
-                    .child({
-                        let icon = crate::icons::icon(if connected {
-                            crate::icons::CHECK
-                        } else {
-                            crate::icons::PLUS
-                        })
-                        .size(px(15.))
-                        .text_color(theme.text_muted);
-                        if connected {
-                            icon
-                        } else {
-                            let text = theme.text;
-                            icon.group_hover(icon_group, move |s| s.text_color(text))
-                        }
-                    }),
+                    .gap(px(12.))
+                    .child(catalog_ui::plugin_logo(
+                        theme,
+                        &definition.domain,
+                        &definition.name,
+                        36.,
+                    ))
+                    .child(catalog_ui::title_block(
+                        theme,
+                        definition.name.clone(),
+                        definition.description.clone(),
+                        13.,
+                        12.,
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.browse_selected = Some(selected.clone());
+                        this.detail_menu = Default::default();
+                        cx.notify();
+                    })),
             )
-            .on_click(
-                cx.listener(move |this, _, window, cx| {
-                    this.connect(definition.clone(), window, cx)
-                }),
+            .child(
+                catalog_ui::icon_button(
+                    theme,
+                    (SharedString::from(format!("{section}-connect")), index),
+                    if connected {
+                        crate::icons::CHECK
+                    } else {
+                        crate::icons::PLUS
+                    },
+                    if connected {
+                        "Connected"
+                    } else {
+                        "Connect plugin"
+                    },
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if !connected {
+                        this.connect(definition.clone(), window, cx);
+                    }
+                })),
             )
             .into_any_element()
+    }
+
+    fn detail_action(
+        &mut self,
+        action: zuse_viewport::plugin_detail::Action,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use zuse_viewport::plugin_detail::Action;
+        let selected = self.browse_selected.as_ref().and_then(|id| {
+            zuse_viewport::plugin_catalog::catalog(&self.plugins.snapshot, "", false)
+                .into_iter()
+                .find(|p| &p.id == id)
+        });
+        match action {
+            Action::Back => {
+                self.browse_selected = None;
+                self.detail_menu = Default::default();
+            }
+            Action::MenuToggle => self.detail_menu.toggle(),
+            Action::MenuClose => self.detail_menu.close(),
+            Action::Connect => {
+                if let Some(definition) = selected {
+                    self.connect(definition, window, cx);
+                }
+            }
+            Action::Toggle { id, enabled } => self.set_enabled(json!(id), enabled, cx),
+            Action::Disconnect(id) => {
+                self.ask_removal(zuse_protocol::plugin_state::Removal::Connection, &id, cx)
+            }
+            Action::RemoveServer => {
+                if let Some(definition) = selected {
+                    self.ask_removal(
+                        zuse_protocol::plugin_state::Removal::Server,
+                        &definition.id,
+                        cx,
+                    );
+                }
+            }
+        }
+        cx.notify();
     }
 
     fn render_browse_section(
@@ -762,6 +783,7 @@ impl PluginsCard {
         title: &'static str,
         section: &'static str,
         items: Vec<zuse_protocol::plugins::PluginDefinition>,
+        two_columns: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut rows = items
@@ -772,6 +794,10 @@ impl PluginsCard {
             .into_iter();
         let mut grid = div().flex().flex_col().gap(px(2.));
         while let Some(left) = rows.next() {
+            if !two_columns {
+                grid = grid.child(left);
+                continue;
+            }
             let right = rows
                 .next()
                 .unwrap_or_else(|| div().flex_1().min_w_0().into_any_element());
@@ -798,11 +824,53 @@ impl PluginsCard {
     pub fn render_browse(
         &mut self,
         scroll: &gpui::ScrollHandle,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use zuse_viewport::plugin_catalog as catalog;
         let theme = Theme::of(cx).clone();
+        zuse_viewport::palette::set_light(theme.appearance.is_light());
+        if let Some(definition) = self.browse_selected.as_ref().and_then(|id| {
+            catalog::catalog(&self.plugins.snapshot, "", false)
+                .into_iter()
+                .find(|p| &p.id == id)
+        }) {
+            let colors = SetupColors {
+                text: theme.text,
+                muted: theme.text_muted,
+                background: theme.surface_card,
+                border: theme.border,
+                danger: theme.danger,
+            };
+            let status = self.render_status(&theme, cx);
+            return div()
+                .id("plugins-page")
+                .size_full()
+                .overflow_y_scroll()
+                .track_scroll(scroll)
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(768.))
+                        .mx_auto()
+                        .px(px(32.))
+                        .py(px(32.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(20.))
+                        .children(status)
+                        .child(zuse_viewport::plugin_detail::render(
+                            &definition,
+                            &self.plugins.snapshot,
+                            self.busy || self.plugins.active_attempt(),
+                            &self.detail_menu,
+                            colors,
+                            cx,
+                            Self::detail_action,
+                        )),
+                )
+                .into_any_element();
+        }
         let query = self.search.read(cx).text().trim().to_owned();
         let items = catalog::catalog(&self.plugins.snapshot, &query, self.connected_only);
         let connected = self.connected_count();
@@ -827,6 +895,7 @@ impl PluginsCard {
                 "Connected",
                 "plugin-connected",
                 items,
+                window.viewport_size().width >= px(1024.),
                 cx,
             ));
         } else {
@@ -843,13 +912,21 @@ impl PluginsCard {
                         "Featured",
                         "plugin-featured",
                         featured,
+                        window.viewport_size().width >= px(1024.),
                         cx,
                     ));
                 }
             }
             let mut all = items;
             all.sort_by_key(|item| item.name.to_lowercase());
-            sections.push(self.render_browse_section(&theme, "All plugins", "plugin-all", all, cx));
+            sections.push(self.render_browse_section(
+                &theme,
+                "All plugins",
+                "plugin-all",
+                all,
+                window.viewport_size().width >= px(1024.),
+                cx,
+            ));
         }
         let tabs = catalog_ui::segmented_tabs(
             &theme,
@@ -898,11 +975,11 @@ impl PluginsCard {
             .child(
                 div()
                     .w_full()
-                    .max_w(px(832.))
+                    .max_w(px(768.))
                     .mx_auto()
                     .px(px(32.))
-                    .pt(px(48.))
-                    .pb(px(48.))
+                    .pt(px(32.))
+                    .pb(px(32.))
                     .flex()
                     .flex_col()
                     .gap(px(20.))
@@ -914,7 +991,7 @@ impl PluginsCard {
                             .gap(px(4.))
                             .child(
                                 div()
-                                    .text_size(crate::typography::text_xl())
+                                    .text_size(crate::typography::ui_rems(20.))
                                     .line_height(crate::typography::ui_rems(28.))
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .child("Plugins"),

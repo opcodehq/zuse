@@ -40,9 +40,49 @@ pub fn tile(
     muted: Hsla,
     background: Hsla,
 ) -> Div {
-    let path = format!("plugin-icons/{}", item.domain);
-    let brand = div()
-        .size(px(36.))
+    div()
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .py(px(8.))
+        .px(px(8.))
+        .min_w_0()
+        .rounded(px(10.))
+        .child(logo(&item.domain, &item.name, 36., background, muted))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(3.))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(text)
+                        .truncate()
+                        .child(item.name.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(muted)
+                        .truncate()
+                        .child(item.description.clone()),
+                ),
+        )
+        .child(
+            crate::assets::icon(if connected { "check" } else { "plus" })
+                .size(px(15.))
+                .text_color(muted),
+        )
+}
+
+pub fn logo(domain: &str, name: &str, extent: f32, background: Hsla, muted: Hsla) -> Div {
+    let path = format!("plugin-icons/{domain}");
+    div()
+        .size(px(extent))
         .flex_none()
         .rounded(px(10.))
         .overflow_hidden()
@@ -59,43 +99,38 @@ pub fn tile(
                 .into_any_element()
         } else {
             div()
-                .child(item.name.chars().next().unwrap_or('?').to_string())
-                .into_any_element()
-        });
-    div()
-        .flex()
-        .items_center()
-        .gap(px(10.))
-        .py(px(8.))
-        .px(px(6.))
-        .min_w_0()
-        .rounded(px(8.))
-        .child(brand)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(3.))
                 .child(
-                    div()
-                        .text_size(px(13.))
-                        .text_color(text)
-                        .truncate()
-                        .child(item.name.clone()),
+                    name.chars()
+                        .next()
+                        .unwrap_or('?')
+                        .to_uppercase()
+                        .to_string(),
                 )
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(muted)
-                        .truncate()
-                        .child(item.description.clone()),
-                ),
-        )
-        .child(
-            crate::assets::icon(if connected { "check" } else { "plus" })
-                .size(px(15.))
-                .text_color(muted),
-        )
+                .into_any_element()
+        })
+}
+
+/// Choose an unused connection label, retaining disabled accounts in the check.
+pub fn next_label(snapshot: &Value, plugin: &PluginDefinition) -> String {
+    for index in 1.. {
+        let label = if index == 1 {
+            plugin.name.clone()
+        } else {
+            format!("{} {index}", plugin.name)
+        };
+        let taken = snapshot["connections"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|connection| {
+                connection["pluginId"] == plugin.id
+                    && connection["label"]
+                        .as_str()
+                        .is_some_and(|name| name.trim().to_lowercase() == label.to_lowercase())
+            });
+        if !taken {
+            return label;
+        }
+    }
+    unreachable!()
 }
