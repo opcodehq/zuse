@@ -87,10 +87,24 @@ async fn rpc(
             }
             ("createRequest", vec!["createResponse"])
         }
+        "CreateSnapshot" => {
+            fixture.creates.fetch_add(1, Ordering::Relaxed);
+            if fixture.truncate_create.load(Ordering::Relaxed) {
+                return Response::builder()
+                    .body(Body::from(vec![0, 0, 0, 0, 9, 1]))
+                    .unwrap();
+            }
+            ("captureRequest", vec!["captureResponse"])
+        }
+        "GetSnapshot" => ("snapshotRequest", vec!["snapshotResponse"]),
+        "DeleteSnapshot" => ("deleteRequest", vec!["emptyResponse"]),
         "GetOrgUsage" => ("orgRequest", vec!["orgResponse"]),
         "GetVmUsage" => ("machineRequest", vec!["machineResponse"]),
         "GetVm" => {
-            if body.as_ref() == frame(&decode(fixture.wire["missingRequest"].as_str().unwrap())) {
+            if fixture.wire["missingRequest"]
+                .as_str()
+                .is_some_and(|request| body.as_ref() == frame(&decode(request)))
+            {
                 return response(&fixture, &[], 5);
             }
             ("machineRequest", vec!["machineResponse"])
@@ -257,4 +271,86 @@ async fn sdk_usage_wire_matches_http_and_rejects_incomplete_or_non_usd_costs() {
         assert_eq!(fixture.exchanges.load(Ordering::Relaxed), 1);
         server.abort();
     }
+}
+
+#[tokio::test]
+async fn sdk_snapshot_capture_read_provenance_and_delete_never_replay_uncertain_capture() {
+    use prost::Message;
+    let golden: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/boxd-snapshot-wire.json")).unwrap();
+    let fixture = Fixture {
+        wire: Arc::new(golden.clone()),
+        exchanges: Arc::new(AtomicUsize::new(0)),
+        creates: Arc::new(AtomicUsize::new(0)),
+        truncate_create: Arc::new(AtomicBool::new(false)),
+        reject: Arc::new(AtomicBool::new(false)),
+    };
+    let app = axum::Router::new()
+        .route("/token", post(exchange))
+        .route("/boxd.api.v1.BoxdApi/{method}", post(rpc))
+        .with_state(fixture.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut provider = Boxd::new("fixture-api-key".into(), Some("fixture-org".into())).unwrap();
+    provider.set_test_endpoint(format!("http://{address}"));
+    let capture = provider
+        .create_snapshot("vm-fixture", "zuse-image-fixture")
+        .await
+        .unwrap();
+    assert_eq!(capture.id, "snapshot-original");
+    assert_eq!(capture.version, 7);
+    assert_eq!(capture.state, SnapshotState::Pending);
+    let ready = provider
+        .inspect_snapshot("snapshot-original")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ready.state, SnapshotState::Ready);
+    assert_eq!(ready.version, 7);
+    assert_eq!(ready.size_bytes, 34359738368);
+    assert_eq!(ready.memory_bytes, 17179869184);
+    provider
+        .verify_snapshot_source("vm-fixture", "snapshot-original", 7)
+        .await
+        .unwrap();
+    assert_eq!(
+        provider
+            .verify_snapshot_source("vm-fixture", "snapshot-original", 8)
+            .await
+            .err(),
+        Some(ProviderError::Rejected)
+    );
+    assert_eq!(
+        provider
+            .verify_snapshot_source("vm-fixture", "another-image", 7)
+            .await
+            .err(),
+        Some(ProviderError::Rejected)
+    );
+    fixture.truncate_create.store(true, Ordering::Relaxed);
+    assert_eq!(
+        provider
+            .create_snapshot("vm-fixture", "zuse-image-fixture")
+            .await
+            .err(),
+        Some(ProviderError::OutcomeUnknown)
+    );
+    assert_eq!(fixture.creates.load(Ordering::Relaxed), 2);
+    provider
+        .inspect_snapshot("snapshot-original")
+        .await
+        .unwrap();
+    assert_eq!(fixture.creates.load(Ordering::Relaxed), 2);
+    provider.delete_snapshot("snapshot-original").await.unwrap();
+    let source = super::boxd_wire::MachineDetails::decode(
+        decode(golden["machineResponse"].as_str().unwrap()).as_slice(),
+    )
+    .unwrap()
+    .source_info
+    .unwrap();
+    assert_eq!(source.id, "snapshot-original");
+    assert_eq!(source.kind, "snapshot");
+    assert_eq!(fixture.exchanges.load(Ordering::Relaxed), 1);
+    server.abort();
 }

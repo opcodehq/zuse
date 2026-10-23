@@ -40,6 +40,11 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Prepare a credential-free repository image in an isolated build machine.
+    PrepareImage {
+        #[arg(long)]
+        plan: PathBuf,
+    },
     Mcp,
     /// Capture or restore a fenced workspace using its scoped archive capability.
     Recover,
@@ -59,6 +64,14 @@ async fn run() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let args = Args::parse();
+    if let Some(Command::PrepareImage { plan }) = &args.command {
+        let plan: zuse_cloud_runtime::image::ImagePlan =
+            serde_json::from_slice(&std::fs::read(plan)?)?;
+        let result = zuse_cloud_runtime::image::prepare(&plan)
+            .map_err(|_| anyhow::anyhow!("image_preparation_failed"))?;
+        println!("{}", serde_json::to_string(&result)?);
+        return Ok(());
+    }
     if matches!(args.command, Some(Command::Mcp)) {
         return zuse_mcp::run(zuse_mcp::McpConfig::from_env()).await;
     }

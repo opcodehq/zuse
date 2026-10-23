@@ -67,6 +67,8 @@ pub struct CreatedMachine {
 
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct MachineDetails {
+    #[prost(message, optional, tag = "24")]
+    pub source_info: Option<VmSource>,
     #[prost(string, tag = "1")]
     pub vm_id: String,
     #[prost(string, tag = "2")]
@@ -201,4 +203,74 @@ pub struct VmUsageResponse {
     pub currency: String,
     #[prost(message, optional, tag = "5")]
     pub usage: Option<VmUsage>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct VmSource {
+    #[prost(string, tag = "1")]
+    pub kind: String,
+    #[prost(string, tag = "2")]
+    pub name: String,
+    #[prost(uint64, tag = "3")]
+    pub version: u64,
+    #[prost(string, tag = "4")]
+    pub id: String,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct CreateSnapshotRequest {
+    #[prost(string, tag = "1")]
+    pub vm: String,
+    #[prost(string, tag = "2")]
+    pub name: String,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct CreateSnapshotResponse {
+    #[prost(string, tag = "1")]
+    pub snapshot_id: String,
+    #[prost(string, tag = "2")]
+    pub name: String,
+    #[prost(uint64, tag = "3")]
+    pub version: u64,
+    #[prost(string, tag = "4")]
+    pub status: String,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SnapshotRequest {
+    #[prost(string, tag = "1")]
+    pub name: String,
+    #[prost(string, tag = "2")]
+    pub org: String,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SnapshotResponse {
+    #[prost(message, optional, tag = "1")]
+    pub snapshot: Option<SnapshotInfo>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SnapshotInfo {
+    #[prost(string, tag = "1")]
+    pub snapshot_id: String,
+    #[prost(string, tag = "2")]
+    pub name: String,
+    #[prost(uint64, tag = "3")]
+    pub version: u64,
+    #[prost(string, tag = "4")]
+    pub status: String,
+    #[prost(uint64, tag = "7")]
+    pub size_bytes: u64,
+    #[prost(int64, tag = "8")]
+    pub updated_at: i64,
+    #[prost(uint32, tag = "9")]
+    pub vcpu: u32,
+    #[prost(uint64, tag = "10")]
+    pub memory_bytes: u64,
+    #[prost(uint64, tag = "11")]
+    pub use_count: u64,
+    #[prost(int64, tag = "12")]
+    pub created_at: i64,
 }

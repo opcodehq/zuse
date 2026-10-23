@@ -34,6 +34,31 @@ pub struct Usage {
     pub complete: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SnapshotState {
+    Pending,
+    Ready,
+    Failed,
+}
+#[derive(Clone, Debug)]
+pub struct Snapshot {
+    pub id: String,
+    pub name: String,
+    pub version: u64,
+    pub state: SnapshotState,
+    pub size_bytes: u64,
+    pub vcpu: u32,
+    pub memory_bytes: u64,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+#[derive(Clone, Debug)]
+pub struct SnapshotCapture {
+    pub id: String,
+    pub name: String,
+    pub version: u64,
+    pub state: SnapshotState,
+}
 impl Boxd {
     /// SDK-compatible cluster override; infrastructure secrets never follow redirects.
     pub fn with_base_url(mut self, base: &str) -> Result<Self, ProviderError> {
@@ -293,6 +318,131 @@ impl Boxd {
                 ProviderError::InvalidResponse
             }
         })
+    }
+
+    /// One capture attempt only. Reusing a name bumps its version at the provider;
+    /// reconcilers must inspect a build-unique name after any uncertain result.
+    pub async fn create_snapshot(
+        &self,
+        machine: &str,
+        name: &str,
+    ) -> Result<SnapshotCapture, ProviderError> {
+        machine_id(machine)?;
+        snapshot_reference(name)?;
+        let captured: wire::CreateSnapshotResponse = self
+            .unary(
+                "CreateSnapshot",
+                wire::CreateSnapshotRequest {
+                    vm: machine.into(),
+                    name: name.into(),
+                },
+                true,
+            )
+            .await?;
+        if captured.snapshot_id.is_empty()
+            || captured.name != name
+            || captured.version == 0
+            || captured.version > 9_007_199_254_740_991
+        {
+            return Err(ProviderError::OutcomeUnknown);
+        }
+        let state = snapshot_state(&captured.status).map_err(|_| ProviderError::OutcomeUnknown)?;
+        Ok(SnapshotCapture {
+            id: captured.snapshot_id,
+            name: captured.name,
+            version: captured.version,
+            state,
+        })
+    }
+    /// Metadata reads neither wake a machine nor retry snapshot capture.
+    pub async fn inspect_snapshot(
+        &self,
+        reference: &str,
+    ) -> Result<Option<Snapshot>, ProviderError> {
+        snapshot_reference(reference)?;
+        let response: wire::SnapshotResponse = match self
+            .unary(
+                "GetSnapshot",
+                wire::SnapshotRequest {
+                    name: reference.into(),
+                    org: self.organization.clone(),
+                },
+                false,
+            )
+            .await
+        {
+            Err(ProviderError::NotFound) => return Ok(None),
+            other => other?,
+        };
+        let Some(snapshot) = response.snapshot else {
+            return Ok(None);
+        };
+        if snapshot.snapshot_id.is_empty()
+            || (snapshot.snapshot_id != reference && snapshot.name != reference)
+            || snapshot.name.is_empty()
+            || snapshot.version > 9_007_199_254_740_991
+            || snapshot.created_at < 0
+            || snapshot.updated_at < snapshot.created_at
+        {
+            return Err(ProviderError::InvalidResponse);
+        }
+        let state = snapshot_state(&snapshot.status)?;
+        if state == SnapshotState::Ready && snapshot.version == 0 {
+            return Err(ProviderError::InvalidResponse);
+        }
+        Ok(Some(Snapshot {
+            id: snapshot.snapshot_id,
+            name: snapshot.name,
+            version: snapshot.version,
+            state,
+            size_bytes: snapshot.size_bytes,
+            vcpu: snapshot.vcpu,
+            memory_bytes: snapshot.memory_bytes,
+            created_at_ms: snapshot.created_at,
+            updated_at_ms: snapshot.updated_at,
+        }))
+    }
+    pub async fn delete_snapshot(&self, reference: &str) -> Result<(), ProviderError> {
+        snapshot_reference(reference)?;
+        match self
+            .unary::<wire::Empty>(
+                "DeleteSnapshot",
+                wire::SnapshotRequest {
+                    name: reference.into(),
+                    org: self.organization.clone(),
+                },
+                true,
+            )
+            .await
+        {
+            Ok(_) | Err(ProviderError::NotFound) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+    /// Check the created machine's recorded provenance, not just the current
+    /// snapshot head. This detects a capture/version change racing allocation.
+    pub async fn verify_snapshot_source(
+        &self,
+        machine: &str,
+        snapshot: &str,
+        version: u64,
+    ) -> Result<(), ProviderError> {
+        machine_id(machine)?;
+        snapshot_reference(snapshot)?;
+        if version == 0 || version > 9_007_199_254_740_991 {
+            return Err(ProviderError::Rejected);
+        }
+        let details: wire::MachineDetails =
+            self.unary("GetVm", machine_id(machine)?, false).await?;
+        let source = details.source_info.ok_or(ProviderError::Rejected)?;
+        if details.vm_id != machine
+            || source.kind != "snapshot"
+            || source.id != snapshot
+            || source.version != version
+        {
+            return Err(ProviderError::Rejected);
+        }
+        Ok(())
     }
 
     pub async fn inspect(&self, id: &str) -> Result<Option<Machine>, ProviderError> {
@@ -628,5 +778,20 @@ mod usage_configuration_tests {
                     .is_err()
             );
         }
+    }
+}
+
+fn snapshot_reference(reference: &str) -> Result<(), ProviderError> {
+    if reference.is_empty() || reference.len() > 512 || reference.chars().any(char::is_control) {
+        return Err(ProviderError::Rejected);
+    }
+    Ok(())
+}
+fn snapshot_state(state: &str) -> Result<SnapshotState, ProviderError> {
+    match state {
+        "pending" => Ok(SnapshotState::Pending),
+        "ready" => Ok(SnapshotState::Ready),
+        "failed" => Ok(SnapshotState::Failed),
+        _ => Err(ProviderError::InvalidResponse),
     }
 }

@@ -12,7 +12,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, first-launch attachments/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker, guest image preparation and Boxd snapshot/provenance primitives, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC and scoped browser uploads added; full cloud tools acceptance, sync/device bridge/org automation pending | Guest text/PNG bytes, image reads and provider consumption pass with fixture runtime; other tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; remaining: complete live sync and custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray and archived cloud transcript screens added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -2079,3 +2079,58 @@ billing section displays the existing read-only/unavailable state. Live GitHub,
 live billing and Mac acceptance are not established by this run. Remaining work
 includes GitHub enrollment/authority in Rust, image build/rebuild operations,
 complete Cloud settings and full screen parity.
+
+
+### Guest image preparation and Boxd snapshot primitives
+
+The packaged Rust guest now supports `prepare-image --plan <file>` for an isolated
+build machine. It prepares bare repository caches, validates branch heads and Git
+object integrity, bounds aggregate cache size and publishes an identity-bound
+manifest after credential cleanup. Structured progress/logs retain build/project
+IDs and actual phases without copying Git diagnostics or secret values. The
+manifest declares the actual Rust RPC/storage/session contracts; no conversation
+engine or enrolled runtime storage is initialized by this command.
+
+Git commands ignore inherited account configuration and credential helpers. Private
+GitHub access uses explicitly supplied mode-0600, single-link, caller-owned token
+files plus a temporary askpass helper. Tokens are refused for other production
+hosts. Consumed secrets/helper files are removed on success and Git failures;
+remaining secret files prevent readiness. Existing user history, enrollment data,
+account credentials and SSH identity are refused instead of being cleared.
+Repository caches must be bare and retain the expected credential-free origin.
+
+Retries bind to the original plan digest/build ID, recheck the original manifest,
+repository paths, commit heads and object integrity, and refuse changed/corrupt
+ready data. A failed new preparation does not overwrite the previous ready
+manifest. A cached image can materialize an independent working tree with the
+original Git objects and bytes.
+
+The Boxd adapter now implements the SDK 0.2.14 snapshot create/read/delete contracts
+and recorded-machine snapshot provenance. Capture is one mutation attempt: a lost
+or malformed response remains uncertain, and metadata polling never replays it.
+Names must be unique per build because Boxd increments a reused name's version.
+An explicit provenance check compares the restored machine's source kind, immutable
+snapshot ID and version; legacy missing provenance is refused. Snapshot reads do not wake compute.
+
+Verification:
+
+- Two guest workflows pass with a real authenticated local Git HTTP server:
+  private clone, bare-cache integrity, idempotent retries, temporary
+  credential cleanup, failed rebuild preservation, independent working-tree
+  reopen and corrupted-cache refusal. Enrolled user files remain byte-identical
+  after rejected preparation. `.context/cloud-image-guest-tests.log`.
+- Four Boxd transport checks pass, including independently SDK-encoded snapshot
+  requests/responses, exact capture/read/delete framing, source ID/version
+  validation and no automatic replay after uncertain capture. Existing machine
+  and usage operations still pass. `.context/cloud-image-snapshot-tests.log`.
+- The guest executable builds (`.context/cloud-image-guest-build.log`). Its actual
+  `prepare-image` command clones a real public HTTPS repository, reopens the same
+  manifest idempotently, and materializes its original commit and README from the
+  cache. `.context/cloud-image-guest-cli-acceptance.json` and
+  `.context/cloud-image-guest-cli.log`. No paid provider compute is used.
+
+The control-plane build admission, scoped private-repository grant issuance,
+durable worker scheduling, capture/promotion/cleanup and account image UI are
+still open. These verified guest/provider pieces are prerequisites for that worker;
+they do not establish a complete image build/rebuild workflow or live Boxd
+acceptance. The existing ready-image records remain untouched.

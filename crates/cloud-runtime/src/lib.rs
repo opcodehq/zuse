@@ -32,3 +32,5 @@ pub mod projection;
 
 #[cfg(feature = "engine")]
 pub mod recovery;
+
+pub mod image;
