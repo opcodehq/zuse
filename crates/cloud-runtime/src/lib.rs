@@ -21,3 +21,5 @@ pub mod mailbox;
 pub mod engine;
 
 pub mod repository;
+
+pub mod grants;

@@ -785,3 +785,5 @@ mod steering_control_tests {
 }
 
 mod tool_output;
+
+pub mod credentials;

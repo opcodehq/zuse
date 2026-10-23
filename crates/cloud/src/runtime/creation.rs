@@ -154,6 +154,13 @@ impl RuntimeControl {
         {
             return Err(ApiError::conflict("cloud_project_runtime_update_required"));
         }
+        let brokered = build["settings"]["providerAuthDeliveryVersion"] == 1;
+        if brokered
+            && (self.grant_issuer.is_none()
+                || !matches!(body.agent.as_str(), "claude" | "claude-code"))
+        {
+            return Err(ApiError::conflict("runtime_provider_auth_adapter_required"));
+        }
         let snapshot = build["snapshot_id"]
             .as_str()
             .filter(|s| !s.is_empty())
@@ -202,7 +209,7 @@ impl RuntimeControl {
             .master
             .create_transcript_key(owner, &id)
             .map_err(|_| ApiError::unavailable("cloud_transcript_key_unavailable"))?;
-        let config = json!({"runtimeGeneration":1,"gatewayEpoch":1,"rustCreateRequestDigest":digest,"rustCommandMailboxEnabled":mailbox,"runtimeRpcProtocol":zuse_protocol::cloud_gateway::RUST_RPC,"title":title,"agent":body.agent,"initialTurnId":turn,"runtimeMode":intent["runtimeMode"],"permissions":intent["permissions"],"repositoryCache":"account-image","rustRepositoryCheckout":{"branch":branch,"baseRef":body.base_ref},"startupTimings":{"requestedAt":now}});
+        let config = json!({"runtimeGeneration":1,"gatewayEpoch":1,"rustCreateRequestDigest":digest,"rustCommandMailboxEnabled":mailbox,"runtimeRpcProtocol":zuse_protocol::cloud_gateway::RUST_RPC,"title":title,"agent":body.agent,"initialTurnId":turn,"providerAuthMode":if brokered{"broker-v1"}else{"legacy-image"},"runtimeMode":intent["runtimeMode"],"permissions":intent["permissions"],"repositoryCache":"account-image","rustRepositoryCheckout":{"branch":branch,"baseRef":body.base_ref},"startupTimings":{"requestedAt":now}});
         sqlx::query("INSERT INTO api_cloud_workspaces(workspace_id,account_id,project_id,build_id,provider,runtime_state,chat_id,initial_session_id,branch,base_ref,state,desired_state,status_code,wrapped_transcript_key,idempotency_key,request_config,next_action_at,revision,created_at,updated_at,last_activity_at) VALUES($1,$2,$3,$4,$5,'offline',$6,$7,$8,$9,'queued','ready','provisioning-queued',$10,$11,$12,$13,0,$13,$13,$13)")
             .bind(&id).bind(owner).bind(&body.project_id).bind(build["build_id"].as_str()).bind(&body.provider_id).bind(&chat).bind(&session).bind(&branch).bind(&body.base_ref).bind(wrapped).bind(&body.idempotency_key).bind(config).bind(now).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO api_cloud_workspace_launch_intents(workspace_id,account_id,chat_id,session_id,turn_id,command_id,ciphertext,expires_at,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)").bind(&id).bind(owner).bind(&chat).bind(&session).bind(&turn).bind(&command).bind(ciphertext).bind(now+86_400_000).bind(now).execute(&mut *tx).await?;

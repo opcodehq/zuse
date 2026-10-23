@@ -70,3 +70,5 @@ pub mod notifications;
 
 pub mod plugin_setup;
 pub mod plugin_state;
+
+pub mod cloud_auth;

@@ -1,0 +1,53 @@
+{
+  "source": "Independent Node crypto implementation of the original account-authority grant wire at 2016cf4",
+  "requestId": "f1fdba90-e497-4a6c-bc89-5106384ec37c",
+  "now": 1700000001000,
+  "good": {
+    "protocolVersion": 1,
+    "providerId": "claude",
+    "requestId": "f1fdba90-e497-4a6c-bc89-5106384ec37c",
+    "keyThumbprint": "meQ5wss4lrLXqXgk3EZxjFb94OMd3FK7hXOyLflQqw4",
+    "authorityIncarnationId": "authority-original",
+    "authorityEpoch": 3,
+    "wrappedKey": "LpFUYX38FgTs9DposSO8wa4fBlo6-3zo2oHDLSs-2YTNRA3HYHvI0wbig-LCmz1SyRp2VijLm3EjxENu8VgolleQhMluTVVT6fKY0BPCDGnvt4QfXmE35qMvuIuMXDcnXkuGBJ92htyxO1ghnb71P97pXxXPuLrJSeSLihdZI_DQgYPvGa0hGoG26v3q6QES3u03kswHpvZM9g9wJoQD3do81CvWBLfDCPo6slEZmhiBs4LbO69_Kc2DD9XMgVppvfOcqVN66PCb5B2LePTKoYYLtWyWRdHYqn5sOc6zL8ArhjiFhI407EU1CEzQiXpleXgIAaH9nSDYu1_3qjHtbg",
+    "iv": "WuTMjO6u8ef4Sial",
+    "ciphertext": "hhj9xJQOnh7aH82H1HTF76jAVVMrBJbYV_XEJZFWtIuKFKNFfAzASm-nbDqeWjRXpSZM17Zi12HmWOLkg9gSV2RiW8NFc7bjABVOp8Sujg33aD6FvNiq4i-VV-VvcJF745tuSBVI6PWUA9-pqvDHADqS-lQPHSy03cpi0kI-EJ7ZR6SnZGjFS9fyjVKOfpZ4mViSnk51gK0FqLLffJ5yzpKo3EFyitCIrpjCFP49fceROrFLgh1UlY4USZdHAq78GTN9TwMnrfKK48tNV9uZ_kTJUYC_gxxiIYFYizq4vtwACouupE0YXNq9lB-oSZeKfwaBOw2tYCQkEgVsZx5xtLdipfR0Ti8ZshP8tZ2gPUO2cR04TIhLPEW6wnAqdk_vkjl3-wpqhtC_Fi1Cmm_lGDJIk_d9V_J0m3ZmUvkD33lTHkTaoHY2qHs8M-wfczkDV2iqwcRLbCXnPePJs4mIqPyDiCVXwHUXA1Q3CLXzzt04oxgRq0nHtBWBfzkpqHYrfcW6Og_jurdEy5tx1oGLpgP0K27HjYV3",
+    "tag": "g4BoblOSfA6eyMo6z6YLnA"
+  },
+  "wrongAccount": {
+    "protocolVersion": 1,
+    "providerId": "claude",
+    "requestId": "f1fdba90-e497-4a6c-bc89-5106384ec37c",
+    "keyThumbprint": "meQ5wss4lrLXqXgk3EZxjFb94OMd3FK7hXOyLflQqw4",
+    "authorityIncarnationId": "authority-original",
+    "authorityEpoch": 3,
+    "wrappedKey": "pn8CTqnqr56MlcD1V6RIZnJeSa-ANMmmH0LayqqKKTMpWEcunrd2CAkXyDlQndoG1zC3897J4AZz8m5460d_9VhopQjGKqO3tQZhtKlJHdqf1JQOr46Je37vJeVh-tbP0AcwXI00G2Qyt8j-YTbaUdKqGblxxiG7qTSUavKayDIYOisDjv-kYhtx4rOpjy4XMmAbbPfbo0YzzKqE7klqqltatMEZ7iGeYubXkHUGEyFUsZszSP-tkXTRA3Wjd80-P1i4l7UDRPV8tawbYGucFO1JDYMdLVE96NOf8wM_yfwxI0QxKk9jX0Omn2EBxnOuD82yW3PqlQAzssI3GhNsrg",
+    "iv": "nIO-1ov_JLtu8Crf",
+    "ciphertext": "yGY-5dyUw2snTVmaAIt0cKKlvf-FEgUJPZN0ZW1_lw1VlaMtD9H_pSJFPmQXhxzh2GexXGkcJJMSwkBzKFczvWOTBbBrDSGKbdlWdd4Dtr_qNQ4S1wWRTqk3xekippK-Izk4m_iO9lO7efarUEjO-ESTyGozCd-AA1WqgGocI3hThmeRAR45DeMRQl-Blwt71uwJzrRTjFUHQPACvYoTTFsBu8VBTH246sYr08EfPukpEgxzSgWY0lB3iGhDH-d6IRdlShvUFInsCqLQV3-RuBLsFs_l0PuAk1ikGjrQLs4BabWq_m3lolfAXXwpThmvgHC7beOvl8DASGS_l-uw30UlcwNsS9qUoK74ghlUWCNcEKGNphItxImTeQipp0kIdiAbIeVsiMYNnsUGO9o0RMV2SVSH8reN4dUFEsOv7LdIh5ARufIcNN0b5GYfYfV2V59rJRcjmoa5CRcM19dXHMplC3ZfOXJCy6d00Sb-uXAS6pxZmOCT7foN_tczCsJ4eQjNM6KHuQN192FomQe-UsCshPqf",
+    "tag": "xV9idDa5bkMNY8ZbGx3igg"
+  },
+  "wrongGeneration": {
+    "protocolVersion": 1,
+    "providerId": "claude",
+    "requestId": "f1fdba90-e497-4a6c-bc89-5106384ec37c",
+    "keyThumbprint": "meQ5wss4lrLXqXgk3EZxjFb94OMd3FK7hXOyLflQqw4",
+    "authorityIncarnationId": "authority-original",
+    "authorityEpoch": 3,
+    "wrappedKey": "ZgxrXdRtnIu55az2MdDxxA8zVhVdHskoj9x1JgdEUcIppTGr8Jn1wC-_Ad9U4BXEnpxzX18RiAzrPilZ0qzxydzMlrT5QQtN-paZaP8-SxXpmyiKK879air47PRazgBXJtdQS-G2AMYDJJfW4CG-OyX1RWPwYnxrvktPKN2ZWrfihVvmFTvnOSszKk1zaKnCyxu9AY6ugQOKjEYrzahpB2E9XUKjSWnOHTEMEbi1ZQD8zpx5_8T1AV4XuJuimsUggQ5SrlwZZ1eWteUK83X4QBMSPr9Y67AMNfZg0ZSEIPrNmb4W2SKSKoCHIH_ulhiJEod7MVprnTdKFtZo_Yd2mw",
+    "iv": "JXDQFvajs3Mt2aMZ",
+    "ciphertext": "IaGyP6MtO8oSy9x1FaXLmVA8uVywO_cas4nGq-LcurDFI7xaV0WoXuF6PT2172faFIu1xbn0hwVIhLd7T0MeQ7uKN8wSNHqfXst-8rh8DDONCE-EQkC-0PS8Gb9wjIcTdc93ND6TplpYMiw5ZRLaV8gRhxo4SFXOvk09zWtAGMVNxj4VVmzVMHNsGzPfleI_x92SW5EFA86uz-BmCgdcITlFRp17Ze0bfmdAF_hzvPjl1MnN5fGsD8ZCzzQt9NoagIptQjoYK12Zk53oR2ZCYXBybzTS2XlTNicQFpsHqC8WKl9RTqATu1or9y4rHjGBzzlk7J6b-0muAGvwS_PY0EkTE0E0wm_ud9ccuxfec2jO7AzPbthl7NOj0WfbDIO6ESz8unVfYlKCXMxpikrMZFnXJMDq7WBgOVMh4DQB7p2KPxZhY0JhOhM4N-rDb6YyFjYw05kBvp-cvNq3QtJObRiwbYAq68N17m3LWLhuM1_x0lRReTgq0sTqxEYY5uSVuFFG94pZEyVpHorrybUvQzb4qn0F5faQ",
+    "tag": "d-bfWuCrZpeGiV2LdJxFzQ"
+  },
+  "shortLived": {
+    "protocolVersion": 1,
+    "providerId": "claude",
+    "requestId": "f1fdba90-e497-4a6c-bc89-5106384ec37c",
+    "keyThumbprint": "meQ5wss4lrLXqXgk3EZxjFb94OMd3FK7hXOyLflQqw4",
+    "authorityIncarnationId": "authority-original",
+    "authorityEpoch": 3,
+    "wrappedKey": "EOk5msEx53wVxEA8qZGsy-L_hXgzFW5tfjZ5jXbC2w76MFxWgQ-dKNb0Imb_QMDY3VNHOciiK0KQvGfW-Ii7-1kQL1c61eTrWHOqJEvOjSh29e45g4ap6SnODllBatNgE6B52tg_KkGclIF5V2uyH9IVCgJkAQ7S6e6k5n9G3IKrswIEowmj0aN_whkzPWQZ0y7lDliHeAdfG4jbTAqUlp_eofmDTKaDK1MiTHzL6EofmEjJx3okyRE0OSl2uULlunML6KQ_385TihxsD-eZLYHb9Issmy60yPfPq9N5pRwoDuhDNlr1KaGWmKdszvOSZ5rZZxBU0FNYzfYXM7aJLw",
+    "iv": "RxAj0xCOMFdGdgWZ",
+    "ciphertext": "al9m-rHA8fpBoddd470j3DEB6CsGqtacBvrCkCbuVyD-NNq1MQX60uwWqRMmTdEmg2Qtpl325A0VxBQduBTW9GX5nFL4BJALyPv--7O1TFsoZPhQroANYbANXYt0YKPrYwMM2rjuCBzvpApsUUF3CJRTVsPKD_D3Z3ZpG6EfXzJFnuax8-PIDT3askAHEcleb1FYRhNgR7vmtxCJbxbSnW840OswnvlmoetVemgkicqwMOfLPmxmb9pxeN0Wrc7j8bNVWszGr9Qyru4hKOlRlLBlI_lkSbeyWxz4NRnDpt4-z3IZWW2BF3H8Pr5-7VZ2usE-M_lnb1jPWc2wyLr9QIg25kSQH3EKzy_ZnsZOK_i7i75ME7cIB_ZwQpo70SMJEK0p3-xhE97n_0CmtXNtd9L8R3UCefsm-XuL9VfiPg4EcDFCFYcW-TVxOZQ_symYcZOUtx2iJgrlKjwYFLHCv0GEYW-9rS0lFgsaTKIza_FFet5RclLUnf53kmIjbkxeacRZuXdKzlBNzMvQZR9Whu0sV9f1CAX-",
+    "tag": "pckYfUPg7lzPS00ifI3RdA"
+  }
+}

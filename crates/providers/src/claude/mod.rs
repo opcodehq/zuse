@@ -144,6 +144,7 @@ fn option_is_on(options: &serde_json::Map<String, Value>, key: &str) -> bool {
 /// it at a fake CLI with [`ClaudeHarness::with_executable`].
 pub struct ClaudeHarness {
     executable: Option<PathBuf>,
+    credentials: Option<std::sync::Arc<dyn crate::credentials::CredentialResolver>>,
     /// Grace between the interrupt control request and SIGTERM.
     interrupt_grace: Duration,
     /// Grace between SIGTERM and SIGKILL.
@@ -157,6 +158,7 @@ impl Default for ClaudeHarness {
     fn default() -> Self {
         Self {
             executable: None,
+            credentials: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             initialize: discovery::InitializeCache::default(),
@@ -169,6 +171,13 @@ impl Default for ClaudeHarness {
 impl ClaudeHarness {
     pub fn new() -> Self {
         Self::default()
+    }
+    pub fn with_credentials(
+        mut self,
+        credentials: std::sync::Arc<dyn crate::credentials::CredentialResolver>,
+    ) -> Self {
+        self.credentials = Some(credentials);
+        self
     }
 
     /// Use a fixed CLI binary instead of PATH/known-location resolution.
@@ -298,6 +307,9 @@ impl ClaudeHarness {
     async fn probe_initialize(&self, cwd: Option<&std::path::Path>) -> Result<Value, HarnessError> {
         let exe = self.resolve_executable()?;
         let mut cmd = Command::new(&exe);
+        if let Some(credentials) = &self.credentials {
+            credentials.environment().await?.apply(&mut cmd);
+        }
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
         }
@@ -568,6 +580,18 @@ impl Harness for ClaudeHarness {
     }
 }
 
+fn interrupted_start(
+    session_id: Option<String>,
+) -> BoxStream<'static, Result<AgentEvent, HarnessError>> {
+    futures::stream::iter([Ok(AgentEvent::Done {
+        status: DoneStatus::Interrupted,
+        result: None,
+        error: None,
+        session_id,
+    })])
+    .boxed()
+}
+
 impl ClaudeHarness {
     async fn run_with_mode(
         &self,
@@ -577,6 +601,16 @@ impl ClaudeHarness {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let exe = self.resolve_executable()?;
         let mut cmd = self.build_command(&exe, &request);
+        if let Some(credentials) = &self.credentials {
+            let environment = tokio::select! {biased;
+                _=controls.interrupt.cancelled()=>return Ok(interrupted_start(request.resume.clone())),
+                environment=credentials.environment()=>environment?,
+            };
+            environment.apply(&mut cmd);
+        }
+        if controls.interrupt.is_cancelled() {
+            return Ok(interrupted_start(request.resume.clone()));
+        }
         if title_only {
             cmd.args([
                 "--system-prompt",

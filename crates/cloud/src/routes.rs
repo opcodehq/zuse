@@ -83,6 +83,10 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
     if state.runtime.is_some() {
         app = app
             .route(
+                "/v1/cloud/workspaces/{id}/runtime/providers/{provider}/grant",
+                post(provider_grant).layer(DefaultBodyLimit::max(24 * 1024)),
+            )
+            .route(
                 "/v1/cloud/workspaces/{id}/commands",
                 post(command_enqueue).layer(DefaultBodyLimit::max(
                     zuse_protocol::cloud_commands::MAX_ENVELOPE_BYTES,
@@ -666,4 +670,31 @@ async fn workspace_create(
         );
     }
     Ok(response)
+}
+
+async fn provider_grant(
+    State(state): State<AppState>,
+    Path((id, provider)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_auth::ProviderGrantRequest>, JsonRejection>,
+) -> Result<Json<zuse_protocol::cloud_auth::SealedProviderGrant>, ApiError> {
+    let provider = serde_json::from_value(serde_json::json!(provider))
+        .map_err(|_| ApiError::not_found("cloud_provider_not_found"))?;
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_provider_grant_request"))?;
+    let credential = runtime_bearer(&headers)?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_writes_disabled"))?;
+    Ok(Json(
+        runtime
+            .provider_grant(
+                &id,
+                credential,
+                provider,
+                body,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
 }

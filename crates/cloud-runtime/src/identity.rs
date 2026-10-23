@@ -230,6 +230,17 @@ impl Identity {
     pub fn acknowledged(&self) -> bool {
         self.stored.bootstrap_acknowledged
     }
+    pub fn grant_recipient(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+    ) -> Result<crate::grants::GrantRecipient> {
+        crate::grants::GrantRecipient::new(
+            self,
+            bootstrap,
+            self.credential.clone(),
+            self.stored.credential_public_jwk.clone(),
+        )
+    }
     pub fn request(&self) -> CloudRuntimeBootstrapRequest {
         CloudRuntimeBootstrapRequest {
             credential_public_jwk: self.stored.credential_public_jwk.clone(),

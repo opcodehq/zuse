@@ -14163,6 +14163,7 @@ dependencies = [
  "zuse-doc",
  "zuse-engine",
  "zuse-protocol",
+ "zuse-providers",
  "zuse-rpc",
 ]
 
@@ -14410,6 +14411,7 @@ dependencies = [
  "tracing",
  "uuid",
  "windows-sys 0.61.2",
+ "zeroize",
  "zip",
  "zuse-protocol",
  "zuse-voice-media",

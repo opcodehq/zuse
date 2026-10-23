@@ -11,8 +11,8 @@ completed UI images in the final user-facing report.
 | Milestone | Implementation | Acceptance |
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
-| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input delivery. Remaining: complete image selection/builds, provider grants, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Existing entitlement/ledger/reservation capacity reads ported; remaining: Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
+| B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, context/attachment delivery, remaining creation variants and UI flows | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
+| C: billing/admin | Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, Stripe/Polar writes, settlement/export, provider credentials, images, machine administration | Capacity/admission fixtures pass; live billing acceptance pending |
 | D: tools/integrations | Existing local tools; hosted routing/sync/device bridge/org automation pending | Pending |
 | E: archive lifecycle | Existing local archive; legacy-compatible cloud manifest/status/retention contracts added; cloud backup/retirement/restore/delete pending | Pending |
 | F: complete GPUI parity | Existing partial UI; complete reference comparison pending | Pending |
@@ -46,6 +46,8 @@ With `ZUSE_CLOUD_RUNTIME_WRITES=true`, these routes are additionally registered:
 - `POST /v1/cloud/workspaces/:id/runtime/bootstrap`.
 - `POST /v1/cloud/workspaces/:id/runtime/bootstrap/ack`.
 - `POST /v1/cloud/workspaces/:id/runtime/credentials/renew`.
+- `POST /v1/cloud/workspaces/:id/runtime/providers/:provider/grant` (original
+  account-authority ciphertext, including the Codex compatibility envelope).
 - `POST /v1/cloud/workspaces/:id/runtime/storage/enroll` (prepare/commit activation barrier).
 - `POST /v1/cloud/workspaces/:id/ready` (`agent-started` receipt for Rust guests).
 - `POST /v1/cloud/workspaces/:id/gateway/ticket`.
@@ -92,6 +94,7 @@ Configuration:
 | `CLOUD_DATA_ENCRYPTION_KEY` | Existing master key required for runtime writes; legacy fallback `CLOUD_CREDENTIAL_VAULT_KEY` |
 | `RELAY_MINT_PRIVATE_JWK` | Existing Ed25519 mint key required for runtime writes |
 | `API_ISSUER` | Runtime ticket/gateway origin, defaults `https://api-rust.zuse.sh`; plaintext HTTP is allowed only for loopback acceptance |
+| `ZUSE_CLOUD_LEGACY_AUTH_URL` | Optional exact HTTPS origin of the existing account authority API; no default, credentials are never redirected |
 | `CLOUD_WORKSPACE_IDLE_TIMEOUT_MS` | Existing idle policy; defaults ten minutes, preserves earlier runtime-operation deadlines |
 
 Organization access rechecks membership and separates content/admin/billing roles.
@@ -677,3 +680,67 @@ guest strict Clippy pass. Production creation stays disabled by default. No bill
 owner transfer, payment/export write, live-provider turn or full milestone completion
 is claimed. The next substantial backend work remains provider grants, images and
 complete billing/lifecycle integration before customer activation.
+
+
+### Account-authority grants and native Claude delivery
+
+The runtime grant route binds requests to the current Rust workspace owner,
+generation, enrolled storage, credential hash/expiry and exact RSA thumbprint.
+It supports the original typed provider/Codex grant envelopes and rechecks runtime
+and authority incarnation/epoch after issuance. A delayed result cannot pass a
+concurrent delete, credential revocation, authority rotation or writer handoff.
+Reusable credentials and refresh tokens never enter mailbox commands or chat state.
+
+For **existing legacy-owned account authorities**, the optional
+`ZUSE_CLOUD_LEGACY_AUTH_URL` compatibility adapter delegates to their existing
+serialized executor. It preserves the existing account, provider login, authority
+storage, cache and sole refresh writer. The transport pins an HTTPS origin, refuses
+the Rust API's own origin, never follows redirects, bounds responses and returns
+only known error categories. It forwards only the enrolled workspace bearer and
+public recipient request, never a user session or administrative provider key.
+Missing authority ownership is legacy; an explicitly Rust-owned authority is
+rejected rather than silently delegated back. This is a migration adapter, **not
+completion of the Rust account-authority rewrite**. Native authority provisioning,
+configuration/login/logout, refresh/import and ownership transfer remain required
+in C/G before the legacy service can be retired. Old schedulers must still be fenced
+before any production Rust workspace activation.
+
+The guest opens the original RSA-OAEP/SHA-256 wrapped AES-256-GCM grant, authenticating
+the original ordered AAD and binding plaintext to account, workspace, generation,
+provider, key and authority incarnation/epoch. Grants need at least one minute of
+remaining validity. The broker coalesces concurrent resolves, retains request identity
+on transport failure and refreshes its in-memory cache on demand within the original
+five-minute margin. Runtime bearer renewal reaches it through the shared credential
+watch channel. It does not store plaintext grants or refresh credentials on disk.
+
+The native Claude driver now accepts a host credential resolver for both discovery
+and runs. Credential waits in a run honor Stop before spawning a child; a late
+successful grant cannot start a cancelled prompt. Secrets go directly into that child command's environment; serialized
+RunRequest/session data remain unchanged. Brokered children clear conflicting
+inherited Anthropic/OAuth credentials first. Local drivers without a resolver keep
+their existing behavior. A prepared Rust build declaring
+`providerAuthDeliveryVersion: 1` selects this broker path; creation requires a
+configured issuer and currently accepts the Claude adapter only. The brokered guest
+registers only supported drivers, preventing an unsupported provider from falling
+back to an unrelated local login. Custom endpoints and Codex/Cursor/Grok runtime
+adapters, including external-token refresh callbacks, remain unfinished and gated.
+
+Acceptance launches the actual native Claude Rust driver with an explicit fixture
+CLI, through Axum/PostgreSQL and an independent Node authority envelope. Both run
+and discovery receive only the expected credential; stale inherited accounts are
+removed. The executed turn survives guest reopen without replay, and plaintext
+credentials are absent from runtime/checkout files, including SQLite/WAL/history.
+Acceptance also holds a grant response, stops startup, releases the late response
+and proves no cancelled prompt reaches the provider. A later explicit run succeeds.
+Deletion during issuance suppresses ciphertext and fences the guest. Independent
+Node-generated fixtures prove scope/generation/expiry rejection and authenticated
+metadata/ciphertext tampering rejection. A real HTTP transport fixture verifies
+request preservation, refusal to redirect the bearer and sanitization of upstream
+errors. No live account authority or model-provider turn was exercised.
+
+Verification: 30 local cases pass (seven cloud fixture/unit checks, 15 PostgreSQL/
+HTTP/gateway/engine/process scenarios and eight guest crypto/storage/repository
+checks). API/guest builds, scoped strict Clippy, Rust formatting and diff checks
+pass. The creation allowlist and authority delegation remain off by default.
+Complete billing, image preparation, archive/restore/delete, UI parity and live
+migration acceptance remain required by the milestone ledger.

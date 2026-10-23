@@ -6,9 +6,10 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-engine = ["dep:zuse-engine", "dep:zuse-doc"]
+engine = ["dep:zuse-engine", "dep:zuse-doc", "dep:zuse-providers"]
 
 [dependencies]
+zuse-providers = { workspace = true, optional = true }
 zuse-engine = { workspace = true, optional = true }
 zuse-doc = { workspace = true, optional = true }
 anyhow.workspace = true

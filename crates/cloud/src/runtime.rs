@@ -19,6 +19,7 @@ use subtle::ConstantTimeEq;
 
 pub mod allocation;
 pub mod creation;
+pub mod grants;
 pub mod mailbox;
 
 pub struct RuntimeConfig {
@@ -26,6 +27,7 @@ pub struct RuntimeConfig {
     signer: TicketSigner,
     idle_ms: i64,
     creation_accounts: Vec<String>,
+    legacy_auth_url: Option<String>,
 }
 impl RuntimeConfig {
     pub fn from_env() -> anyhow::Result<Option<Self>> {
@@ -49,6 +51,7 @@ impl RuntimeConfig {
             "Invalid cloud idle timeout"
         );
         Ok(Some(Self {
+            legacy_auth_url: env::var("ZUSE_CLOUD_LEGACY_AUTH_URL").ok(),
             creation_accounts: env::var("ZUSE_CLOUD_CREATE_ACCOUNTS")
                 .unwrap_or_default()
                 .split(',')
@@ -71,6 +74,7 @@ pub struct RuntimeControl {
     signer: TicketSigner,
     idle_ms: i64,
     creation_accounts: Vec<String>,
+    grant_issuer: Option<Arc<dyn grants::GrantIssuer>>,
     pub(crate) mailbox_changes: tokio::sync::broadcast::Sender<()>,
 }
 
@@ -121,6 +125,12 @@ impl RuntimeControl {
         let mut control = Self::from_pool(pool, config.master, config.signer);
         control.idle_ms = config.idle_ms;
         control.creation_accounts = config.creation_accounts;
+        if let Some(url) = config.legacy_auth_url {
+            control.grant_issuer = Some(Arc::new(
+                grants::LegacyGrantIssuer::new(&url, &control.signer.issuer())
+                    .map_err(|error| anyhow::anyhow!("{}", error.code))?,
+            ));
+        }
         control
             .ready()
             .await
@@ -134,6 +144,7 @@ impl RuntimeControl {
             signer,
             idle_ms: 10 * 60 * 1000,
             creation_accounts: vec![],
+            grant_issuer: None,
             mailbox_changes: tokio::sync::broadcast::channel(128).0,
         }
     }
@@ -142,6 +153,17 @@ impl RuntimeControl {
             .fetch_one(&self.pool).await?;
         if !ready {
             return Err(ApiError::unavailable("cloud_runtime_schema_not_ready"));
+        }
+        if self.grant_issuer.is_some() {
+            let ready: bool =
+                sqlx::query_scalar("SELECT to_regclass('api_cloud_auth_authorities') IS NOT NULL")
+                    .fetch_one(&self.pool)
+                    .await?;
+            if !ready {
+                return Err(ApiError::unavailable(
+                    "cloud_auth_authority_schema_not_ready",
+                ));
+            }
         }
         if self.creation_enabled() {
             self.allocation_ready().await?;

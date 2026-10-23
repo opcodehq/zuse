@@ -2008,6 +2008,272 @@ mod runtime_engine {
         api.finish().await;
     }
 
+    struct GrantFixtureIssuer {
+        pool: PgPool,
+        calls: AtomicUsize,
+        revoke: std::sync::atomic::AtomicBool,
+        blocked: std::sync::atomic::AtomicBool,
+        entered: Notify,
+        release: Notify,
+    }
+    #[async_trait]
+    impl zuse_cloud::runtime::grants::GrantIssuer for GrantFixtureIssuer {
+        async fn issue(
+            &self,
+            workspace: &str,
+            provider: zuse_protocol::cloud_auth::CloudAuthProvider,
+            _credential: &str,
+            request: &zuse_protocol::cloud_auth::ProviderGrantRequest,
+        ) -> Result<zuse_protocol::cloud_auth::SealedProviderGrant, ApiError> {
+            use tokio::io::AsyncWriteExt;
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.blocked.load(Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            let thumb =
+                zuse_cloud::crypto::credential_thumbprint(&request.credential_public_jwk).unwrap();
+            // Independent original Node crypto wire, rather than the Rust receiver's encrypt path.
+            let script = r#"const c=require('node:crypto');let input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',()=>{const i=JSON.parse(input);const aad={protocolVersion:1,providerId:i.provider,requestId:i.request.requestId,keyThumbprint:i.thumb,authorityIncarnationId:'original-auth-storage',authorityEpoch:1};const payload={zuseAccountId:'user-bob',workspaceId:i.workspace,runtimeGeneration:i.request.runtimeGeneration,keyThumbprint:i.thumb,authorityIncarnationId:aad.authorityIncarnationId,authorityEpoch:aad.authorityEpoch,providerId:i.provider,method:'api-key',credentialKind:'api-key',secret:'fixture-provider-secret-never-persist',providerAccountId:null,issuer:null,issuedAt:Date.now(),expiresAt:Date.now()+1800000};const key=c.randomBytes(32),iv=c.randomBytes(12),cipher=c.createCipheriv('aes-256-gcm',key,iv);cipher.setAAD(Buffer.from(JSON.stringify(aad)));const ciphertext=Buffer.concat([cipher.update(JSON.stringify(payload)),cipher.final()]);const publicKey=c.createPublicKey({key:JSON.parse(i.request.credentialPublicJwk),format:'jwk'});process.stdout.write(JSON.stringify({...aad,wrappedKey:c.publicEncrypt({key:publicKey,oaepHash:'sha256',padding:c.constants.RSA_PKCS1_OAEP_PADDING},key).toString('base64url'),iv:iv.toString('base64url'),ciphertext:ciphertext.toString('base64url'),tag:cipher.getAuthTag().toString('base64url')}));});"#;
+            let mut child = tokio::process::Command::new("node")
+                .args(["-e", script])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(json!({"workspace":workspace,"provider":provider,"request":request,"thumb":thumb}).to_string().as_bytes()).await.unwrap();
+            let output = child.wait_with_output().await.unwrap();
+            assert!(output.status.success());
+            if self.revoke.swap(false, Ordering::SeqCst) {
+                sqlx::query("UPDATE api_cloud_workspaces SET runtime_credential_hash=NULL,desired_state='deleted',state='deleting' WHERE workspace_id=$1").bind(workspace).execute(&self.pool).await.unwrap();
+            }
+            Ok(serde_json::from_slice(&output.stdout).unwrap())
+        }
+    }
+    fn no_secret_files(root: &std::path::Path) {
+        for entry in std::fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                no_secret_files(&path);
+            } else {
+                let bytes = std::fs::read(path).unwrap();
+                assert!(
+                    !bytes
+                        .windows(b"fixture-provider-secret-never-persist".len())
+                        .any(|bytes| bytes == b"fixture-provider-secret-never-persist")
+                );
+            }
+        }
+    }
+    #[tokio::test]
+    #[ignore = "requires isolated PostgreSQL, Node and ZUSE_CLOUD_TEST_GUEST_BIN"]
+    async fn rust_cloud_provider_grant_reaches_claude_without_persisting_secret_and_fences_revocation()
+     {
+        use std::os::unix::fs::PermissionsExt;
+        // The issuer needs the same isolated pool used by its API; it is installed below before serving.
+        let api = GuestApi::start_with_grants().await;
+        let issuer = api.grant_issuer.as_ref().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        sqlx::raw_sql("CREATE TABLE api_cloud_auth_authorities(account_id text PRIMARY KEY,storage_incarnation_id text NOT NULL,auth_epoch bigint NOT NULL,state text NOT NULL); INSERT INTO api_cloud_auth_authorities VALUES('user-bob','original-auth-storage',1,'ready');").execute(&api.pool).await.unwrap();
+        sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{providerAuthMode}','\"broker-v1\"') WHERE workspace_id='ws-bob'").execute(&api.pool).await.unwrap();
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+        let master = zuse_cloud::crypto::MasterKey::parse(&B64.encode([15; 32])).unwrap();
+        let intent = json!({"commandId":"original-launch","turnId":"original-turn","title":"Brokered native turn","agent":"claude","model":"fixture","permissions":[],"runtimeMode":"approval-required","firstMessage":"Use account-owned provider credentials"});
+        let cipher = master
+            .seal(
+                b"zuse-cloud-workspace-launch-intent-v1\nuser-bob\nws-bob",
+                intent.to_string().as_bytes(),
+            )
+            .unwrap();
+        sqlx::query("UPDATE api_cloud_workspace_launch_intents SET ciphertext=$1,expires_at=$2 WHERE workspace_id='ws-bob'").bind(cipher).bind(now+120000).execute(&api.pool).await.unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let data = temporary.path().join("data");
+        let checkout = temporary.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let seen = temporary.path().join("provider-observed");
+        let cli = temporary.path().join("claude-fixture");
+        std::fs::write(&cli,r#"#!/usr/bin/env python3
+import os,sys,json
+if '--version' in sys.argv:
+ print('2.1.228');sys.exit(0)
+assert os.environ.get('ANTHROPIC_API_KEY')=='fixture-provider-secret-never-persist'
+assert 'CLAUDE_CODE_OAUTH_TOKEN' not in os.environ
+assert 'ANTHROPIC_AUTH_TOKEN' not in os.environ
+for line in sys.stdin:
+ m=json.loads(line)
+ if m.get('type')=='control_request':
+  print(json.dumps({'type':'control_response','response':{'subtype':'success','request_id':m['request_id'],'response':{'models':[{'value':'fixture','displayName':'Fixture'}],'commands':[]}}}),flush=True)
+ elif m.get('type')=='user':
+  if '--system-prompt' not in sys.argv:
+   with open(os.environ['ZUSE_TEST_PROVIDER_SEEN'],'a') as f:f.write('credential-only-in-child\n')
+  print(json.dumps({'type':'stream_event','event':{'type':'content_block_delta','delta':{'type':'text_delta','text':'Brokered native provider reply'}}}),flush=True)
+  print(json.dumps({'type':'result','subtype':'success','result':'Brokered native provider reply','usage':{'input_tokens':1,'output_tokens':1},'session_id':'broker-native-session'}),flush=True)
+  break
+"#).unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let boot = temporary.path().join("boot");
+        std::fs::write(&boot, "packaged-guest-boot").unwrap();
+        let log = temporary.path().join("guest.log");
+        let binary = std::env::var_os("ZUSE_CLOUD_TEST_GUEST_BIN").unwrap();
+        let spawn = |with_boot: bool| {
+            let mut command = tokio::process::Command::new(&binary);
+            command
+                .args([
+                    "--workspace-id",
+                    "ws-bob",
+                    "--api-url",
+                    &api.origin,
+                    "--generation",
+                    "2",
+                    "--storage-incarnation-id",
+                    "packaged-storage",
+                    "--ipc-port",
+                    "0",
+                ])
+                .arg("--data-dir")
+                .arg(&data)
+                .arg("--workspace-root")
+                .arg(&checkout)
+                .env("CLAUDE_CODE_EXECUTABLE", &cli)
+                .env("ZUSE_TEST_PROVIDER_SEEN", &seen)
+                .env("ANTHROPIC_API_KEY", "wrong-inherited-account")
+                .env("CLAUDE_CODE_OAUTH_TOKEN", "wrong-inherited-oauth")
+                .env("ANTHROPIC_AUTH_TOKEN", "wrong-inherited-auth")
+                .env_remove("ZUSE_RUNTIME_BOOT_TOKEN_FILE")
+                .env_remove("ZUSE_WORKSPACE_RUNTIME_LOCK_FD")
+                .env_remove("ZUSE_API_URL")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::fs::File::create(&log).unwrap())
+                .kill_on_drop(true);
+            if with_boot {
+                command.arg("--boot-token-file").arg(&boot);
+            }
+            command.spawn().unwrap()
+        };
+        issuer.blocked.store(true, Ordering::SeqCst);
+        let mut child = spawn(true);
+        tokio::time::timeout(Duration::from_secs(5), issuer.entered.notified())
+            .await
+            .unwrap();
+        let client = api.client().await;
+        let stop = tokio::time::Instant::now();
+        client.client.call(zuse_rpc::methods::RELAY_COMMAND,json!({"chatId":"session-bob","entry":{"id":"stop-before-grant","issuedBy":"cloud-ui","issuedAt":chrono::Utc::now().timestamp_millis(),"status":"pending","payload":{"kind":"interrupt"}}})).await.unwrap();
+        assert!(stop.elapsed() < Duration::from_secs(3));
+        assert!(
+            !seen.exists(),
+            "A stopped startup must not reach the provider"
+        );
+        issuer.blocked.store(false, Ordering::SeqCst);
+        issuer.release.notify_waiters();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !seen.exists(),
+            "A late grant must not start the stopped turn"
+        );
+        client.client.call(zuse_rpc::methods::RELAY_COMMAND,json!({"chatId":"session-bob","entry":{"id":"explicit-run-after-grant","issuedBy":"cloud-ui","issuedAt":chrono::Utc::now().timestamp_millis(),"status":"pending","payload":{"kind":"run","messageId":"explicit-provider-message","request":{"prompt":"Run with the account credential","harness":"claude-code","model":"fixture","cwd":checkout,"sandbox":"workspace-write","autoApprove":false}}}})).await.unwrap();
+        client.closed.cancel();
+        drop(client);
+        let ran = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if seen.exists() {
+                    break;
+                }
+                if let Some(status) = child.try_wait().unwrap() {
+                    panic!(
+                        "Grant guest failed {status}: {}",
+                        std::fs::read_to_string(&log).unwrap()
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        if let Err(error) = ran {
+            let client = api.client().await;
+            let mut transcript = client
+                .client
+                .subscribe(
+                    zuse_rpc::methods::WATCH_DOC_MESSAGES,
+                    json!({"chatId":"session-bob"}),
+                )
+                .await
+                .unwrap();
+            let snapshot = tokio::time::timeout(Duration::from_secs(3), transcript.recv()).await;
+            panic!(
+                "Provider did not run: {error}; issuer_calls={}; snapshot={snapshot:?}; log={}",
+                issuer.calls.load(Ordering::SeqCst),
+                std::fs::read_to_string(&log).unwrap()
+            );
+        }
+        let client = api.client().await;
+        let mut transcript = client
+            .client
+            .subscribe(
+                zuse_rpc::methods::WATCH_DOC_MESSAGES,
+                json!({"chatId":"session-bob"}),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if transcript
+                    .recv()
+                    .await
+                    .unwrap()
+                    .to_string()
+                    .contains("Brokered native provider reply")
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&seen).unwrap().lines().count(), 1);
+        assert!(issuer.calls.load(Ordering::SeqCst) >= 1);
+        no_secret_files(&data);
+        no_secret_files(&checkout);
+        drop(transcript);
+        client.closed.cancel();
+        drop(client);
+        stop_guest(&mut child).await;
+        let mut restarted = spawn(false);
+        let client = api.client().await;
+        let stored: Value = serde_json::from_slice(
+            &std::fs::read(data.join("cloud-runtime-identity.json")).unwrap(),
+        )
+        .unwrap();
+        let public = stored["credentialPublicJwk"].as_str().unwrap();
+        let credential = stored["bootstrap"]["runtimeCredential"].as_str().unwrap();
+        let endpoint = format!(
+            "{}/v1/cloud/workspaces/ws-bob/runtime/providers/claude/grant",
+            api.origin
+        );
+        let request = json!({"requestId":uuid::Uuid::new_v4().to_string(),"protocolVersion":1,"runtimeGeneration":2,"credentialPublicJwk":public,"reason":"initial"});
+        // Runtime revocation after issuance invalidates the response before ciphertext leaves the API.
+        issuer.revoke.store(true, Ordering::SeqCst);
+        let (status, response) = runtime_post_for_url(&endpoint, credential, &request).await;
+        assert_eq!(status, 401, "{response}");
+        assert_eq!(response["error"], "workspace_runtime_fenced");
+        assert!(response["ciphertext"].is_null());
+        let status = tokio::time::timeout(Duration::from_secs(10), restarted.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!status.success());
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap().lines().count(),
+            1,
+            "Reopen cannot replay the original turn"
+        );
+        no_secret_files(&data);
+        client.closed.cancel();
+        drop(client);
+        api.finish().await;
+    }
+
     struct GuestApi {
         pool: PgPool,
         admin: PgPool,
@@ -2017,6 +2283,7 @@ mod runtime_engine {
         stop: tokio::sync::oneshot::Sender<()>,
         server: tokio::task::JoinHandle<()>,
         lost_ack_release: Arc<Notify>,
+        grant_issuer: Option<Arc<GrantFixtureIssuer>>,
     }
     impl GuestApi {
         async fn start() -> Self {
@@ -2026,6 +2293,17 @@ mod runtime_engine {
             Self::start_options(mailbox, true, mailbox).await
         }
         async fn start_options(mailbox: bool, launch_prompt: bool, withhold_ack: bool) -> Self {
+            Self::start_options_with_grants(mailbox, launch_prompt, withhold_ack, false).await
+        }
+        async fn start_with_grants() -> Self {
+            Self::start_options_with_grants(false, true, false, true).await
+        }
+        async fn start_options_with_grants(
+            mailbox: bool,
+            launch_prompt: bool,
+            withhold_ack: bool,
+            grants: bool,
+        ) -> Self {
             use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
             use ed25519_dalek::SigningKey;
             use sha2::{Digest, Sha256};
@@ -2061,7 +2339,21 @@ mod runtime_engine {
                 )
                 .unwrap();
             sqlx::query("INSERT INTO api_cloud_workspace_launch_intents VALUES ('ws-bob','user-bob','chat-bob','session-bob','original-turn','original-launch',$1,$2,$3)").bind(ciphertext).bind(now+120000).bind(now).execute(&pool).await.unwrap();
-            let control = Arc::new(RuntimeControl::from_pool(pool.clone(), master, signer));
+            let grant_issuer = grants.then(|| {
+                Arc::new(GrantFixtureIssuer {
+                    pool: pool.clone(),
+                    calls: AtomicUsize::new(0),
+                    revoke: std::sync::atomic::AtomicBool::new(false),
+                    blocked: std::sync::atomic::AtomicBool::new(false),
+                    entered: Notify::new(),
+                    release: Notify::new(),
+                })
+            });
+            let mut control = RuntimeControl::from_pool(pool.clone(), master, signer);
+            if let Some(issuer) = &grant_issuer {
+                control = control.with_grant_issuer(issuer.clone());
+            }
+            let control = Arc::new(control);
             let app = router(
                 AppState {
                     store: Store::from_pool(pool.clone()),
@@ -2119,6 +2411,7 @@ mod runtime_engine {
                 stop,
                 server,
                 lost_ack_release,
+                grant_issuer,
             }
         }
         async fn finish(self) {

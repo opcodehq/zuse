@@ -170,6 +170,7 @@ async fn run() -> Result<()> {
     }
     let lock = InstanceLock::acquire(&directory)?;
     let ipc = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, args.ipc_port)).await?;
+    let (credentials, updates) = tokio::sync::watch::channel(bootstrap.clone());
     let registry = if args.test_harness {
         ensure!(
             bootstrap
@@ -192,6 +193,18 @@ async fn run() -> Result<()> {
                 },
             ],
         }));
+        registry
+    } else if bootstrap.extra.get("providerAuthMode") == Some(&serde_json::json!("broker-v1")) {
+        let registry = zuse_engine::HarnessRegistry::new();
+        let broker = zuse_cloud_runtime::grants::ProviderBroker::new(
+            identity.grant_recipient(&bootstrap)?,
+            zuse_protocol::cloud_auth::CloudAuthProvider::Claude,
+            authority.clone(),
+            updates.clone(),
+        );
+        registry.register(Arc::new(
+            zuse_providers::ClaudeHarness::new().with_credentials(broker),
+        ));
         registry
     } else {
         default_registry()
@@ -259,7 +272,7 @@ async fn run() -> Result<()> {
             }
         }
         tracing::info!("Cloud runtime enrolled; serving workspace gateway");
-        let (credentials, updates) = tokio::sync::watch::channel(
+        credentials.send_replace(
             identity
                 .bootstrap()
                 .ok_or_else(|| anyhow::anyhow!("runtime_not_enrolled"))?
