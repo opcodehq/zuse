@@ -44,7 +44,7 @@ pub fn column_width(window: &gpui::Window, cx: &gpui::App) -> f32 {
             .size
             .width,
     );
-    pane.min(PAGE_MAX_WIDTH) - 2.0 * PAGE_PAD_X
+    pane.min(768. + 2. * page_padding(window)) - 2. * page_padding(window)
 }
 
 pub fn dropdown(
@@ -311,7 +311,26 @@ pub const ROW_DESCRIPTION_SIZE: f32 = zuse_viewport::settings_style::DESCRIPTION
 const PAGE_MAX_WIDTH: f32 = 816.0;
 const PAGE_PAD_X: f32 = 24.0;
 
-/// Centered page column under the titlebar strip.
+/// Settings content follows the reference's 800px viewport breakpoint.
+pub fn page_padding(window: &Window) -> f32 {
+    if window.viewport_size().width < px(800.) {
+        16.
+    } else {
+        24.
+    }
+}
+
+/// Settings column, including responsive outer padding around its 768px content.
+pub fn settings_page_column(window: &Window) -> gpui::Div {
+    let padding = page_padding(window);
+    page_column()
+        .max_w(px(768. + 2. * padding))
+        .px(px(padding))
+        .pt(px(padding))
+        .pb(px(padding))
+}
+
+/// Centered legacy column used by views outside Settings.
 pub fn page_column() -> gpui::Div {
     div()
         .w_full()

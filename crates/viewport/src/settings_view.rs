@@ -464,7 +464,7 @@ impl WorkspaceView {
                             "Theme",
                             "Choose the app theme, or follow your system setting.",
                         ))
-                        .child(choices),
+                        .child(row().h(px(28.)).flex_none().child(choices)),
                 ),
             )
             .into_any_element()

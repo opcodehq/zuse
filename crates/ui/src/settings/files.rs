@@ -79,7 +79,7 @@ impl popover::ScrollRailHost for FilesSettingsPage {
 }
 
 impl Render for FilesSettingsPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
         let autosave_enabled = self.autosave_enabled;
         let selected = self.autosave_delay_ms;
@@ -237,7 +237,7 @@ impl Render for FilesSettingsPage {
                         .overflow_y_scroll()
                         .track_scroll(&self.scroll.scroll)
                         .child(
-                            widgets::page_column()
+                            widgets::settings_page_column(window)
                                 .child(widgets::section_title(
                                     &theme,
                                     "Files",

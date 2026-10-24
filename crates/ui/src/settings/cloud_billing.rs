@@ -599,7 +599,7 @@ impl CloudBillingPage {
     }
 }
 impl Render for CloudBillingPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active = active_owner(self.state.read(cx));
         if self.owner != active {
             self.owner = active;
@@ -632,7 +632,7 @@ impl Render for CloudBillingPage {
         let theme = Theme::of(cx).for_settings_surface();
         zuse_viewport::palette::set_light(theme.appearance.is_light());
         let busy = self.task.is_some();
-        let mut body = widgets::page_column().child(widgets::section_title_with_action(
+        let mut body = widgets::settings_page_column(window).child(widgets::section_title_with_action(
             &theme,
             "Cloud workspaces (Beta)",
             None,

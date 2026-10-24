@@ -1238,7 +1238,7 @@ impl popover::ScrollRailHost for HarnessesPage {
 }
 
 impl Render for HarnessesPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
         let body: gpui::AnyElement = match &self.harnesses {
             Loadable::Idle | Loadable::Loading => widgets::section_card(&theme)
@@ -1399,7 +1399,7 @@ impl Render for HarnessesPage {
                         .overflow_y_scroll()
                         .track_scroll(&self.scroll.scroll)
                         .child(
-                            widgets::page_column()
+                            widgets::settings_page_column(window)
                                 .child(widgets::section_title(&theme, "Providers", "Verify what's installed, signed in, and which subscription each provider runs on."))
                                 .child(div().mt(px(20.)).flex().flex_col().gap(px(16.))
                                     .child(widgets::group_with_action(&theme, "Agent providers", "Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.", Some(div().flex().items_center().gap(px(6.)).child(check).into_any_element()))

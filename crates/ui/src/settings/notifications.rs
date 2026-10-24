@@ -177,7 +177,7 @@ impl popover::ScrollRailHost for NotificationsPage {
 }
 
 impl Render for NotificationsPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
         let accent = theme.accent;
         let sound = self.sound;
@@ -417,7 +417,7 @@ impl Render for NotificationsPage {
                         .overflow_y_scroll()
                         .track_scroll(&self.scroll.scroll)
                         .child(
-                            widgets::page_column()
+                            widgets::settings_page_column(window)
                                 .child(widgets::section_title(
                                     &theme,
                                     "Notifications",

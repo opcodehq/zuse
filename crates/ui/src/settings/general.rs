@@ -65,12 +65,20 @@ impl ShortcutsPage {
         .child(
             widgets::section_card(theme).mt_0().child(
                 widgets::card_row(theme, true)
+                    .items_start()
                     .child(general_details(
                         theme,
                         "Theme",
                         "Choose the app theme, or follow your system setting.",
                     ))
-                    .child(modes),
+                    .child(
+                        div()
+                            .h(px(28.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .child(modes),
+                    ),
             ),
         );
         let updates = preferences.agent_update_notifications;
@@ -164,7 +172,7 @@ impl ShortcutsPage {
         };
         let notifications=widgets::group(theme,"Notifications","")
             .child(widgets::section_card(theme).mt_0()
-                .child(widgets::card_row(theme,true).child(general_details(theme,"Provider update notifications","Show a notification when a newer version of an agent provider is available. Off by default.")).child(update_switch))
+                .child(widgets::card_row(theme,true).items_start().child(general_details(theme,"Provider update notifications","Show a notification when a newer version of an agent provider is available. Off by default.")).child(div().h(px(28.)).flex_none().flex().items_center().child(update_switch)))
                 .child(widgets::card_row(theme,false).flex_col().flex_nowrap().items_stretch().gap(px(8.))
                     .child(div().flex().items_start().gap(px(10.)).child(general_details(theme,"Agent completion sound","Play a short sound when any agent turn finishes, including agents working in background chats.")).child(div().flex().items_center().h(px(28.)).child(sound_switch)))
                     .child(div().flex().items_center().flex_wrap().gap(px(8.)).when(!sound,|controls|controls.opacity(0.6))

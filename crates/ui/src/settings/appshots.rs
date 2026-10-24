@@ -35,7 +35,7 @@ fn row(
 impl ShortcutsPage {
     pub(super) fn render_appshots(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = Theme::of(cx).for_settings_surface();
@@ -287,7 +287,7 @@ impl ShortcutsPage {
                             }
                         })
                         .child(
-                            widgets::page_column()
+                            widgets::settings_page_column(window)
                                 .child(widgets::section_title(
                                     &theme,
                                     "Appshots",

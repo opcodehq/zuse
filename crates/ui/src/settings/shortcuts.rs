@@ -950,7 +950,7 @@ impl Render for ShortcutsPage {
                             .overflow_y_scroll()
                             .track_scroll(&self.scroll.scroll)
                             .child(
-                                widgets::page_column()
+                                widgets::settings_page_column(window)
                                     .child(self.general_header(&theme))
                                     .child(
                                         widgets::section_stack()
@@ -1032,7 +1032,8 @@ impl Render for ShortcutsPage {
                         .track_scroll(&self.scroll.scroll)
                         .track_focus(&self.focus)
                         .child(
-                            widgets::page_column()
+                            widgets::settings_page_column(window)
+                                .max_w(px(1152. + 2. * widgets::page_padding(window)))
                                 .child(widgets::section_title_with_action(
                                     &theme,
                                     "Keyboard shortcuts",

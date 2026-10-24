@@ -1024,7 +1024,7 @@ impl Render for ArchivedPage {
                         .overflow_y_scroll()
                         .track_scroll(&self.scroll.scroll)
                         .child(
-                            widgets::page_column()
+                            widgets::settings_page_column(window)
                                 .child(widgets::section_title_with_action(
                                     &theme,
                                     "Archived sessions",

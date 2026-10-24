@@ -97,7 +97,7 @@ impl Render for DefaultsPage {
                     ))
                     .child(permission),
             );
-        let content = widgets::page_column()
+        let content = widgets::settings_page_column(window)
             .child(widgets::section_title(
                 &theme,
                 "Default models",

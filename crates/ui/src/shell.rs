@@ -5810,7 +5810,7 @@ impl Shell {
                     .size_full()
                     .overflow_y_scroll()
                     .child(
-                        settings::widgets::page_column()
+                        settings::widgets::settings_page_column(window)
                             .child(settings::widgets::section_title(
                                 &theme,
                                 "Plugins",
@@ -8109,7 +8109,7 @@ impl Shell {
             // Tab remains the explicit way to enter its navigation or content.
             window.focus(&self.settings_focus, cx);
         }
-        let sidebar_width = if window.viewport_size().width <= px(800.) {
+        let sidebar_width = if window.viewport_size().width < px(800.) {
             48.
         } else {
             208.
@@ -8232,7 +8232,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let compact = window.viewport_size().width <= px(800.);
+        let compact = window.viewport_size().width < px(800.);
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::Cloud => icons::CLOUD,
             SettingsSection::Devices => icons::SETTINGS_REMOTE,
