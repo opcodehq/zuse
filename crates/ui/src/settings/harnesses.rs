@@ -230,9 +230,9 @@ pub struct HarnessesPage {
     install_task: Option<Task<()>>,
 
     expanded_harness: Option<HarnessId>,
-    /// The expanded provider's Accounts section — one page, retargeted as
-    /// providers expand, so every provider shares the same sign-in flow.
+    /// Active account section; each computer/provider retains its own login owner.
     accounts_page: Option<Entity<AccountsPage>>,
+    account_pages: std::collections::HashMap<(Option<String>, HarnessId), Entity<AccountsPage>>,
     update_task: Option<Task<()>>,
     update_action_task: Option<Task<()>>,
     /// A manual provider refresh is checking available CLI updates.
@@ -270,12 +270,23 @@ impl HarnessesPage {
 
             expanded_harness: None,
             accounts_page: None,
+            account_pages: Default::default(),
             update_task: None,
             update_action_task: None,
             checking_updates: false,
         };
         page.load(cx);
         page
+    }
+
+    pub(crate) fn refresh_on_visit(&mut self, cx: &mut Context<Self>) {
+        self.load(cx);
+        self.custom_acp.update(cx, |card, cx| {
+            card.set_target(self.target_device.clone(), cx)
+        });
+        if let Some(accounts) = &self.accounts_page {
+            accounts.update(cx, |page, cx| page.refresh_on_visit(cx));
+        }
     }
 
     fn toggle_agent_details(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
@@ -291,14 +302,18 @@ impl HarnessesPage {
         } else {
             self.expanded_harness = Some(harness);
             if accounts::signs_in(harness) {
-                if let Some(accounts) = &self.accounts_page {
-                    accounts.update(cx, |page, cx| page.set_embedded_harness(harness, cx));
+                let key = (self.target_device.clone(), harness);
+                let page = if let Some(page) = self.account_pages.get(&key).cloned() {
+                    page.update(cx, |page, cx| page.refresh_metadata(cx));
+                    page
                 } else {
                     let state = self.state.clone();
                     let target = self.target_device.clone();
-                    self.accounts_page =
-                        Some(cx.new(|cx| AccountsPage::new_embedded(state, target, harness, cx)));
-                }
+                    let page = cx.new(|cx| AccountsPage::new_embedded(state, target, harness, cx));
+                    self.account_pages.insert(key, page.clone());
+                    page
+                };
+                self.accounts_page = Some(page);
             }
         }
         cx.notify();
@@ -464,11 +479,8 @@ impl HarnessesPage {
         self.custom_acp.update(cx, |card, cx| {
             card.set_target(self.target_device.clone(), cx)
         });
-        if let Some(accounts) = &self.accounts_page {
-            accounts.update(cx, |page, cx| {
-                page.set_target_device(self.target_device.clone(), cx)
-            });
-        }
+        self.accounts_page = None;
+        self.expanded_harness = None;
         self.error = None;
         self.harnesses = Loadable::Idle;
         self.updates = Loadable::Idle;

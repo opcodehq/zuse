@@ -5577,10 +5577,11 @@ impl Shell {
     pub(crate) fn open_settings(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
         let section = section.canonical();
         self.command_palette = None;
-        // Recreate per visit: the page's ListHarnesses load re-probes which
-        // CLIs are installed, so installing one shows up on the next open.
+        // Re-probe installed providers on each visit while preserving active sign-ins.
         if section == SettingsSection::Harnesses {
-            self.harnesses_page = None;
+            if let Some(page) = &self.harnesses_page {
+                page.update(cx, |page, cx| page.refresh_on_visit(cx));
+            }
         }
         if !matches!(self.route, Route::Settings(_)) {
             self.settings_focus_pending = true;

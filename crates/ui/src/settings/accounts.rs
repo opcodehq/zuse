@@ -113,26 +113,7 @@ pub fn force_usage_for(trigger: LoadTrigger) -> bool {
 /// Whether a login URL may be opened. Remote logins relay their URL from
 /// another device (or from a CLI's output there), so only web sign-in pages
 /// and loopback callbacks pass — never `file://` or custom schemes. Pure.
-pub fn is_openable_login_url(url: &str) -> bool {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return false;
-    };
-    match scheme.to_ascii_lowercase().as_str() {
-        "https" => true,
-        "http" => {
-            let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-            let authority = authority
-                .rsplit_once('@')
-                .map_or(authority, |(_, host)| host);
-            let host = match authority.strip_prefix('[') {
-                Some(v6) => v6.split(']').next().unwrap_or(""),
-                None => authority.split(':').next().unwrap_or(""),
-            };
-            matches!(host, "localhost" | "127.0.0.1" | "::1")
-        }
-        _ => false,
-    }
-}
+pub use zuse_viewport::provider_signin::is_openable_login_url;
 
 pub(crate) fn open_login_url(url: &str, cx: &mut gpui::App) {
     if is_openable_login_url(url) {
@@ -252,36 +233,7 @@ pub fn provider_note(harness: HarnessId) -> Option<&'static str> {
 
 /// One way to add an account: agents that keep a login PER model provider
 /// (OpenCode, Pi, Hermes) sign in to a named provider; the rest have one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LoginOption {
-    /// The engine's `provider` param (`None` = the agent's only login).
-    pub provider: Option<&'static str>,
-    /// Who the user signs in to.
-    pub label: &'static str,
-}
-
-/// The sign-ins zuse offers for `harness`, in button order. Pure.
-pub fn login_options(harness: HarnessId) -> Vec<LoginOption> {
-    let option = |provider, label| LoginOption {
-        provider: Some(provider),
-        label,
-    };
-    match harness {
-        HarnessId::Opencode => vec![
-            option("openai", "ChatGPT"),
-            option("github-copilot", "GitHub Copilot"),
-        ],
-        HarnessId::Pi => vec![option("openai-codex", "ChatGPT")],
-        HarnessId::Hermes => vec![
-            option("openai-codex", "ChatGPT"),
-            option("nous", "Nous Portal"),
-        ],
-        _ => vec![LoginOption {
-            provider: None,
-            label: provider_name(harness),
-        }],
-    }
-}
+pub use zuse_viewport::provider_signin::{LoginOption, login_options};
 
 /// The list's last row: connect the first account, or add another. Pure.
 pub fn add_account_label(harness: HarnessId, empty: bool) -> String {
@@ -528,6 +480,7 @@ pub struct AccountsPage {
     login_attempts: u64,
     error: Option<SharedString>,
     code_input: Entity<ComposerInput>,
+    inline_focus: gpui::FocusHandle,
     load_task: Option<Task<()>>,
     action_task: Option<Task<()>>,
     poll_task: Option<Task<()>>,
@@ -580,6 +533,7 @@ impl AccountsPage {
             login_attempts: 0,
             error: None,
             code_input,
+            inline_focus: cx.focus_handle(),
             load_task: None,
             action_task: None,
             poll_task: None,
@@ -596,6 +550,14 @@ impl AccountsPage {
     /// Retarget the page at another device's logins: every accounts RPC is
     /// relay-forwardable, so the whole page — list, usage probes, switch,
     /// forget, login flows — follows the passthrough.
+    pub(crate) fn refresh_metadata(&mut self, cx: &mut Context<Self>) {
+        self.load(false, cx);
+    }
+
+    pub(crate) fn refresh_on_visit(&mut self, cx: &mut Context<Self>) {
+        self.load(force_usage_for(LoadTrigger::Refresh), cx);
+    }
+
     pub(crate) fn set_target_device(&mut self, target: Option<String>, cx: &mut Context<Self>) {
         if self.target_device == target {
             cx.notify();
@@ -807,6 +769,13 @@ impl AccountsPage {
         provider: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .login
+            .as_ref()
+            .is_some_and(|flow| !matches!(flow.step, LoginStep::Failed { .. }))
+        {
+            return;
+        }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -827,6 +796,7 @@ impl AccountsPage {
             object.insert("provider".into(), serde_json::json!(provider));
         }
         let params = self.params(params);
+        let params_target = self.target_device.clone();
         self.action_task = Some(cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
@@ -836,8 +806,31 @@ impl AccountsPage {
                 .and_then(|value| {
                     serde_json::from_value::<AgentLoginStart>(value).map_err(|e| e.to_string())
                 });
-            this.update(cx, |page, cx| page.apply_start(attempt, result, cx))
-                .ok();
+            let accepted = this
+                .update(cx, |page, cx| {
+                    if !page
+                        .login
+                        .as_ref()
+                        .is_some_and(|flow| flow.attempt == attempt)
+                    {
+                        return false;
+                    }
+                    page.apply_start(attempt, result.clone(), cx);
+                    true
+                })
+                .unwrap_or(false);
+            if !accepted {
+                if let Ok(start) = result {
+                    let mut cleanup = serde_json::json!({"loginId":start.login_id});
+                    if let Some(target) = params_target {
+                        cleanup["targetDeviceId"] = serde_json::json!(target);
+                    }
+                    let _ = engine
+                        .client()
+                        .call(methods::CANCEL_AGENT_LOGIN, cleanup)
+                        .await;
+                }
+            }
         }));
         cx.notify();
     }
@@ -1033,6 +1026,13 @@ impl AccountsPage {
             _ => None,
         };
         self.poll_task = None;
+        self.code_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        if login_id.is_none() {
+            if let Some(task) = self.action_task.take() {
+                task.detach();
+            }
+        }
         if let (Some(login_id), Some(engine)) = (login_id, self.state.read(cx).engine().cloned()) {
             let params = self.params(serde_json::json!({ "loginId": login_id }));
             self.action_task = Some(cx.spawn(async move |_, _| {
@@ -1695,6 +1695,67 @@ impl popover::ScrollRailHost for AccountsPage {
 }
 
 impl AccountsPage {
+    fn render_inline_login(&self, harness: HarnessId, cx: &mut Context<Self>) -> AnyElement {
+        use zuse_viewport::provider_signin::{self as signin, Data, Phase};
+        let flow = self.login.as_ref().filter(|flow| flow.harness == harness);
+        let mut code = None;
+        let mut error = None;
+        let mut submitting = false;
+        let phase = match flow.map(|flow| &flow.step) {
+            None => Phase::Idle,
+            Some(LoginStep::Browser { message }) => Phase::Waiting {
+                message: message.as_ref().map(ToString::to_string),
+            },
+            Some(LoginStep::PasteCode {
+                submitting: pending,
+                error: message,
+            }) => {
+                code = Some(self.code_input.clone().into_any_element());
+                submitting = *pending;
+                error = message.as_ref().map(ToString::to_string);
+                Phase::Waiting {
+                    message: Some("Paste the authorization code to finish signing in.".into()),
+                }
+            }
+            Some(LoginStep::Failed { message }) => Phase::Failed(message.to_string()),
+        };
+        signin::render(
+            Data {
+                harness,
+                phase,
+                url: flow.and_then(|flow| flow.url.clone()),
+                submitting,
+                error,
+                blocked: false,
+            },
+            code,
+            Self::inline_login_action,
+            cx,
+        )
+    }
+    fn inline_login_action(
+        &mut self,
+        action: zuse_viewport::provider_signin::Action,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use zuse_viewport::provider_signin::Kind;
+        if !matches!(action.kind, Kind::Complete) {
+            window.focus(&self.inline_focus, cx);
+        }
+        match action.kind {
+            Kind::Start(provider) => self.start_login(action.harness, provider, cx),
+            Kind::Retry => self.retry_login(cx),
+            Kind::Cancel => self.cancel_login(cx),
+            Kind::Complete => self.submit_code(cx),
+            Kind::Open => {
+                if let Some(url) = self.login.as_ref().and_then(|flow| flow.url.clone()) {
+                    open_login_url(&url, cx)
+                }
+            }
+        }
+    }
+
     fn render_embedded_provider(
         &self,
         harness: HarnessId,
@@ -1704,10 +1765,10 @@ impl AccountsPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let refreshing = self.refreshing || matches!(self.snapshot, Loadable::Loading);
-        let content: AnyElement = match &self.snapshot {
-            Loadable::Idle | Loadable::Loading => self.render_embedded_skeleton(theme, cx),
-            Loadable::Error(message) => {
-                widgets::error_strip(theme, message.clone())
+        let content: AnyElement =
+            match &self.snapshot {
+                Loadable::Idle | Loadable::Loading => self.render_embedded_skeleton(theme, cx),
+                Loadable::Error(message) => widgets::error_strip(theme, message.clone())
                     .mt(px(4.0))
                     .id("accounts-inline-retry")
                     .role(gpui::Role::Button)
@@ -1725,137 +1786,83 @@ impl AccountsPage {
                             .text_color(theme.text_muted)
                             .child(SharedString::from("Retry")),
                     )
-                    .into_any_element()
-            }
-            Loadable::Ready(snapshot) => {
-                let rows: Vec<_> = provider_accounts(snapshot, harness)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(ix, account)| {
-                        self.render_account_row(account, ix, ix == 0, theme, now, cx)
-                    })
-                    .collect();
-                let empty = rows.is_empty();
-                // Adding is the list's last row, not a header button —
-                // it sits where the next account will appear. A
-                // one-login agent that is connected has nothing to add.
-                // Nothing signed in yet: a clear primary sign-in, with
-                // the CLI's own login command as the alternative.
-                let sign_in = empty.then(|| {
-                    div()
-                        .py(px(4.0))
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.0))
-                        .child(
-                            div()
-                                .text_size(crate::typography::text_xs())
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(theme.text_strong)
-                                .child("Sign in"),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .flex_wrap()
-                                .items_center()
-                                .gap(px(10.0))
-                                .children(login_options(harness).into_iter().enumerate().map(
-                                    |(ix, option)| {
-                                        let label = match option.provider {
-                                            None => format!("Sign in to {}", option.label),
-                                            Some(_) => format!("Sign in with {}", option.label),
-                                        };
-                                        super::plugins::catalog_ui::primary_button(
-                                            theme,
-                                            ("accounts-sign-in", ix),
-                                        )
+                    .into_any_element(),
+                Loadable::Ready(snapshot) => {
+                    let rows: Vec<_> = provider_accounts(snapshot, harness)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(ix, account)| {
+                            self.render_account_row(account, ix, ix == 0, theme, now, cx)
+                        })
+                        .collect();
+                    let empty = rows.is_empty();
+                    // Adding is the list's last row, not a header button —
+                    // it sits where the next account will appear. A
+                    // one-login agent that is connected has nothing to add.
+                    // Nothing signed in yet: a clear primary sign-in, with
+                    // the CLI's own login command as the alternative.
+                    let sign_in = (empty
+                        || self
+                            .login
+                            .as_ref()
+                            .is_some_and(|flow| flow.harness == harness))
+                    .then(|| self.render_inline_login(harness, cx));
+                    let add_row = (!empty && !keeps_one_login(harness)).then(|| {
+                        div()
+                            .pt(px(4.0))
+                            .border_t_1()
+                            .border_color(widgets::row_divider(theme))
+                            .flex()
+                            .flex_row()
+                            .flex_wrap()
+                            .gap(px(12.0))
+                            .children(login_options(harness).into_iter().enumerate().map(
+                                |(ix, option)| {
+                                    let label = add_option_label(harness, option, empty);
+                                    let hover_key = format!("accounts-add-{ix}-hover");
+                                    div()
+                                        .id(("accounts-add", ix))
+                                        .h(px(24.0))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.0))
+                                        .rounded(px(5.0))
                                         .text_size(crate::typography::text_xs())
+                                        .text_color(crate::motion::hover_blend(
+                                            &hover_key,
+                                            theme.text_muted,
+                                            theme.text,
+                                        ))
+                                        .on_hover(crate::motion::hover_listener(hover_key))
+                                        .cursor_pointer()
+                                        .role(gpui::Role::Button)
                                         .aria_label(label.clone())
+                                        .tab_index(0)
                                         .focus_visible(|s| s.border_2().border_color(theme.accent))
                                         .on_click(cx.listener(move |page, _, _, cx| {
                                             page.start_login(harness, option.provider, cx)
                                         }))
+                                        .child(
+                                            crate::icons::icon(crate::icons::PLUS)
+                                                .size(px(12.0))
+                                                .text_color(theme.text_muted),
+                                        )
                                         .child(SharedString::from(label))
-                                    },
-                                ))
-                                .when_some(cli_login_command(harness), |row, command| {
-                                    row.child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(4.0))
-                                            .text_size(crate::typography::text_xs())
-                                            .text_color(theme.text_muted)
-                                            .child("or run")
-                                            .child(
-                                                div()
-                                                    .font_family(theme.font_mono.clone())
-                                                    .text_color(theme.text)
-                                                    .child(command),
-                                            ),
-                                    )
-                                }),
-                        )
-                });
-                // A quiet "Add account" link under the list, where the next
-                // account will appear.
-                let add_row = (!empty && !keeps_one_login(harness)).then(|| {
+                                },
+                            ))
+                    });
                     div()
-                        .pt(px(4.0))
-                        .border_t_1()
-                        .border_color(widgets::row_divider(theme))
                         .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap(px(12.0))
-                        .children(login_options(harness).into_iter().enumerate().map(
-                            |(ix, option)| {
-                                let label = add_option_label(harness, option, empty);
-                                let hover_key = format!("accounts-add-{ix}-hover");
-                                div()
-                                    .id(("accounts-add", ix))
-                                    .h(px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .rounded(px(5.0))
-                                    .text_size(crate::typography::text_xs())
-                                    .text_color(crate::motion::hover_blend(
-                                        &hover_key,
-                                        theme.text_muted,
-                                        theme.text,
-                                    ))
-                                    .on_hover(crate::motion::hover_listener(hover_key))
-                                    .cursor_pointer()
-                                    .role(gpui::Role::Button)
-                                    .aria_label(label.clone())
-                                    .tab_index(0)
-                                    .focus_visible(|s| s.border_2().border_color(theme.accent))
-                                    .on_click(cx.listener(move |page, _, _, cx| {
-                                        page.start_login(harness, option.provider, cx)
-                                    }))
-                                    .child(
-                                        crate::icons::icon(crate::icons::PLUS)
-                                            .size(px(12.0))
-                                            .text_color(theme.text_muted),
-                                    )
-                                    .child(SharedString::from(label))
-                            },
-                        ))
-                });
-                div()
-                    .flex()
-                    .flex_col()
-                    .children(rows)
-                    .children(sign_in)
-                    .children(add_row)
-                    .into_any_element()
-            }
-        };
+                        .flex_col()
+                        .children(rows)
+                        .children(sign_in)
+                        .children(add_row)
+                        .into_any_element()
+                }
+            };
         div()
             .id("accounts-embedded")
+            .track_focus(&self.inline_focus)
             .w_full()
             .min_w_0()
             .flex()
@@ -1929,7 +1936,11 @@ impl Render for AccountsPage {
         crate::toast::take_error(&mut self.error, cx);
         let theme = Theme::of(cx).for_settings_surface();
         let now = Utc::now();
-        let dialog = self.render_login_dialog(window.viewport_size(), cx);
+        let dialog = if self.embedded_harness.is_some() {
+            None
+        } else {
+            self.render_login_dialog(window.viewport_size(), cx)
+        };
         if let Some(harness) = self.embedded_harness {
             return self.render_embedded_provider(harness, &theme, now, dialog, cx);
         }

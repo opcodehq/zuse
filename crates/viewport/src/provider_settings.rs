@@ -6,7 +6,12 @@ use crate::{
     shell::{BORDER, MUTED, column, provider_icon, row},
 };
 impl WorkspaceView {
-    pub(super) fn provider_action(&mut self, provider: String, method: &'static str, params: Value) {
+    pub(super) fn provider_action(
+        &mut self,
+        provider: String,
+        method: &'static str,
+        params: Value,
+    ) {
         if !self.connected {
             self.provider_error =
                 Some("Reconnect to this computer before changing provider setup.".into());
@@ -23,6 +28,174 @@ impl WorkspaceView {
         let id = self.call(method, params);
         self.provider_actions.insert(id, provider);
     }
+    pub(super) fn interrupt_provider_logins(&mut self, cx: &mut Context<Self>) {
+        self.provider_login_tasks.clear();
+        self.provider_logins.clear();
+        for input in self.provider_codes.values() {
+            input.update(cx, |input, cx| input.set_value(String::new(), cx));
+        }
+    }
+    fn start_provider_login(
+        &mut self,
+        provider: String,
+        selected: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.connected || self.provider_actions.values().any(|p| p == &provider) {
+            return;
+        }
+        self.provider_login_tasks.remove(&provider);
+        if let Some(input) = self.provider_codes.get(&provider) {
+            input.update(cx, |input, cx| input.set_value(String::new(), cx));
+        }
+        self.provider_logins.insert(
+            provider.clone(),
+            json!({"status":"starting","provider":selected}),
+        );
+        let mut params = json!({"harness":provider});
+        if let Some(selected) = selected {
+            params["provider"] = json!(selected);
+        }
+        self.provider_action(provider, methods::START_AGENT_LOGIN, params);
+        cx.notify();
+    }
+    fn cancel_provider_login(&mut self, provider: &str, cx: &mut Context<Self>) {
+        self.provider_login_tasks.remove(provider);
+        let Some(login) = self.provider_logins.get_mut(provider) else {
+            return;
+        };
+        login["cancelled"] = json!(true);
+        let id = login["loginId"].as_str().map(str::to_owned);
+        if let Some(input) = self.provider_codes.get(provider) {
+            input.update(cx, |input, cx| input.set_value(String::new(), cx));
+        }
+        if let Some(login_id) = id {
+            let request = self.call(methods::CANCEL_AGENT_LOGIN, json!({"loginId":login_id}));
+            self.provider_actions.insert(request, provider.to_owned());
+        }
+        cx.notify();
+    }
+    fn complete_provider_login(&mut self, provider: &str, cx: &mut Context<Self>) {
+        let Some(login) = self
+            .provider_logins
+            .get(provider)
+            .filter(|login| login["cancelled"] != true && login["mode"] == "paste-code")
+        else {
+            return;
+        };
+        let Some(login_id) = login["loginId"].as_str().map(str::to_owned) else {
+            return;
+        };
+        let Some(input) = self.provider_codes.get(provider) else {
+            return;
+        };
+        let code = input.read(cx).value(cx);
+        if code.trim().is_empty() {
+            return;
+        }
+        self.provider_action(
+            provider.to_owned(),
+            methods::COMPLETE_AGENT_LOGIN,
+            json!({"loginId":login_id,"code":code}),
+        );
+        cx.notify();
+    }
+    fn inline_provider_action(
+        &mut self,
+        action: crate::provider_signin::Action,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::provider_signin::Kind;
+        if !matches!(action.kind, Kind::Complete) {
+            window.focus(&self.workspace_focus, cx);
+        }
+        let provider = String::from(action.harness);
+        match action.kind {
+            Kind::Start(selected) => {
+                self.start_provider_login(provider, selected.map(str::to_owned), cx)
+            }
+            Kind::Retry => {
+                let selected = self
+                    .provider_logins
+                    .get(&provider)
+                    .and_then(|v| v["provider"].as_str())
+                    .map(str::to_owned);
+                self.start_provider_login(provider, selected, cx);
+            }
+            Kind::Cancel => self.cancel_provider_login(&provider, cx),
+            Kind::Complete => self.complete_provider_login(&provider, cx),
+            Kind::Open => {
+                if let Some(url) = self
+                    .provider_logins
+                    .get(&provider)
+                    .and_then(|v| v["url"].as_str())
+                    .filter(|url| crate::provider_signin::is_openable_login_url(url))
+                {
+                    cx.open_url(url);
+                }
+            }
+        }
+    }
+    fn schedule_provider_poll(
+        &mut self,
+        provider: String,
+        login_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let epoch = self.connection_epoch;
+        let key = provider.clone();
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1500))
+                    .await;
+                let keep = this
+                    .update(cx, |view, cx| {
+                        if !view.connected
+                            || view.connection_epoch != epoch
+                            || !view.provider_logins.get(&provider).is_some_and(|login| {
+                                login["loginId"] == login_id
+                                    && login["status"] == "pending"
+                                    && login["cancelled"] != true
+                            })
+                        {
+                            return false;
+                        }
+                        if !view
+                            .provider_actions
+                            .values()
+                            .any(|pending| pending == &provider)
+                        {
+                            view.provider_action(
+                                provider.clone(),
+                                methods::POLL_AGENT_LOGIN,
+                                json!({"loginId":login_id}),
+                            );
+                            cx.notify();
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    break;
+                }
+            }
+        });
+        self.provider_login_tasks.insert(key, task);
+    }
+    pub(super) fn dismiss_provider_login(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(provider) = self.provider_expanded.clone().filter(|provider| {
+            self.provider_logins.get(provider).is_some_and(|login| {
+                login["cancelled"] != true
+                    && matches!(login["status"].as_str(), Some("starting" | "pending"))
+            })
+        }) else {
+            return false;
+        };
+        self.cancel_provider_login(&provider, cx);
+        true
+    }
     pub(super) fn receive_provider_action(
         &mut self,
         id: u64,
@@ -32,60 +205,130 @@ impl WorkspaceView {
         let Some(provider) = self.provider_actions.get(&id).cloned() else {
             return false;
         };
+        if frame.get("ok").is_none() && frame.get("err").is_none() {
+            return true;
+        }
         let method = self.pending.get(&id).cloned().unwrap_or_default();
+        self.provider_actions.remove(&id);
+        let is_login = matches!(
+            method.as_str(),
+            methods::START_AGENT_LOGIN
+                | methods::POLL_AGENT_LOGIN
+                | methods::COMPLETE_AGENT_LOGIN
+                | methods::CANCEL_AGENT_LOGIN
+        );
         if let Some(error) = frame["err"].as_str() {
-            if provider.starts_with("acp-") {self.acp_provider_error(error.to_owned());}
-            else {self.provider_error = Some(error.to_owned());}
-            self.provider_actions.remove(&id);
+            if is_login {
+                self.provider_login_tasks.remove(&provider);
+                if let Some(login) = self.provider_logins.get_mut(&provider) {
+                    if login["cancelled"] == true && method == methods::START_AGENT_LOGIN {
+                        self.provider_logins.remove(&provider);
+                    } else if method == methods::COMPLETE_AGENT_LOGIN && login["cancelled"] != true
+                    {
+                        login["error"] = json!(error);
+                    } else if login["cancelled"] != true || method == methods::CANCEL_AGENT_LOGIN {
+                        login["status"] = json!("failed");
+                        login["message"] = json!(error);
+                        login["cancelled"] = json!(false);
+                    }
+                }
+            } else if provider.starts_with("acp-") {
+                self.acp_provider_error(error.to_owned());
+            } else {
+                self.provider_error = Some(error.to_owned());
+            }
             self.pending.remove(&id);
             cx.notify();
             return true;
         }
-        let Some(value) = frame.get("ok") else {
-            return true;
-        };
-        self.provider_actions.remove(&id);
+        let value = &frame["ok"];
         if matches!(
             method.as_str(),
             methods::SET_HARNESS_ENABLED | methods::INSTALL_HARNESS
         ) {
             return false;
         }
+        let cancelled = self
+            .provider_logins
+            .get(&provider)
+            .is_some_and(|login| login["cancelled"] == true);
         match method.as_str() {
             methods::START_AGENT_LOGIN => {
-                if let Some(url) = value["url"]
-                    .as_str()
-                    .filter(|url| url.starts_with("https://"))
-                {
-                    cx.open_url(url);
+                if cancelled {
+                    if let Some(login_id) = value["loginId"].as_str() {
+                        let request =
+                            self.call(methods::CANCEL_AGENT_LOGIN, json!({"loginId":login_id}));
+                        self.provider_actions.insert(request, provider.clone());
+                    } else {
+                        self.provider_logins.remove(&provider);
+                    }
+                } else if self.provider_logins.contains_key(&provider) {
+                    let selected = self.provider_logins[&provider]["provider"].clone();
+                    let mut login = value.clone();
+                    login["status"] = json!("pending");
+                    login["provider"] = selected;
+                    if let Some(url) = login["url"]
+                        .as_str()
+                        .filter(|url| crate::provider_signin::is_openable_login_url(url))
+                    {
+                        cx.open_url(url);
+                    }
+                    let browser = login["mode"] == "browser";
+                    let login_id = login["loginId"].as_str().map(str::to_owned);
+                    self.provider_logins.insert(provider.clone(), login);
+                    if browser {
+                        if let Some(login_id) = login_id {
+                            self.schedule_provider_poll(provider.clone(), login_id, cx);
+                        }
+                    }
+                }
+            }
+            methods::POLL_AGENT_LOGIN if !cancelled => {
+                if let Some(login) = self.provider_logins.get_mut(&provider) {
+                    if let Some(url) = value["url"]
+                        .as_str()
+                        .filter(|url| crate::provider_signin::is_openable_login_url(url))
+                    {
+                        if login["url"] != url {
+                            cx.open_url(url);
+                            login["url"] = json!(url);
+                        }
+                    }
+                    if let Some(message) = value["message"].as_str() {
+                        login["message"] = json!(message);
+                    }
+                    if value["status"] == "done" {
+                        login["status"] = json!("done");
+                        self.provider_login_tasks.remove(&provider);
+                        self.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":true}));
+                        self.call(methods::LIST_HARNESSES, json!({}));
+                    } else if value["status"] == "error" {
+                        login["status"] = json!("failed");
+                        login["message"] = value["message"]
+                            .as_str()
+                            .unwrap_or("Sign-in failed.")
+                            .into();
+                        self.provider_login_tasks.remove(&provider);
+                    }
+                }
+            }
+            methods::COMPLETE_AGENT_LOGIN
+                if !cancelled && self.provider_logins.contains_key(&provider) =>
+            {
+                self.provider_login_tasks.remove(&provider);
+                if let Some(login) = self.provider_logins.get_mut(&provider) {
+                    login["status"] = json!("done");
+                    login.as_object_mut().map(|object| object.remove("error"));
                 }
                 if let Some(input) = self.provider_codes.get(&provider) {
                     input.update(cx, |input, cx| input.set_value(String::new(), cx));
                 }
-                self.provider_logins.insert(provider, value.clone());
+                self.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":true}));
+                self.call(methods::LIST_HARNESSES, json!({}));
             }
-            methods::POLL_AGENT_LOGIN => {
-                let login = self.provider_logins.entry(provider.clone()).or_default();
-                if let Some(url) = value["url"].as_str() {
-                    login["url"] = json!(url);
-                }
-                if let Some(message) = value["message"].as_str() {
-                    login["message"] = json!(message);
-                }
-                if value["status"] == "done" {
-                    self.provider_logins.remove(&provider);
-                    self.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":false}));
-                    self.call(methods::LIST_HARNESSES, json!({}));
-                }
-                if value["status"] == "error" {
-                    self.provider_error = value["message"].as_str().map(str::to_owned);
-                }
-            }
-            methods::COMPLETE_AGENT_LOGIN | methods::CANCEL_AGENT_LOGIN => {
+            methods::CANCEL_AGENT_LOGIN => {
                 self.provider_logins.remove(&provider);
-                if let Some(input) = self.provider_codes.get(&provider) {
-                    input.update(cx, |input, cx| input.set_value(String::new(), cx));
-                }
+                self.provider_login_tasks.remove(&provider);
                 self.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":false}));
             }
             _ => {}
@@ -221,6 +464,9 @@ impl WorkspaceView {
                                         cx,
                                     )
                                 });
+                                let provider=expand.clone();
+                                let events=cx.subscribe(&input,move|this,_,_:&input::Submitted,cx|this.complete_provider_login(&provider,cx));
+                                this.provider_code_events.insert(expand.clone(),events);
                                 this.provider_codes.insert(expand.clone(), input);
                             }
                             cx.notify();
@@ -265,108 +511,17 @@ impl WorkspaceView {
                                         ),
                                     ),
                             );
-                        } else {
-                            let login = id.clone();
-                            details = details.child(
-                                row()
-                                    .gap(px(12.))
-                                    .child(s::details(
-                                        "Account",
-                                        account
-                                            .and_then(|account| account["planLabel"].as_str())
-                                            .unwrap_or("Sign in to use your agent subscription."),
-                                    ))
-                                    .child(
-                                        s::button(
-                                            ("sign-in-provider", index),
-                                            if busy { "Working…" } else { "Sign in" },
-                                        )
-                                        .when(busy, |button| button.opacity(0.5))
-                                        .on_click(
-                                            cx.listener(move |this, _, _, cx| {
-                                                this.provider_action(
-                                                    login.clone(),
-                                                    methods::START_AGENT_LOGIN,
-                                                    json!({"harness":login}),
-                                                );
-                                                cx.notify();
-                                            }),
-                                        ),
-                                    ),
-                            );
-                        }
-                        if let Some(login) = self.provider_logins.get(&id) {
-                            let login_id = login["loginId"].as_str().unwrap_or_default().to_owned();
-                            if let Some(url) = login["url"]
-                                .as_str()
-                                .filter(|url| url.starts_with("https://"))
-                                .map(str::to_owned)
-                            {
-                                details = details.child(
-                                    s::button(("open-provider-login", index), "Open sign-in page")
-                                        .on_click(move |_, _, cx| cx.open_url(&url)),
-                                );
-                            }
-                            if let Some(input) = self.provider_codes.get(&id) {
-                                let input = input.clone();
-                                let field = input.clone();
-                                let complete = id.clone();
-                                let complete_id = login_id.clone();
-                                details = details.child(
-                                    row().gap(px(8.)).child(s::field().child(field)).child(
-                                        s::button(
-                                            ("complete-provider-login", index),
-                                            "Complete sign-in",
-                                        )
-                                        .on_click(
-                                            cx.listener(move |this, _, _, cx| {
-                                                let code = input.read(cx).value(cx);
-                                                if code.trim().is_empty() {
-                                                    return;
-                                                }
-                                                this.provider_action(
-                                                    complete.clone(),
-                                                    methods::COMPLETE_AGENT_LOGIN,
-                                                    json!({"loginId":complete_id,"code":code}),
-                                                );
-                                                cx.notify();
-                                            }),
-                                        ),
-                                    ),
-                                );
-                            }
-                            let poll = id.clone();
-                            let poll_id = login_id.clone();
-                            let cancel = id.clone();
-                            details = details.child(
-                                row()
-                                    .gap(px(8.))
-                                    .child(
-                                        s::button(("check-provider-login", index), "Check sign-in")
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.provider_action(
-                                                    poll.clone(),
-                                                    methods::POLL_AGENT_LOGIN,
-                                                    json!({"loginId":poll_id}),
-                                                );
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        s::button(("cancel-provider-login", index), "Cancel")
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.provider_action(
-                                                    cancel.clone(),
-                                                    methods::CANCEL_AGENT_LOGIN,
-                                                    json!({"loginId":login_id}),
-                                                );
-                                                cx.notify();
-                                            })),
-                                    ),
-                            );
-                            if let Some(message) = login["message"].as_str() {
-                                details = details.child(s::description_text(message.to_owned()));
-                            }
+                        } else if let Ok(harness)=zuse_protocol::HarnessId::try_from(id.clone()) {
+                            use crate::provider_signin::{self as signin,Data,Phase};
+                            let login=self.provider_logins.get(&id);let cancelled=login.is_some_and(|login|login["cancelled"]==true);
+                            let phase=if cancelled{Phase::Idle}else{match login.and_then(|login|login["status"].as_str()){
+                                Some("starting"|"pending")=>Phase::Waiting{message:login.and_then(|login|login["message"].as_str()).map(str::to_owned)},
+                                Some("failed")=>Phase::Failed(login.and_then(|login|login["message"].as_str()).unwrap_or("Sign-in failed.").into()),
+                                Some("done")=>Phase::Success,_=>Phase::Idle,
+                            }};
+                            let code=(!cancelled&&login.is_some_and(|login|login["mode"]=="paste-code"&&login["status"]=="pending")).then(||self.provider_codes.get(&id).cloned().map(IntoElement::into_any_element)).flatten();
+                            let submitting=self.provider_actions.iter().any(|(request,provider)|provider==&id&&self.pending.get(request).is_some_and(|method|method==methods::COMPLETE_AGENT_LOGIN));
+                            details=details.child(signin::render(Data{harness,phase,url:login.and_then(|login|login["url"].as_str()).filter(|url|signin::is_openable_login_url(url)).map(str::to_owned),submitting,error:login.and_then(|login|login["error"].as_str()).map(str::to_owned),blocked:busy},code,Self::inline_provider_action,cx));
                         }
                         details = details.child(self.provider_update_details(&id,index,cx));
                         card = card.child(details);

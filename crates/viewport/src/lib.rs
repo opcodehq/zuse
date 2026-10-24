@@ -63,6 +63,7 @@ pub mod usage_dashboard;
 mod project_archive_host;
 mod usage_host;
 mod provider_settings;
+pub mod provider_signin;
 mod provider_updates;
 mod pull_requests;
 mod questions;
@@ -192,6 +193,8 @@ pub struct WorkspaceView {
     provider_actions: HashMap<u64, String>,
     provider_logins: HashMap<String, Value>,
     provider_codes: HashMap<String, Entity<input::TextInput>>,
+    provider_code_events: HashMap<String, Subscription>,
+    provider_login_tasks: HashMap<String, Task<()>>,
     provider_error: Option<String>,
     settings_section: settings_view::Section,
     settings_nav_focus: FocusHandle,
@@ -639,6 +642,8 @@ impl WorkspaceView {
             provider_actions: HashMap::new(),
             provider_logins: HashMap::new(),
             provider_codes: HashMap::new(),
+            provider_code_events: HashMap::new(),
+            provider_login_tasks: HashMap::new(),
             provider_error: None,
             settings_section: settings_view::Section::General,
             settings_nav_focus: cx.focus_handle().tab_stop(true),
@@ -1331,7 +1336,10 @@ impl WorkspaceView {
                     self.call(methods::LIST_REPOS, json!({}));
                 }
 
-                methods::LIST_AGENT_ACCOUNTS => self.accounts = value.clone(),
+                methods::LIST_AGENT_ACCOUNTS => {
+                    self.accounts = value.clone();
+                    self.provider_logins.retain(|_,login|login["status"]!="done");
+                },
                 methods::WATCH_QUEUE if self.queue_watch == Some(id) => {
                     if let Some(items) = value["items"].as_array() {
                         self.queue = items.clone();

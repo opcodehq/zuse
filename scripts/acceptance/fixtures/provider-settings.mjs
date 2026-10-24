@@ -4,6 +4,9 @@ export function providerSettingsFixture(events) {
   const usageWaiting = [];
   const waiting = [], watches = new Map();
   let modelErrors = {};
+  let loginMode='paste-code',loginSequence=0,pollsBeforeDone=null,loginError=null,codeError=null,holdStart=false;
+  const logins=new Map(),startWaiting=[];
+  const accountFor=harness=>({id:'signed-'+harness,harness,email:'sam@example.test',planLabel:'Pro',active:true,usageWindows:[],switchable:true});
   const descriptors = [
     ['claude-code', 'Claude Code', true, true],
     ['codex', 'Codex', true, true],
@@ -14,11 +17,11 @@ export function providerSettingsFixture(events) {
     {id:'deep',label:p.id==='codex'?'Codex Deep':'Deep',description:'Complex reasoning',reasoningLevels:[],options:[]},
   ]]));
   const updates = descriptors.filter(p=>p.installed).map(p=>({harness:p.id,installedVersion:'1.2.3',latestVersion:'1.2.3',phase:'current',policy:'notify',checkedAt:Date.now(),canApply:false}));
-  const snapshot = () => ({enabled,hold,descriptors,models,updates,modelErrors});
+  const snapshot = () => ({enabled,hold,descriptors,models,updates,modelErrors,accounts,loginMode,logins:[...logins].map(([id,login])=>({id,...login}))});
   const reply = (send,client,frame) => hold ? waiting.push([send,client,frame]) : send(client,frame);
   return {
     snapshot,
-    configure(value) { if(value.models)Object.assign(models,value.models); if(value.modelErrors)modelErrors=value.modelErrors; enabled=true; hold=value.hold??false; if(value.accounts)accounts=value.accounts; if(Object.hasOwn(value,'usageError'))usageError=value.usageError; if(Object.hasOwn(value,'holdUsage'))holdUsage=value.holdUsage; if(!holdUsage)for(const [send,client,frame]of usageWaiting.splice(0))send(client,frame); if(!hold)for(const [send,client,frame] of waiting.splice(0))send(client,frame); },
+    configure(value) { if(Object.hasOwn(value,'loginMode'))loginMode=value.loginMode;if(Object.hasOwn(value,'pollsBeforeDone'))pollsBeforeDone=value.pollsBeforeDone;if(Object.hasOwn(value,'loginError'))loginError=value.loginError;if(Object.hasOwn(value,'codeError'))codeError=value.codeError;if(Object.hasOwn(value,'holdStart'))holdStart=value.holdStart;if(!holdStart)for(const[send,client,frame]of startWaiting.splice(0))send(client,frame); if(value.models)Object.assign(models,value.models); if(value.modelErrors)modelErrors=value.modelErrors; enabled=true; hold=value.hold??false; if(value.accounts)accounts=value.accounts; if(Object.hasOwn(value,'usageError'))usageError=value.usageError; if(Object.hasOwn(value,'holdUsage'))holdUsage=value.holdUsage; if(!holdUsage)for(const [send,client,frame]of usageWaiting.splice(0))send(client,frame); if(!hold)for(const [send,client,frame] of waiting.splice(0))send(client,frame); },
     handle(client,frame,send) {
       if(frame.cancel && watches.get(client)?.delete(frame.id))return true;
       if(!enabled)return false;
@@ -47,9 +50,20 @@ export function providerSettingsFixture(events) {
         }
         provider.enabled=p.enabled;data=descriptors;
       }
-      if(method==='StartAgentLogin')data={loginId:'provider-login',url:'https://identity.example.test/provider',mode:'paste-code'};
-      if(method==='PollAgentLogin')data={status:'pending',message:'Waiting for sign-in…'};
-      if(method==='CompleteAgentLogin'||method==='CancelAgentLogin')data={ok:true};
+      if(method==='StartAgentLogin'){
+        const loginId='provider-login-'+(++loginSequence);logins.set(loginId,{harness:p.harness,polls:0,cancelled:false,done:false});
+        const response=loginError?{id:frame.id,err:loginError,done:true}:{id:frame.id,ok:{loginId,url:'https://identity.example.test/provider',mode:loginMode}};
+        if(holdStart)startWaiting.push([send,client,response]);else reply(send,client,response);return true;
+      }
+      if(method==='PollAgentLogin'){
+        const login=logins.get(p.loginId);if(login){login.polls++;if(pollsBeforeDone!==null&&login.polls>=pollsBeforeDone&&!login.cancelled){login.done=true;accounts=accounts.filter(a=>a.harness!==login.harness);accounts.push(accountFor(login.harness));}}
+        data={status:login?.cancelled?'error':login?.done?'done':'pending'};
+      }
+      if(method==='CompleteAgentLogin'){
+        if(codeError){reply(send,client,{id:frame.id,err:codeError,done:true});return true;}
+        const login=logins.get(p.loginId);if(login&&!login.cancelled){login.done=true;accounts=accounts.filter(a=>a.harness!==login.harness);accounts.push(accountFor(login.harness));}data={ok:true};
+      }
+      if(method==='CancelAgentLogin'){const login=logins.get(p.loginId);if(login)login.cancelled=true;data={ok:true};}
       reply(send,client,{id:frame.id,ok:data});return true;
     },
   };
