@@ -18,6 +18,8 @@ mod composer_alerts;
 pub mod composer_style;
 pub mod creation_style;
 pub mod creation_sources;
+pub mod import_chat;
+mod import_chat_adapter;
 mod creation_checkout;
 mod creation_source_adapter;
 pub mod dither;
@@ -217,6 +219,8 @@ pub struct WorkspaceView {
     creating: Option<(u64, Value, Value)>,
     creation_checkout: creation_checkout::State,
     creation_source_picker: Entity<creation_sources::SourcePicker>,
+    import_picker: Entity<import_chat::ImportMenu>,
+    import_requests: HashMap<u64,u64>,
     creation_source_requests: HashMap<u64,u64>,
     creation_source_checkout: Option<(String,String,String)>,
     queue: Vec<Value>,
@@ -375,6 +379,7 @@ impl WorkspaceView {
         })
         .detach();
         let creation_source_picker=Self::new_creation_sources(cx);
+        let import_picker=Self::new_import_menu(cx);
         let repository_panel = cx.new(|cx| cloud_repositories::RepositoryPanel::new(window, cx));
         cx.observe(&repository_panel, |_,_,cx|cx.notify()).detach();
         cx.subscribe(
@@ -662,6 +667,8 @@ impl WorkspaceView {
             creation_checkout: Default::default(),
             creation_source_picker,
             creation_source_requests: Default::default(),
+            import_picker,
+            import_requests: Default::default(),
             creation_source_checkout: None,
             queue: vec![],
             queue_watch: None,
@@ -853,6 +860,7 @@ impl WorkspaceView {
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
         if self.receive_creation_source(&frame,cx){return;}
+        if self.receive_import_chat(&frame,cx){return;}
         if frame["id"]
             .as_u64()
             .and_then(|id| self.pending.get(&id))
@@ -1567,6 +1575,9 @@ impl WorkspaceView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.import_picker.read(cx).busy() {
+            return;
+        }
         if self.project_archive.project.is_some() || self.usage_open {return;}
         if self.cloud.cached {
             if !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty() {

@@ -8920,6 +8920,9 @@ impl Composer {
     /// New chats need a runnable agent, but may target the device's home
     /// directory without a project. Existing chats carry their own run config.
     fn send_blocked(&self, cx: &App) -> bool {
+        if self.pickers.read(cx).importing_chat(cx) {
+            return true;
+        }
         if self.queue_edit_finishing {
             return true;
         }

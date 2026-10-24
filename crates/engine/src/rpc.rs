@@ -52,6 +52,7 @@
 
 mod archive_review;
 mod creation_sources;
+mod external_chats;
 mod git_workspace;
 mod visuals;
 mod voice_chat;
@@ -1630,6 +1631,7 @@ fn forwardable(method: &str) -> bool {
         method,
         zuse_protocol::usage::OVERVIEW | zuse_protocol::usage::SESSIONS
             | zuse_protocol::creation_source::LIST | zuse_protocol::creation_source::RESOLVE
+            | zuse_protocol::external_chat::LIST | zuse_protocol::external_chat::IMPORT
             | methods::OPEN_VISUAL | methods::CONTROL_VISUAL | methods::DRAW_VISUAL
             | methods::FORK_SIDE_CHAT
             | methods::CREATE_THREAD_SESSION
@@ -2355,6 +2357,9 @@ impl RpcService for EngineRpc {
             None
         };
         match method {
+            zuse_protocol::external_chat::LIST | zuse_protocol::external_chat::IMPORT => {
+                self.external_chats(method, params).await
+            }
             zuse_protocol::creation_source::LIST | zuse_protocol::creation_source::RESOLVE => {
                 self.creation_sources(method, params).await
             }

@@ -913,6 +913,34 @@ impl WorkspaceHost {
         }
     }
 
+    /// Finish an explicit history import before acknowledging it to a viewport.
+    pub(crate) fn finish_external_import(
+        &self,
+        chat_id: &str,
+        title: &str,
+        cursor: &str,
+        cwd: &str,
+        harness: zuse_protocol::HarnessId,
+        preview: &str,
+        updated_at: i64,
+    ) -> Result<(), EngineError> {
+        self.mutate(|doc| -> Result<(), zuse_doc::DocError> {
+            doc.rename_chat(chat_id, title)?;
+            if !doc.set_chat_owned_harness_session(chat_id, cursor, cwd, Some(harness))? {
+                return Err(zuse_doc::DocError::Schema(
+                    "Imported conversation was removed".into(),
+                ));
+            }
+            doc.set_chat_last_message(
+                chat_id,
+                preview,
+                chrono::DateTime::from_timestamp_millis(updated_at).unwrap_or_else(Utc::now),
+            )?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
     pub fn chat_harness_session_owner(
         &self,
         chat_id: &str,

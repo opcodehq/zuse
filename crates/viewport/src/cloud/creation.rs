@@ -356,20 +356,26 @@ impl WorkspaceView {
     ) -> Div {
         let bounds = self.cloud.creation.bounds(kind);
         let measure = bounds.clone();
-        let mut view = div().relative().flex_none().child(
-            ui::chip(SharedString::from(format!("composer-{kind}")), label, glyph)
-                .relative()
-                .track_focus(&self.cloud.creation.handle(kind, cx).tab_stop(true))
-                .aria_expanded(self.cloud.picker == Some(kind))
-                .child(
-                    canvas(move |b, _, _| measure.set(Some(b)), |_, _, _, _| {})
-                        .absolute()
-                        .size_full(),
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.open_creation_picker(kind, window, cx)
-                })),
-        );
+        let compact = matches!(kind, "repository" | "environment");
+        let mut view = div()
+            .relative()
+            .flex_none()
+            .when(compact, |view| view.min_w(px(60.)).flex_shrink(1.))
+            .child(
+                ui::chip(SharedString::from(format!("composer-{kind}")), label, glyph)
+                    .when(compact, |view| view.max_w_full().flex_shrink(1.))
+                    .relative()
+                    .track_focus(&self.cloud.creation.handle(kind, cx).tab_stop(true))
+                    .aria_expanded(self.cloud.picker == Some(kind))
+                    .child(
+                        canvas(move |b, _, _| measure.set(Some(b)), |_, _, _, _| {})
+                            .absolute()
+                            .size_full(),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_creation_picker(kind, window, cx)
+                    })),
+            );
         if self.cloud.picker == Some(kind) {
             view = view.child(
                 div().absolute().bottom_full().left_0().child(deferred(
@@ -441,6 +447,7 @@ impl WorkspaceView {
             .when_some(self.creation_workspace_control(cx), |view, control| {
                 view.child(control)
             })
+            .children(self.import_chat_control(cx))
             .when(!self.cloud.mode, |view| {
                 view.child(div().flex_1())
                     .children(self.creation_source_control(cx))

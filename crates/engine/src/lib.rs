@@ -33,6 +33,7 @@ pub(crate) mod home_index;
 mod http_error;
 pub mod instance_lock;
 pub mod local_import;
+mod external_chats;
 pub mod managed_access;
 pub mod relay_access;
 pub use zuse_harness::processes::supervisor as command_host;

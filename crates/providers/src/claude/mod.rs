@@ -47,6 +47,38 @@ mod discovery;
 mod normalize;
 mod wire;
 
+/// Translate saved native rows with the same tool/reasoning decoder as live traffic.
+pub fn history_decoder() -> impl FnMut(&serde_json::Value) -> Vec<AgentEvent> {
+    let mut normalizer = normalize::Normalizer::new();
+    move |row| {
+        // Live main-thread text arrives as deltas; saved history contains the
+        // completed blocks instead. Keep their order around the tool calls.
+        if row["type"] == "assistant" && row["parent_tool_use_id"].is_null() {
+            return row["message"]["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|block| match block["type"].as_str()? {
+                    "text" => Some(AgentEvent::TextDelta {
+                        text: format!("{}\n\n", block["text"].as_str()?.trim_end()),
+                    }),
+                    "thinking" => Some(AgentEvent::ReasoningDelta {
+                        text: block["thinking"].as_str()?.to_owned(),
+                    }),
+                    "tool_use" => Some(AgentEvent::ToolCall {
+                        id: block["id"].as_str()?.to_owned(),
+                        call: normalize::decode_tool_use(block["name"].as_str()?, &block["input"]),
+                    }),
+                    _ => None,
+                })
+                .collect();
+        }
+        wire::parse_frame(&row.to_string())
+            .map(|frame| normalizer.normalize(frame, false))
+            .unwrap_or_default()
+    }
+}
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;

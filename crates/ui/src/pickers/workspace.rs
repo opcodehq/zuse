@@ -29,7 +29,8 @@ impl Pickers {
             self.checkout_label().into(),
             &theme,
             cx,
-        );
+        )
+        .flex_none();
         if self.mounted_kind() == Some(PickerKind::Checkout) {
             let content = self.render_checkout_popover(cx);
             let popup = self.popover_frame(224., content, cx);

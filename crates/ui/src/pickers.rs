@@ -18,6 +18,7 @@ mod workspace;
 mod model_menu;
 mod settings_models;
 mod creation_sources;
+mod import_chat;
 pub(crate) use creation_sources::CreationIssueTitle;
 
 use crate::roll_text::{roll_text, rolling};
@@ -788,6 +789,8 @@ pub struct Pickers {
     state: Entity<AppState>,
     config: DraftConfig,
     source_picker: Entity<zuse_viewport::creation_sources::SourcePicker>,
+    import_picker: Entity<zuse_viewport::import_chat::ImportMenu>,
+    import_tasks: HashMap<u64, Task<()>>,
     source_tasks: HashMap<u64, Task<()>>,
     /// Thread-naming binding (Settings → General): the model picker reads and
     /// emits the local device's title settings instead of a composer draft.
@@ -948,6 +951,7 @@ impl Pickers {
         cx: &mut Context<Self>,
     ) -> Self {
         let source_picker = Self::new_creation_sources(cx);
+        let import_picker = Self::new_import_menu(cx);
         let search = cx.new(|cx| {
             ComposerInput::with_context("Search…", "PaletteSearch", cx)
                 .with_accessibility_role(gpui::Role::SearchInput)
@@ -1116,6 +1120,8 @@ impl Pickers {
                 ..Default::default()
             },
             source_picker,
+            import_picker,
+            import_tasks: Default::default(),
             source_tasks: Default::default(),
             title,
             settings_model: settings_models::State::new(default_settings, cx),
@@ -3644,7 +3650,7 @@ impl Pickers {
             .border_color(gpui::transparent_black())
             .h(px(28.0))
             .max_w(px(224.0))
-            .min_w_0()
+            .min_w(px(60.0))
             .flex()
             .flex_row()
             .items_center()
@@ -3759,7 +3765,8 @@ impl Pickers {
             cx,
         );
         div()
-            .flex_none()
+            .min_w_0()
+            .flex_shrink(1.)
             .flex()
             .flex_row()
             .items_center()
@@ -3779,6 +3786,7 @@ impl Pickers {
                 closing,
             ))
             .children(self.render_creation_workspace(cx))
+            .children(self.render_import_chat(cx))
             .into_any_element()
     }
 
