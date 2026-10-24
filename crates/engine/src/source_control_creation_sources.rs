@@ -125,6 +125,49 @@ impl GitHubCli {
         })
     }
 
+    pub(crate) async fn creation_cloud_pr(
+        &self,
+        cwd: &Path,
+        number: u64,
+    ) -> Result<zuse_protocol::creation_source::Resolution, ChangeRequestError> {
+        let value = self
+            .source_command(
+                cwd,
+                vec![
+                    "pr".into(),
+                    "view".into(),
+                    number.to_string(),
+                    "--json".into(),
+                    "headRefName,isCrossRepository".into(),
+                ],
+                false,
+            )
+            .await?;
+        let head = value["headRefName"]
+            .as_str()
+            .filter(|head| !head.is_empty())
+            .ok_or(ChangeRequestError::Decode)?;
+        let fork = value["isCrossRepository"]
+            .as_bool()
+            .ok_or(ChangeRequestError::Decode)?;
+        if !fork
+            && !head
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._/-".contains(&byte))
+        {
+            return Err(ChangeRequestError::Decode);
+        }
+        Ok(zuse_protocol::creation_source::Resolution::CloudRef {
+            label: format!("PR #{number} · {head}"),
+            base_ref: if fork {
+                format!("refs/pull/{number}/head")
+            } else {
+                format!("origin/{head}")
+            },
+            branch: (!fork).then(|| head.into()),
+        })
+    }
+
     pub(crate) async fn checkout_creation_pr(
         &self,
         cwd: &Path,

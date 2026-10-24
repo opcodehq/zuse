@@ -36,6 +36,9 @@ enum Pick {
     AddComputer,
 }
 impl WorkspaceView {
+    pub(crate) fn cloud_creation_repository_identity(&self) -> Option<&str> {
+        self.cloud.projects.get(self.cloud.project)?["repositoryIdentity"].as_str()
+    }
     fn creation_choices(
         &self,
         kind: &str,
@@ -448,27 +451,9 @@ impl WorkspaceView {
                 view.child(control)
             })
             .children(self.import_chat_control(cx))
-            .when(!self.cloud.mode, |view| {
+            .map(|view| {
                 view.child(div().flex_1())
                     .children(self.creation_source_control(cx))
-            })
-            .when(self.cloud.mode, |v| {
-                v.child(div().flex_1()).child(self.creation_chip(
-                    "branch",
-                    {
-                        let branch = self.cloud_branch.read(cx).value(cx);
-                        if branch.is_empty() {
-                            project
-                                .and_then(|p| p["defaultBranch"].as_str())
-                                .unwrap_or("main")
-                                .to_owned()
-                        } else {
-                            branch
-                        }
-                    },
-                    "git-branch",
-                    cx,
-                ))
             })
             .into_any_element()
     }

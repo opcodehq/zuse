@@ -388,23 +388,4 @@ impl Pickers {
             })
             .into_any_element()
     }
-    pub(super) fn cloud_git_summary(&self, cx: &App) -> Option<AnyElement> {
-        let row = self.state.read(cx).cloud_project.as_ref()?;
-        let theme = Theme::of(cx);
-        Some(
-            workspace_footer_row()
-                .w_auto()
-                .flex_none()
-                .gap(px(6.))
-                .child(
-                    crate::icons::icon(crate::icons::GIT_BRANCH)
-                        .size(px(14.))
-                        .text_color(theme.text_muted),
-                )
-                .child(SharedString::from(
-                    row["defaultBranch"].as_str().unwrap_or("main").to_owned(),
-                ))
-                .into_any_element(),
-        )
-    }
 }

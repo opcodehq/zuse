@@ -111,6 +111,95 @@ async fn sources_prepare_reuse_replay_and_attach_without_a_chat_or_primary_check
     assert!(rows.iter().any(|r| r.title == "feature/reused" && r.in_use));
     assert!(rows.iter().any(|r| r.title == "feature/remote"));
     let request = |source| json!({"repoPath":root,"spaceId":"source-project","source":source,"requestId":uuid::Uuid::new_v4().to_string()});
+    let cloud_request = |source| {
+        let mut value = request(source);
+        value["cloud"] = json!(true);
+        value
+    };
+    let checkouts_before = git(&root, &["worktree", "list", "--porcelain"]);
+    let unpublished = cloud_request(Source::Branch {
+        reference: "refs/heads/feature/available".into(),
+    });
+    assert!(
+        client
+            .call(wire::RESOLVE, unpublished)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Push")
+    );
+    git(
+        &root,
+        &[
+            "update-ref",
+            "refs/remotes/origin/feature/available",
+            "HEAD",
+        ],
+    );
+    let cloud_branch_request = cloud_request(Source::Branch {
+        reference: "refs/heads/feature/available".into(),
+    });
+    let cloud_branch: Value = client
+        .call(wire::RESOLVE, cloud_branch_request.clone())
+        .await
+        .unwrap();
+    assert_eq!(cloud_branch["kind"], "cloudRef");
+    assert_eq!(cloud_branch["baseRef"], "origin/feature/available");
+    assert_eq!(cloud_branch["branch"], "feature/available");
+    assert_eq!(
+        client
+            .call(wire::RESOLVE, cloud_branch_request.clone())
+            .await
+            .unwrap(),
+        cloud_branch
+    );
+    let mut different_destination = cloud_branch_request;
+    different_destination["cloud"] = json!(false);
+    assert!(
+        client
+            .call(wire::RESOLVE, different_destination)
+            .await
+            .is_err()
+    );
+    let cloud_remote: Value = client
+        .call(
+            wire::RESOLVE,
+            cloud_request(Source::Branch {
+                reference: "refs/remotes/origin/feature/remote".into(),
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cloud_remote["baseRef"], "origin/feature/remote");
+    let cloud_pr: Value = client
+        .call(wire::RESOLVE, cloud_request(Source::Pr { number: 72 }))
+        .await
+        .unwrap();
+    assert_eq!(cloud_pr["baseRef"], "origin/feature/from-pr");
+    assert_eq!(cloud_pr["branch"], "feature/from-pr");
+    let cloud_fork: Value = client
+        .call(wire::RESOLVE, cloud_request(Source::Pr { number: 84 }))
+        .await
+        .unwrap();
+    assert_eq!(cloud_fork["baseRef"], "refs/pull/84/head");
+    assert!(cloud_fork["branch"].is_null());
+    let cloud_issue: Value = client
+        .call(wire::RESOLVE, cloud_request(Source::Issue { number: 93 }))
+        .await
+        .unwrap();
+    assert!(cloud_issue["uploadId"].is_string());
+    assert!(
+        cloud_issue["markdown"]
+            .as_str()
+            .unwrap()
+            .contains("Preserve the text")
+    );
+    assert_eq!(
+        git(&root, &["worktree", "list", "--porcelain"]),
+        checkouts_before,
+        "Cloud sources cannot prepare a local worktree"
+    );
+    assert_eq!(git(&root, &["branch", "--show-current"]), "main");
     let selected = request(Source::Branch {
         reference: "refs/heads/feature/available".into(),
     });
@@ -211,8 +300,8 @@ async fn sources_prepare_reuse_replay_and_attach_without_a_chat_or_primary_check
             .lines()
             .filter(|line| line.contains("\"issue\", \"view\""))
             .count(),
-        1,
-        "Receipt retry must not reread or duplicate the attachment"
+        2,
+        "Each local or Cloud issue request reads its issue once, including receipt retries"
     );
     assert_eq!(git(&root, &["branch", "--show-current"]), "main");
     assert_eq!(git(&root, &["status", "--porcelain=v1"]), before);

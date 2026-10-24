@@ -52,7 +52,23 @@ impl WorkspaceView {
         picker
     }
     pub(super) fn creation_source_control(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let target = if self.creation_workspace_key().is_some() {
+        if self.selected.is_some() || self.cloud_model_change_pending() {
+            return None;
+        }
+        let cloud_project_matches = !self.cloud.mode
+            || self.project.as_ref().is_some_and(|project| {
+                self.spaces.iter().any(|space| {
+                    project["path"] == space.path
+                        && space.git_detected
+                        && space.remote_repository.as_deref().is_some_and(|identity| {
+                            self.cloud_creation_repository_identity()
+                                .is_some_and(|remote| identity.eq_ignore_ascii_case(remote))
+                        })
+                })
+            });
+        let target = if cloud_project_matches
+            && (self.cloud.mode || self.creation_workspace_key().is_some())
+        {
             let path = self.project.as_ref()?["path"].as_str()?;
             Some(Target {
                 repo_path: path.into(),
@@ -66,6 +82,7 @@ impl WorkspaceView {
                     .iter()
                     .find(|s| s.path == path)
                     .map(|s| s.device_id.clone()),
+                cloud: self.cloud.mode,
             })
         } else {
             None
@@ -116,6 +133,7 @@ impl WorkspaceView {
         if let Some(zuse_protocol::creation_source::Resolution::Issue {
             number,
             attachment_path,
+            upload_id,
             ..
         }) = self.creation_source_picker.read(cx).selection()
         {
@@ -125,7 +143,7 @@ impl WorkspaceView {
                 .any(|a| a["path"] == *attachment_path)
             {
                 self.attachments
-                    .push(json!({"path":attachment_path,"fileName":format!("issue-{number}.md")}));
+                    .push(json!({"path":attachment_path,"name":format!("issue-{number}.md"),"fileName":format!("issue-{number}.md"),"uploadId":upload_id}));
             }
         }
     }

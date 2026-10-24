@@ -3795,8 +3795,8 @@ impl Pickers {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if self.state.read(cx).cloud_project.is_some() {
-            return self.cloud_git_summary(cx);
+        if self.cloud_launch_frozen() {
+            return None;
         }
         let git = self
             .state
@@ -3807,8 +3807,8 @@ impl Pickers {
             return None;
         }
         self.ensure_refs(false, cx);
-        let target = self.creation_source_target(cx);
-        self.source_picker.update(cx, |picker,cx| picker.set_target(target,cx));
+        let target = self.creation_source_target(cx)?;
+        self.source_picker.update(cx, |picker,cx| picker.set_target(Some(target),cx));
         Some(self.source_picker.clone().into_any_element())
     }
 

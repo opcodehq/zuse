@@ -1,4 +1,4 @@
-//! Source selection prepares a checkout or issue context before a chat exists.
+//! Source selection prepares a local checkout, Cloud ref or issue context before a chat exists.
 use serde::{Deserialize, Serialize};
 
 pub const LIST: &str = "ListCreationSources";
@@ -75,6 +75,9 @@ pub struct ResolveRequest {
     pub source: Source,
     /// Stable across a retry whose receipt was lost.
     pub request_id: String,
+    /// Resolve a sandbox ref without preparing a local checkout.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cloud: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -88,11 +91,18 @@ pub enum Resolution {
         label: String,
         outcome: crate::CreateWorktreeOutcome,
     },
+    CloudRef {
+        label: String,
+        base_ref: String,
+        branch: Option<String>,
+    },
     Issue {
         number: u64,
         title: String,
         attachment_path: String,
         markdown: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        upload_id: Option<String>,
     },
 }
 

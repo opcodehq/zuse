@@ -46,7 +46,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
    const text=message.toString(),frame=JSON.parse(text);
    if(frame.method){
     client.data.pending.set(frame.id,frame.method);
-    events.push({method:frame.method,...(['CloudCreate','DiscoverModels','DiscoverHarnesses'].includes(frame.method)?{params:frame.params}:{})});
+    events.push({method:frame.method,...(['CloudCreate','DiscoverModels','DiscoverHarnesses','ListCreationSources','ResolveCreationSource'].includes(frame.method)?{params:frame.params}:{})});
     if(frame.method==='CloudContext'&&faults.failContext){faults.failContext=false;emit(client,{id:frame.id,err:'Cloud catalogue is temporarily unavailable. Retry.',done:true});return;}
    }
    if(client.data.ready)client.data.upstream.send(text);else client.data.waiting.push(text);

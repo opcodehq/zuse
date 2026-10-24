@@ -80,6 +80,47 @@ impl Repos {
         Ok(rows)
     }
 
+    pub(crate) async fn creation_cloud_branch(
+        &self,
+        root: &Path,
+        reference: &str,
+    ) -> Result<zuse_protocol::creation_source::Resolution, EngineError> {
+        let branch = reference
+            .strip_prefix("refs/heads/")
+            .or_else(|| reference.strip_prefix("refs/remotes/origin/"))
+            .filter(|branch| !branch.is_empty())
+            .ok_or_else(|| {
+                EngineError::Other(
+                    "Choose a branch available on origin before starting it in the cloud.".into(),
+                )
+            })?;
+        self.git(&["check-ref-format", "--branch", branch], Some(root))
+            .await?;
+        self.git(&["show-ref", "--verify", reference], Some(root))
+            .await?;
+        if !branch
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._/-".contains(&byte))
+        {
+            return Err(EngineError::Other(format!(
+                "Branch \"{branch}\" contains characters the cloud workspace can't use."
+            )));
+        }
+        let origin = format!("refs/remotes/origin/{branch}");
+        self.git(&["show-ref", "--verify", &origin], Some(root))
+            .await
+            .map_err(|_| {
+                EngineError::Other(format!(
+                    "Push \"{branch}\" to origin before starting it in the cloud."
+                ))
+            })?;
+        Ok(zuse_protocol::creation_source::Resolution::CloudRef {
+            label: branch.into(),
+            base_ref: format!("origin/{branch}"),
+            branch: Some(branch.into()),
+        })
+    }
+
     pub(crate) async fn prepare_creation_source(
         &self,
         root: &Path,

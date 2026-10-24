@@ -4,10 +4,17 @@ use serde_json::Value;
 use zuse_protocol::cloud_catalog::CloudAgentCatalog;
 
 impl Pickers {
+    pub(crate) fn finish_cloud_launch(&mut self, cx: &mut Context<Self>) {
+        self.freeze_cloud_launch(false, cx);
+        self.source_picker
+            .update(cx, |picker, cx| picker.clear_selection(cx));
+    }
     pub(crate) fn freeze_cloud_launch(&mut self, frozen: bool, cx: &mut Context<Self>) {
         self.cloud.frozen = frozen;
         if frozen {
             self.close(cx);
+            self.source_picker
+                .update(cx, |picker, cx| picker.dismiss(cx));
         }
         cx.notify();
     }

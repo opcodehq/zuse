@@ -17,6 +17,7 @@ pub struct Target {
     pub repo_path: String,
     pub space_id: Option<String>,
     pub device_id: Option<String>,
+    pub cloud: bool,
 }
 #[derive(Clone)]
 pub struct Request {
@@ -105,8 +106,24 @@ impl SourcePicker {
     pub fn selection(&self) -> Option<&Resolution> {
         self.selection.as_ref()
     }
+    pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        self.selection = None;
+        self.attempt = None;
+        self.error = None;
+        self.dismiss(cx);
+        cx.emit(Event::Changed(None));
+        cx.notify();
+    }
     pub fn is_preparing(&self) -> bool {
         self.preparing
+    }
+    pub fn cloud_ref(&self, default_branch: &str) -> (String, Option<String>) {
+        match self.selection.as_ref() {
+            Some(Resolution::CloudRef {
+                base_ref, branch, ..
+            }) => (base_ref.clone(), branch.clone()),
+            _ => (format!("origin/{default_branch}"), None),
+        }
     }
     pub fn dismiss(&mut self, cx: &mut Context<Self>) {
         if self.open {
@@ -197,7 +214,18 @@ impl SourcePicker {
         };
         self.preparing = true;
         self.error = None;
-        self.request(wire::RESOLVE,json!({"repoPath":target.repo_path,"spaceId":target.space_id,"source":source,"requestId":id}),Pending::Resolve{generation:self.generation},cx);
+        let mut params = json!({"repoPath":target.repo_path,"spaceId":target.space_id,"source":source,"requestId":id});
+        if target.cloud {
+            params["cloud"] = json!(true);
+        }
+        self.request(
+            wire::RESOLVE,
+            params,
+            Pending::Resolve {
+                generation: self.generation,
+            },
+            cx,
+        );
         cx.notify();
     }
     pub fn receive(&mut self, id: u64, result: Result<Value, String>, cx: &mut Context<Self>) {
@@ -296,12 +324,15 @@ impl Render for SourcePicker {
             window.focus(&self.search.as_ref().unwrap().read(cx).focus_handle(cx), cx);
         }
         let label = self.selection.as_ref().map(|r| match r {
-            Resolution::Checkout { label, .. } => label.clone(),
+            Resolution::Checkout { label, .. } | Resolution::CloudRef { label, .. } => {
+                label.clone()
+            }
             Resolution::Issue { number, .. } => format!("#{number}"),
         });
         let mut view = div()
             .relative()
-            .flex_none()
+            .min_w_0()
+            .flex_shrink(1.)
             .flex()
             .items_center()
             .gap(px(4.))
@@ -334,6 +365,7 @@ impl Render for SourcePicker {
                 .child(
                     div()
                         .text_size(px(12.))
+                        .min_w_0()
                         .max_w(px(200.))
                         .truncate()
                         .child(label),
@@ -345,6 +377,7 @@ impl Render for SourcePicker {
                         .aria_label("Clear selected source")
                         .cursor_pointer()
                         .size(px(20.))
+                        .flex_none()
                         .flex()
                         .items_center()
                         .justify_center()
@@ -364,6 +397,7 @@ impl Render for SourcePicker {
             div()
                 .id("create-from")
                 .relative()
+                .flex_none()
                 .role(Role::Button)
                 .aria_label("Create from…")
                 .aria_expanded(self.open)

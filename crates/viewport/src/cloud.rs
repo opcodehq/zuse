@@ -173,7 +173,7 @@ impl WorkspaceView {
             return;
         }
         if self.cloud.launch.is_none() {
-            let branch = self.cloud_branch.read(cx).value(cx);
+            let (base_ref, branch) = self.creation_source_picker.read(cx).cloud_ref(project["defaultBranch"].as_str().unwrap_or("main"));
             let model = self.selected_model().unwrap().id.clone();
             let configured = self.cloud_model_configuration_available();
             let mode = match self.sandbox {
@@ -188,7 +188,7 @@ impl WorkspaceView {
             };
             self.cloud.launch = Some(json!({
                 "projectId":project["projectId"],"providerId":project["providerId"],
-                "baseRef":if branch.trim().is_empty(){project["defaultBranch"].as_str().unwrap_or("main")}else{branch.trim()},
+                "baseRef":base_ref,"branch":branch,
                 "agent":self.composer_provider().map(|provider| provider["id"].clone()), "model":model,
                 "reasoning":if configured { self.reasoning } else { None },
                 "modelOptions":if configured { self.model_options.clone() } else { Default::default() },
@@ -349,6 +349,7 @@ impl WorkspaceView {
                         });
                         self.sync_previews(true, cx);
                     }
+                    self.creation_source_picker.update(cx, |picker, cx| picker.clear_selection(cx));
                     self.cloud.launch = None;
                     self.close_cloud();
                     let launch = &value["workspace"];

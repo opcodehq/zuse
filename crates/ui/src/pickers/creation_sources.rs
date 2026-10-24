@@ -51,15 +51,33 @@ impl Pickers {
     }
     pub(super) fn creation_source_target(&self, cx: &App) -> Option<Target> {
         let state = self.state.read(cx);
-        if state.selected_chat.is_some() || state.cloud_project.is_some() {
+        if state.selected_chat.is_some() {
             return None;
         }
         let space = state.selected_space_row().filter(|s| s.git_detected)?;
+        let cloud = state.cloud_project.is_some();
+        if let Some(project) = state.cloud_project.as_ref() {
+            if !space.remote_repository.as_deref().is_some_and(|identity| {
+                project["repositoryIdentity"]
+                    .as_str()
+                    .is_some_and(|remote| identity.eq_ignore_ascii_case(remote))
+            }) {
+                return None;
+            }
+        }
         Some(Target {
             repo_path: space.path.clone(),
             space_id: Some(space.id.clone()),
             device_id: Some(space.device_id.clone()),
+            cloud,
         })
+    }
+    pub(crate) fn source_cloud_ref(
+        &self,
+        default_branch: &str,
+        cx: &App,
+    ) -> (String, Option<String>) {
+        self.source_picker.read(cx).cloud_ref(default_branch)
     }
     pub(crate) fn preparing_source(&self, cx: &App) -> bool {
         self.source_picker.read(cx).is_preparing()

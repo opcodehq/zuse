@@ -12,7 +12,7 @@
    if(method==='CloudCreate')proof.creates.push(value.workspace.workspace??value.workspace);
    if(method==='CloudEnvironment')proof.status.push(value);
    if(method==='CloudHistory')proof.history.push(value);
-   if(JSON.stringify(value).includes('Brokered native provider reply'))proof.replies.push(method);
+   if(/Brokered native provider reply|Cloud issue context verified/.test(JSON.stringify(value)))proof.replies.push(method);
   }catch{}});}
   send(text){try{const frame=JSON.parse(text);if(frame.method){pending.set(frame.id,frame.method);proof.methods.push(frame.method);}}catch{}super.send(text);}
  };

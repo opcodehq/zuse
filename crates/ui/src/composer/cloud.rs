@@ -9,6 +9,7 @@ pub(super) struct Launch {
     owner: Option<String>,
     pub(super) request: Option<Value>,
     accepted: Option<Value>,
+    issue: Option<StagedAttachment>,
     pub pause_task: Option<Task<()>>,
     pub pause_error: Option<String>,
     pause_command: Option<String>,
@@ -182,7 +183,6 @@ impl Composer {
             return true;
         };
         let controller = engine.controller();
-        let staged = self.staged().to_vec();
         let Some(subject) = state.cloud_user_id().map(str::to_owned) else {
             return true;
         };
@@ -205,6 +205,14 @@ impl Composer {
             return true;
         }
         if self.cloud.request.is_none() {
+            self.cloud.issue = self.pickers.read(cx).source_issue(cx).map(|(number, markdown)| {
+                StagedAttachment::from_file(&format!("issue-{number}.md"), markdown.into_bytes())
+            });
+        }
+        let mut staged = self.staged().to_vec();
+        staged.extend(self.cloud.issue.iter().cloned());
+        if self.cloud.request.is_none() {
+            let (base_ref, branch) = self.pickers.read(cx).source_cloud_ref(project["defaultBranch"].as_str().unwrap_or("main"), cx);
             let config = self.pickers.read(cx).resolved(cx);
             let (Some(agent), Some(model)) = (config.harness, config.model) else { return true; };
             let runtime_mode = match config.sandbox {
@@ -221,12 +229,13 @@ impl Composer {
                 }
             };
             self.cloud.request = Some(
-                json!({"runtimeMode":runtime_mode,"projectId":project["projectId"],"providerId":project["providerId"],"baseRef":project["defaultBranch"],"agent":agent,"model":model,"reasoning":config.reasoning,"modelOptions":config.model_options,"idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text,"expectedAccountId":subject,"attachmentTransfers":staged.iter().map(|a|json!({"uploadId":a.id,"fileName":a.name})).collect::<Vec<_>>()}),
+                json!({"runtimeMode":runtime_mode,"projectId":project["projectId"],"providerId":project["providerId"],"baseRef":base_ref,"branch":branch,"agent":agent,"model":model,"reasoning":config.reasoning,"modelOptions":config.model_options,"idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text,"expectedAccountId":subject,"attachmentTransfers":staged.iter().map(|a|json!({"uploadId":a.id,"fileName":a.name})).collect::<Vec<_>>()}),
             );
         }
         self.pickers.update(cx, |pickers, cx| pickers.freeze_cloud_launch(true, cx));
         let key = self.current_key.clone();
         let request = self.cloud.request.clone().unwrap();
+        let sent_text = request["firstMessage"].as_str().unwrap_or_default().to_owned();
         let accepted = self.cloud.accepted.clone();
         self.cloud.message = Some(
             if staged.is_empty() {
@@ -342,7 +351,7 @@ impl Composer {
                         initial_session: initial,
                     };
                     let _ = this.update(cx, |this, cx| {
-                        if this.current_key == key && this.input.read(cx).text() == text {
+                        if this.current_key == key && this.input.read(cx).text() == sent_text {
                             this.input.update(cx, |input, cx| input.set_text("", cx));
                             if let Some(current) = this.attachments.get_mut(&key) {
                                 current.retain(|a| !staged.iter().any(|sent| sent.id == a.id));
@@ -352,8 +361,9 @@ impl Composer {
                         this.cloud.message = None;
                         this.cloud.request = None;
                         this.cloud.accepted = None;
+                        this.cloud.issue = None;
                         this.cloud.task = None;
-                        this.pickers.update(cx, |pickers, cx| pickers.freeze_cloud_launch(false, cx));
+                        this.pickers.update(cx, |pickers, cx| pickers.finish_cloud_launch(cx));
                         crate::open_cloud_window(target, cx);
                         cx.notify();
                     });

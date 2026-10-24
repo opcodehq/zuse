@@ -1890,6 +1890,7 @@ mod runtime_engine {
         for args in [
             vec!["add", "tracked"],
             vec!["commit", "-m", "Prepared fixture"],
+            vec!["update-ref", "refs/remotes/origin/main", "HEAD"],
         ] {
             assert!(
                 std::process::Command::new("git")
@@ -1940,6 +1941,9 @@ mod runtime_engine {
         if std::env::var_os("ZUSE_CLOUD_MODEL_ACCEPTANCE").is_some() {
             sqlx::query("UPDATE api_cloud_project_builds SET settings=settings||'{\"rustLaunchModelConfigVersion\":1}'::jsonb WHERE build_id='rust-build'").execute(&api.pool).await.unwrap();
         }
+        if std::env::var_os("ZUSE_CLOUD_SOURCE_ACCEPTANCE").is_some() {
+            sqlx::raw_sql("ALTER TABLE api_cloud_projects ADD COLUMN repository_identity text, ADD COLUMN repository_url text, ADD COLUMN display_name text, ADD COLUMN default_branch text; UPDATE api_cloud_projects SET repository_identity='github.com/example/project',repository_url='https://github.com/example/project.git',display_name='Source project',default_branch='main' WHERE project_id='create-project';").execute(&api.pool).await.unwrap();
+        }
         let now = chrono::Utc::now().timestamp_millis();
         sqlx::query("INSERT INTO api_cloud_billing_periods(period_id,account_id,status,period_start,period_end,included_provider_cost_micros,markup_basis_points,overage_cap_micros) VALUES('launch-period','user-bob','active',$1,$2,100000000,0,0)").bind(now-1000).bind(now+3600000).execute(&api.pool).await.unwrap();
         let root = tempfile::Builder::new()
@@ -1948,6 +1952,23 @@ mod runtime_engine {
             .unwrap()
             .keep();
         let provider = allocation_fixture(&api, root.as_path(), false).await;
+        if std::env::var_os("ZUSE_CLOUD_SOURCE_ACCEPTANCE").is_some() {
+            for args in [
+                vec!["switch", "-c", "feature/from-pr"],
+            ] {
+                assert!(std::process::Command::new("git").arg("-C").arg(&provider.checkout).args(args).status().unwrap().success());
+            }
+            std::fs::write(provider.checkout.join("tracked"), "selected Cloud source bytes").unwrap();
+            for args in [
+                vec!["commit", "-am", "Selected source"],
+                vec!["update-ref", "refs/remotes/origin/feature/from-pr", "HEAD"],
+                vec!["update-ref", "refs/remotes/origin/feature/available", "HEAD"],
+                vec!["update-ref", "refs/pull/84/head", "HEAD"],
+                vec!["switch", "main"],
+            ] {
+                assert!(std::process::Command::new("git").arg("-C").arg(&provider.checkout).args(args).status().unwrap().success());
+            }
+        }
         provider.uncertain_create.store(false, Ordering::SeqCst);
         let cli = root.as_path().join("claude-fixture");
         std::fs::write(&cli, include_str!("fixtures/claude-provider.py")).unwrap();
@@ -1973,7 +1994,7 @@ mod runtime_engine {
         )
         .unwrap();
         std::fs::write(&path, &api.origin).unwrap();
-        tokio::time::timeout(Duration::from_secs(900), async {
+        tokio::time::timeout(Duration::from_secs(if std::env::var_os("ZUSE_CLOUD_SOURCE_ACCEPTANCE").is_some() { 1800 } else { 900 }), async {
             while !path.with_extension("done").exists() {
                 if path.with_extension("offline").exists() && !path.with_extension("offline-ready").exists() {
                     if let Some(mut child)=provider.child.lock().await.take() { stop_guest(&mut child).await; }

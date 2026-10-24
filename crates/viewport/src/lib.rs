@@ -1610,6 +1610,10 @@ impl WorkspaceView {
             return;
         }
         if self.cloud.mode && self.selected.is_none() {
+            if self.creation_source_picker.read(cx).is_preparing() {
+                return;
+            }
+            self.stage_creation_issue(cx);
             self.submit_cloud(cx);
             return;
         }

@@ -94,9 +94,16 @@ impl EngineRpc {
                     let encoded = base64::engine::general_purpose::STANDARD.encode(markdown.as_bytes());
                     this.uploads.append(&p.request_id, &encoded, Some(0)).map_err(|e| RpcError::Failed(e.to_string()))?;
                     let attachment_path = this.uploads.commit(&p.request_id, &format!("issue-{number}.md")).map_err(|e| RpcError::Failed(e.to_string()))?;
-                    source::Resolution::Issue { number: *number, title, attachment_path, markdown }
+                    source::Resolution::Issue { number: *number, title, attachment_path, markdown, upload_id: Some(p.request_id.clone()) }
                 }
                 source::Source::Issue { .. } => return Err(RpcError::BadParams("Invalid issue number".into())),
+                source::Source::Branch { reference } if p.cloud => {
+                    this.repos.creation_cloud_branch(&root, reference).await.map_err(|e| RpcError::Failed(e.to_string()))?
+                }
+                source::Source::Pr { number } if p.cloud && *number > 0 => {
+                    this.github.creation_cloud_pr(&root, *number).await.map_err(change_request_rpc_error)?
+                }
+                source::Source::Pr { .. } if p.cloud => return Err(RpcError::BadParams("Invalid pull request number".into())),
                 _ => {
                     let reply = this.handle(methods::CREATE_WORKTREE, serde_json::json!({"repoPath":p.repo_path,"branch":"HEAD","spaceId":p.space_id,"source":{"source":p.source,"requestId":p.request_id}})).await?;
                     let RpcReply::Value(value) = reply else { return Err(RpcError::Failed("Source checkout response was interrupted".into())); };
