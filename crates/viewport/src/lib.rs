@@ -32,6 +32,7 @@ mod workspace_layout;
 mod connection;
 pub mod context_status;
 mod custom_acp;
+pub mod acp_command;
 mod draft_journal;
 mod environment;
 pub mod git_controls;

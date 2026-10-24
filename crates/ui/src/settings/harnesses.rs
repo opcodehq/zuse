@@ -402,6 +402,12 @@ impl HarnessesPage {
     /// Escape that reached Settings unclaimed goes to the expanded provider's
     /// accounts (an open login) first. Returns whether it was consumed.
     pub(crate) fn dismiss_on_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if self
+            .custom_acp
+            .update(cx, |card, cx| card.dismiss_on_escape(cx))
+        {
+            return true;
+        }
         self.expanded_harness.is_some()
             && self
                 .accounts_page

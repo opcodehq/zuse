@@ -26,9 +26,8 @@ pub struct CustomAcpCard {
     state: Entity<AppState>,
     target: Option<String>,
     snapshot: Option<CustomAcpAgents>,
-    fields: Vec<Entity<ComposerInput>>,
-    editing: bool,
-    editing_id: Option<zuse_protocol::HarnessId>,
+    form: Option<Entity<zuse_viewport::acp_command::CommandDialog>>,
+    form_events: Option<Subscription>,
     error: Option<String>,
     busy: bool,
     epoch: u64,
@@ -53,14 +52,6 @@ pub struct CustomAcpCard {
     _state: Subscription,
 }
 impl EventEmitter<Changed> for CustomAcpCard {}
-const LABELS: [&str; 6] = [
-    "Provider ID (acp-name)",
-    "Name",
-    "Executable",
-    "Arguments — one literal argument per line",
-    "Environment — NAME=value per line",
-    "Fallback model IDs — one per line",
-];
 
 async fn fetch(client: Arc<dyn HttpClient>, url: String, limit: usize) -> Result<Vec<u8>, String> {
     use futures::AsyncReadExt;
@@ -106,20 +97,6 @@ impl CustomAcpCard {
                 this.refresh(cx);
             }
         });
-        let fields = LABELS
-            .iter()
-            .enumerate()
-            .map(|(index, label)| {
-                cx.new(|cx| {
-                    let input = ComposerInput::new(*label, cx).with_tab_stop();
-                    if index < 3 {
-                        input.with_single_line()
-                    } else {
-                        input.with_viewport_height(72.)
-                    }
-                })
-            })
-            .collect();
         let search = cx.new(|cx| {
             ComposerInput::new("Search agents…", cx)
                 .with_single_line()
@@ -130,9 +107,8 @@ impl CustomAcpCard {
             state,
             target: None,
             snapshot: None,
-            fields,
-            editing: false,
-            editing_id: None,
+            form: None,
+            form_events: None,
             error: None,
             busy: false,
             epoch: 0,
@@ -158,13 +134,10 @@ impl CustomAcpCard {
         self.task = None;
         self.busy = false;
         self.snapshot = None;
-        self.editing = false;
-        self.editing_id = None;
+        self.form = None;
+        self.form_events = None;
         self.error = None;
         self.adding = None;
-        for field in &self.fields {
-            field.update(cx, |input, cx| input.set_text("", cx));
-        }
         cx.notify();
     }
     pub fn set_target(&mut self, target: Option<String>, cx: &mut Context<Self>) {
@@ -188,12 +161,22 @@ impl CustomAcpCard {
             return;
         }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.error = Some("The selected computer is not connected.".into());
+            if let Some(form) = &self.form {
+                form.update(cx, |form, cx| {
+                    form.set_status(false, self.error.clone(), cx)
+                });
+            }
+            cx.notify();
             return;
         };
         params["targetDeviceId"] = json!(self.target);
         let epoch = self.epoch;
         self.busy = true;
         self.error = None;
+        if let Some(form) = &self.form {
+            form.update(cx, |form, cx| form.set_status(true, None, cx));
+        }
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(method, params).await;
             let _ = this.update(cx, |card, cx| {
@@ -208,70 +191,60 @@ impl CustomAcpCard {
                 }) {
                     Ok(snapshot) => {
                         card.snapshot = Some(snapshot);
-                        card.editing = false;
-                        card.editing_id = None;
-                        for field in &card.fields {
-                            field.update(cx, |input, cx| input.set_text("", cx));
+                        if let Some(form) = card.form.take() {
+                            form.update(cx, |form, cx| form.restore_focus(cx));
                         }
+                        card.form_events = None;
                         if method != methods::GET_CUSTOM_ACP_AGENTS {
                             cx.emit(Changed);
                         }
                     }
                     Err(error) => card.error = Some(error.to_string()),
                 }
+                if let Some(form) = &card.form {
+                    form.update(cx, |form, cx| {
+                        form.set_status(false, card.error.clone(), cx)
+                    });
+                }
                 cx.notify();
             });
         }));
         cx.notify();
     }
-    fn edit(&mut self, agent: Option<CustomAcpAgent>, cx: &mut Context<Self>) {
-        if self.busy {
+    fn edit(&mut self, agent: Option<CustomAcpAgent>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy || self.form.is_some() {
             return;
         }
-        self.editing_id = agent.as_ref().map(|a| a.id);
-        let values = agent
-            .map(|a| {
-                vec![
-                    String::from(a.id),
-                    a.name.clone(),
-                    a.command.clone(),
-                    a.argument_fields(),
-                    a.environment_fields(),
-                    a.model_ids.join("\n"),
-                ]
-            })
-            .unwrap_or_else(|| {
-                vec![
-                    "acp-".into(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                ]
-            });
-        for (field, value) in self.fields.iter().zip(values) {
-            field.update(cx, |input, cx| input.set_text(value, cx));
-        }
-        self.editing = true;
+        self.dialog_open = false;
+        let existing = agent.as_ref().is_some_and(|agent| self.installed(agent.id));
+        let form = cx
+            .new(|cx| zuse_viewport::acp_command::CommandDialog::new(agent, existing, window, cx));
+        let events = cx.subscribe(
+            &form,
+            |this, _, event: &zuse_viewport::acp_command::Event, cx| match event {
+                zuse_viewport::acp_command::Event::Save(agent) => this.put(agent.clone(), cx),
+                zuse_viewport::acp_command::Event::Dismiss => {
+                    this.form = None;
+                    this.form_events = None;
+                    cx.notify();
+                }
+            },
+        );
+        self.form = Some(form);
+        self.form_events = Some(events);
         self.error = None;
         cx.notify();
     }
-    fn save(&mut self, cx: &mut Context<Self>) {
-        let values: Vec<_> = self
-            .fields
-            .iter()
-            .map(|field| field.read(cx).text().to_owned())
-            .collect();
-        match CustomAcpAgent::from_fields(
-            &values[0], &values[1], &values[2], &values[3], &values[4], &values[5],
-        ) {
-            Ok(agent) => self.put(agent, cx),
-            Err(error) => {
-                self.error = Some(error);
-                cx.notify();
-            }
+    pub(super) fn dismiss_on_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(form) = self.form.clone() {
+            form.update(cx, |form, cx| form.dismiss(cx));
+            return true;
         }
+        if self.dialog_open {
+            self.close_dialog(cx);
+            return true;
+        }
+        false
     }
     /// Save `agent` against the snapshot this card last read.
     fn put(&mut self, agent: CustomAcpAgent, cx: &mut Context<Self>) {
@@ -286,6 +259,11 @@ impl CustomAcpCard {
             }
             None => {
                 self.error = Some("Custom agents are still loading. Try again in a moment.".into());
+                if let Some(form) = &self.form {
+                    form.update(cx, |form, cx| {
+                        form.set_status(false, self.error.clone(), cx)
+                    });
+                }
                 cx.notify();
             }
         }
@@ -299,6 +277,9 @@ impl CustomAcpCard {
     // ---- Add ACP agent dialog ----
 
     fn open_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy || self.form.is_some() {
+            return;
+        }
         self.dialog_open = true;
         self.search.update(cx, |input, cx| input.set_text("", cx));
         window.focus(&self.search.focus_handle(cx), cx);
@@ -505,10 +486,9 @@ impl CustomAcpCard {
                         .tooltip(widgets::text_tooltip(
                             "Install it first, then save its command",
                         ))
-                        .on_click(cx.listener(move |this, _, _, cx| {
+                        .on_click(cx.listener(move |this, _, window, cx| {
                             this.dialog_open = false;
-                            this.edit(Some(custom.clone()), cx);
-                            this.editing_id = None;
+                            this.edit(Some(custom.clone()), window, cx);
                         }))
                         .into_any_element()
                 }
@@ -634,9 +614,9 @@ impl CustomAcpCard {
                     .items_center()
                     .justify_between()
                     .child(ghost("acp-custom-command", "Use a custom command…").on_click(
-                        cx.listener(|this, _, _, cx| {
+                        cx.listener(|this, _, window, cx| {
                             this.dialog_open = false;
-                            this.edit(None, cx);
+                            this.edit(None, window,cx);
                         }),
                     ))
                     .child(
@@ -722,19 +702,13 @@ impl Render for CustomAcpCard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
         let dialog = self.render_dialog(window, cx);
-        let button = |id: String, label: &str| {
-            widgets::text_action(&theme, widgets::ActionTone::Outlined, label)
-                .id(id)
-                .tab_index(0)
-                .role(gpui::Role::Button)
-        };
         let agents = self
             .snapshot
             .as_ref()
             .map(|s| s.agents.clone())
             .unwrap_or_default();
         let busy = self.busy;
-        let editing = self.editing;
+        let editing = self.form.is_some();
         let mut card = widgets::section_card(&theme).mt_0();
         if let Some(error) = &self.error {
             card = card.child(
@@ -746,7 +720,7 @@ impl Render for CustomAcpCard {
                     .child(error.clone()),
             );
         }
-        if agents.is_empty() && !editing {
+        if agents.is_empty() {
             card = card.child(
                 widgets::card_row(&theme, true).child(catalog_ui::title_block(
                     &theme,
@@ -761,7 +735,6 @@ impl Render for CustomAcpCard {
                 )),
             );
         }
-        let count = agents.len();
         card = card.children(agents.into_iter().enumerate().map(|(index, agent)| {
             let id = agent.id;
             let command = std::iter::once(agent.command.as_str())
@@ -814,8 +787,8 @@ impl Render for CustomAcpCard {
                             .id(format!("edit-acp-{index}"))
                             .flex_none()
                             .child("Edit")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.edit(Some(agent.clone()), cx)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.edit(Some(agent.clone()), window, cx)
                             })),
                     )
                     .child(
@@ -836,83 +809,6 @@ impl Render for CustomAcpCard {
                     )
                 })
         }));
-        if editing {
-            let mut form = div()
-                .px(px(12.))
-                .py(px(12.))
-                .when(count > 0, |el| {
-                    el.border_t_1().border_color(widgets::row_divider(&theme))
-                })
-                .flex()
-                .flex_col()
-                .gap(px(12.))
-                .text_size(crate::typography::text_xs())
-                .child(
-                    div()
-                        .text_size(crate::typography::text_xs())
-                        .text_color(theme.text_muted)
-                        .child("Runs on the selected computer. Arguments have no shell expansion. Use JSON quotes for empty or multiline values. Environment values stay in that computer’s private configuration."),
-                );
-            for (index, (label, field)) in LABELS.iter().zip(&self.fields).enumerate() {
-                if index == 0
-                    && let Some(id) = self.editing_id
-                {
-                    form = form.child(
-                        div()
-                            .font_family(theme.font_mono.clone())
-                            .text_size(crate::typography::text_xs())
-                            .text_color(theme.text_muted)
-                            .child(String::from(id)),
-                    );
-                    continue;
-                }
-                form = form.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.))
-                        .child(
-                            div()
-                                .text_size(crate::typography::text_xs())
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(theme.text_muted)
-                                .child(*label),
-                        )
-                        .child(
-                            div()
-                                .px(px(10.))
-                                .py(px(6.))
-                                .rounded(px(7.))
-                                .bg(catalog_ui::control_fill(&theme))
-                                .child(field.clone()),
-                        ),
-                );
-            }
-            if !busy {
-                form = form.child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.))
-                        .child(button("cancel-acp".into(), "Cancel").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.editing = false;
-                                this.editing_id = None;
-                                for field in &this.fields {
-                                    field.update(cx, |input, cx| input.set_text("", cx));
-                                }
-                                cx.notify();
-                            },
-                        )))
-                        .child(
-                            catalog_ui::primary_button(&theme, "save-acp")
-                                .child("Save agent")
-                                .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
-                        ),
-                );
-            }
-            card = card.child(form);
-        }
         let actions = div()
             .flex()
             .items_center()
@@ -925,7 +821,11 @@ impl Render for CustomAcpCard {
                     "Refresh custom agents",
                 )
                 .when(busy, |el| el.opacity(0.5))
-                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if this.form.is_none() {
+                        this.refresh(cx)
+                    }
+                })),
             )
             .child(
                 catalog_ui::secondary_button(&theme, "add-acp")
@@ -934,16 +834,12 @@ impl Render for CustomAcpCard {
                             .size(px(13.))
                             .text_color(theme.text),
                     )
-                    .child("Add ACP agent")
+                    .child("Add")
                     .on_click(cx.listener(|this, _, window, cx| this.open_dialog(window, cx))),
             );
-        widgets::group_with_action(
-            &theme,
-            "Custom agents",
-            "Agents that speak ACP over standard input and output.",
-            Some(actions.into_any_element()),
-        )
-        .child(card)
-        .children(dialog)
+        widgets::group_with_action(&theme, "ACP agents", "", Some(actions.into_any_element()))
+            .child(card)
+            .children(dialog)
+            .children(self.form.clone())
     }
 }

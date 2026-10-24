@@ -91,6 +91,7 @@ impl WorkspaceView {
             self.refresh_pairings();
             self.refresh_managed_access();
         }
+        if section == Section::Providers { self.refresh_custom_acp(cx); }
         if matches!(section, Section::Providers | Section::Usage) {
             self.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":false}));
         }

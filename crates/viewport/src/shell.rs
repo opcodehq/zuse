@@ -1276,6 +1276,7 @@ impl Render for WorkspaceView {
                     else if this.plugin_detail.take().is_none() { this.close_plugins_browse(); this.settings=true; }
                     cx.notify(); return;
                 }
+                if let Some(form)=this.custom_acp.form.clone(){form.update(cx,|form,cx|form.dismiss(cx));return;}
                 if this.remote_ui.dialog.is_some() {
                     this.close_remote_dialog(window, cx);
                     return;

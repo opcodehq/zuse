@@ -9,6 +9,9 @@ pub struct Submitted {
 }
 impl EventEmitter<Submitted> for TextInput {}
 
+pub struct FocusChanged;
+impl EventEmitter<FocusChanged> for TextInput {}
+
 pub const CLIPBOARD_PASTE_ERROR: &str =
     "Clipboard access is unavailable. Use the keyboard paste shortcut.";
 pub const CLIPBOARD_COPY_ERROR: &str =
@@ -33,9 +36,24 @@ pub struct TextInput {
 
 impl TextInput {
     pub fn new(placeholder: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::single(placeholder, false, window, cx)
+    }
+
+    pub fn password(placeholder: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::single(placeholder, true, window, cx)
+    }
+
+    fn single(
+        placeholder: &str,
+        masked: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let owner = cx.weak_entity();
         let editor = cx.new(|cx| {
-            let mut state = InputState::new(window, cx).placeholder(placeholder.to_owned());
+            let mut state = InputState::new(window, cx)
+                .placeholder(placeholder.to_owned())
+                .masked(masked);
             state.set_editor_style(editor_style());
             state.on_context_menu(edit_menu::handler(owner, state.focus_handle(cx)));
             state
@@ -130,6 +148,18 @@ impl TextInput {
     }
 
     fn on_input_event(&mut self, event: &InputEvent, cx: &mut Context<Self>) {
+        // Focus can move to a cached editor after its initial paint. Repaint
+        // that editor so the platform installs its text-input handler.
+        if matches!(event, InputEvent::Focus) {
+            match &self.editor {
+                Editor::Single(editor) => editor.update(cx, |_, cx| cx.notify()),
+                Editor::Multi(editor) => editor.update(cx, |_, cx| cx.notify()),
+                Editor::Code(editor) => editor.update(cx, |_, cx| cx.notify()),
+            }
+        }
+        if matches!(event, InputEvent::Focus | InputEvent::Blur) {
+            cx.emit(FocusChanged);
+        }
         if matches!(event, InputEvent::Change) {
             self.close_edit_menu(cx);
         }
