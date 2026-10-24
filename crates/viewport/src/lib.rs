@@ -21,6 +21,8 @@ pub mod dither;
 mod glass;
 pub mod sidebar_controls;
 mod sidebar_host;
+pub mod workspace_style;
+mod workspace_layout;
 mod connection;
 pub mod context_status;
 mod custom_acp;
@@ -226,6 +228,8 @@ pub struct WorkspaceView {
     sidebar_controls: Entity<sidebar_controls::SidebarControls>,
     sidebar_control_requests: HashMap<u64, u64>,
     sidebar_open: bool,
+    sidebar_resize: Option<Option<u16>>,
+    sidebar_resize_focus: FocusHandle,
     search_open: bool,
     session_search: Entity<input::TextInput>,
     archive_search: Entity<input::TextInput>,
@@ -273,6 +277,7 @@ pub struct WorkspaceView {
     dismissed_alerts: std::collections::HashSet<String>,
     right_open: bool,
     content_width: f32,
+    viewport_width: f32,
     content_height: f32,
     right_tab: String,
     history: history::History,
@@ -650,6 +655,8 @@ impl WorkspaceView {
             sidebar_controls,
             sidebar_control_requests: Default::default(),
             sidebar_open: true,
+            sidebar_resize: None,
+            sidebar_resize_focus: cx.focus_handle().tab_stop(true),
             search_open: false,
             session_search,
             plugin_search,
@@ -697,6 +704,7 @@ impl WorkspaceView {
             dismissed_alerts: Default::default(),
             right_open: false,
             content_width: 768.,
+            viewport_width: 1280.,
             content_height: 880.,
             right_tab: "files".into(),
             history: history::History::new(window, cx),

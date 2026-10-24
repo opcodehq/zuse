@@ -11087,7 +11087,7 @@ impl Render for Composer {
             .flex_col()
             .gap(px(Theme::SPACE_SM))
             .px(px(COMPOSER_OUTER_PAD))
-            .pb(px(if new_chat { 24. } else { 8. }));
+            .pb(px(if new_chat { 12. } else { 8. }));
 
         if wizard_active {
             let wizard = self.render_wizard(cx);

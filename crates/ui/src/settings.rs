@@ -38,13 +38,10 @@ pub mod wallpaper_colors;
 pub mod widgets;
 mod worktrees;
 
-/// Sidebar drag-resize bounds (px). The minimum keeps the sidebar options
-/// button inside the sidebar beside the titlebar controls: 88 (past the
-/// traffic lights) + 82 (toggle, back, forward) + 32 (new session) + 8 gap
-/// + 24 (options) + 8 inset.
-pub const SIDEBAR_MIN: f32 = 242.0;
-pub const SIDEBAR_MAX: f32 = 400.0;
-pub const SIDEBAR_DEFAULT: f32 = 256.0;
+/// Sidebar panel dimensions shared with the browser workspace.
+pub const SIDEBAR_MIN: f32 = zuse_viewport::workspace_style::SIDEBAR_MIN;
+pub const SIDEBAR_MAX: f32 = zuse_viewport::workspace_style::SIDEBAR_MAX;
+pub const SIDEBAR_DEFAULT: f32 = zuse_viewport::workspace_style::SIDEBAR_DEFAULT;
 
 /// Independent file explorer width preference and drag bounds (px).
 pub const FILES_PANEL_DEFAULT: f32 = 286.0;

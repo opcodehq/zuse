@@ -73,7 +73,7 @@ pub(super) fn provider_icon(id: &str) -> &'static str {
 }
 
 impl WorkspaceView {
-    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn header(&self, cx: &mut Context<Self>) -> AnyElement {
         row()
             .h(px(36.))
             .flex_shrink_0()
@@ -221,7 +221,7 @@ impl WorkspaceView {
             .into_any_element()
     }
 
-    fn composer(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn composer(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.browser_voice_replaces_composer() {
             return self.browser_voice_stage(cx);
         }
@@ -239,7 +239,8 @@ impl WorkspaceView {
         column()
             .w_full()
             .max_w(px(if self.selected.is_none() {
-                composer::LANDING_WIDTH
+                composer::LANDING_WIDTH.min((self.content_width
+                    - 2. * if self.viewport_width <= 800. { 16. } else { 24. }).max(0.))
             } else {
                 composer::CONVERSATION_WIDTH + 24.
             }))
@@ -593,8 +594,8 @@ impl WorkspaceView {
             })
             .when(self.messages.is_empty() && !archived && self.selected.is_none(), |d| {
                 let title = self.creation_project_name().map(|name|format!("What should we build in {name}?")).unwrap_or_else(||"What should we build today?".to_owned());
-                d.child(column().flex_1().justify_center().items_center().w_full().gap_2()
-                    .child(div().text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::MEDIUM).child(title))
+                d.px(px(if self.viewport_width <= 800. { 16. } else { 24. })).pt(px(32.)).child(column().flex_1().justify_center().items_center().w_full().max_w(px(768.)).self_center().gap_2()
+                    .child(div().relative().top(px(3.)).text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::MEDIUM).child(title))
                     .when(self.project.is_some() || self.cloud.mode, |view| view.child(control("welcome-without-project", "Start without a project")
                         .text_color(rgb(MUTED)).text_size(px(12.))
                         .on_click(cx.listener(|this, _, _, cx| { this.project = None; this.cloud.mode = false; cx.notify(); })))))
@@ -703,7 +704,7 @@ impl WorkspaceView {
             .into_any_element()
     }
 
-    fn project_picker_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn project_picker_view(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .p_6()
             .gap_4()
@@ -1182,7 +1183,7 @@ impl Render for WorkspaceView {
             0.
         } else if self.right_tab == "browser" {
             (f32::from(window.viewport_size().width)
-                - if self.sidebar_open { 296. } else { 0. }
+                - if self.sidebar_open { self.sidebar_width() } else { 0. }
                 - 380.)
                 .clamp(300., 640.)
         } else if self.open_file.is_some()
@@ -1194,17 +1195,27 @@ impl Render for WorkspaceView {
         } else {
             320.
         };
-        self.content_height = f32::from(window.viewport_size().height);
+        self.viewport_width = f32::from(window.viewport_size().width);
+        self.content_height = f32::from(window.viewport_size().height)
+            - if self.settings { 0. } else { 2. * crate::workspace_style::GUTTER };
         self.content_width = f32::from(window.viewport_size().width)
             - if self.sidebar_open && !self.settings {
-                296.
+                self.sidebar_width()
             } else {
                 0.
             }
-            - panel_width;
+            - panel_width
+            - if self.settings { 0. } else { 2. * crate::workspace_style::GUTTER };
         div()
             .track_focus(&self.workspace_focus)
             .key_context("Workspace")
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if this.sidebar_resize.is_some() {
+                    this.resize_sidebar(f32::from(event.position.x), cx);
+                }
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_sidebar_resize(cx)))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_sidebar_resize(cx)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -1235,6 +1246,7 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
+                if this.cancel_sidebar_resize(cx) { return; }
                 if this.sidebar_controls.update(cx, |controls, cx| {
                     controls.dismiss_on_escape(window, cx)
                 }) {
@@ -1318,39 +1330,17 @@ impl Render for WorkspaceView {
             .size_full()
             .relative()
             .flex()
-            .bg(rgb(BG))
+            .bg(rgb(if self.settings { BG } else { SURFACE }))
             .text_color(rgb(TEXT))
             .font_family("Geist")
             .text_size(px(13.))
             .when(self.sidebar_open && !self.settings, |d| {
-                d.child(self.sidebar(cx))
+                d.child(crate::workspace_style::column()
+                    .w(px(self.sidebar_width())).flex_none()
+                    .pl(px(crate::workspace_style::GUTTER)).child(self.sidebar(cx)))
+                    .child(self.sidebar_separator(cx))
             })
-            .child(
-                column()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .when(!self.settings && !self.plugins_browse, |view| {
-                        view.child(self.header(cx))
-                            .when(self.selected.is_some(), |d| {
-                                d.child(self.conversation_tabs(cx))
-                            })
-                    })
-                    .child(if self.plugins_browse {
-                        self.plugins_page_view(cx)
-                    } else if self.settings {
-                        self.settings_view(window, cx)
-                    } else if self.project_picker {
-                        self.project_picker_view(cx)
-                    } else {
-                        column()
-                            .flex_1()
-                            .min_h_0()
-                            .child(self.transcript(cx))
-                            .child(self.composer(cx))
-                            .into_any_element()
-                    }),
-            )
+            .child(self.workspace_main(window, cx))
             .when(
                 self.right_open && !self.settings && !self.project_picker,
                 |d| d.child(self.workspace_panel(panel_width, cx)),

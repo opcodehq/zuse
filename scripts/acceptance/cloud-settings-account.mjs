@@ -16,7 +16,7 @@ try{
  for(let n=0;n<100&&!fs.existsSync(ready);n++){assert.equal(child.exitCode,null);await sleep(100);}
  assert.ok(fs.existsSync(ready));url=fs.readFileSync(ready,'utf8');await update({cloud:true,hold:true});
  page=browser('cloud-settings-account');page.open(url,fixture('general-settings-observer.js'));
- page.wait('window.__generalParity.methods.includes("CloudAccountStatus")');await click(274,982);await click(70,212);
+ page.wait('window.__generalParity.methods.includes("CloudAccountStatus")');await click(210,978);await click(70,212);
  stage='loading';page.screenshot('cloud-account-loading.png');
  assert.equal((await status()).events.filter(e=>e.method?.startsWith('CloudBilling')).length,0);
  await update({hold:false});await sleep(150);stage='signed-out';page.screenshot('cloud-account-signed-out.png');

@@ -24,13 +24,13 @@ try {
     const image = new Image(); image.src = 'data:image/png;base64,${png}'; await image.decode();
     const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
     const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
-    return [[416,918],[1159,918],[788,866],[788,971],[415,918],[1160,918],[788,972]]
+    return [[384,918],[1127,918],[756,862],[756,967],[383,918],[1128,918],[756,968]]
       .map(([x,y]) => context.getImageData(x,y,1,1).data[0]);
   })()`);
   assert.ok(outline.slice(0,4).every(red => red >= 30 && red < 65), 'Composer outline must match the reference 744×106px bounds');
   assert.ok(outline.slice(4).every(red => red < 20), 'Composer must end at the reference bounds');
 
-  page.click(274,982); await sleep(180);
+  page.click(210,978); await sleep(180);
   page.click(80,272); await sleep(200);
   page.click(600,163); page.run(['keyboard','type','integration']); await sleep(150);
   page.click(1037,272);
@@ -47,7 +47,7 @@ try {
   page.click(500,266);
   page.wait('window.__uiParity.methods.includes("WatchDocMessages")'); await sleep(200);
   page.screenshot('ui-parity-archive-preview.png');
-  page.click(354,18); await sleep(180);
+  page.click(294,22); await sleep(180);
   page.click(600,163); page.run(['press','Control+a']); page.run(['press','Backspace']); await sleep(100);
   page.screenshot('ui-parity-archive.png');
 

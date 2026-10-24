@@ -137,6 +137,7 @@ pub struct DefaultModelSelection {
 #[serde(default, rename_all = "camelCase")]
 pub struct WorkspacePreferences {
     pub display_name: String,
+    pub sidebar_width: Option<u16>,
     pub sidebar_view: SidebarView,
     pub appearance: AppearanceMode,
     pub reduce_motion: motion::ReduceMotion,
@@ -191,6 +192,7 @@ impl WorkspacePreferences {
         self.record_model(selection);
     }
     pub fn normalize(&mut self) {
+        self.sidebar_width = self.sidebar_width.map(|width| width.clamp(200, 300));
         self.recent_models.truncate(8);
         model_config::normalize_history(&mut self.model_config_history);
         self.collapsed_projects.truncate(512);

@@ -11,7 +11,7 @@ async function until(check,label){for(let n=0;n<50;n++){const value=await proof(
 const click=async(x,y)=>{page.click(x,y);await sleep(150);};
 const press=key=>page.run(['press',key]);
 const type=value=>page.run(['keyboard','type',value]);
-async function settings(){await click(274,982);await click(70,152);}
+async function settings(){await click(210,978);await click(70,152);}
 async function browse(){await click(1087,163);await click(990,199);}
 try {
   host=await engine('plugin-settings');
@@ -31,27 +31,29 @@ try {
   press('Escape');await sleep(150);
   assert.equal((await proof()).events.filter(e=>e.action==='addServer').length,0,'Invalid/canceled setup must not write');
   await browse();page.screenshot('plugin-parity-browse.png');
-  await click(550,381);page.screenshot('plugin-parity-detail.png');
+  await click(518,385);page.screenshot('plugin-parity-detail.png');
   // The disabled existing account still reserves the default name Figma.
-  await click(580,390);
+  await click(548,394);
   await until(p=>p.events.some(e=>e.action==='connect'&&e.pluginId==='figma'&&e.label==='Figma 2'),'Additional connection label');
   page.screenshot('plugin-parity-pending.png');
-  // Remaining coordinates are kept with the authored 1280×1000 acceptance viewport.
+  // Catalog coordinates follow the framed main pane at 1280×1000.
   // They exercise the canvas controls rather than mutating application state from JavaScript.
-  await click(654,119);
+  await click(622,123);
   await until(p=>p.snapshot.connections.some(c=>c.label==='Figma 2'),'Complete additional connection');
   page.screenshot('plugin-parity-multiple.png');
-  await click(1113,396);page.screenshot('plugin-parity-disconnect-confirm.png');
+  await click(1081,400);page.screenshot('plugin-parity-disconnect-confirm.png');
+  const confirmation=fs.readFileSync('.context/plugin-parity-disconnect-confirm.png').toString('base64');
+  assert.ok(page.evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${confirmation}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const x=c.getContext('2d');x.drawImage(i,0,0);return x.getImageData(756,90,1,1).data[0]>=18;})()`),'Disconnect confirmation must be painted before confirming');
   assert.equal((await proof()).events.filter(e=>e.action==='disconnect').length,0,'Disconnect must require confirmation');
-  await click(1081,151);
+  await click(1049,155);
   await until(p=>!p.snapshot.connections.some(c=>c.label==='Figma 2'),'Disconnect only the selected account');
   assert.equal((await proof()).snapshot.connections.find(c=>c.id==='figma-one').enabled,false);
-  await click(463,80);await click(1106,495);
+  await click(431,84);await click(1074,499);
   page.screenshot('plugin-parity-api-key-modal.png');
   press('Tab');type('fixture-plugin-key');press('Enter');
   await until(p=>p.snapshot.connections.some(c=>c.pluginId==='metrics'),'API key connection');
   assert.equal((await proof()).events.filter(e=>e.action==='connect'&&e.pluginId==='metrics').length,1,'Enter submits once');
-  await click(724,146);page.screenshot('plugin-parity-mcp-modal.png');
+  await click(692,150);page.screenshot('plugin-parity-mcp-modal.png');
   const png=fs.readFileSync('.context/plugin-parity-mcp-modal.png').toString('base64');
   const labels=page.evaluate(`(async()=>{
     const image=new Image();image.src='data:image/png;base64,${png}';await image.decode();
@@ -72,17 +74,17 @@ try {
   const added=(await proof()).events.filter(e=>e.action==='addServer');
   assert.equal(added.length,1);assert.equal(added[0].name,'Parity tools');
   assert.equal(added[0].url,'https://parity.example.test/mcp');assert.equal(added[0].apiKeyHeader,'X-Parity-Key');
-  await click(654,119);
+  await click(622,123);
   await until(p=>p.snapshot.connections.some(c=>c.label==='Parity tools'),'Complete custom server connection');
   page.screenshot('plugin-parity-server-added.png');
   // Open an ephemeral credential form, then replace its owning account.
-  await click(724,146);type('Discarded setup');await sleep(100);
+  await click(692,150);type('Discarded setup');await sleep(100);
   const before=(await proof()).events.filter(e=>e.action!=='list').length;
   const listsBefore=(await proof()).events.filter(e=>e.action==='list').length;
   await fetch(url+'/__fixture',{method:'POST',body:JSON.stringify({account:'other-plugin-owner',canManage:false})});
   await sleep(250);press('Enter');await sleep(100);
   await until(p=>p.events.filter(e=>e.action==='list').length>listsBefore,'Refresh the new account');
-  await click(1106,495);await sleep(100);
+  await click(1074,499);await sleep(100);
   assert.equal((await proof()).events.filter(e=>e.action!=='list').length,before,'Account change discards the form; read-only catalog cannot connect');
   assert.equal((await proof()).snapshot.connections.length,0,'Prior account connections are cleared');
   page.screenshot('plugin-parity-read-only.png');

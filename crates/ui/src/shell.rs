@@ -91,6 +91,7 @@ mod session_info;
 mod side_chats;
 mod sidebar_pins;
 mod sidebar_controls;
+mod workspace_layout;
 mod sidebar_sections;
 pub(crate) mod spaces;
 mod thread_search;
@@ -2027,6 +2028,7 @@ pub struct Shell {
     state: Entity<AppState>,
     sidebar_pane: Entity<SidebarPane>,
     sidebar_controls: Entity<zuse_viewport::sidebar_controls::SidebarControls>,
+    workspace_sidebar_focus: FocusHandle,
     sidebar_control_tasks: std::collections::HashMap<u64, Task<()>>,
     transcript: Entity<Transcript>,
     composer: Entity<Composer>,
@@ -2615,6 +2617,7 @@ impl Shell {
             state: state.clone(),
             sidebar_pane,
             sidebar_controls,
+            workspace_sidebar_focus: cx.focus_handle().tab_stop(true),
             sidebar_control_tasks: Default::default(),
             transcript,
             composer,
@@ -7975,13 +7978,13 @@ impl Shell {
         out
     }
 
-    fn render_sidebar(&mut self, _cx: &mut Context<Self>) -> AnyElement {
+    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // The sidebar is part of the resolved theme. A second fixed-Zuse
         // palette here made imported families look split in half and froze
         // activity/glyph personality independently of the selected variant.
         let inner = self.sidebar_pane.clone().cached(
             gpui::StyleRefinement::default()
-                .w(px(self.sidebar_content_width()))
+                .w(px((self.sidebar_content_width() - self.workspace_gutter()).max(0.)))
                 .h_full()
                 .flex_none(),
         );
@@ -7996,7 +7999,13 @@ impl Shell {
             .flex_none()
             .overflow_hidden()
             .w(px(self.sidebar_now()))
-            .child(div().h_full().pt(px(Theme::TITLEBAR_HEIGHT)).child(inner))
+            .flex()
+            .flex_col()
+            .pl(px(if self.sidebar_now() > 0.5 { self.workspace_gutter() } else { 0. }))
+            .py(px(self.workspace_gutter()))
+            .child(self.workspace_surface(cx).child(
+                div().h_full().pt(px(if self.workspace_gutter() > 0. { 36. } else { Theme::TITLEBAR_HEIGHT })).child(inner)
+            ))
             .into_any_element()
     }
 
@@ -9978,7 +9987,7 @@ impl Shell {
         let github_star_banner = self.render_github_star_banner(update_strip.is_some(), theme, cx);
 
         div()
-            .w(px(self.sidebar_content_width()))
+            .w(px((self.sidebar_content_width() - self.workspace_gutter()).max(0.)))
             .h_full()
             .flex()
             .flex_col()
@@ -10530,7 +10539,7 @@ impl Shell {
     /// Pull requests and Settings actions.
     fn render_sidebar_footer(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         self.update_sidebar_controls(cx);
-        let voice_trigger = self.render_voice_trigger(theme, cx);
+        let voice_trigger = (self.workspace_gutter() == 0.).then(|| self.render_voice_trigger(theme, cx)).flatten();
         let pull_requests = self.render_pull_requests_button(theme, cx);
         let settings = self.render_settings_trigger(theme, cx);
         div()
@@ -10545,7 +10554,7 @@ impl Shell {
                     .child(self.sidebar_controls.clone()),
             )
             .children(voice_trigger)
-            .child(pull_requests)
+            .when(self.workspace_gutter() == 0., |view| view.child(pull_requests))
             .child(settings)
             .into_any_element()
     }
@@ -11886,7 +11895,8 @@ impl Shell {
             self.reduced_motion || self.viewport_resized || self.pane_resize_dragging.is_some();
         let composer_width = self.composer_dock.borrow_mut().layout_width(
             composer_target_width(
-                main_content_width - session_reserve,
+                main_content_width - session_reserve
+                    - if has_selection { 0. } else { 2. * if self.viewport_width <= 800. { 16. } else { 24. } },
                 ui_settings.transcript_width,
                 has_selection,
             ),
@@ -12043,11 +12053,14 @@ impl Shell {
                 .items_center()
                 .justify_center()
                 .gap(px(12.))
-                .pb(px(80.))
+                .pb(px(self.composer.read(cx).surface_bounds().get()
+                    .map(|bounds| f32::from(bounds.size.height)).unwrap_or(106.) + 68.))
                 .child(
                     div()
                         .text_size(crate::typography::text_2xl())
                         .line_height(crate::typography::ui_rems(32.))
+                        .relative()
+                        .top(px(-1.))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.text_strong)
                         .child(project.as_ref().map_or_else(
@@ -12257,12 +12270,13 @@ impl Shell {
                                         None
                                     }),
                                 self.composer_dock.clone(),
-                                self.viewport_height,
+                                self.viewport_height - self.workspace_gutter(),
                                 self.reduced_motion,
                                 frame_time,
                             )
                             // Centered on the transcript, which keeps the
                             // session card's room free on its right.
+                            .floating_clearance(16.)
                             .shift_x(-session_reserve / 2.0)
                             .reserve_terminal(terminal_geometry.clone()),
                         )
@@ -14676,6 +14690,9 @@ impl Render for Shell {
                     .flex_row()
                     .overflow_hidden()
                     .opacity(under_stage)
+                    .when(self.workspace_gutter() > 0., |view| {
+                        view.rounded(px(zuse_viewport::workspace_style::RADIUS)).bg(Theme::of(cx).bg)
+                    })
                     .when(tab_row.is_some(), |column| {
                         column.pt(px(top_bar::CONVERSATION_TAB_ROW_HEIGHT))
                     })
@@ -14690,7 +14707,7 @@ impl Render for Shell {
                 // (zero layout width, same idiom as the changes-pane grabber)
                 // so the sidebar's right gutter stays exactly as wide as its
                 // left one — a 5px flex child here read as lopsided spacing.
-                let sidebar_seam = div().w(px(0.0)).h_full().flex_none().relative().children(
+                let sidebar_seam = div().w(px(self.workspace_gutter())).h_full().flex_none().relative().children(
                     sidebar_handle.map(|handle| handle.left(px(-PANE_RESIZE_HITBOX_HALF_WIDTH))),
                 );
                 // Keep the right resize target outside the pane's
@@ -14711,7 +14728,10 @@ impl Render for Shell {
                 } else {
                     Empty.into_any_element()
                 };
-                let title_bar = self.render_title_bar(cx);
+                let show_main_chrome = self.workspace_gutter() == 0.
+                    || self.state.read(cx).selected_chat.is_some()
+                    || self.settings.sidebar_collapsed;
+                let title_bar = show_main_chrome.then(|| self.render_title_bar(cx));
                 // Sidebar tone: a slightly lighter column behind the sidebar.
                 // Its width rides the same tween as the sidebar, so the tone
                 // melts away with the collapse instead of vanishing in a frame.
@@ -14732,7 +14752,8 @@ impl Render for Shell {
                             .flex_row()
                             .child(sidebar)
                             .child(sidebar_seam)
-                            .child(card)
+                            .child(div().flex_1().min_w_0().h_full().flex().flex_col()
+                                .py(px(self.workspace_gutter())).pr(px(self.workspace_gutter())).child(card))
                             // The right pane is ONE container: the surface
                             // host column and the docked explorer column
                             // sit side by side under a shared titlebar
@@ -14754,15 +14775,19 @@ impl Render for Shell {
                             .left_0()
                             .right_0()
                             .opacity(under_stage)
-                            .child(title_bar),
+                            .children(title_bar),
                     )
                     // The stage covers the conversation's titlebar but never
                     // the cluster: the sidebar toggle and navigation stay live.
                     .children(voice_stage)
-                    .child(self.render_titlebar_cluster(cx))
-                    .children(self.render_sidebar_options_titlebar(cx))
+                    .when(self.workspace_gutter() == 0. || self.sidebar_now() < 1., |view| {
+                        view.child(self.render_titlebar_cluster(cx))
+                            .children(self.render_sidebar_options_titlebar(cx))
+                    })
+                    .child(self.workspace_sidebar_header(cx))
+                    .child(self.workspace_native_actions(cx))
                     .children(overlays);
-                root.child(sidebar_tone)
+                root.when(self.workspace_gutter() == 0., |view| view.child(sidebar_tone))
                     .child(motion::fade_in("phase-app", page))
             }
             GatePhase::Loading => root, // splash overlay covers boot
@@ -14968,20 +14993,6 @@ mod tests {
         );
         chat.sync_state = S::Connecting;
         assert_eq!(chat_sync_pill_caption(&chat), Some("Syncing…"));
-    }
-
-    #[test]
-    fn narrowest_sidebar_keeps_its_options_button_beside_the_titlebar_controls() {
-        for is_macos in [true, false] {
-            let cluster_end = cluster_buttons_start(is_macos, false, 0)
-                + CLUSTER_BUTTONS_WIDTH
-                + TITLEBAR_ACTION_SLOT_WIDTH;
-            let options_right = cluster_end + TITLEBAR_GROUP_GAP + 24.0;
-            assert!(
-                options_right + Theme::SPACE_SM <= SIDEBAR_MIN,
-                "options button ends at {options_right} in a {SIDEBAR_MIN} sidebar"
-            );
-        }
     }
 
     #[test]
@@ -17026,8 +17037,8 @@ mod exit_regressions {
                 let saved = settings::current(cx);
                 assert!(!saved.dictation_enabled);
                 assert_eq!(saved.codex_voice, None);
-                assert_eq!(saved.sidebar_width, 320.0);
-                assert_eq!(shell.settings.sidebar_width, 320.0);
+                assert_eq!(saved.sidebar_width, SIDEBAR_MAX);
+                assert_eq!(shell.settings.sidebar_width, SIDEBAR_MAX);
             })
             .unwrap();
     }

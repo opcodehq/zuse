@@ -2,7 +2,7 @@
 use super::*;
 use crate::assets::icon;
 use crate::shell::{
-    BG, BORDER, FAINT, MUTED, RAISED, SURFACE, TEXT, column, icon_button, label, provider_icon, row,
+    BG, BORDER, FAINT, MUTED, RAISED, TEXT, column, icon_button, label, provider_icon, row,
 };
 use zuse_protocol::presentation::{SidebarView, project_identity};
 
@@ -142,12 +142,12 @@ impl WorkspaceView {
         });
         let projects = self.preferences.sidebar_view == SidebarView::Projects;
         column()
-            .w(px(296.))
+            .w_full()
             .h_full()
             .flex_shrink_0()
-            .bg(rgb(SURFACE))
-            .border_r_1()
-            .border_color(rgb(BORDER))
+            .bg(rgb(BG))
+            .rounded(px(crate::workspace_style::RADIUS))
+            .overflow_hidden()
             .child(
                 row()
                     .h(px(36.))
@@ -161,13 +161,6 @@ impl WorkspaceView {
                             .text_color(rgb(TEXT)),
                     )
                     .child(div().flex_1())
-                    .child(
-                        icon_button("search-sessions", "magnifer", "Search threads")
-                            .size(px(28.))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.toggle_search(window, cx)),
-                            ),
-                    )
                     .child(
                         icon_button("sidebar-collapse", "split-columns", "Hide sidebar")
                             .size(px(28.))

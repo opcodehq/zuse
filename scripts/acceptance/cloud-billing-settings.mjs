@@ -29,7 +29,7 @@ try{
  assert.ok(fs.existsSync(ready));url=fs.readFileSync(ready,'utf8');
  await update({cloud:true,billing:{writeDelay:1200},state:{user:{id:'avery',name:'Avery Parker',email:'avery@example.test'},login:null,error:null}});
  page=browser('cloud-billing-settings');page.open(url,fixture('general-settings-observer.js'));
- page.wait('window.__generalParity.methods.includes("CloudAccountStatus")');await click(274,982);await click(70,212);
+ page.wait('window.__generalParity.methods.includes("CloudAccountStatus")');await click(210,978);await click(70,212);
  await until(s=>s.events.some(e=>e.method==='CloudProjects'),'Cloud setup ready');await sleep(250);
  page.screenshot('cloud-layout-setup-dark.png');stage='usage';await click(528,331);await sleep(220);page.screenshot('cloud-layout-usage-dark.png');
  // The actual reference components measure Hosting 193–301, tabs 317–345,

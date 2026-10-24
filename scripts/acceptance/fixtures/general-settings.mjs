@@ -53,6 +53,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
   },
   message(client,message){
    const text=message.toString(),frame=JSON.parse(text);
+   if(frame.method==='WatchDocMessages')events.push({method:frame.method,chatId:frame.params?.chatId});
    if(providerFixture.handle(client,frame,emit))return;
    if(frame.cancel){events.push({cancel:frame.id});if(client.data.handled.delete(frame.id))return;}
    if(frame.method==='CloudAccountStatus'){

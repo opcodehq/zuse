@@ -514,6 +514,7 @@ pub(crate) struct DockedComposer {
     child: AnyElement,
     state: SharedDock,
     viewport_height: f32,
+    floating_clearance: f32,
     reduced: bool,
     now: Instant,
     terminal: Option<crate::terminal::dock::SharedGeometry>,
@@ -531,6 +532,7 @@ pub(crate) fn docked_composer(
         child: child.into_any_element(),
         state,
         viewport_height,
+        floating_clearance: 24.,
         reduced,
         now,
         terminal: None,
@@ -539,6 +541,10 @@ pub(crate) fn docked_composer(
 }
 
 impl DockedComposer {
+    pub fn floating_clearance(mut self, clearance: f32) -> Self {
+        self.floating_clearance = clearance;
+        self
+    }
     pub fn reserve_terminal(mut self, geometry: crate::terminal::dock::SharedGeometry) -> Self {
         self.terminal = Some(geometry);
         self
@@ -652,7 +658,7 @@ impl Element for DockedComposer {
         let y = if docked {
             f32::from(bounds.top())
         } else {
-            (self.viewport_height - f32::from(bounds.size.height) - 24.0).max(0.0)
+            (self.viewport_height - f32::from(bounds.size.height) - self.floating_clearance).max(0.0)
         };
         let position = state.position_at(x, y, self.reduced, self.now);
         state.last_geometry = Some(self.now);

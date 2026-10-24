@@ -13,7 +13,7 @@ const press=key=>page.run(['press',key]);
 const type=value=>page.run(['keyboard','type',value]);
 const prefs=()=>page.evaluate('JSON.parse(localStorage.getItem("zuse.workspace.preferences.v1"))');
 const waitPrefs=condition=>page.wait(`(()=>{const p=JSON.parse(localStorage.getItem("zuse.workspace.preferences.v1"));return ${condition};})()`);
-async function openSettings(){await click(274,982);}
+async function openSettings(){await click(210,978);}
 function pixelSamples(file,points){
  const png=fs.readFileSync('.context/'+file).toString('base64');
  return page.evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${png}';await image.decode();const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;const c=canvas.getContext('2d');c.drawImage(image,0,0);return ${JSON.stringify(points)}.map(([x,y])=>Array.from(c.getImageData(x,y,1,1).data));})()`);

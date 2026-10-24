@@ -28,11 +28,11 @@ try {
   page=browser('sidebar-controls');page.open(url,fixture('general-settings-observer.js'));
   page.wait('window.__generalParity.methods.includes("CloudAccountStatus")');await sleep(200);
   stage='loading and signed-out account guards';
-  await click(22,982);await click(22,982);
+  await click(26,978);await click(26,978);
   assert.equal(events(await state(),'CloudAccountSignIn').length,0);
   page.screenshot('sidebar-controls-loading.png');
   await configure({hold:false});await sleep(220);
-  await click(22,982);await click(22,982);
+  await click(26,978);await click(26,978);
   assert.equal(events(await state(),'CloudAccountSignIn').length,1);
   page.screenshot('sidebar-controls-signing-in.png');
   await waitFor(s=>s.state.login!==null,'Sign-in did not publish its progress');await sleep(200);
@@ -41,12 +41,12 @@ try {
   await configure({state:user('avery')});
   await waitFor(s=>events(s,'CloudBillingEntitlements').some(e=>e.owner==='avery'&&e.expectedAccountId==='avery'),'Avery plan was not bound');
   await sleep(250);page.screenshot('sidebar-controls-cloud.png');
-  await click(38,982);await sleep(180);page.screenshot('sidebar-controls-cloud-settings.png');
+  await click(42,978);await sleep(180);page.screenshot('sidebar-controls-cloud-settings.png');
   assert.ok(events(await state(),'CloudBillingSummary').some(e=>e.owner==='avery'));
   await click(82,18);
   stage='provider limits and keyboard submenus';
-  await click(600,898);page.run(['keyboard','type','Keep sidebar navigation draft']);
-  await click(244,982);press('Enter');
+  await click(600,894);page.run(['keyboard','type','Keep sidebar navigation draft']);
+  await click(180,978);press('Enter');
   await waitFor(s=>events(s,'ListAgentAccounts').length>0,'Provider usage was not requested');await sleep(220);
   page.screenshot('sidebar-controls-limits.png');
   assert.equal(menuVisible('sidebar-controls-limits.png'),true,'Usage menu must be painted');
@@ -63,7 +63,7 @@ try {
   await configure({providers:{holdUsage:false}});await sleep(220);page.screenshot('sidebar-controls-refresh-error.png');
   await configure({providers:{usageError:null}});press('Escape');
   const cachedBefore=events(await state(),'ListAgentAccounts').filter(e=>!e.params.forceUsage).length;
-  await sleep(5150);await click(244,982);
+  await sleep(5150);await click(180,978);
   await waitFor(s=>events(s,'ListAgentAccounts').filter(e=>!e.params.forceUsage).length===cachedBefore+1,'Expired failed usage must reload on the next open');
   press('End');press('ArrowUp');press('Enter');
   await waitFor(s=>events(s,'ListAgentAccounts').filter(e=>e.params.forceUsage).length===forcedBefore+2,'Refresh retry was not dispatched');
@@ -71,7 +71,7 @@ try {
   stage='provider-account destination and menu dismissal';
   press('End');press('Enter');await sleep(180);page.screenshot('sidebar-controls-accounts.png');
   assert.ok(page.evaluate('window.__generalParity.methods').includes('ListAgentAccounts'));
-  await click(82,18);await click(244,982);press('Escape');await sleep(100);page.screenshot('sidebar-controls-dismissed.png');
+  await click(82,18);await click(180,978);press('Escape');await sleep(100);page.screenshot('sidebar-controls-dismissed.png');
   assert.equal(menuVisible('sidebar-controls-dismissed.png'),false,'Escape must remove the usage menu');
   press('Enter');await sleep(120);page.screenshot('sidebar-controls-focus-restored.png');
   assert.equal(menuVisible('sidebar-controls-focus-restored.png'),true,'Escape must restore focus to the usage trigger');
@@ -83,7 +83,7 @@ try {
   await waitFor(s=>events(s,'CloudBillingEntitlements').some(e=>e.owner==='casey'),'Casey plan not requested');
   await configure({holdCloud:false,billing:{holdWrites:true}});await sleep(250);
   page.screenshot('sidebar-controls-upgrade.png');
-  await click(38,982);await click(38,982);
+  await click(42,978);await click(42,978);
   const checkout=await waitFor(s=>events(s,'CloudBillingCheckout').length===1,'Upgrade was not dispatched exactly once');
   assert.equal(events(checkout,'CloudBillingCheckout')[0].owner,'casey');
   assert.equal(events(checkout,'CloudBillingCheckout')[0].expectedAccountId,'casey');
@@ -95,9 +95,9 @@ try {
   const prefs=page.evaluate('JSON.parse(localStorage.getItem("zuse.workspace.preferences.v1"))');
   page.evaluate(`localStorage.setItem('zuse.workspace.preferences.v1',JSON.stringify(${JSON.stringify({...prefs,appearance:'light'})}))`);
   page.run(['reload']);page.wait('window.__generalParity.methods.includes("WatchChats")');await sleep(250);
-  await click(244,982);press('ArrowDown');press('ArrowRight');await sleep(150);page.screenshot('sidebar-controls-light.png');
+  await click(180,978);press('ArrowDown');press('ArrowRight');await sleep(150);page.screenshot('sidebar-controls-light.png');
   assert.ok(redPixel('sidebar-controls-light.png')>=253,'Light usage popup must be painted');
-  press('Escape');page.run(['set','viewport','760','900']);await sleep(500);await click(244,882);await sleep(250);page.screenshot('sidebar-controls-compact-menu.png');
+  press('Escape');page.run(['set','viewport','760','900']);await sleep(500);await click(180,878);await sleep(250);page.screenshot('sidebar-controls-compact-menu.png');
   assert.ok(redPixel('sidebar-controls-compact-menu.png',375,644)>=253,'Compact usage popup must be painted');
   press('ArrowDown');press('ArrowRight');await sleep(200);page.screenshot('sidebar-controls-compact.png');
   assert.ok(redPixel('sidebar-controls-compact.png',700,690)>=253,'Compact provider detail must fit inside the window');
