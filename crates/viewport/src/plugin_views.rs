@@ -20,6 +20,7 @@ impl WorkspaceView {
         }
     }
     pub(super) fn open_plugins_browse(&mut self, cx: &mut Context<Self>) {
+        self.close_usage(cx);
         if self.plugins_return_right.is_none() {
             self.plugins_return_right = Some(self.right_open);
         }

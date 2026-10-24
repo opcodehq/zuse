@@ -15,7 +15,7 @@ impl Shell {
                 this.sidebar_control_tasks.remove(id);
             }
             Event::CloudSettings => this.open_settings(SettingsSection::Cloud, cx),
-            Event::ProviderAccounts => this.open_settings(SettingsSection::Agents, cx),
+            Event::FullUsage => this.open_usage(None, false, cx),
             Event::Call { id, method, params } => {
                 let Some(engine) = state.read(cx).engine().map(|e| e.controller()) else {
                     controls.update(cx, |controls, cx| {

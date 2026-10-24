@@ -48,7 +48,9 @@ mod plugin_views;
 mod previews;
 mod project_actions;
 pub mod project_archive;
+pub mod usage_dashboard;
 mod project_archive_host;
+mod usage_host;
 mod provider_settings;
 mod provider_updates;
 mod pull_requests;
@@ -237,6 +239,12 @@ pub struct WorkspaceView {
     session_search: Entity<input::TextInput>,
     archive_search: Entity<input::TextInput>,
     project_archive: project_archive_host::ArchiveRoute,
+    usage_dashboard: Option<Entity<usage_dashboard::UsageDashboard>>,
+    usage_open: bool,
+    usage_pending: bool,
+    usage_project: Option<String>,
+    usage_project_scope: bool,
+    usage_requests: std::collections::BTreeMap<u64,u64>,
     plugin_search: Entity<input::TextInput>,
     plugin_installed_search: Entity<input::TextInput>,
     plugins_browse: bool,
@@ -494,6 +502,12 @@ impl WorkspaceView {
             }
             let _ = this.update(cx, |this, cx| {
                 this.status = "Disconnected".into();
+                this.connected = false;
+                let failed = std::mem::take(&mut this.usage_requests);
+                for (remote,local) in failed {
+                    this.pending.remove(&remote);
+                    if let Some(dashboard) = this.usage_dashboard.clone() { dashboard.update(cx,|dashboard,cx| dashboard.receive(local,Err("Computer disconnected. Reconnect and refresh usage.".into()),cx)); }
+                }
                 this.sidebar_controls
                     .update(cx, |controls, cx| controls.interrupted(cx));
                 for remote in this
@@ -674,6 +688,12 @@ impl WorkspaceView {
             plugin_detail_menu: Default::default(),
             archive_search,
             project_archive: Default::default(),
+            usage_dashboard: None,
+            usage_open: false,
+            usage_pending: false,
+            usage_project: None,
+            usage_project_scope: false,
+            usage_requests: Default::default(),
             plugin_connected_only: false,
             plugin_catalog_page: 0,
             agent_picker: false,
@@ -989,6 +1009,7 @@ impl WorkspaceView {
             }
             return;
         }
+        if self.receive_usage(id, &frame, cx) { return; }
         if self.receive_sidebar_controls(id, &frame, cx) {
             return;
         }
@@ -1410,6 +1431,7 @@ impl WorkspaceView {
         {
             return false;
         }
+        self.close_usage(cx);
         self.close_project_archives();
         self.close_plugins_browse();
         self.stash_draft(cx);
@@ -1486,6 +1508,7 @@ impl WorkspaceView {
     }
 
     fn new_chat(&mut self, cx: &mut Context<Self>) -> bool {
+        self.close_usage(cx);
         self.close_project_archives();
         if !self.require_connection(cx) {
             return false;
@@ -1528,7 +1551,7 @@ impl WorkspaceView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
-        if self.project_archive.project.is_some(){return;}
+        if self.project_archive.project.is_some() || self.usage_open {return;}
         if self.cloud.cached {
             if !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty() {
                 let _ = self.requests.unbounded_send(json!({"ui":"resumeCloud","send":true}));

@@ -1246,6 +1246,10 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
+                if this.usage_open {
+                    if let Some(dashboard) = this.usage_dashboard.clone() { dashboard.update(cx, |dashboard,cx| dashboard.escape(window,cx)); }
+                    return;
+                }
                 if this.cancel_sidebar_resize(cx) { return; }
                 if this.sidebar_controls.update(cx, |controls, cx| {
                     controls.dismiss_on_escape(window, cx)
@@ -1329,6 +1333,7 @@ impl Render for WorkspaceView {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
+                if this.usage_open {return;}
                 if this.thread_dialog.is_none() && this.project_archive.project.is_none() {
                     this.save_file(cx);
                 }
@@ -1348,7 +1353,7 @@ impl Render for WorkspaceView {
             })
             .child(self.workspace_main(window, cx))
             .when(
-                self.right_open && !self.settings && !self.project_picker && self.project_archive.project.is_none(),
+                self.right_open && !self.settings && !self.project_picker && self.project_archive.project.is_none() && !self.usage_open,
                 |d| d.child(self.workspace_panel(panel_width, cx)),
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {

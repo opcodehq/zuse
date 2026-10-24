@@ -96,6 +96,7 @@ mod workspace_storage;
 mod sidebar_sections;
 pub(crate) mod spaces;
 mod archives;
+mod usage_dashboard;
 mod thread_search;
 use side_chats::SideChatTab;
 mod tabs;
@@ -714,6 +715,7 @@ pub enum Route {
     /// The plugin catalog, a main-area page beside the sidebar.
     Plugins,
     Archives,
+    Usage,
     Settings(SettingsSection),
 }
 
@@ -881,6 +883,7 @@ pub enum NavEntry {
     Settings(SettingsSection),
     Plugins,
     Archives(String),
+    Usage { project: Option<String>, project_scope: bool },
 }
 
 /// Browser-style navigation history for the titlebar back/forward buttons
@@ -2169,6 +2172,11 @@ pub struct Shell {
     devices_page: Option<Entity<DevicesPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
     archive_project: Option<String>,
+    usage_dashboard: Option<Entity<zuse_viewport::usage_dashboard::UsageDashboard>>,
+    usage_tasks: std::collections::BTreeMap<u64, Task<()>>,
+    usage_project: Option<String>,
+    usage_project_scope: bool,
+    usage_pending: bool,
     project_archives: std::collections::HashMap<String, Entity<crate::project_archive::ProjectArchive>>,
     project_archive_events: std::collections::HashMap<String, Subscription>,
     appearance_page: Option<Entity<AppearancePage>>,
@@ -2199,6 +2207,7 @@ pub struct Shell {
     discard_working_tree_task: Option<Task<()>>,
     /// Space-row context menu (dropdown rows): (space id, window position).
     space_menu: popover::Popup<(String, Point<Pixels>)>,
+    space_menu_active: usize,
     rename_space_dialog: Option<RenameSpaceDialog>,
     sidebar_section_migration: Option<(String, crate::state::EngineHandle)>,
     section_dialog: Option<sidebar_sections::SectionDialog>,
@@ -2608,6 +2617,7 @@ impl Shell {
             Route::PullRequests => NavEntry::PullRequests,
             Route::Plugins => NavEntry::Plugins,
             Route::Archives => NavEntry::Archives(String::new()),
+            Route::Usage => NavEntry::Usage { project: None, project_scope: false },
             Route::Settings(section) => NavEntry::Settings(section),
         });
         // Parent notifications carry presentation changes (session status,
@@ -2709,6 +2719,11 @@ impl Shell {
             devices_page: None,
             archived_page: None,
             archive_project: None,
+            usage_dashboard: None,
+            usage_tasks: Default::default(),
+            usage_project: None,
+            usage_project_scope: false,
+            usage_pending: false,
             project_archives: std::collections::HashMap::new(),
             project_archive_events: std::collections::HashMap::new(),
             appearance_page: None,
@@ -2731,6 +2746,7 @@ impl Shell {
             discard_working_tree: None,
             discard_working_tree_task: None,
             space_menu: popover::Popup::default(),
+            space_menu_active: 0,
             rename_space_dialog: None,
             sidebar_section_migration: None,
             section_dialog: None,
@@ -5142,6 +5158,10 @@ impl Shell {
         if matches!(self.route,Route::Archives) && !matches!(route,Route::Archives) {
             if let Some(page)=self.archive_project.as_ref().and_then(|id|self.project_archives.get(id)).cloned(){page.update(cx,|page,cx|page.on_hidden(cx));}
         }
+        if matches!(self.route, Route::Usage) && !matches!(route, Route::Usage) {
+            if let Some(dashboard) = self.usage_dashboard.clone() { dashboard.update(cx, |dashboard,cx| dashboard.hide(cx)); }
+        }
+        if matches!(route, Route::Usage) && !matches!(self.route, Route::Usage) { self.usage_pending = true; }
         self.route = route;
         if !was_pull_requests && will_show_pull_requests {
             if let Some(page) = self.pull_requests_page.as_ref().cloned() {
@@ -5737,6 +5757,7 @@ impl Shell {
                 self.pending_pull_request = Some((url, device));
             }
             NavEntry::Plugins => self.set_route(Route::Plugins, cx),
+            NavEntry::Usage { project, project_scope } => self.enter_usage(project, project_scope, cx),
             NavEntry::Archives(project) => {
                 if self.archive_project.as_ref() != Some(&project) {
                     if let Some(page) = self.archive_project.as_ref().and_then(|id| self.project_archives.get(id)).cloned() {
@@ -7413,7 +7434,7 @@ impl Shell {
     /// the pull request pane's tabs.
     fn render_title_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // The Plugins page has no tabs: a bare strip that still drags.
-        if matches!(self.route, Route::Plugins | Route::Archives) {
+        if matches!(self.route, Route::Plugins | Route::Archives | Route::Usage) {
             return self
                 .titlebar_drag_region("plugins-titlebar", div().size_full(), cx)
                 .into_any_element();
@@ -8367,7 +8388,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // The Plugins page owns the main area, so no chat reads as current.
-        let selected = selected && !matches!(self.route, Route::Plugins | Route::Archives);
+        let selected = selected && !matches!(self.route, Route::Plugins | Route::Archives | Route::Usage);
         // Activity, not position (t3code Sidebar): status is a small colored
         // word + glyph in the row's top-right corner — Working animates the
         // composer-strip spinner, Done wears a check; Idle rows show the
@@ -11367,6 +11388,27 @@ impl Shell {
             cx.stop_propagation();
             return;
         }
+        if let Some((project,_)) = self.space_menu.as_open().cloned() {
+            match event.keystroke.key.as_str() {
+                "escape" => self.close_space_menu(cx),
+                "up" => self.space_menu_active=(self.space_menu_active+3)%4,
+                "down" => self.space_menu_active=(self.space_menu_active+1)%4,
+                "home" => self.space_menu_active=0,
+                "end" => self.space_menu_active=3,
+                "enter" | "space" => match self.space_menu_active {
+                    0 => self.open_rename_space(project,cx),
+                    1 => self.open_project_archives(project,window,cx),
+                    2 => self.open_usage(Some(project),true,cx),
+                    _ => {self.close_space_menu(cx);self.delete_space_confirm=Some(project);},
+                },
+                _ => return,
+            }
+            cx.notify();cx.stop_propagation();return;
+        }
+        if event.keystroke.key == "escape" && matches!(self.route, Route::Usage) {
+            if let Some(dashboard) = self.usage_dashboard.clone() { dashboard.update(cx, |dashboard,cx| dashboard.escape(window,cx)); }
+            cx.stop_propagation(); return;
+        }
         if event.keystroke.key=="escape" && matches!(self.route,Route::Archives) {
             if let Some(page)=self.archive_project.as_ref().and_then(|id|self.project_archives.get(id)).cloned(){page.update(cx,|page,cx|page.dismiss_on_escape(cx));}
             cx.stop_propagation();return;
@@ -11850,6 +11892,7 @@ impl Shell {
                 .into_any_element();
         }
 
+        if matches!(self.route, Route::Usage) { return self.usage_view(window,cx); }
         if matches!(self.route,Route::Archives) {
             return self.archive_project.as_ref().and_then(|id|self.project_archives.get(id)).map(|page|page.clone().into_any_element())
                 .unwrap_or_else(||zuse_viewport::project_archive::centered("Select a project to view archived chats.").into_any_element());
@@ -14311,7 +14354,7 @@ impl Render for Shell {
                 }
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
-                if matches!(this.route,Route::Archives){return;}
+                if matches!(this.route,Route::Archives | Route::Usage){return;}
                 if matches!(this.route, Route::Chat) && this.right_pane_open(cx) {
                     let file = match this.resolved_right_active(cx) {
                         RightSurface::File(id) => this.file_surfaces.get(&id).cloned(),
@@ -14653,7 +14696,7 @@ impl Render for Shell {
                     )
                 });
                 // A review or commit-diff tab stands in for the conversation.
-                let main = match self.active_main_tab(cx) {
+                let main = match matches!(self.route, Route::Chat).then(|| self.active_main_tab(cx)).flatten() {
                     Some(main_tabs::MainTab::Diff(id)) => self.render_main_diff(id, cx),
                     Some(main_tabs::MainTab::File(id)) => self.render_main_file(id, cx),
                     None => self.render_main(window, main_content_width, transcript_width, cx),

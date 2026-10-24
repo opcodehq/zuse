@@ -16,6 +16,7 @@ pub(super) struct ArchiveRoute {
     restore_target: Option<String>,
     pub menu: Option<(String, Point<Pixels>)>,
     menu_focus: Option<FocusHandle>,
+    menu_active: usize,
 }
 impl WorkspaceView {
     pub(super) fn close_project_archives(&mut self) {
@@ -43,6 +44,7 @@ impl WorkspaceView {
             .menu_focus
             .get_or_insert_with(|| cx.focus_handle())
             .clone();
+        self.project_archive.menu_active = 0;
         self.project_archive.menu = Some((id, position));
         window.focus(&focus, cx);
         cx.notify();
@@ -56,6 +58,7 @@ impl WorkspaceView {
         if !self.spaces.iter().any(|s| s.id == id) {
             return;
         }
+        self.close_usage(cx);
         self.close_plugins_browse();
         self.close_project_archives();
         if self.project_archive.search.is_none() {
@@ -364,61 +367,85 @@ impl WorkspaceView {
         let (project, position) = self.project_archive.menu.clone()?;
         let focus = self.project_archive.menu_focus.clone()?;
         let opened = project.clone();
+        let mut menu = div()
+            .id("project-actions-menu")
+            .role(Role::Menu)
+            .track_focus(&focus)
+            .w(px(196.))
+            .p(px(4.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(crate::palette::rgb(crate::shell::BORDER))
+            .bg(crate::palette::rgb(crate::shell::RAISED))
+            .shadow_lg()
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.project_archive.menu = None;
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "escape" => {
+                        this.project_archive.menu = None;
+                        window.focus(&this.workspace_focus, cx);
+                    }
+                    "up" | "down" => {
+                        this.project_archive.menu_active = 1 - this.project_archive.menu_active
+                    }
+                    "home" => this.project_archive.menu_active = 0,
+                    "end" => this.project_archive.menu_active = 1,
+                    "enter" | "space" => {
+                        if this.project_archive.menu_active == 0 {
+                            this.open_project_archives(opened.clone(), window, cx);
+                        } else {
+                            this.request_usage(Some(opened.clone()), true, cx);
+                            window.focus(&this.workspace_focus, cx);
+                        }
+                    }
+                    _ => return,
+                }
+                cx.notify();
+                cx.stop_propagation();
+            }));
+        for (index, title, glyph) in [
+            (0, "Archived chats", "project-archive"),
+            (1, "Usage", "analytics"),
+        ] {
+            let project = project.clone();
+            menu = menu.child(
+                div()
+                    .id(("project-action", index as usize))
+                    .role(Role::MenuItem)
+                    .aria_label(title)
+                    .cursor_pointer()
+                    .h(px(32.))
+                    .px(px(8.))
+                    .rounded(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .text_size(px(13.))
+                    .when(self.project_archive.menu_active == index as usize, |view| {
+                        view.bg(crate::settings_style::frame_bg())
+                    })
+                    .hover(|view| view.bg(crate::settings_style::frame_bg()))
+                    .child(crate::assets::icon(glyph).size(px(14.)))
+                    .child(title)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if index == 0 {
+                            this.open_project_archives(project.clone(), window, cx);
+                        } else {
+                            this.request_usage(Some(project.clone()), true, cx);
+                        }
+                    })),
+            );
+        }
         Some(
             deferred(
-                anchored().anchor(Anchor::TopLeft).position(position).child(
-                    div()
-                        .id("project-actions-menu")
-                        .role(Role::Menu)
-                        .track_focus(&focus)
-                        .w(px(196.))
-                        .p(px(4.))
-                        .rounded(px(10.))
-                        .border_1()
-                        .border_color(crate::palette::rgb(crate::shell::BORDER))
-                        .bg(crate::palette::rgb(crate::shell::RAISED))
-                        .shadow_lg()
-                        .occlude()
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.project_archive.menu = None;
-                            cx.notify();
-                        }))
-                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                            match event.keystroke.key.as_str() {
-                                "escape" => {
-                                    this.project_archive.menu = None;
-                                    cx.notify();
-                                    cx.stop_propagation();
-                                }
-                                "enter" | "space" => {
-                                    this.open_project_archives(opened.clone(), window, cx);
-                                    cx.stop_propagation();
-                                }
-                                _ => {}
-                            }
-                        }))
-                        .child(
-                            div()
-                                .id("project-actions-archives")
-                                .role(Role::MenuItem)
-                                .aria_label("Archived chats")
-                                .tab_index(0)
-                                .cursor_pointer()
-                                .h(px(32.))
-                                .px(px(8.))
-                                .rounded(px(8.))
-                                .flex()
-                                .items_center()
-                                .gap(px(8.))
-                                .text_size(px(13.))
-                                .hover(|d| d.bg(crate::settings_style::frame_bg()))
-                                .child(crate::assets::icon("project-archive").size(px(14.)))
-                                .child("Archived chats")
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.open_project_archives(project.clone(), window, cx)
-                                })),
-                        ),
-                ),
+                anchored()
+                    .anchor(Anchor::TopLeft)
+                    .position(position)
+                    .child(menu),
             )
             .priority(3)
             .into_any_element(),

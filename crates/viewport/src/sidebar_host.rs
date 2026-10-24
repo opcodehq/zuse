@@ -23,9 +23,8 @@ impl WorkspaceView {
                 this.settings = true;
                 this.select_settings_section(crate::settings_view::Section::Cloud, cx);
             }
-            Event::ProviderAccounts => {
-                this.settings = true;
-                this.select_settings_section(crate::settings_view::Section::Usage, cx);
+            Event::FullUsage => {
+                this.request_usage(None, false, cx);
             }
         })
         .detach();

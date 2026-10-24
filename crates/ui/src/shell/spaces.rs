@@ -4973,6 +4973,7 @@ impl Shell {
                                 el.on_mouse_down(
                                     MouseButton::Right,
                                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                        this.space_menu_active=0;
                                         this.space_menu.open((space_id.clone(), event.position));
                                         cx.notify();
                                     }),
@@ -5853,6 +5854,7 @@ impl Shell {
                     )
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                         cx.stop_propagation();
+                        this.space_menu_active=0;
                         this.space_menu.open((menu_space.clone(), event.position()));
                         cx.notify();
                     }))
@@ -7542,6 +7544,7 @@ impl Shell {
             let rename_id = space_id.clone();
             let delete_id = space_id.clone();
             let archive_id=space_id.clone();
+            let usage_id=space_id.clone();
             let menu = popover::popover_card(&theme)
                 .w(px(196.0))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -7550,7 +7553,7 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .child(
-                    popover::menu_row(&theme, false, format!("space-menu-rename-{space_id}"))
+                    popover::menu_row(&theme, self.space_menu_active==0, format!("space-menu-rename-{space_id}"))
                         .id("space-menu-rename")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.open_rename_space(rename_id.clone(), cx)
@@ -7558,13 +7561,17 @@ impl Shell {
                         .child(icon(icons::PEN).size(px(16.0)).text_color(theme.text_muted))
                         .child(SharedString::from("Rename…")),
                 )
-                .child(popover::menu_row(&theme,false,format!("space-menu-archives-{space_id}"))
+                .child(popover::menu_row(&theme,self.space_menu_active==1,format!("space-menu-archives-{space_id}"))
                     .id("space-menu-archives").role(gpui::Role::MenuItem).aria_label("Archived chats").tab_index(0)
                     .child(icon("icons/project-archive.svg").size(px(14.)).text_color(theme.text_muted)).child("Archived chats")
                     .on_click(cx.listener(move|this,_,window,cx|this.open_project_archives(archive_id.clone(),window,cx))))
+                .child(popover::menu_row(&theme,self.space_menu_active==2,format!("space-menu-usage-{space_id}"))
+                    .id("space-menu-usage").role(gpui::Role::MenuItem).aria_label("Usage").tab_index(0)
+                    .child(icon("icons/analytics.svg").size(px(14.)).text_color(theme.text_muted)).child("Usage")
+                    .on_click(cx.listener(move|this,_,_,cx|this.open_usage(Some(usage_id.clone()),true,cx))))
                 .child(popover::menu_separator())
                 .child(
-                    popover::menu_row(&theme, false, format!("space-menu-delete-{space_id}"))
+                    popover::menu_row(&theme, self.space_menu_active==3, format!("space-menu-delete-{space_id}"))
                         .id("space-menu-delete")
                         .text_color(theme.danger)
                         .on_click(cx.listener(move |this, _, _, cx| {

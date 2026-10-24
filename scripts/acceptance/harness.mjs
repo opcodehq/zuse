@@ -83,6 +83,10 @@ export function browser(prefix) {
     let result;
     try { result = JSON.parse(execFileSync('agent-browser',['--session',session,'--json',...args],{input,encoding:'utf8',maxBuffer:2*1024*1024})); }
     catch { throw new Error(`Browser ${args[0]} failed`); }
+    if (Array.isArray(result)) {
+      if (result.some(item => !item.success)) throw new Error('Browser batch action failed');
+      return result.map(item => item.data);
+    }
     if (!result.success) throw new Error('Browser action failed');
     return result.data;
   }

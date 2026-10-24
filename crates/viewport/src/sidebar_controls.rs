@@ -20,7 +20,7 @@ pub enum Event {
     },
     Cancel(u64),
     CloudSettings,
-    ProviderAccounts,
+    FullUsage,
 }
 type Owner = (String, Option<String>);
 pub struct SidebarControls {
@@ -343,7 +343,7 @@ impl SidebarControls {
             "enter" | "space" if self.active == providers().len() => self.load_usage(true, cx),
             "enter" | "space" if self.active == providers().len() + 1 => {
                 self.close(window, cx);
-                cx.emit(Event::ProviderAccounts);
+                cx.emit(Event::FullUsage);
             }
             "enter" | "space" => {}
             _ => return,
@@ -590,7 +590,7 @@ impl SidebarControls {
                 .child(
                     ui::option(
                         "sidebar-usage-accounts",
-                        "Provider accounts",
+                        "Full usage",
                         "analytics",
                         false,
                     )
@@ -600,7 +600,7 @@ impl SidebarControls {
                     })
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.close(window, cx);
-                        cx.emit(Event::ProviderAccounts);
+                        cx.emit(Event::FullUsage);
                     })),
                 ),
         )

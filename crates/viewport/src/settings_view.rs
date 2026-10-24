@@ -74,6 +74,7 @@ impl Section {
 }
 impl WorkspaceView {
     pub(super) fn select_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.close_usage(cx);
         self.close_plugins_browse();
         self.plugins_add_menu = false;
         self.settings_section = section;
