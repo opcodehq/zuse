@@ -704,6 +704,7 @@ enum MutateParams {
 #[derive(Clone)]
 pub struct EngineRpc {
     archives: crate::archives::Archives,
+    usage: Option<crate::usage::Usage>,
     pairings: Option<zuse_remote::authority::Authority>,
     browser_access: Option<crate::browser_access::BrowserAccess>,
     relay_access: Option<crate::relay_access::RelayAccess>,
@@ -763,6 +764,7 @@ impl EngineRpc {
         let archives = crate::archives::Archives::new(repos.data_dir());
         Self {
             archives,
+            usage: None,
             pairings: None,
             browser_access: None,
             relay_access: None,
@@ -794,6 +796,11 @@ impl EngineRpc {
             local_import: None,
             engine_info,
         }
+    }
+
+    pub fn with_usage(mut self, usage: crate::usage::Usage) -> Self {
+        self.usage = Some(usage);
+        self
     }
 
     pub(crate) fn with_visuals(mut self, visuals: crate::visuals::Visuals) -> Self {
@@ -1617,7 +1624,8 @@ fn forwardable(method: &str) -> bool {
     }
     matches!(
         method,
-        methods::OPEN_VISUAL | methods::CONTROL_VISUAL | methods::DRAW_VISUAL
+        zuse_protocol::usage::OVERVIEW | zuse_protocol::usage::SESSIONS
+            | methods::OPEN_VISUAL | methods::CONTROL_VISUAL | methods::DRAW_VISUAL
             | methods::FORK_SIDE_CHAT
             | methods::CREATE_THREAD_SESSION
             | methods::LIST_HARNESSES
@@ -2342,6 +2350,12 @@ impl RpcService for EngineRpc {
             None
         };
         match method {
+            zuse_protocol::usage::OVERVIEW | zuse_protocol::usage::SESSIONS => {
+                let usage = self.usage.as_ref().ok_or_else(|| RpcError::Failed("Recorded usage is unavailable on this host.".into()))?;
+                let request: zuse_protocol::usage::Request = parse_params(params)?;
+                let spaces = self.workspace.read_spaces().map_err(failed)?;
+                usage.handle(method, request, &spaces, self.doc_host.device_id()).await
+            }
             methods::INSPECT_RECOVERY | methods::RESOLVE_RECOVERY => {
                 let profile = self.repos.data_dir().to_path_buf();
                 let workspace = self.workspace.clone();

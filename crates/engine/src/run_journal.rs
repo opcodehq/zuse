@@ -30,6 +30,8 @@ pub enum JournalError {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JournalLine {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    at: Option<chrono::DateTime<chrono::Utc>>,
     seq: u64,
     event: AgentEvent,
 }
@@ -128,6 +130,7 @@ impl RunJournal {
         };
         let seq = journal.next_seq;
         let line = serde_json::to_string(&JournalLine {
+            at: Some(chrono::Utc::now()),
             seq,
             event: event.clone(),
         })?;
@@ -493,7 +496,12 @@ mod tests {
     }
 
     fn line(seq: u64, event: AgentEvent) -> String {
-        serde_json::to_string(&JournalLine { seq, event }).unwrap()
+        serde_json::to_string(&JournalLine {
+            at: None,
+            seq,
+            event,
+        })
+        .unwrap()
     }
 
     fn rev_lines(path: &Path) -> Vec<Vec<u8>> {

@@ -57,6 +57,7 @@ pub mod terminals;
 pub mod titles;
 mod transcript_history;
 pub mod uploads;
+pub mod usage;
 mod visuals;
 pub mod voice;
 pub mod workspace_files;
@@ -158,6 +159,7 @@ pub struct EngineCore {
     pub harness_models: harness_models::HarnessModels,
     pub plugins: plugins::Plugins,
     pub sessions: SessionsEngine,
+    pub usage: usage::Usage,
     pub doc_host: DocHost,
     pub workspace: WorkspaceHost,
     pub registry: Arc<HarnessRegistry>,
@@ -400,7 +402,9 @@ impl EngineCore {
             pairings.clone(),
             browser_access.control().pairing_slots(),
         );
+        let usage = usage::Usage::local(profile.store_root().join("journals"));
         Ok(Self {
+            usage,
             relay_access,
             browser_access,
             pairings,
@@ -572,6 +576,7 @@ impl EngineCore {
             self.agent_accounts.clone(),
             self.workspace_scope,
         )
+        .with_usage(self.usage.clone())
         .with_visuals(self.visuals.clone())
         .with_pairings(self.pairings.clone())
         .with_browser_access(self.browser_access.control())

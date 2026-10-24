@@ -16,6 +16,7 @@ members = [
     "crates/theme",
     "crates/audio",
     "crates/protocol",
+    "crates/usage",
     "crates/preview",
     "crates/doc",
     "crates/sync",
@@ -51,6 +52,7 @@ license = "AGPL-3.0-only"
 publish = false
 
 [workspace.dependencies]
+zuse-usage = { path = "crates/usage" }
 zuse-cloud-projection = { path = "crates/cloud-projection" }
 zuse-icons = { path = "crates/icons" }
 zuse-remote = { path = "crates/remote" }
