@@ -130,6 +130,7 @@ actions!(
         NewSession,
         OpenSettings,
         OpenDevices,
+        OpenCloudSettings,
         NextSession,
         PrevSession,
         ArchiveSession
@@ -297,7 +298,7 @@ fn composer_target_width(panel_width: f32, content_width: f32, docked: bool) -> 
     // Share the configurable maximum, including the composer's outer padding.
     // Below that maximum, keep the original full-panel responsive width: using
     // transcript gutters here would remove 64px and wrap attachments too early.
-    (content_width + 2.0 * Theme::SPACE_LG).min(panel_width)
+    (content_width + 2.0 * crate::composer::COMPOSER_OUTER_PAD).min(panel_width)
 }
 
 fn titlebar_new_session_alpha(route: &Route, has_selected_chat: bool) -> f32 {
@@ -12079,11 +12080,11 @@ impl Shell {
                 ))
                 .into_any_element()
         } else {
-            let project = self
-                .state
-                .read(cx)
-                .selected_space_row()
-                .map(|space| space.display_name().to_owned());
+            let state = self.state.read(cx);
+            let project = state.cloud_project.as_ref()
+                .and_then(|project| project["displayName"].as_str())
+                .map(str::to_owned)
+                .or_else(|| state.selected_space_row().map(|space| space.display_name().to_owned()));
             div()
                 .size_full()
                 .flex()
@@ -12114,8 +12115,8 @@ impl Shell {
                             .hover(|d| d.text_color(theme.text))
                             .child("Start without a project")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.state
-                                    .update(cx, |state, cx| state.select_space(None, cx));
+                                let pickers = this.composer.read(cx).pickers().clone();
+                                pickers.update(cx, |pickers, cx| pickers.start_without_project(cx));
                                 this.focus_composer(cx);
                             })),
                     )
@@ -14420,6 +14421,9 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &OpenDevices, _, cx| {
                 this.open_settings(SettingsSection::Devices, cx)
             }))
+            .on_action(cx.listener(|this, _: &OpenCloudSettings, _, cx| {
+                this.open_settings(SettingsSection::Cloud, cx)
+            }))
             .on_action(cx.listener(|this, _: &NextSession, window, cx| {
                 this.cycle_navigation(true, window, cx)
             }))
@@ -15460,7 +15464,7 @@ mod tests {
 
     #[test]
     fn composer_width_shares_the_maximum_only_in_established_threads() {
-        for (setting, outer) in [(560.0, 592.0), (736.0, 768.0), (1200.0, 1232.0)] {
+        for (setting, outer) in [(560.0, 584.0), (736.0, 760.0), (1200.0, 1224.0)] {
             assert_eq!(composer_target_width(1600.0, setting, true), outer);
             assert_eq!(composer_target_width(1600.0, setting, false), 768.0);
             // Narrow panes keep the composer's original gutters and usable width.
@@ -15476,7 +15480,7 @@ mod tests {
             let panel_width = panel_width as f32;
             assert_eq!(
                 composer_target_width(panel_width, settings::TRANSCRIPT_WIDTH_DEFAULT, true),
-                panel_width.min(crate::composer::COMPOSER_MAX_WIDTH),
+                panel_width.min(settings::TRANSCRIPT_WIDTH_DEFAULT + 2.0 * crate::composer::COMPOSER_OUTER_PAD),
                 "default width must preserve main's responsive layout at {panel_width}px"
             );
         }

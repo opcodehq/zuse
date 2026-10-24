@@ -17,6 +17,9 @@ impl Cloud {
     }
 }
 impl Pickers {
+    pub(crate) fn start_without_project(&mut self, cx: &mut Context<Self>) {
+        self.pick_no_project(cx);
+    }
     pub(super) fn leave_cloud(&mut self, cx: &mut Context<Self>) {
         self.state.update(cx, |state, _| state.cloud_project = None);
         if let Some(config) = self.cloud.local.take() {
@@ -26,7 +29,12 @@ impl Pickers {
     fn select_cloud(&mut self, row: Value, cx: &mut Context<Self>) {
         if row["prepared"] != true || row["state"] != "ready" {
             self.cloud.error =
-                Some("Prepare a Rust cloud image for this repository before starting.".into());
+                Some("Build a cloud image for this repository before starting.".into());
+            cx.notify();
+            return;
+        }
+        if row["accountId"].as_str() != self.state.read(cx).cloud_user_id() {
+            self.cloud.error = Some("Your account changed. Open the project picker again.".into());
             cx.notify();
             return;
         }
@@ -44,7 +52,7 @@ impl Pickers {
     }
     fn ensure_cloud(&mut self, cx: &mut Context<Self>) {
         let state = self.state.read(cx);
-        let owner = state.auth_user().map(|user| user.id.clone());
+        let owner = state.cloud_user_id().map(str::to_owned);
         if self.cloud.owner != owner {
             self.cloud.owner = owner.clone();
             self.cloud.loaded = false;
@@ -75,49 +83,145 @@ impl Pickers {
         });
         self.cloud.task = Some(cx.spawn(async move |this, cx| {
             let result = job.await;
-            let _ = this.update(cx, |this, cx| {
-                if this.state.read(cx).auth_user().map(|u| u.id.as_str()) != Some(owner.as_str()) {
-                    return;
-                }
-                this.cloud.task = None;
-                match result {
-                    Ok(Ok((value, list)))
-                        if value["accountId"].as_str() == Some(owner.as_str()) =>
-                    {
-                        this.cloud.workspaces = list["workspaces"]
-                            .as_array()
-                            .cloned()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter(|w| {
-                                w["desiredState"] != "deleted"
-                                    && w["desiredState"] != "archived"
-                                    && w["state"] != "deleted"
-                            })
-                            .collect();
-                        this.cloud.rows = value["projects"]
-                            .as_array()
-                            .cloned()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|mut row| {
-                                row["accountId"] = json!(owner);
-                                row
-                            })
-                            .collect();
-                        this.cloud.error = None;
+            let _ =
+                this.update(cx, |this, cx| {
+                    if this.state.read(cx).cloud_user_id() != Some(owner.as_str()) {
+                        return;
                     }
-                    Ok(Err(error)) => this.cloud.error = Some(error.to_string()),
-                    _ => {
-                        this.cloud.error = Some(
+                    this.cloud.task = None;
+                    match result {
+                        Ok(Ok((value, list)))
+                            if value["accountId"].as_str() == Some(owner.as_str()) =>
+                        {
+                            this.cloud.workspaces = list["workspaces"]
+                                .as_array()
+                                .cloned()
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter(|w| {
+                                    w["desiredState"] != "deleted"
+                                        && w["desiredState"] != "archived"
+                                        && w["state"] != "deleted"
+                                })
+                                .collect();
+                            this.cloud.rows = value["projects"]
+                                .as_array()
+                                .cloned()
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|mut row| {
+                                    row["accountId"] = json!(owner);
+                                    row
+                                })
+                                .collect();
+                            this.cloud.error = None;
+                        }
+                        Ok(Err(error)) => this.cloud.error = Some(error.to_string()),
+                        _ => this.cloud.error = Some(
                             "Could not load cloud destinations. Open the picker again to retry."
                                 .into(),
-                        )
+                        ),
                     }
-                }
-                cx.notify();
-            });
+                    cx.notify();
+                });
         }));
+    }
+    pub(super) fn filtered_cloud_projects(&self, cx: &App) -> Vec<Value> {
+        let query = self.search.read(cx).text().to_lowercase();
+        self.cloud
+            .rows
+            .iter()
+            .filter(|p| {
+                !self.state.read(cx).spaces.iter().any(|space| {
+                    space.remote_repository.as_deref().is_some_and(|identity| {
+                        p["repositoryIdentity"]
+                            .as_str()
+                            .is_some_and(|v| v.eq_ignore_ascii_case(identity))
+                    })
+                }) && format!(
+                    "{} {}",
+                    p["displayName"].as_str().unwrap_or(""),
+                    p["repositoryIdentity"].as_str().unwrap_or("")
+                )
+                .to_lowercase()
+                .contains(&query)
+            })
+            .cloned()
+            .collect()
+    }
+    pub(super) fn cloud_destination(&self, cx: &App) -> Option<Value> {
+        let state = self.state.read(cx);
+        if let Some(project) = &state.cloud_project {
+            return Some(project.clone());
+        }
+        let identity = state.selected_space_row()?.remote_repository.as_ref()?;
+        self.cloud
+            .rows
+            .iter()
+            .find(|p| {
+                p["repositoryIdentity"]
+                    .as_str()
+                    .is_some_and(|v| v.eq_ignore_ascii_case(identity))
+            })
+            .cloned()
+    }
+    pub(super) fn cloud_project_rows(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        self.ensure_cloud(cx);
+        let selected = self
+            .state
+            .read(cx)
+            .cloud_project
+            .as_ref()
+            .map(|p| p["projectId"].clone());
+        let base = self.filtered_project_rows(cx).len() + 1;
+        let mut view = div().flex().flex_col();
+        for (i, project) in self.filtered_cloud_projects(cx).into_iter().enumerate() {
+            let chosen = selected.as_ref() == Some(&project["projectId"]);
+            view = view.child(
+                zuse_viewport::creation_style::option(
+                    ("cloud-project", i),
+                    project["displayName"]
+                        .as_str()
+                        .unwrap_or("Repository")
+                        .to_owned(),
+                    "folder",
+                    chosen,
+                )
+                .h(px(32.))
+                .when(self.active == base + i, |v| {
+                    v.bg(Theme::of(cx).element_hover)
+                })
+                .child(zuse_viewport::creation_style::selection(chosen))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if project["prepared"] == true && project["state"] == "ready" {
+                        this.select_cloud(project.clone(), cx);
+                    } else {
+                        this.close(cx);
+                        window.dispatch_action(Box::new(crate::shell::OpenCloudSettings), cx);
+                    }
+                })),
+            );
+        }
+        view.when_some(self.cloud.error.clone(), |v, error| {
+            v.child(
+                div()
+                    .p_2()
+                    .text_size(px(11.))
+                    .text_color(Theme::of(cx).warning)
+                    .child(error),
+            )
+        })
+        .into_any_element()
+    }
+    pub(super) fn select_cloud_index(&mut self, i: usize, cx: &mut Context<Self>) {
+        if let Some(row) = self.filtered_cloud_projects(cx).get(i).cloned() {
+            self.select_cloud(row, cx);
+        }
+    }
+    pub(super) fn select_cloud_destination(&mut self, cx: &mut Context<Self>) {
+        if let Some(row) = self.cloud_destination(cx) {
+            self.select_cloud(row, cx);
+        }
     }
     pub(super) fn cloud_rows(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.ensure_cloud(cx);
@@ -131,52 +235,30 @@ impl Pickers {
         div()
             .flex()
             .flex_col()
-            .gap(px(2.))
-            .children(
-                self.cloud
-                    .rows
-                    .iter()
-                    .cloned()
-                    .enumerate()
-                    .map(|(index, row)| {
-                        let ready = row["prepared"] == true && row["state"] == "ready";
-                        let selected = selected.as_ref() == Some(&row["projectId"]);
-                        popover::picker_row(
-                            &theme,
+            .when_some(self.cloud_destination(cx), |view, row| {
+                let ready = row["prepared"] == true && row["state"] == "ready";
+                let selected = selected.as_ref() == Some(&row["projectId"]);
+                view.child(zuse_viewport::creation_style::separator())
+                    .child(
+                        zuse_viewport::creation_style::option(
+                            "cloud-destination",
+                            "Cloud sandbox · boxd",
+                            "cloud-dither",
                             selected,
-                            false,
-                            format!("cloud-device-{index}"),
                         )
-                        .id(("cloud-device", index))
-                        .child(
-                            crate::icons::icon(crate::icons::DITHER_CLOUD)
-                                .size(px(14.))
-                                .text_color(theme.text_muted),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_ellipsis()
-                                .child(SharedString::from(format!(
-                                    "Cloud · {}",
-                                    row["displayName"].as_str().unwrap_or("Repository")
-                                ))),
-                        )
-                        .child(div().text_color(theme.text_muted).child("Beta"))
-                        .when(!ready, |view| {
-                            view.child(
-                                div()
-                                    .text_color(theme.text_muted)
-                                    .child("Update cloud image"),
-                            )
+                        .when(self.active == self.filtered_device_rows(cx).len(), |v| {
+                            v.bg(theme.element_hover)
                         })
-                        .child(popover::radio_dot(&theme, selected))
+                        .child(zuse_viewport::creation_style::meta("Beta"))
+                        .when(!ready, |v| {
+                            v.child(zuse_viewport::creation_style::meta("Set up cloud"))
+                        })
+                        .child(zuse_viewport::creation_style::selection(selected))
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.select_cloud(row.clone(), cx)),
-                        )
-                    }),
-            )
+                        ),
+                    )
+            })
             .children(
                 self.cloud
                     .workspaces
@@ -198,7 +280,7 @@ impl Pickers {
                                 let state = this.state.read(cx);
                                 let (Some(controller), Some(subject)) = (
                                     state.engine().map(|e| e.controller()),
-                                    state.auth_user().map(|u| u.id.clone()),
+                                    state.cloud_user_id().map(str::to_owned),
                                 ) else {
                                     return;
                                 };
@@ -219,16 +301,19 @@ impl Pickers {
                             }))
                     }),
             )
-            .child(popover::menu_separator())
+            .child(zuse_viewport::creation_style::separator())
             .child(
-                popover::picker_row(&theme, false, false, "add-computer")
-                    .id("add-computer")
-                    .child(crate::icons::icon(crate::icons::MONITOR).size(px(14.)))
-                    .child("Add computer…")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.close(cx);
-                        window.dispatch_action(Box::new(crate::shell::OpenDevices), cx);
-                    })),
+                zuse_viewport::creation_style::option(
+                    "add-computer",
+                    "Add computer…",
+                    "monitor",
+                    false,
+                )
+                .role(gpui::Role::Button)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.close(cx);
+                    window.dispatch_action(Box::new(crate::shell::OpenDevices), cx);
+                })),
             )
             .when_some(self.cloud.error.clone(), |view, error| {
                 view.child(
@@ -246,6 +331,8 @@ impl Pickers {
         let theme = Theme::of(cx);
         Some(
             workspace_footer_row()
+                .w_auto()
+                .flex_none()
                 .gap(px(6.))
                 .child(
                     crate::icons::icon(crate::icons::GIT_BRANCH)

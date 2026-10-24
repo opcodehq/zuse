@@ -1,9 +1,10 @@
 //! Cloud launch and environment selection. Only interactive connection acquires compute.
 mod uploads;
+mod creation;
 mod sync;
 use super::*;
 use crate::assets::icon;
-use crate::shell::{BG, BORDER, MUTED, RAISED, column, control, icon_button, label, row};
+use crate::shell::{BG, BORDER, MUTED, column, control, icon_button, label, row};
 
 #[derive(Default)]
 pub(super) struct Cloud {
@@ -16,6 +17,7 @@ pub(super) struct Cloud {
     pub resume_draft: Option<(String, String, Vec<Value>, bool)>,
     resume_send: bool,
     pub picker: Option<&'static str>,
+    creation: creation::State,
     pub target: Option<Value>,
     account: Option<String>,
     projects: Vec<Value>,
@@ -428,170 +430,6 @@ impl WorkspaceView {
         cx.notify();
         true
     }
-    pub(super) fn cloud_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let project = self.cloud.projects.get(self.cloud.project);
-        let name = if self.cloud.mode {
-            project
-                .and_then(|p| p["displayName"].as_str())
-                .unwrap_or("Select repository")
-                .to_owned()
-        } else if self.project.is_some() {
-            self.project_name()
-        } else {
-            "Select project".into()
-        };
-        let destination = if self.cloud.mode {
-            format!(
-                "Cloud · {}",
-                project
-                    .and_then(|p| p["displayName"].as_str())
-                    .unwrap_or("Select")
-            )
-        } else {
-            "This computer".into()
-        };
-        row()
-            .relative()
-            .w(relative(14. / 15.))
-            .self_center()
-            .min_h(px(40.))
-            .px_2()
-            .gap_1()
-            .bg(crate::palette::composer_toolbar())
-            .when(!self.has_composer_notices(), |view| view.rounded_t(px(19.)))
-            .child(
-                control("composer-project", "")
-                    .child(icon("folder").size(px(14.)))
-                    .child(SharedString::from(name))
-                    .child(icon("alt-arrow-down").size(px(11.)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if this.cloud.mode {
-                            this.cloud.picker = Some("repository");
-                            this.refresh_cloud();
-                        } else {
-                            this.project_picker = true;
-                        }
-                        cx.notify();
-                    })),
-            )
-            .child(
-                control("composer-environment", "")
-                    .h(px(28.))
-                    .text_size(px(11.))
-                    .rounded_full()
-                    .child(icon(if self.cloud.mode { "cloud-dither" } else { "monitor" }).size(px(15.)))
-                    .child(SharedString::from(destination))
-                    .child(icon("alt-arrow-down").size(px(11.)))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.cloud.picker = if this.cloud.picker == Some("environment") {
-                            None
-                        } else {
-                            Some("environment")
-                        };
-                        this.refresh_cloud();
-                        cx.notify();
-                    })),
-            )
-            .when(self.cloud.mode, |view| {
-                view.child(
-                    control("composer-cloud-branch", "")
-                        .child(icon("git-branch").size(px(14.)))
-                        .child(SharedString::from({
-                            let branch = self.cloud_branch.read(cx).value(cx);
-                            if branch.is_empty() {
-                                project
-                                    .and_then(|p| p["defaultBranch"].as_str())
-                                    .unwrap_or("main")
-                                    .to_owned()
-                            } else {
-                                branch
-                            }
-                        }))
-                        .child(icon("alt-arrow-down").size(px(11.)))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.cloud.picker = Some("branch");
-                            cx.notify();
-                        })),
-                )
-            })
-            .when_some(self.cloud.picker, |view, kind| {
-                view.child(self.cloud_destination_menu(kind, cx))
-            })
-            .into_any_element()
-    }
-    fn cloud_destination_menu(&self, kind: &'static str, cx: &mut Context<Self>) -> AnyElement {
-        let menu = column()
-            .id("composer-destination-menu")
-            .absolute()
-            .bottom_full()
-            .mb_2()
-            .left(px(120.))
-            .w(px(256.))
-            .p_1()
-            .gap_1()
-            .rounded(px(10.))
-            .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(RAISED))
-            .shadow_lg()
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.cloud.picker = None;
-                cx.notify();
-            }));
-        if kind == "branch" || kind == "model" {
-            return menu
-                .child(
-                    label(if kind == "branch" {
-                        "Base branch"
-                    } else {
-                        "Claude model"
-                    })
-                    .px_2()
-                    .py_1(),
-                )
-                .child(if kind == "branch" {
-                    self.cloud_branch.clone()
-                } else {
-                    self.cloud_model.clone()
-                })
-                .child(control("cloud-config-done", "Done").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.cloud.picker = None;
-                        cx.notify();
-                    },
-                )))
-                .into_any_element();
-        }
-        menu.when(kind=="environment",|view|view.child(
-            control("destination-this-computer", "").w_full().h(px(28.))
-                .when(!self.cloud.mode,|view|view.bg(rgb(0x202020)))
-                .child(icon("monitor").size(px(16.))).child("This computer").child(div().flex_1())
-                .child(destination_radio(!self.cloud.mode))
-                .on_click(cx.listener(|this,_,_,cx|{this.cloud.mode=false;this.cloud.picker=None;cx.notify();}))))
-            .children(self.cloud.projects.iter().enumerate().map(|(index,project)|{
-                let ready=project["prepared"]==true && project["state"]=="ready";
-                let name=project["displayName"].as_str().unwrap_or("Repository");
-                let title=if kind=="environment"{format!("Cloud · {name}")}else{name.to_owned()};
-                control(("cloud-destination",index),"").w_full().h(px(28.))
-                    .child(icon(if kind=="environment"{"cloud-dither"}else{"folder"}).size(px(16.)))
-                    .child(div().flex_1().min_w_0().truncate().child(SharedString::from(title)))
-                    .when(kind=="environment",|view|view.child(label("Beta").text_size(px(11.))))
-                    .when(!ready,|view|view.child(label("Update cloud image").text_size(px(10.))))
-                    .child(destination_radio(self.cloud.mode && self.cloud.project==index))
-                    .on_click(cx.listener(move|this,_,_,cx|{
-                        if ready {this.cloud.mode=true;this.cloud.project=index;this.cloud.picker=None;}else{this.cloud.notice=Some("This repository needs a prepared Rust cloud image before it can run.".into());}
-                        cx.notify();
-                    }))
-            }))
-            .when(self.cloud.projects.is_empty(),|view|view.child(label(if self.cloud.context.is_some(){"Loading cloud destinations…"}else{"No cloud repositories available."}).px_2().py_2()))
-            .when_some(self.cloud.notice.clone(),|view,n|view.child(label(n).px_2().py_1()))
-            .when(kind=="environment",|view|view.child(div().h(px(1.)).my_1().bg(rgb(BORDER))).child(
-                control("destination-add-computer","").w_full().h(px(28.)).child(icon("monitor").size(px(16.))).child("Add computer…")
-                    .on_click(cx.listener(|this,_,_,cx|{this.cloud.picker=None;this.settings=true;this.select_settings_section(crate::settings_view::Section::Devices,cx);}))))
-            .into_any_element()
-    }
     pub(super) fn cloud_notices(&self, cx: &mut Context<Self>) -> AnyElement {
         column()
             .when_some(self.cloud.notice.clone(), |view, notice| {
@@ -839,18 +677,4 @@ impl WorkspaceView {
             .when(!live, |view| view.child(self.cloud_reconnect_tray(cx)))
             .into_any_element()
     }
-}
-
-fn destination_radio(selected: bool) -> Div {
-    div()
-        .size(px(14.))
-        .rounded_full()
-        .border_1()
-        .border_color(rgb(if selected { 0x89ca21 } else { BORDER }))
-        .flex()
-        .items_center()
-        .justify_center()
-        .when(selected, |view| {
-            view.child(div().size(px(7.)).rounded_full().bg(rgb(0x89ca21)))
-        })
 }

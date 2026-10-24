@@ -75,6 +75,7 @@ pub const COMPACT_TOTAL_HEIGHT: f32 = 49.0;
 /// `max-w-3xl`: outer width of the new-chat composer, also used when no shell
 /// width is supplied. Established threads follow the conversation column.
 pub const COMPOSER_MAX_WIDTH: f32 = 768.0;
+pub const COMPOSER_OUTER_PAD: f32 = zuse_viewport::composer_style::OUTER_PAD;
 /// The composer covers the tray's lower padding so the queue reads as emerging
 /// from behind it instead of as a separate rounded pill.
 pub(crate) const QUEUE_COMPOSER_OVERLAP: f32 = 18.0;
@@ -7324,7 +7325,7 @@ impl Composer {
             .pt(px(STRIP_PAD_TOP))
             .overflow_x_scroll();
         let max_image_width = self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH)
-            - 2.0 * Theme::SPACE_LG
+            - 2.0 * COMPOSER_OUTER_PAD
             - 2.0
             - 2.0 * STRIP_PAD_X
             - 2.0 * APPSHOT_IMAGE_INSET;
@@ -11151,8 +11152,8 @@ impl Render for Composer {
             .flex()
             .flex_col()
             .gap(px(Theme::SPACE_SM))
-            .px(px(Theme::SPACE_LG))
-            .pb(px(Theme::SPACE_LG));
+            .px(px(COMPOSER_OUTER_PAD))
+            .pb(px(if new_chat { 24. } else { 8. }));
 
         if wizard_active {
             let wizard = self.render_wizard(cx);
@@ -11191,7 +11192,7 @@ impl Render for Composer {
                         .get()
                         .map_or(COMPOSER_MAX_WIDTH, |bounds| f32::from(bounds.size.width))
                 },
-                |width| (width - 2.0 * Theme::SPACE_LG).max(0.0),
+                |width| (width - 2.0 * COMPOSER_OUTER_PAD).max(0.0),
             ));
             el.child(motion::fade_quick(
                 "composer-tray",
@@ -11236,7 +11237,7 @@ impl Render for Composer {
         // Staged images and annotations live in the tray above the card;
         // only appshot cards still grow the card itself.
         let strip_width_hint =
-            self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH) - 2.0 * Theme::SPACE_LG - 2.0;
+            self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH) - 2.0 * COMPOSER_OUTER_PAD - 2.0;
         let appshot_count = self.staged_appshots().len();
         let base_height = if self.dock_frame.is_some() {
             dock_layout.height(dock_amount)
@@ -11502,7 +11503,7 @@ impl Render for Composer {
                         f32::from(bounds.size.width)
                     })
             },
-            |width| (width - 2.0 * Theme::SPACE_LG).max(0.0),
+            |width| (width - 2.0 * COMPOSER_OUTER_PAD).max(0.0),
         );
         let model_picker = div()
             .min_w_0()
@@ -11730,13 +11731,15 @@ impl Render for Composer {
                 .child(
                     div()
                         .h(px(NEW_THREAD_SELECTOR_ROW_HEIGHT))
+                        .w_full()
                         .min_w_0()
                         .flex()
                         .items_center()
                         .justify_start()
-                        .gap(px(2.0))
+                        .gap(px(6.0))
                         .px(px(8.0))
                         .children(new_thread_target_selectors)
+                        .child(div().flex_1())
                         .children(new_thread_git_selectors),
                 )
         };
@@ -11747,8 +11750,8 @@ impl Render for Composer {
                     .id("dock-target-selectors")
                     .absolute()
                     .top(px(-NEW_THREAD_SELECTOR_ROW_HEIGHT))
-                    .left(px(Theme::SPACE_LG))
-                    .right(px(Theme::SPACE_LG))
+                    .left(px(COMPOSER_OUTER_PAD))
+                    .right(px(COMPOSER_OUTER_PAD))
                     .h(px(NEW_THREAD_SELECTOR_ROW_HEIGHT))
                     .child(tray(CONTEXT_TRAY_TUCK)),
             )
@@ -11962,7 +11965,7 @@ mod tests {
                         handle.read_with(cx, |composer, cx| {
                         assert_eq!(composer.input, input);
                         let surface = composer.surface_bounds.get().unwrap();
-                        assert!((f32::from(surface.size.width) - (outer_width - 2.0 * Theme::SPACE_LG)).abs() <= 1.0,
+                        assert!((f32::from(surface.size.width) - (outer_width - 2.0 * COMPOSER_OUTER_PAD)).abs() <= 1.0,
                             "surface width clipped: docked={docked}, amount={amount}, outer={outer_width}, surface={surface:?}");
                         // The editor stays at the card's top inset on both
                         // routes: one hairline plus `pt-4`.

@@ -24,10 +24,10 @@ try {
     const image = new Image(); image.src = 'data:image/png;base64,${png}'; await image.decode();
     const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
     const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
-    return [[404,930],[1171,930],[788,878],[788,983],[403,930],[1172,930],[788,984]]
+    return [[416,918],[1159,918],[788,866],[788,971],[415,918],[1160,918],[788,972]]
       .map(([x,y]) => context.getImageData(x,y,1,1).data[0]);
   })()`);
-  assert.ok(outline.slice(0,4).every(red => red >= 30 && red < 65), 'Composer outline must match the reference 768×106px bounds');
+  assert.ok(outline.slice(0,4).every(red => red >= 30 && red < 65), 'Composer outline must match the reference 744×106px bounds');
   assert.ok(outline.slice(4).every(red => red < 20), 'Composer must end at the reference bounds');
 
   page.click(265,964); await sleep(180);
@@ -61,7 +61,7 @@ try {
   assert.equal(proof.methods.filter(method => ['QueueMessage','QueueCommand','CloudCreate','CloudBillingPortal','CloudBillingCheckout','CloudPrepaidCheckout'].includes(method)).length, 0);
   artifact('ui-parity-acceptance.json', {
     compiledGpui: true, realEngine: true, referenceCommit: '43e14c1',
-    composer: {width:768,height:106,pixelBoundsVerified:true},
+    composer: {width:744,height:106,pixelBoundsVerified:true},
     localArchiveSearch: true, restoresOnlyChosenThread: true, savedArchivePreview: true,
     backToArchives: true, cloudSignedOutGate: true, noSyntheticBillingRequests: true, compactSettings: true, agentWrites: 0,
     liveAccountAcceptance: false,

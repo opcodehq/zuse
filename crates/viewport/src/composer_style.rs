@@ -1,6 +1,8 @@
 //! Geometry of the shared chat composer, in CSS pixels.
 pub const RADIUS: f32 = 19.2;
 pub const LANDING_WIDTH: f32 = 768.;
+pub const OUTER_PAD: f32 = 12.;
+pub const LANDING_CARD_WIDTH: f32 = LANDING_WIDTH - 2. * OUTER_PAD;
 pub const CONVERSATION_WIDTH: f32 = 896.;
 pub const EDITOR_MIN: f32 = 44.;
 pub const EDITOR_MAX: f32 = 240.;

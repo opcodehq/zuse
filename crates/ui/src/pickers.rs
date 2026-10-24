@@ -875,9 +875,6 @@ pub struct Pickers {
     /// device) — the popups are mutually exclusive, so only one mounts at a
     /// time and a fresh open resets the offset.
     menu_scroll: gpui::ScrollHandle,
-    /// Artwork for the project picker's rows, shared with the sidebar's
-    /// loader; each owner keeps its own entries alive.
-    project_icons: crate::shell::project_icon::ProjectIcons,
     /// Shared search / URL / name input, reused across popovers.
     search: Entity<ComposerInput>,
     /// One-shot mute for the next Edited event's highlight reset — armed by
@@ -1125,7 +1122,6 @@ impl Pickers {
             catalog_rev: 0,
             menu_bar: popover::MenuScrollbarState::default(),
             menu_scroll: gpui::ScrollHandle::new(),
-            project_icons: Default::default(),
             search,
             search_reset_muted: false,
             focus: cx.focus_handle(),
@@ -1588,7 +1584,7 @@ impl Pickers {
             self.compact_keyboard = false;
             self.compact_motion = compact::CompactMotion::default();
         }
-        if kind == PickerKind::Device {
+        if matches!(kind, PickerKind::Device | PickerKind::Space) {
             self.cloud.refresh();
         }
         self.open.open(kind);
@@ -1641,7 +1637,7 @@ impl Pickers {
             },
             PickerKind::Branch => self.selected_ref_index(cx),
             PickerKind::HarnessModel => self.selected_model_index(cx),
-            PickerKind::Space => self.selected_project_index(cx),
+            PickerKind::Space => if self.state.read(cx).no_project { 0 } else { self.selected_project_index(cx)+1 },
             PickerKind::Device => self.selected_device_index(cx),
         };
         if kind == PickerKind::HarnessModel {
@@ -1669,13 +1665,7 @@ impl Pickers {
                 });
                 window.focus(&handle, cx);
             }
-            PickerKind::Device => {
-                let handle = self.search.read(cx).focus_handle(cx);
-                self.search.update(cx, |input, cx| {
-                    input.set_placeholder("Search devices…", cx);
-                });
-                window.focus(&handle, cx);
-            }
+            PickerKind::Device => { window.focus(&self.focus, cx); }
             PickerKind::HarnessModel => {
                 let handle = self.search.read(cx).focus_handle(cx);
                 let placeholder = if self.compact_model_picker(cx) {
@@ -2887,125 +2877,44 @@ impl Pickers {
         }
     }
 
-    /// The device popover: search + one row per device (name, muted path when
-    /// a device holds several checkouts of the project, offline glyph, check
-    /// on the canvas's target).
+    /// Project-scoped computers, followed by the prepared Cloud destination.
     fn render_device_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
-        let now = chrono::Utc::now();
         let rows = self.filtered_device_rows(cx);
-        let (selected_space, effective, local, online): (
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Vec<bool>,
-        ) = {
-            let state = self.state.read(cx);
-            (
-                state.selected_space_row().map(|s| s.id.clone()),
-                state.effective_device_id(),
-                state.local_device_id.clone(),
-                rows.iter()
-                    .map(|row| state.device_online(&row.device_id, now))
-                    .collect(),
-            )
-        };
-        let active = self.active;
-        let scrollbar = popover::rail(self, "device-scrollbar", &theme, cx);
-        let body: AnyElement = if rows.is_empty() {
-            div()
-                .p(px(Theme::SPACE_SM))
-                .text_size(crate::typography::text_xs())
-                .text_color(theme.text_faint)
-                .child(SharedString::from("No devices match."))
-                .into_any_element()
-        } else {
-            popover::menu_scroll_host("device-list-host")
-                .on_hover(cx.listener(Self::on_menu_list_hover))
-                .child(popover::faded_menu_list(
-                    &self.menu_scroll,
-                    popover::menu_scroll_list("device-list", &self.menu_scroll)
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .max_h(px(self.list_budget(64.0)))
-                        .children(rows.into_iter().zip(online).enumerate().map(
-                            |(ix, (row, online))| {
-                                let is_local = local.as_deref() == Some(row.device_id.as_str());
-                                let label: SharedString = if is_local {
-                                    "This computer".into()
-                                } else {
-                                    row.name.clone().into()
-                                };
-                                let is_selected = self.state.read(cx).cloud_project.is_none()
-                                    && match &row.space {
-                                        Some(space) => {
-                                            selected_space.as_deref() == Some(space.id.as_str())
-                                        }
-                                        None => {
-                                            effective.as_deref() == Some(row.device_id.as_str())
-                                        }
-                                    };
-                                let detail = row.detail.clone().map(SharedString::from);
-                                popover::picker_row(
-                                    &theme,
-                                    is_selected,
-                                    ix == active,
-                                    format!("device-row-{ix}"),
-                                )
-                                .id(("device-row", ix))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.pick_device_row(row.clone(), cx);
-                                }))
-                                .child(
-                                    crate::icons::icon(crate::icons::MONITOR)
-                                        .size(px(14.0))
-                                        .flex_none()
-                                        .text_color(theme.text_muted),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .flex()
-                                        .flex_row()
-                                        .items_baseline()
-                                        .gap(px(6.0))
-                                        .child(div().flex_none().child(label))
-                                        .when_some(detail, |el, detail| {
-                                            el.child(
-                                                div()
-                                                    .min_w_0()
-                                                    .truncate()
-                                                    .text_size(crate::typography::text_xs())
-                                                    .text_color(theme.text_muted)
-                                                    .child(detail),
-                                            )
-                                        }),
-                                )
-                                // Disconnected glyph, not the word (user request).
-                                .when(!online, |el| {
-                                    el.child(
-                                        crate::icons::icon(crate::icons::WIFI_OFF)
-                                            .size(px(12.0))
-                                            .flex_none()
-                                            .text_color(theme.warning.opacity(0.8)),
-                                    )
-                                })
-                                .child(popover::radio_dot(&theme, is_selected))
-                            },
-                        )),
-                ))
-                .children(scrollbar)
-                .into_any_element()
-        };
-        div()
-            .flex()
-            .flex_col()
-            .child(self.search_box(&theme))
-            .child(body)
-            .child(self.cloud_rows(cx))
-            .into_any_element()
+        let state = self.state.read(cx);
+        let local = state.local_device_id.clone();
+        let selected_space = state.selected_space_row().map(|s| s.id.clone());
+        let effective = state.effective_device_id();
+        let cloud = state.cloud_project.is_some();
+        let mut body = div().flex().flex_col();
+        for (i, row) in rows.into_iter().enumerate() {
+            let selected = !cloud
+                && match &row.space {
+                    Some(space) => selected_space.as_deref() == Some(&space.id),
+                    None => effective.as_deref() == Some(&row.device_id),
+                };
+            let online = state.device_online(&row.device_id, chrono::Utc::now());
+            let label = if local.as_deref() == Some(&row.device_id) {
+                "This computer".to_owned()
+            } else {
+                row.name.clone()
+            };
+            body = body.child(
+                zuse_viewport::creation_style::option(
+                    ("device-row", i),
+                    label,
+                    "monitor",
+                    selected,
+                )
+                .when(self.active == i, |v| v.bg(theme.element_hover))
+                .when(!online, |v| {
+                    v.child(zuse_viewport::creation_style::meta("Offline"))
+                })
+                .child(zuse_viewport::creation_style::selection(selected))
+                .on_click(cx.listener(move |this, _, _, cx| this.pick_device_row(row.clone(), cx))),
+            );
+        }
+        body.child(self.cloud_rows(cx)).into_any_element()
     }
 
     /// The project popover: search + one row per project across devices
@@ -3013,154 +2922,107 @@ impl Pickers {
     /// No per-row `@ device` tag — the device chip next door picks the host.
     fn render_space_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
+        let cloud_rows = self.cloud_project_rows(cx);
         let rows = self.filtered_project_rows(cx);
-        let selected = self
-            .state
-            .read(cx)
-            .selected_space_row()
-            .map(zuse_protocol::view::project_key);
-        let active = self.active;
-        let no_project_index = rows.len();
-        let scrollbar = popover::rail(self, "space-scrollbar", &theme, cx);
-        let (spaces, profile): (Vec<Option<zuse_protocol::Space>>, Option<String>) = {
-            let state = self.state.read(cx);
-            (
-                rows.iter()
-                    .map(|row| {
-                        state
-                            .spaces
-                            .iter()
-                            .find(|space| zuse_protocol::view::project_key(space) == row.key)
-                            .cloned()
-                    })
-                    .collect(),
-                match &state.auth {
-                    Some(zuse_protocol::AuthState::SignedIn { user, org_id }) => {
-                        Some(format!("{}:{org_id:?}", user.id))
-                    }
-                    _ => None,
-                },
-            )
-        };
-        let icons: Vec<AnyElement> = rows
-            .iter()
-            .zip(&spaces)
-            .map(|(row, space)| {
-                self.project_icons.render(
-                    &self.state,
-                    space.as_ref(),
-                    profile.clone(),
-                    selected.as_deref() == Some(row.key.as_str()),
-                    cx,
-                )
+        let has_cloud = !self.filtered_cloud_projects(cx).is_empty();
+        let state = self.state.read(cx);
+        let selected = state
+            .cloud_project
+            .is_none()
+            .then(|| {
+                state
+                    .selected_space_row()
+                    .map(zuse_protocol::view::project_key)
             })
-            .collect();
-        let body: AnyElement = if rows.is_empty() {
-            // Distinguish "the filter ate everything" from "no projects yet".
-            let empty: &str = if self.search.read(cx).text().is_empty() {
-                "No projects yet."
-            } else {
-                "No projects match."
-            };
-            div()
-                .p(px(Theme::SPACE_SM))
-                .text_size(crate::typography::text_xs())
-                .text_color(theme.text_faint)
-                .child(SharedString::from(empty.to_string()))
-                .into_any_element()
-        } else {
-            popover::menu_scroll_host("space-list-host")
-                .on_hover(cx.listener(Self::on_menu_list_hover))
-                .child(popover::faded_menu_list(
-                    &self.menu_scroll,
-                    popover::menu_scroll_list("space-list", &self.menu_scroll)
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .max_h(px(self.list_budget(152.0)))
-                        .children(rows.into_iter().zip(icons).enumerate().map(
-                            |(ix, (row, art))| {
-                                let label: SharedString = row.name.into();
-                                let is_selected = selected.as_deref() == Some(row.key.as_str());
-                                let key = row.key;
-                                popover::picker_row(
-                                    &theme,
-                                    is_selected,
-                                    ix == active,
-                                    format!("space-row-{ix}"),
-                                )
-                                .id(("space-row", ix))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.pick_project(key.clone(), cx);
-                                }))
-                                .child(popover::picker_icon_slot(art))
-                                .child(div().flex_1().min_w_0().truncate().child(label))
-                            },
-                        )),
-                ))
-                .children(scrollbar)
-                .into_any_element()
-        };
-        let no_project = popover::picker_row(
-            &theme,
-            self.state.read(cx).no_project,
-            active == no_project_index,
-            "project-none".to_string(),
-        )
-        .id("project-none")
-        .on_click(cx.listener(|this, _, _, cx| this.pick_no_project(cx)))
-        .child(popover::picker_icon_slot(
-            crate::icons::icon(crate::icons::CLOSE)
-                .size(px(12.0))
-                .text_color(theme.text_muted)
-                .into_any_element(),
-        ))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .child("Don't work in a project"),
-        );
-        // Action row under a hairline: mint a project.
-        let new_project = popover::picker_row(&theme, false, false, "project-new".to_string())
-            .id("project-new")
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.dismiss(cx);
-                window.dispatch_action(Box::new(crate::shell::AddSpacePalette), cx);
-            }))
-            .child(popover::picker_icon_slot(
-                crate::icons::icon(crate::icons::PLUS)
-                    .size(px(12.0))
-                    .text_color(theme.text_muted)
-                    .into_any_element(),
-            ))
+            .flatten();
+        let no_project = state.no_project && state.cloud_project.is_none();
+        let mut choices = div()
+            .id("creation-native-projects")
+            .max_h(px(192.))
+            .overflow_y_scroll()
+            .track_scroll(&self.menu_scroll)
+            .flex()
+            .flex_col()
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(SharedString::from("New project")),
+                zuse_viewport::creation_style::option("project-none", "No project", "", no_project)
+                    .h(px(32.))
+                    .when(self.active == 0, |v| v.bg(theme.element_hover))
+                    .child(zuse_viewport::creation_style::selection(no_project))
+                    .on_click(cx.listener(|this, _, _, cx| this.pick_no_project(cx))),
             );
+        if rows.is_empty() && !has_cloud {
+            choices = choices.child(
+                div()
+                    .px(px(8.))
+                    .py(px(6.))
+                    .text_size(px(12.))
+                    .text_color(theme.text_muted)
+                    .child(if self.search.read(cx).text().is_empty() {
+                        "No projects yet."
+                    } else {
+                        "No projects match."
+                    }),
+            );
+        }
+        for (i, row) in rows.into_iter().enumerate() {
+            let selected = selected.as_deref() == Some(row.key.as_str());
+            choices = choices.child(
+                zuse_viewport::creation_style::option(
+                    ("space-row", i),
+                    row.name,
+                    "folder",
+                    selected,
+                )
+                .h(px(32.))
+                .when(self.active == i + 1, |v| v.bg(theme.element_hover))
+                .child(zuse_viewport::creation_style::selection(selected))
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.pick_project(row.key.clone(), cx)),
+                ),
+            );
+        }
+        choices = choices.child(cloud_rows);
         div()
             .flex()
             .flex_col()
-            .child(self.search_box(&theme))
             .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    // Same 2px rhythm as the list's own row gap — the action
-                    // rows sat flush while list rows breathed (user report).
-                    .gap(px(2.0))
-                    .child(body)
-                    .child(popover::picker_divider())
-                    .child(new_project)
-                    .child(no_project),
+                div().px(px(4.)).pb(px(6.)).child(
+                    div()
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .px(px(8.))
+                        .rounded(px(7.))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.bg.opacity(0.5))
+                        .child(
+                            crate::icons::icon(crate::icons::MAGNIFER)
+                                .size(px(14.))
+                                .text_color(theme.text_muted),
+                        )
+                        .child(div().flex_1().min_w_0().child(self.search.clone())),
+                ),
+            )
+            .child(choices)
+            .child(zuse_viewport::creation_style::separator())
+            .child(
+                zuse_viewport::creation_style::option(
+                    "project-new",
+                    "Add new project…",
+                    "plus",
+                    false,
+                )
+                .h(px(32.))
+                .role(gpui::Role::Button)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.dismiss(cx);
+                    window.dispatch_action(Box::new(crate::shell::AddSpacePalette), cx);
+                })),
             )
             .into_any_element()
     }
-
     fn on_search_submit(&mut self, cx: &mut Context<Self>) {
         if self.open_kind() == Some(PickerKind::Branch)
             && let Some(row) = self.filtered_ref_rows(cx).into_iter().nth(self.active)
@@ -3169,16 +3031,21 @@ impl Pickers {
         }
         if self.open_kind() == Some(PickerKind::Space) {
             let rows = self.filtered_project_rows(cx);
-            if let Some(row) = rows.get(self.active) {
-                self.pick_project(row.key.clone(), cx);
-            } else if self.active == rows.len() {
+            if self.active == 0 {
                 self.pick_no_project(cx);
+            } else if let Some(row) = rows.get(self.active - 1) {
+                self.pick_project(row.key.clone(), cx);
+            } else {
+                self.select_cloud_index(self.active - 1 - rows.len(), cx);
             }
         }
-        if self.open_kind() == Some(PickerKind::Device)
-            && let Some(row) = self.filtered_device_rows(cx).into_iter().nth(self.active)
-        {
-            self.pick_device_row(row, cx);
+        if self.open_kind() == Some(PickerKind::Device) {
+            let rows = self.filtered_device_rows(cx);
+            if let Some(row) = rows.get(self.active).cloned() {
+                self.pick_device_row(row, cx);
+            } else if self.active == rows.len() {
+                self.select_cloud_destination(cx);
+            }
         }
         // Palette-search Enter submits the highlighted model or setting.
         if self.open_kind() == Some(PickerKind::HarnessModel) {
@@ -3295,8 +3162,8 @@ impl Pickers {
                                 self.setting_groups(cx).len()
                             }
                     }
-                    Some(PickerKind::Space) => self.filtered_project_rows(cx).len() + 1,
-                    Some(PickerKind::Device) => self.filtered_device_rows(cx).len(),
+                    Some(PickerKind::Space) => self.filtered_project_rows(cx).len() + self.filtered_cloud_projects(cx).len() + 1,
+                    Some(PickerKind::Device) => self.filtered_device_rows(cx).len() + usize::from(self.cloud_destination(cx).is_some()),
                     None => 0,
                 };
                 let current = (self.active != NO_ACTIVE_ROW).then_some(self.active);
@@ -3353,7 +3220,7 @@ impl Pickers {
         let below = (self.title.is_some() || self.state.read(cx).selected_chat.is_none())
             && matches!(
                 kind,
-                PickerKind::HarnessModel | PickerKind::Branch | PickerKind::Checkout
+                PickerKind::HarnessModel | PickerKind::Branch | PickerKind::Checkout | PickerKind::Space
             );
         gpui::canvas(
             move |bounds, window, cx| {
@@ -3636,17 +3503,20 @@ impl Pickers {
             .relative()
             .child(self.measure_trigger(kind, cx))
             .id(id.clone())
+            .border_1()
+            .border_color(gpui::transparent_black())
             .h(px(28.0))
-            .max_w(px(280.0))
+            .max_w(px(224.0))
             .min_w_0()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(6.0))
             .px(px(10.0))
-            .rounded(px(8.0))
-            .text_size(crate::typography::text_xs())
-            .font_weight(gpui::FontWeight::MEDIUM)
+            .rounded_full()
+            .text_size(px(11.))
+            .line_height(px(14.85))
+            .font_weight(gpui::FontWeight::NORMAL)
             .text_color(motion::hover_blend(&id, theme.text, theme.text_strong))
             .bg(if open {
                 theme.element_hover
@@ -3664,7 +3534,11 @@ impl Pickers {
             .on_click(cx.listener(move |this, _, window, cx| this.toggle(kind, window, cx)))
             .child(
                 crate::icons::icon(icon_path)
-                    .size(px(14.0))
+                    .size(px(if icon_path == crate::icons::DITHER_CLOUD {
+                        16.
+                    } else {
+                        14.
+                    }))
                     .flex_none()
                     .text_color(theme.text),
             )
@@ -3676,7 +3550,6 @@ impl Pickers {
                     .text_color(theme.text_muted.opacity(0.6)),
             )
     }
-
     /// New-session destination controls: the project, then the device it
     /// runs on, as a chip-only cluster floating above the composer's trailing
     /// edge.
@@ -3686,11 +3559,11 @@ impl Pickers {
         let mut overlay: Option<(PickerKind, AnyElement)> = match self.mounted_kind() {
             Some(PickerKind::Space) => {
                 let content = self.render_space_popover(cx);
-                Some((PickerKind::Space, self.popover_frame(280.0, content, cx)))
+                Some((PickerKind::Space, self.popover_frame(256.0, content, cx)))
             }
             Some(PickerKind::Device) => {
                 let content = self.render_device_popover(cx);
-                Some((PickerKind::Device, self.popover_frame(224.0, content, cx)))
+                Some((PickerKind::Device, self.popover_frame(256.0, content, cx)))
             }
             _ => None,
         };
@@ -3717,7 +3590,7 @@ impl Pickers {
             device_label = "This computer".into();
         }
         if let Some(project) = &self.state.read(cx).cloud_project {
-            device_label = SharedString::from("Cloud");
+            device_label = SharedString::from("Cloud sandbox · boxd");
             project_label = SharedString::from(
                 project["displayName"]
                     .as_str()
@@ -3731,7 +3604,7 @@ impl Pickers {
                 PickerKind::Device,
                 "picker-device",
                 if self.state.read(cx).cloud_project.is_some() {
-                    crate::icons::CLOUD
+                    crate::icons::DITHER_CLOUD
                 } else {
                     crate::icons::MONITOR
                 },
@@ -3753,15 +3626,15 @@ impl Pickers {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(4.0))
-            .child(attach_overlay_end(
+            .gap(px(6.0))
+            .child(attach_creation_overlay(
                 project_chip,
                 &mut overlay,
                 PickerKind::Space,
                 "project-popover",
                 closing,
             ))
-            .child(attach_overlay_end(
+            .child(attach_creation_overlay(
                 device_chip,
                 &mut overlay,
                 PickerKind::Device,
@@ -3824,6 +3697,8 @@ impl Pickers {
         );
         Some(
             workspace_footer_row()
+                .w_auto()
+                .flex_none()
                 .child(attach_overlay_below(
                     checkout_chip,
                     &mut overlay,
@@ -3846,6 +3721,13 @@ impl Pickers {
         let theme = Theme::of(cx).for_popup();
         popover::popover_card(&theme)
             .w(px(width))
+            .when(
+                matches!(
+                    self.mounted_kind(),
+                    Some(PickerKind::Device | PickerKind::Space)
+                ),
+                |v| v.p(px(7.)).gap(px(0.)).rounded(px(10.)).text_size(px(12.)),
+            )
             // zuse caps its tallest picker at min(640px, 75vh).
             .max_h(px(self.menu_geometry().height))
             .track_focus(&self.focus)
@@ -3880,7 +3762,6 @@ impl Pickers {
             .child(content)
             .into_any_element()
     }
-
     /// [`Self::popover_frame`] without the p-1 inset — the harness/model
     /// picker's rail + list panes bleed to the card edge (zuse
     /// harness-model-picker.tsx `className="w-80 p-0"`).
@@ -6230,6 +6111,25 @@ fn attach_overlay_end(
             popover::anchored_menu_below_end(id, element, closing.0)
         } else {
             popover::anchored_menu_above_end(id, element, closing.0)
+        });
+    }
+    chip
+}
+
+fn attach_creation_overlay(
+    chip: gpui::Stateful<gpui::Div>,
+    overlay: &mut Option<(PickerKind, AnyElement)>,
+    kind: PickerKind,
+    id: &'static str,
+    closing: (Option<std::time::Instant>, bool),
+) -> gpui::Stateful<gpui::Div> {
+    if overlay.as_ref().is_some_and(|(k, _)| *k == kind)
+        && let Some((_, element)) = overlay.take()
+    {
+        return chip.relative().child(if closing.1 {
+            popover::anchored_menu_below(id, element, closing.0)
+        } else {
+            popover::anchored_menu_above(id, element, closing.0)
         });
     }
     chip

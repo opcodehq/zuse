@@ -16,6 +16,7 @@ pub mod cloud_repositories;
 pub mod cloud_settings;
 mod composer_alerts;
 pub mod composer_style;
+pub mod creation_style;
 mod connection;
 pub mod context_status;
 mod custom_acp;

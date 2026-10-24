@@ -83,7 +83,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
     if(frame.method==='CloudImage'&&setup.imageError){emit(client,{id:frame.id,err:setup.imageError,done:true});return;}
     if(frame.method==='CloudProjects'&&setup.projectError){emit(client,{id:frame.id,err:setup.projectError,done:true});return;}
     const data={CloudProjects:{projects:setup.projects??[project]},CloudGithubCatalog:setup.github??{configured:true,canManageInstallations:true,user:null,installations:[],repositories:[]},CloudImage:setup.image??image,CloudBillingSummary:summary(),CloudBillingUsage:{items:usage,nextCursor:billing.usageCount>offset+10?'older':null},CloudBillingEntitlements:{entitlements:billing.subscribed?[{offerId:'cloud-workspace-standard-v1',status:'active',paidThrough:1793491200000}]:[]},CloudPrepaidBalance:{available:billing.creditAvailable,creditCents:billing.creditCents,debitCents:billing.debitCents,currency:'USD'}}[frame.method];
-    const value=frame.method==='CloudContext'?{accountId:owner,projects:[]}:frame.method==='CloudWorkspaces'?{accountId:owner,workspaces:billing.workspaces}:{accountId:owner,organizationId:state.orgId??null,data};
+    const value=frame.method==='CloudContext'?{accountId:owner,projects:setup.projects??[]}:frame.method==='CloudWorkspaces'?{accountId:owner,workspaces:billing.workspaces}:{accountId:owner,organizationId:state.orgId??null,data};
     const response={id:frame.id,ok:value};
     if(holdCloud)delayed.push([client,response]);else emit(client,response);return;
    }

@@ -239,7 +239,7 @@ impl WorkspaceView {
         column()
             .w_full()
             .max_w(px(if self.selected.is_none() {
-                composer::LANDING_WIDTH + 24.
+                composer::LANDING_WIDTH
             } else {
                 composer::CONVERSATION_WIDTH + 24.
             }))
@@ -247,7 +247,7 @@ impl WorkspaceView {
             .self_center()
             .flex_shrink_0()
             .px(px(12.))
-            .pb(px(if self.selected.is_none() { 16. } else { 12. }))
+            .pb(px(if self.selected.is_none() { 28. } else { 12. }))
             .pt_2()
             .when_some(self.voice.notice.clone(), |d, notice| {
                 d.child(
@@ -526,8 +526,7 @@ impl WorkspaceView {
                                     .child(icon("alt-arrow-down").size(px(12.)).opacity(0.6))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         if this.cloud.mode && this.selected.is_none() {
-                                            this.cloud.picker = Some("model");
-                                            cx.notify();
+                                            this.open_creation_picker("model", window, cx);
                                         } else {
                                             this.open_model_picker(window, cx)
                                         }
@@ -593,11 +592,7 @@ impl WorkspaceView {
                     .child(label(if self.transcript_blocked() { "Loading saved conversation…" } else { "No messages in this archived chat." }).text_color(rgb(MUTED))))
             })
             .when(self.messages.is_empty() && !archived && self.selected.is_none(), |d| {
-                let title = if self.project.is_some() {
-                    format!("What should we build in {}?", self.project_name())
-                } else {
-                    "What should we build today?".to_owned()
-                };
+                let title = self.creation_project_name().map(|name|format!("What should we build in {name}?")).unwrap_or_else(||"What should we build today?".to_owned());
                 d.child(column().flex_1().justify_center().items_center().w_full().gap_2()
                     .child(div().text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::MEDIUM).child(title))
                     .when(self.project.is_some() || self.cloud.mode, |view| view.child(control("welcome-without-project", "Start without a project")
