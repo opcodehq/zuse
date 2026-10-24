@@ -121,11 +121,12 @@ impl CommandDialog {
             });
         }
     }
+    pub fn set_return_focus(&mut self, focus: Option<FocusHandle>) {
+        self.return_focus = focus;
+    }
     pub fn dismiss(&mut self, cx: &mut Context<Self>) {
-        if !self.busy {
-            self.restore_focus(cx);
-            cx.emit(Event::Dismiss);
-        }
+        self.restore_focus(cx);
+        cx.emit(Event::Dismiss);
     }
     fn submit(&mut self, cx: &mut Context<Self>) {
         if self.busy {
@@ -148,7 +149,8 @@ impl CommandDialog {
     fn field(&self, index: usize, label: &str, window: &Window, cx: &App) -> Div {
         let focus = self.fields[index].read(cx).focus_handle(cx);
         let focused = focus.is_focused(window);
-        let width = (f32::from(window.viewport_size().width) - 66.).min(350.);
+        let border = if crate::palette::is_light() { 0. } else { 2. };
+        let width = (f32::from(window.viewport_size().width) - 64. - border).min(352. - border);
         div()
             .w(px(width))
             .flex_none()
@@ -312,8 +314,9 @@ impl Render for CommandDialog {
             .max_h(window.viewport_size().height - px(32.))
             .flex_none()
             .rounded(px(12.))
-            .border_1()
-            .border_color(white().opacity(0.1))
+            .when(!crate::palette::is_light(), |v| {
+                v.border_1().border_color(white().opacity(0.1))
+            })
             .bg(popup_bg())
             .shadow_lg()
             .text_color(rgb(TEXT))
@@ -377,22 +380,18 @@ impl Render for CommandDialog {
                                     .px(px(13.))
                                     .border_0()
                                     .bg(transparent_black())
-                                    .opacity(if self.busy { 0.5 } else { 1. })
                                     .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
                             )
                             .child(
-                                s::button(
-                                    "save-acp-command",
-                                    if self.busy { "Saving…" } else { "Save" },
-                                )
-                                .track_focus(&self.save)
-                                .tab_index(0)
-                                .text_size(px(11.))
-                                .px(px(13.))
-                                .bg(rgb(TEXT))
-                                .text_color(rgb(crate::shell::BG))
-                                .opacity(if self.busy { 0.5 } else { 1. })
-                                .on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
+                                s::button("save-acp-command", "Save")
+                                    .track_focus(&self.save)
+                                    .tab_index(if self.busy { -1 } else { 0 })
+                                    .text_size(px(11.))
+                                    .px(px(13.))
+                                    .bg(rgb(TEXT))
+                                    .text_color(rgb(crate::shell::BG))
+                                    .opacity(if self.busy { 0.64 } else { 1. })
+                                    .on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
                             ),
                     ),
             );
@@ -403,7 +402,7 @@ impl Render for CommandDialog {
             anchored()
                 .anchor(Anchor::TopLeft)
                 .position(point(px(0.), px(0.)))
-                .child(
+                .child(crate::glass::backdrop(
                     div()
                         .id("acp-command-backdrop")
                         .w(viewport.width)
@@ -414,11 +413,17 @@ impl Render for CommandDialog {
                         .flex_col()
                         .items_center()
                         .occlude()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                this.dismiss(cx);
+                                cx.stop_propagation();
+                            }),
+                        )
                         .child(div().flex_1())
                         .child(panel)
                         .child(bottom),
-                ),
+                )),
         )
         .priority(3)
     }

@@ -11,6 +11,8 @@ impl EventEmitter<Submitted> for TextInput {}
 
 pub struct FocusChanged;
 impl EventEmitter<FocusChanged> for TextInput {}
+pub struct Changed;
+impl EventEmitter<Changed> for TextInput {}
 
 pub const CLIPBOARD_PASTE_ERROR: &str =
     "Clipboard access is unavailable. Use the keyboard paste shortcut.";
@@ -161,6 +163,7 @@ impl TextInput {
             cx.emit(FocusChanged);
         }
         if matches!(event, InputEvent::Change) {
+            cx.emit(Changed);
             self.close_edit_menu(cx);
         }
         match event {

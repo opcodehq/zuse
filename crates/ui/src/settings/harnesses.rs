@@ -242,7 +242,16 @@ pub struct HarnessesPage {
 impl HarnessesPage {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let custom_acp = cx.new(|cx| super::custom_acp::CustomAcpCard::new(state.clone(), cx));
-        let custom_changed = cx.subscribe(&custom_acp, |this: &mut Self, _, _, cx| this.load(cx));
+        let custom_changed = cx.subscribe(
+            &custom_acp,
+            |this: &mut Self, _, event: &super::custom_acp::Changed, cx| match event {
+                super::custom_acp::Changed::Reload => this.load(cx),
+                super::custom_acp::Changed::Advanced(id) => {
+                    this.expanded_harness = Some(*id);
+                    cx.notify();
+                }
+            },
+        );
         let mut page = Self {
             custom_acp,
             _custom_changed: custom_changed,
@@ -637,6 +646,7 @@ impl HarnessesPage {
             "harness": harness,
             "enabled": enabled,
         }));
+        let target = self.target_device.clone();
         self.error = None;
         self.pending_toggle = Some((harness, enabled));
         cx.notify();
@@ -646,6 +656,9 @@ impl HarnessesPage {
                 .call(methods::SET_HARNESS_ENABLED, params)
                 .await;
             this.update(cx, |page, cx| {
+                if page.target_device != target {
+                    return;
+                }
                 if page.pending_toggle == Some((harness, enabled)) {
                     page.pending_toggle = None;
                 }
@@ -789,6 +802,10 @@ impl HarnessesPage {
         let enabled_count = descriptors.iter().filter(|d| descriptor_enabled(d)).count();
         descriptors
             .into_iter()
+            .filter(|descriptor| {
+                !matches!(descriptor.id, HarnessId::CustomAcp(_))
+                    || self.expanded_harness == Some(descriptor.id)
+            })
             .enumerate()
             .map(|(ix, descriptor)| {
                 let harness = descriptor.id;
@@ -1365,6 +1382,9 @@ impl Render for HarnessesPage {
                         button
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, _, cx| {
+                                this.custom_acp.update(cx, |card, cx| {
+                                    card.set_target(this.target_device.clone(), cx)
+                                });
                                 this.check_updates(cx);
                                 this.load(cx);
                                 cx.notify();
@@ -1373,6 +1393,9 @@ impl Render for HarnessesPage {
                                 if !event.is_held
                                     && matches!(event.keystroke.key.as_str(), "enter" | "space")
                                 {
+                                    this.custom_acp.update(cx, |card, cx| {
+                                        card.set_target(this.target_device.clone(), cx)
+                                    });
                                     this.check_updates(cx);
                                     this.load(cx);
                                     cx.notify();

@@ -10,11 +10,23 @@ pub fn menu_with_radius(child: impl IntoElement, radius: f32) -> GlassMenu {
     GlassMenu {
         child: child.into_any_element(),
         radius,
+        blur: 20.,
+        always: false,
+    }
+}
+pub fn backdrop(child: impl IntoElement) -> GlassMenu {
+    GlassMenu {
+        child: child.into_any_element(),
+        radius: 0.,
+        blur: 8.,
+        always: true,
     }
 }
 pub struct GlassMenu {
     child: AnyElement,
     radius: f32,
+    blur: f32,
+    always: bool,
 }
 
 impl Element for GlassMenu {
@@ -61,10 +73,10 @@ impl Element for GlassMenu {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let blur = !crate::palette::is_light();
+        let blur = self.always || !crate::palette::is_light();
         if blur {
             window.paint_layer(bounds, |window| {
-                window.paint_backdrop_blur(bounds, Corners::all(px(self.radius)), px(20.));
+                window.paint_backdrop_blur(bounds, Corners::all(px(self.radius)), px(self.blur));
                 self.child.paint(window, cx);
             });
         } else {

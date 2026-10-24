@@ -327,6 +327,8 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | SUBSCRIBE_TERMINAL
         | INSPECT_RECOVERY
         | GET_CUSTOM_ACP_AGENTS
+        | crate::custom_acp::catalog::GET
+        | crate::custom_acp::catalog::ICON
         | GET_CHAT_ARCHIVE_STATUS
         | LIST_REFS
         | LIST_FOLDERS

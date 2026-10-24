@@ -33,6 +33,8 @@ mod connection;
 pub mod context_status;
 mod custom_acp;
 pub mod acp_command;
+pub mod acp_catalog;
+pub mod acp_rows;
 mod draft_journal;
 mod environment;
 pub mod git_controls;
@@ -633,7 +635,7 @@ impl WorkspaceView {
             worktree_settings,
             title_settings: title_settings::TitleSettingsView::new(window, cx),
             provider_expanded: None,
-            custom_acp: Default::default(),
+            custom_acp: custom_acp::Settings::new(window, cx),
             provider_actions: HashMap::new(),
             provider_logins: HashMap::new(),
             provider_codes: HashMap::new(),

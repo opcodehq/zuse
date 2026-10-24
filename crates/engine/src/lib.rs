@@ -39,6 +39,7 @@ pub mod relay_access;
 pub use zuse_harness::processes::supervisor as command_host;
 pub mod harness_models;
 mod model_catalogs;
+mod acp_catalog;
 pub mod model_connections;
 #[cfg(unix)]
 mod native_harness;

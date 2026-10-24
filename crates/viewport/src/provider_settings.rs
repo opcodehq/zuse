@@ -6,7 +6,7 @@ use crate::{
     shell::{BORDER, MUTED, column, provider_icon, row},
 };
 impl WorkspaceView {
-    fn provider_action(&mut self, provider: String, method: &'static str, params: Value) {
+    pub(super) fn provider_action(&mut self, provider: String, method: &'static str, params: Value) {
         if !self.connected {
             self.provider_error =
                 Some("Reconnect to this computer before changing provider setup.".into());
@@ -34,7 +34,8 @@ impl WorkspaceView {
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if let Some(error) = frame["err"].as_str() {
-            self.provider_error = Some(error.to_owned());
+            if provider.starts_with("acp-") {self.acp_provider_error(error.to_owned());}
+            else {self.provider_error = Some(error.to_owned());}
             self.provider_actions.remove(&id);
             self.pending.remove(&id);
             cx.notify();
@@ -107,6 +108,7 @@ impl WorkspaceView {
                     this.call(methods::LIST_HARNESSES, json!({}));
                     this.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":true}));
                     this.check_provider_updates(cx);
+                    this.refresh_custom_acp(cx);
                     cx.notify();
                 })),
             );
@@ -115,6 +117,7 @@ impl WorkspaceView {
                 .iter()
                 .enumerate()
                 .filter(|(_, provider)| provider["id"] != "zuse")
+                .filter(|(_, provider)|!provider["id"].as_str().is_some_and(|id|id.starts_with("acp-")))
                 .map(|(index, provider)| {
                     let id = provider["id"].as_str().unwrap_or_default().to_owned();
                     let name = provider["name"].as_str().unwrap_or("Agent").to_owned();

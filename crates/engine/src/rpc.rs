@@ -1639,6 +1639,8 @@ fn forwardable(method: &str) -> bool {
             | methods::INSTALL_HARNESS
             | methods::CANCEL_INSTALL
             | methods::GET_CUSTOM_ACP_AGENTS
+            | zuse_protocol::custom_acp::catalog::GET
+            | zuse_protocol::custom_acp::catalog::ICON
             | methods::SET_CUSTOM_ACP_AGENT
             | methods::DELETE_CUSTOM_ACP_AGENT
             | methods::GET_TITLE_SETTINGS
@@ -2813,6 +2815,23 @@ impl RpcService for EngineRpc {
                     "checkpoint":record.as_ref().map(|record|&record.checkpoint),
                     "changedPaths":record.as_ref().map(|record|&record.changed_paths).cloned().unwrap_or_default()}),
                 )
+            }
+            zuse_protocol::custom_acp::catalog::GET => {
+                #[derive(Deserialize)]
+                struct P {
+                    #[serde(default)]
+                    force: bool,
+                }
+                let p: P = parse_params(params)?;
+                RpcReply::value(&crate::acp_catalog::get(p.force).await)
+            }
+            zuse_protocol::custom_acp::catalog::ICON => {
+                #[derive(Deserialize)]
+                struct P {
+                    id: String,
+                }
+                let p: P = parse_params(params)?;
+                RpcReply::value(&crate::acp_catalog::icon(&p.id).await)
             }
             methods::GET_CUSTOM_ACP_AGENTS => RpcReply::value(
                 &self

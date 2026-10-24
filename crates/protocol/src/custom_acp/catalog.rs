@@ -5,9 +5,20 @@
 //! npm or PyPI package becomes a custom ACP agent launched through `npx` or
 //! `uvx`; a binary-only entry needs a manual install, so it prefills the
 //! custom command form instead.
-use serde::Deserialize;
+use crate::{HarnessId, custom_acp::CustomAcpAgent};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use zuse_protocol::{HarnessId, custom_acp::CustomAcpAgent};
+
+pub const GET: &str = "GetAcpCatalog";
+pub const ICON: &str = "GetAcpCatalogIcon";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Catalog {
+    pub platform: String,
+    pub agents: Vec<RegistryAgent>,
+    pub error: Option<String>,
+}
 
 pub const REGISTRY_URL: &str =
     "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
@@ -22,7 +33,7 @@ struct Registry {
     agents: Vec<RegistryAgent>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RegistryAgent {
     pub id: String,
     pub name: String,
@@ -32,9 +43,13 @@ pub struct RegistryAgent {
     pub icon: Option<String>,
     #[serde(default)]
     pub distribution: Distribution,
+    #[serde(default)]
+    pub repository: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Distribution {
     #[serde(default)]
     pub npx: Option<Package>,
@@ -42,9 +57,20 @@ pub struct Distribution {
     pub uvx: Option<Package>,
     #[serde(default)]
     pub binary: BTreeMap<String, Binary>,
+    #[serde(default)]
+    pub local: Option<Local>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Local {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Package {
     pub package: String,
     #[serde(default)]
@@ -53,7 +79,7 @@ pub struct Package {
     pub env: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Binary {
     pub cmd: String,
     #[serde(default)]
@@ -176,7 +202,10 @@ pub fn offer(agent: &RegistryAgent, platform: &str) -> Option<Offer> {
         args.extend(package.args.iter().cloned());
         return custom("uvx", args, &package.env).map(Offer::Add);
     }
-    let binary = agent.distribution.binary.get(platform)?;
+    let Some(binary) = agent.distribution.binary.get(platform) else {
+        let local = agent.distribution.local.as_ref()?;
+        return custom(&local.command, local.args.clone(), &local.env).map(Offer::Add);
+    };
     // Installed by hand, the executable is on PATH under its own name.
     let name = binary
         .cmd
@@ -187,11 +216,11 @@ pub fn offer(agent: &RegistryAgent, platform: &str) -> Option<Offer> {
     custom(&name, binary.args.clone(), &binary.env).map(Offer::Manual)
 }
 
-/// Case-insensitive match on name, description and id.
+/// Case-insensitive match on the visible name and description.
 pub fn matches(agent: &RegistryAgent, query: &str) -> bool {
     let query = query.trim().to_lowercase();
     query.is_empty()
-        || format!("{} {} {}", agent.name, agent.description, agent.id)
+        || format!("{} {}", agent.name, agent.description)
             .to_lowercase()
             .contains(&query)
 }
@@ -205,6 +234,21 @@ pub fn tint_icon(svg: &str, color: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_distribution_uses_literal_executable_arguments_and_environment() {
+        let agent: RegistryAgent = serde_json::from_value(serde_json::json!({
+            "id":"local", "name":"Local", "distribution":{"local":{
+                "command":"python3", "args":["two words", "$(literal)"], "env":{"KEY":"value"}
+            }}
+        }))
+        .unwrap();
+        let Some(Offer::Add(config)) = offer(&agent, "linux-x86_64") else {
+            panic!("local command must be offered");
+        };
+        assert_eq!(config.command, "python3");
+        assert_eq!(config.args, ["two words", "$(literal)"]);
+        assert_eq!(config.env["KEY"], "value");
+    }
 
     const SAMPLE: &str = r#"{
         "version": "1.0.0",
