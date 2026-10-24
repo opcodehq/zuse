@@ -29,6 +29,13 @@ impl ShortcutsPage {
                             .id(("general-theme", index))
                             .role(gpui::Role::Button)
                             .tab_index(0)
+                            .aria_label(choice.label())
+                            .aria_toggled(if mode == choice {
+                                gpui::Toggled::True
+                            } else {
+                                gpui::Toggled::False
+                            })
+                            .on_key_down(contain_activation)
                             .cursor_pointer()
                             .h(px(28.))
                             .px(px(10.))
@@ -67,11 +74,12 @@ impl ShortcutsPage {
             ),
         );
         let updates = preferences.agent_update_notifications;
-        let sound = preferences.sound_completion_enabled;
+        let sound = preferences.sound_enabled && preferences.sound_completion_enabled;
         let update_switch = widgets::toggle_switch(theme, updates, "general-provider-updates")
             .id("general-provider-updates")
             .role(gpui::Role::Switch)
             .tab_index(0)
+            .on_key_down(contain_activation)
             .aria_label("Provider update notifications")
             .aria_toggled(if updates {
                 gpui::Toggled::True
@@ -89,6 +97,7 @@ impl ShortcutsPage {
             .id("general-completion-sound")
             .role(gpui::Role::Switch)
             .tab_index(0)
+            .on_key_down(contain_activation)
             .aria_label("Agent completion sound")
             .aria_toggled(if sound {
                 gpui::Toggled::True
@@ -98,7 +107,11 @@ impl ShortcutsPage {
             .cursor_pointer()
             .on_click(cx.listener(move |_, _, _, cx| {
                 crate::settings::update(SavePolicy::Immediate, cx, |settings| {
-                    settings.sound_completion_enabled = !settings.sound_completion_enabled
+                    let enable = !(settings.sound_enabled && settings.sound_completion_enabled);
+                    settings.sound_completion_enabled = enable;
+                    if enable {
+                        settings.sound_enabled = true;
+                    }
                 });
                 cx.refresh_windows();
             }));
@@ -146,6 +159,7 @@ impl ShortcutsPage {
                 .text_size(crate::typography::ui_rems(11.))
                 .child(crate::icons::icon(crate::icons::ALT_ARROW_DOWN).size(px(14.)))
                 .opacity(0.64)
+                .cursor_default()
                 .into_any_element()
         };
         let notifications=widgets::group(theme,"Notifications","")
@@ -186,6 +200,11 @@ impl ShortcutsPage {
                         }))
                         .on_click(|_, _, cx| crate::app_update::check_for_updates(cx))),
             ))
+    }
+}
+fn contain_activation(event: &gpui::KeyDownEvent, _: &mut gpui::Window, cx: &mut gpui::App) {
+    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+        cx.stop_propagation();
     }
 }
 fn general_details(theme: &Theme, title: &str, description: &str) -> gpui::Div {

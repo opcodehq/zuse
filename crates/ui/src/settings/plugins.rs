@@ -50,6 +50,7 @@ pub struct PluginsCard {
     _installed_search: Subscription,
     account: AccountStatus,
     account_loaded: bool,
+    account_watch_error: Option<String>,
     account_view: Option<Entity<zuse_viewport::account_settings::AccountCard>>,
     account_view_events: Option<Subscription>,
     plugins: zuse_protocol::plugin_state::PluginState,
@@ -84,6 +85,7 @@ impl PluginsCard {
                 this.setup_events = None;
                 this.account = AccountStatus::default();
                 this.account_loaded = false;
+                this.account_watch_error = None;
                 this.plugins = Default::default();
             } else if this.watch.is_none() {
                 this.attach(cx);
@@ -115,6 +117,7 @@ impl PluginsCard {
             _installed_search: installed_events,
             account: AccountStatus::default(),
             account_loaded: false,
+            account_watch_error: None,
             account_view: None,
             account_view_events: None,
             plugins: Default::default(),
@@ -152,15 +155,15 @@ impl PluginsCard {
             return;
         };
         self.watch = Some(cx.spawn(async move |this, cx| {
-            let stream = engine
-                .client()
-                .subscribe_scoped(methods::CLOUD_ACCOUNT_STATUS, json!({}))
-                .await;
-            match stream {
-                Ok(mut stream) => {
+            loop {
+                let stream = engine
+                    .client()
+                    .subscribe_scoped(methods::CLOUD_ACCOUNT_STATUS, json!({}))
+                    .await;
+                if let Ok(mut stream) = stream {
                     while let Some(value) = stream.recv().await {
                         let Ok(account) = serde_json::from_value::<AccountStatus>(value) else {
-                            continue;
+                            break;
                         };
                         if this
                             .update(cx, |card, cx| {
@@ -168,7 +171,9 @@ impl PluginsCard {
                                     != account.user.as_ref().map(|u| &u.id);
                                 card.account = account;
                                 card.account_loaded = true;
+                                card.account_watch_error = None;
                                 if changed {
+                                    card.error = None;
                                     card.browse_selected = None;
                                     card.detail_menu = Default::default();
                                     card.setup = None;
@@ -193,12 +198,19 @@ impl PluginsCard {
                         }
                     }
                 }
-                Err(error) => {
-                    let _ = this.update(cx, |card, cx| {
-                        card.error = Some(error.to_string());
+                if this
+                    .update(cx, |card, cx| {
+                        card.account_watch_error =
+                            Some("Account session unavailable. Reconnecting…".into());
                         cx.notify();
-                    });
+                    })
+                    .is_err()
+                {
+                    return;
                 }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
             }
         }));
     }
@@ -289,7 +301,7 @@ impl PluginsCard {
         cx.notify();
     }
     fn request(&mut self, method: &'static str, params: Value, cx: &mut Context<Self>) {
-        if self.busy {
+        if self.busy || self.account_watch_error.is_some() {
             return;
         }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
@@ -558,7 +570,7 @@ impl PluginsCard {
                     .into_any_element(),
             );
         }
-        if let Some(error) = self.error.clone().or_else(|| self.account.error.clone()) {
+        if let Some(error) = self.account_watch_error.clone().or_else(|| self.error.clone()).or_else(|| self.account.error.clone()) {
             items.push(widgets::error_strip(theme, error).mt_0().into_any_element());
         }
         if let Some(notice) = self.plugins.notice.clone() {
@@ -1312,14 +1324,14 @@ impl PluginsCard {
             self.account_view = Some(view);
         }
         let mut status = serde_json::to_value(&self.account).unwrap_or_default();
-        if let Some(error) = &self.error {
+        if let Some(error) = self.account_watch_error.as_ref().or(self.error.as_ref()) {
             status["error"] = json!(error);
         }
         let properties = Properties {
             status,
             display_name: crate::settings::current(cx).display_name,
             loaded: self.account_loaded || self.error.is_some(),
-            available: self.state.read(cx).engine().is_some(),
+            available: self.state.read(cx).engine().is_some() && self.account_watch_error.is_none(),
             busy: self.busy,
             colors: Colors {
                 text: theme.text,

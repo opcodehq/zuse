@@ -49,10 +49,6 @@ enum NotificationPreference {
     AgentUpdates,
 }
 
-fn is_switch_activation(key: &str, is_held: bool) -> bool {
-    !is_held && matches!(key, "enter" | "space")
-}
-
 fn interactive_switch(
     element: gpui::Stateful<gpui::Div>,
     accent: gpui::Hsla,
@@ -66,12 +62,13 @@ fn interactive_switch(
         .on_click(cx.listener(move |this, _, _, cx| {
             this.toggle(preference, cx);
         }))
-        .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-            if is_switch_activation(&event.keystroke.key, event.is_held) {
+        .on_key_down(|event: &gpui::KeyDownEvent, _, cx| {
+            // GPUI activates the focused switch on key-up. Contain the key
+            // without also toggling on key-down.
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                 cx.stop_propagation();
-                this.toggle(preference, cx);
             }
-        }))
+        })
 }
 
 impl NotificationsPage {
@@ -95,6 +92,44 @@ impl NotificationsPage {
             background_only,
             agent_updates,
         }
+    }
+
+    pub(crate) fn sync_settings(
+        &mut self,
+        settings: &crate::settings::UiSettings,
+        cx: &mut Context<Self>,
+    ) {
+        let current = (
+            self.sound,
+            self.completion_sound,
+            self.input_sound,
+            self.attention_sound,
+            self.desktop,
+            self.background_only,
+            self.agent_updates,
+        );
+        let next = (
+            settings.sound_enabled,
+            settings.sound_completion_enabled,
+            settings.sound_input_enabled,
+            settings.sound_attention_enabled,
+            settings.notifications_enabled,
+            settings.notifications_background_only,
+            settings.agent_update_notifications,
+        );
+        if current == next {
+            return;
+        }
+        (
+            self.sound,
+            self.completion_sound,
+            self.input_sound,
+            self.attention_sound,
+            self.desktop,
+            self.background_only,
+            self.agent_updates,
+        ) = next;
+        cx.notify();
     }
 
     fn emit(&self, cx: &mut Context<Self>) {
@@ -398,18 +433,5 @@ impl Render for NotificationsPage {
                 .fade_overflow_y(&self.scroll.scroll),
             )
             .children(scrollbar)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_switch_activation;
-
-    #[test]
-    fn switches_accept_enter_or_space_once_per_press() {
-        assert!(is_switch_activation("enter", false));
-        assert!(is_switch_activation("space", false));
-        assert!(!is_switch_activation("escape", false));
-        assert!(!is_switch_activation("space", true));
     }
 }

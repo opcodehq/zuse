@@ -5,8 +5,8 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {engine,browser,fixture,artifact,sleep} from './harness.mjs';
 let host,page,child,url;
-const state=()=>fetch(url+'/__fixture').then(r=>r.json());
-const update=value=>fetch(url+'/__fixture',{method:'POST',body:JSON.stringify(value)});
+const state=()=>fetch(url+'/__fixture',{headers:{Connection:'close'}}).then(r=>r.json());
+const update=value=>fetch(url+'/__fixture',{method:'POST',headers:{Connection:'close'},body:JSON.stringify(value)});
 async function until(check,label){for(let n=0;n<50;n++){const value=await state();if(check(value))return value;await sleep(100);}throw Error(label);}
 const click=async(x,y)=>{page.click(x,y);await sleep(250);};
 const press=key=>page.run(['press',key]);

@@ -5968,7 +5968,10 @@ impl Shell {
                     self.notifications_page = Some(page);
                 }
                 match &self.notifications_page {
-                    Some(page) => page.clone().into_any_element(),
+                    Some(page) => {
+                        page.update(cx, |page, cx| page.sync_settings(&self.settings, cx));
+                        page.clone().into_any_element()
+                    }
                     None => Empty.into_any_element(),
                 }
             }

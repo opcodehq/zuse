@@ -10,6 +10,7 @@ const titleFixture=titleSettingsFixture(events);
 let state={user:null,login:null,error:null},hold=false,failNext=false,loginTimer,cloud=false,holdCloud=false;
 const delayed=[],delayedWrites=[];
 let workspaceSync=null;
+let accountReadFailure=false;
 const syncReplies=[];
 let setup={projects:null,github:null,image:null,imageError:null,projectError:null,failNextBuild:false};
 let billing={subscribed:true,capMicros:25000000,creditCents:2500,debitCents:0,creditAvailable:true,status:'active',usedMicros:5000000,overageMicros:0,usageCount:1,summaryError:null,entitlementError:null,creditError:null,failNextCap:false,writeDelay:450,holdWrites:false,workspaces:[]};
@@ -24,6 +25,8 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
   if(url.pathname==='/__fixture'){
    if(request.method==='POST'){
     const value=await request.json();
+    if(Object.hasOwn(value,'accountReadFailure'))accountReadFailure=value.accountReadFailure;
+    if(value.interruptAccountReads)for(const client of clients)for(const [id,method] of client.data.handled)if(method==='CloudAccountStatus'){emit(client,{id,err:'Fixture account status interrupted.',done:true});client.data.handled.delete(id);}
     if(Object.hasOwn(value,'state'))state=value.state;
     if(Object.hasOwn(value,'hold'))hold=value.hold;
     if(Object.hasOwn(value,'failNext'))failNext=value.failNext;
@@ -69,6 +72,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
    if(titleFixture.admit(client,frame,emit))return;
    if(frame.cancel){events.push({cancel:frame.id});if(client.data.handled.delete(frame.id))return;}
    if(frame.method==='CloudAccountStatus'){
+    events.push({method:frame.method});if(accountReadFailure){emit(client,{id:frame.id,err:'Fixture account status unavailable.',done:true});return;}
     client.data.handled.set(frame.id,frame.method);if(!hold)emit(client,{id:frame.id,item:state});return;
    }
    if(frame.method==='CloudAccountSignIn'){
