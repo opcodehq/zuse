@@ -59,6 +59,15 @@ impl Shell {
         if self.usage_dashboard.is_none() {
             let dashboard = cx.new(|cx| UsageDashboard::new(window, cx));
             cx.subscribe(&dashboard, |this, dashboard, event, cx| match event {
+                Event::ScopeChanged(project_scope) => {
+                    this.usage_project_scope = *project_scope;
+                    if matches!(this.nav.current(), NavEntry::Usage { .. }) {
+                        this.nav.replace(NavEntry::Usage {
+                            project: this.usage_project.clone(),
+                            project_scope: *project_scope,
+                        });
+                    }
+                }
                 Event::Close => {
                     this.set_route(Route::Chat, cx);
                     this.focus_composer(cx);

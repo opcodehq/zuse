@@ -4,8 +4,9 @@ import {engine,browser,fixture,sleep,artifact} from './harness.mjs';import {seed
 let host,page,proxy,url;
 const click=async(x,y)=>{page.run(['batch','--bail',`mouse move ${x} ${y}`,'mouse down','mouse up','wait 250']);await sleep(350);};
 const shot=name=>page.screenshot('usage-dashboard-'+name+'.png');
-const configure=patch=>fetch(url+'/__fixture',{method:'POST',body:JSON.stringify(patch)});
-const proof=()=>fetch(url+'/__fixture').then(r=>r.json());
+const configure=patch=>fetch(url+'/__fixture',{method:'POST',headers:{Connection:'close'},body:JSON.stringify(patch)});
+// Browser commands can block past keep-alive expiry; use fresh fixture-control sockets.
+const proof=()=>fetch(url+'/__fixture',{headers:{Connection:'close'}}).then(r=>r.json());
 const calls=async method=>(await proof()).events.filter(e=>e.method===method);
 const last=async method=>(await calls(method)).at(-1)?.params;
 const bottom=()=>click(1272,980);
@@ -53,7 +54,7 @@ try{
  await click(1174,box.top+84);shot('provider-menu');await click(1155,box.top+186);assert.equal((await last('UsageSessions')).providerId,'codex');shot('provider-filter');
  // A failed session read retries the current provider and query without losing scope.
  await configure({fail:true});box=session();await click(600,box.top+84);page.run(['keyboard','type','retry']);await sleep(350);shot('sessions-error');await configure({fail:false});
- box=session();const beforeRetry=(await calls('UsageSessions')).length;await click(1213,box.top+124);assert.equal((await calls('UsageSessions')).length,beforeRetry+1);assert.equal((await last('UsageSessions')).providerId,'codex');assert.equal((await last('UsageSessions')).query,'retry');shot('sessions-retried');
+ box=session();const beforeRetry=(await calls('UsageSessions')).length;await click(1236,88);assert.equal((await calls('UsageSessions')).length,beforeRetry+1);assert.equal((await last('UsageSessions')).providerId,'codex');assert.equal((await last('UsageSessions')).query,'retry');shot('sessions-retried');
  // Return by keyboard; opening the dashboard never replaces or sends the live draft.
  page.run(['press','Escape']);await sleep(500);await click(900,500);shot('draft-returned');
  assert.ok(execFileSync('convert',['.context/usage-dashboard-draft-returned.png','-crop','600x38+324+890','-blur','0x1','-depth','8','rgb:-']).equals(draft),'Dashboard return preserves the visible draft');

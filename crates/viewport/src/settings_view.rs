@@ -74,7 +74,6 @@ impl Section {
 }
 impl WorkspaceView {
     pub(super) fn select_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
-        self.close_usage(cx);
         self.close_plugins_browse();
         self.plugins_add_menu = false;
         self.settings_section = section;
@@ -181,6 +180,9 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self.suspend_usage(cx) {
+            window.focus(&self.workspace_focus, cx);
+        }
         let section = self.settings_section;
         if section == Section::Archived {
             self.load_cloud_archive();

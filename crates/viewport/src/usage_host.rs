@@ -38,10 +38,23 @@ impl WorkspaceView {
     pub(super) fn close_usage(&mut self, cx: &mut Context<Self>) {
         if self.usage_open {
             self.usage_open = false;
+            self.usage_pending = false;
             if let Some(dashboard) = self.usage_dashboard.clone() {
                 dashboard.update(cx, |dashboard, cx| dashboard.hide(cx));
             }
         }
+    }
+    pub(super) fn suspend_usage(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.usage_open {
+            self.usage_pending = true;
+            if let Some(dashboard) = self.usage_dashboard.clone() {
+                if dashboard.read(cx).visible() {
+                    dashboard.update(cx, |dashboard, cx| dashboard.hide(cx));
+                    return true;
+                }
+            }
+        }
+        false
     }
     fn usage_properties(&self) -> Properties {
         let project = self
@@ -55,7 +68,9 @@ impl WorkspaceView {
                 self.cloud_account["orgId"]
             ])
             .to_string(),
-            target: project.map(|s| s.device_id.clone()),
+            target: project
+                .map(|s| s.device_id.clone())
+                .or_else(|| self.device_id.clone()),
             project: project.map(|s| Project {
                 id: s.id.clone(),
                 label: s.display_name().to_owned(),
@@ -98,6 +113,7 @@ impl WorkspaceView {
                         window.focus(&this.workspace_focus, cx);
                         cx.notify();
                     }
+                    Event::ScopeChanged(project) => this.usage_project_scope = *project,
                 },
             )
             .detach();

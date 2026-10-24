@@ -1,3 +1,4 @@
+pub(super) use super::format::{money, tokens};
 use super::*;
 use crate::{
     assets::icon,
@@ -40,40 +41,26 @@ fn card() -> Div {
         .bg(style::card_bg())
         .min_w_0()
 }
-pub(super) fn tokens(value: u64) -> String {
-    if value >= 1_000_000 {
-        trim(value as f64 / 1_000_000., "M")
-    } else if value >= 1000 {
-        trim(value as f64 / 1000., "K")
-    } else {
-        value.to_string()
-    }
-}
-fn trim(value: f64, suffix: &str) -> String {
-    let v = format!("{value:.1}");
-    format!("{}{suffix}", v.trim_end_matches('0').trim_end_matches('.'))
-}
-pub(super) fn money(value: Option<f64>) -> String {
-    value
-        .map(|v| format!("${v:.2}"))
-        .unwrap_or_else(|| "—".into())
-}
 fn delta(value: Option<f64>, previous: Option<f64>) -> Option<String> {
     let (v, p) = (value?, previous?);
     if p == 0. {
         return None;
     }
-    let d = ((v - p) / p * 100.).round();
+    let d = ((v - p) / p * 100. + 0.5).floor();
     Some(format!("{}{d:.0}% vs prior", if d > 0. { "+" } else { "" }))
 }
 fn date(group: &Group) -> String {
     group
         .ended_at
         .or(group.started_at)
-        .map(|d| d.with_timezone(&Local).format("%b %-d").to_string())
-        .unwrap_or_else(|| "—".into())
+        .map(|d| {
+            d.with_timezone(&Local)
+                .format("Last active %-m/%-d/%Y")
+                .to_string()
+        })
+        .unwrap_or_else(|| "Last active unavailable".into())
 }
-const PROVIDERS: [(HarnessId, &str, &str, &str); 5] = [
+pub(super) const PROVIDERS: [(HarnessId, &str, &str, &str); 5] = [
     (
         HarnessId::ClaudeCode,
         "claude",
@@ -95,6 +82,12 @@ impl UsageDashboard {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let id = id.into();
+        let enabled = match &action {
+            Action::Scope(true) => self.properties.project.is_some(),
+            Action::Page(offset) => *offset != self.offset && !self.pending(Kind::Sessions),
+            Action::Refresh => !self.pending(Kind::Report),
+            _ => true,
+        };
         let focus = self
             .focus
             .entry(id.clone())
@@ -106,7 +99,7 @@ impl UsageDashboard {
             .role(Role::Button)
             .aria_label(text.into())
             .track_focus(&focus)
-            .tab_index(0)
+            .tab_index(if enabled { 0 } else { -1 })
             .flex_none()
             .h(px(24.))
             .px(px(8.))
@@ -116,24 +109,28 @@ impl UsageDashboard {
             .line_height(px(13.5))
             .text_color(rgb(if selected { TEXT } else { MUTED }))
             .when(selected, |v| v.bg(rgb(BG)))
-            .hover(|v| v.bg(style::frame_bg()))
+            .when(enabled, |v| v.hover(|v| v.bg(style::frame_bg())))
             .focus_visible(|v| v.border_1().border_color(rgb(TEXT).opacity(0.3)))
-            .cursor_pointer()
+            .when(enabled, |v| v.cursor_pointer())
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                window.focus(&focus, cx);
+                if enabled {
+                    window.focus(&focus, cx);
+                }
                 cx.stop_propagation();
             })
             .on_key_down(cx.listener(move |this, e: &KeyDownEvent, window, cx| {
-                if matches!(e.keystroke.key.as_str(), "enter" | "space") {
+                if enabled && matches!(e.keystroke.key.as_str(), "enter" | "space") {
                     this.action(key.clone(), window, cx);
                     cx.stop_propagation();
                 }
             }))
-            .on_click(
-                cx.listener(move |this, _, window, cx| this.action(action.clone(), window, cx)),
-            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if enabled {
+                    this.action(action.clone(), window, cx);
+                }
+            }))
     }
-    fn text_button(
+    pub(super) fn text_button(
         &mut self,
         id: impl Into<String>,
         text: &str,
@@ -275,11 +272,11 @@ impl UsageDashboard {
                 .pr(px(32.))
                 .py(px(24.));
             body = body
-                .child(self.usage_chart(&report, wide, cx))
+                .child(self.usage_chart(&report, wide, window, cx))
                 .child(self.metrics(&report, wide))
                 .child(self.limits(wide, cx))
-                .child(self.contributors(&report, cx))
-                .child(self.sessions(&report, cx));
+                .child(self.contributors(&report, window, cx))
+                .child(self.sessions(&report, window, cx));
             body = body.child(
                 row()
                     .justify_between()
@@ -370,7 +367,13 @@ impl UsageDashboard {
             )
             .into_any_element()
     }
-    fn usage_chart(&mut self, report: &Overview, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn usage_chart(
+        &mut self,
+        report: &Overview,
+        wide: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut title = row()
             .gap(px(8.))
             .flex_1()
@@ -415,16 +418,8 @@ impl UsageDashboard {
             tokens(report.summary.tokens.total())
         };
         let hint = if self.cost {
-            match report.summary.cost_status {
-                CostStatus::Unknown => {
-                    "Pricing is unavailable for these local usage records.".into()
-                }
-                CostStatus::Partial => "Some models are unpriced. Actual billing may vary.".into(),
-                CostStatus::Known => {
-                    "Estimated from local usage at published provider rates. Actual billing may vary."
-                        .into()
-                }
-            }
+            "Estimated from local usage at published provider rates. Actual billing may vary."
+                .into()
         } else {
             format!(
                 "{} locally observed usage records in this period.",
@@ -485,7 +480,15 @@ impl UsageDashboard {
             })
             .sum::<f64>()
             .max(1.);
-        let mut sources = div().grid().grid_cols(2).gap_x(px(24.)).gap_y(px(16.));
+        let mut sources = div()
+            .grid()
+            .grid_cols(if window.viewport_size().width >= px(640.) {
+                2
+            } else {
+                1
+            })
+            .gap_x(px(24.))
+            .gap_y(px(16.));
         for source in &source_rows {
             let n = if self.cost {
                 source.summary.cost_usd.unwrap_or(0.)
@@ -578,7 +581,16 @@ impl UsageDashboard {
                 .child(right)
                 .into_any_element()
         };
-        let mut plot = card().p(px(16.));
+        let mut plot = card()
+            .p(px(16.))
+            .id("usage-plot-card")
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !hovered && (this.hovered.is_some() || this.hover_cursor.is_some()) {
+                    this.hovered = None;
+                    this.hover_cursor = None;
+                    cx.notify();
+                }
+            }));
         if report.groups.is_empty() {
             plot = plot.child(
                 row()
@@ -612,7 +624,9 @@ impl UsageDashboard {
                         .child(label(name, 11.).text_color(rgb(MUTED))),
                 );
             }
-            plot = plot.child(legend).child(self.chart(&report.groups, cx));
+            plot = plot
+                .child(legend)
+                .child(self.chart(&report.groups, window, cx));
             let mut foot = row()
                 .gap(px(12.))
                 .mt(px(8.))
@@ -622,22 +636,32 @@ impl UsageDashboard {
                 .border_color(rgb(BORDER))
                 .text_size(px(11.))
                 .line_height(px(14.85));
-            if let Some((index, group)) = self
-                .hovered
-                .and_then(|i| report.groups.get(i).map(|g| (i, g)))
-            {
+            if let Some((index, group)) = self.hovered.and_then(|i| {
+                report
+                    .groups
+                    .get(report.groups.len().saturating_sub(90) + i)
+                    .map(|g| (i, g))
+            }) {
                 foot = foot
-                    .child(label(group.label.clone(), 11.))
+                    .child(
+                        label(group.label.clone(), 11.)
+                            .font_weight(FontWeight::MEDIUM)
+                            .min_w_0()
+                            .truncate(),
+                    )
                     .child(
                         label(
-                            if self.cost {
+                            format!(
+                                "{} · {}",
+                                tokens(group.summary.tokens.total()),
                                 money(group.summary.cost_usd)
-                            } else {
-                                tokens(group.summary.tokens.total())
-                            },
+                            ),
                             11.,
                         )
-                        .font_weight(FontWeight::MEDIUM),
+                        .font_features(table::tabular())
+                        .text_color(rgb(MUTED))
+                        .ml_auto()
+                        .flex_none(),
                     )
                     .child(
                         self.text_button(
@@ -647,7 +671,12 @@ impl UsageDashboard {
                             Action::Day(index),
                             cx,
                         )
-                        .ml_auto(),
+                        .h_auto()
+                        .px(px(6.))
+                        .py(px(4.))
+                        .text_size(px(11.))
+                        .line_height(px(14.85))
+                        .font_weight(FontWeight::MEDIUM),
                     );
             } else {
                 foot = foot.child(
@@ -865,7 +894,12 @@ impl UsageDashboard {
             .child(cards)
             .into_any_element()
     }
-    fn contributors(&mut self, report: &Overview, cx: &mut Context<Self>) -> AnyElement {
+    fn contributors(
+        &mut self,
+        report: &Overview,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut tabs = row()
             .p(px(2.))
             .rounded(px(6.))
@@ -902,23 +936,8 @@ impl UsageDashboard {
         if !self.expanded {
             rows.truncate(5);
         }
-        let mut table = column().child(table_row(
-            vec![
-                (title.into(), 0.30),
-                ("Share".into(), 0.30),
-                ("Tokens".into(), 0.20),
-                ("Cost".into(), 0.20),
-            ],
-            true,
-        ));
-        if rows.is_empty() {
-            table = table.child(
-                row()
-                    .h(px(64.))
-                    .justify_center()
-                    .child(label("No contributors found.", 12.).text_color(rgb(MUTED))),
-            );
-        }
+        let headers = [title.into(), "Share".into(), "Tokens".into(), "Cost".into()];
+        let mut values = Vec::new();
         for group in rows {
             let previous = previous.iter().find(|p| p.key == group.key);
             let change = delta(
@@ -926,18 +945,37 @@ impl UsageDashboard {
                 previous.map(|p| p.summary.tokens.total() as f64),
             );
             let share = format!(
-                "{:.1}%{}",
-                group.summary.tokens.total() as f64 / total * 100.,
+                "{}{}",
+                format::share(group.summary.tokens.total() as f64 / total * 100.),
                 change.map(|d| format!(" · {d}")).unwrap_or_default()
             );
-            table = table.child(table_row(
-                vec![
-                    (group.label, 0.30),
-                    (share, 0.30),
-                    (tokens(group.summary.tokens.total()), 0.20),
-                    (money(group.summary.cost_usd), 0.20),
-                ],
+            values.push([
+                group.label,
+                share,
+                tokens(group.summary.tokens.total()),
+                money(group.summary.cost_usd),
+            ]);
+        }
+        let columns = table::Columns::auto(&headers, &values, window);
+        let mut table = column()
+            .w_full()
+            .min_w(px(columns.minimum))
+            .child(table::heading(headers, columns.widths));
+        if values.is_empty() {
+            table = table.child(
+                row()
+                    .h(px(64.))
+                    .justify_center()
+                    .child(label("No contributors found.", 12.).text_color(rgb(MUTED))),
+            );
+        }
+        let count_visible = values.len();
+        for (i, values) in values.into_iter().enumerate() {
+            table = table.child(table::cells(
+                values,
+                columns.widths,
                 false,
+                i + 1 == count_visible,
             ));
         }
         let mut result = frame()
@@ -949,7 +987,15 @@ impl UsageDashboard {
                     .child(label("Breakdown", 14.).font_weight(FontWeight::MEDIUM))
                     .child(tabs),
             )
-            .child(card().overflow_hidden().child(table));
+            .child(
+                card().overflow_hidden().child(
+                    div()
+                        .id("usage-contributors-table")
+                        .w_full()
+                        .overflow_x_scroll()
+                        .child(table),
+                ),
+            );
         if count > 5 {
             let expanded = self.expanded;
             result = result.child(row().p(px(8.)).justify_center().child(self.text_button(
@@ -966,7 +1012,12 @@ impl UsageDashboard {
         }
         result.into_any_element()
     }
-    fn sessions(&mut self, report: &Overview, cx: &mut Context<Self>) -> AnyElement {
+    fn sessions(
+        &mut self,
+        report: &Overview,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let heading = self
             .button(
                 "usage-sessions-toggle",
@@ -1003,57 +1054,7 @@ impl UsageDashboard {
             );
         let mut result = frame().child(heading);
         if self.sessions_open {
-            let name = self
-                .provider
-                .and_then(|id| PROVIDERS.iter().find(|p| p.1 == id).map(|p| p.2))
-                .unwrap_or("All providers");
-            let mut provider = self
-                .text_button("usage-provider", name, false, Action::ProviderMenu, cx)
-                .relative()
-                .h(px(28.))
-                .px(px(8.))
-                .text_size(px(12.))
-                .bg(style::card_bg())
-                .border_1()
-                .border_color(rgb(BORDER))
-                .child(icon("alt-arrow-down").size(px(12.)).ml(px(6.)));
-            if self.provider_open {
-                let mut menu = column()
-                    .w(px(160.))
-                    .p(px(4.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(style::card_bg())
-                    .shadow_lg()
-                    .child(
-                        self.text_button(
-                            "usage-provider-all",
-                            "All providers",
-                            self.provider.is_none(),
-                            Action::Provider(None),
-                            cx,
-                        )
-                        .h(px(28.))
-                        .justify_start(),
-                    );
-                for (_, id, label, _) in PROVIDERS {
-                    menu = menu.child(
-                        self.text_button(
-                            format!("usage-filter-{id}"),
-                            label,
-                            self.provider == Some(id),
-                            Action::Provider(Some(id)),
-                            cx,
-                        )
-                        .h(px(28.))
-                        .justify_start(),
-                    );
-                }
-                provider = provider.child(deferred(
-                    div().absolute().top(px(32.)).right_0().child(menu),
-                ));
-            }
+            let provider = self.provider_filter(window, cx);
             let search = row()
                 .flex_1()
                 .min_w_0()
@@ -1076,20 +1077,20 @@ impl UsageDashboard {
                     .child(search)
                     .child(provider),
             );
-            if let Some(error) = self.page_error.clone() {
+            if self.page_error.is_some() {
                 result = result.child(
-                    row()
-                        .px(px(12.))
-                        .py(px(8.))
-                        .gap(px(8.))
-                        .child(label(error, 12.).flex_1().text_color(rgb(0xe5a0a0)))
-                        .child(self.text_button(
-                            "usage-sessions-retry",
-                            "Retry",
-                            false,
-                            Action::RetrySessions,
-                            cx,
-                        )),
+                    label(
+                        "Could not load sessions. Change a filter or try again.",
+                        12.,
+                    )
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .px(px(12.))
+                    .py(px(8.))
+                    .text_color(palette::tone(
+                        hsla(0., 0.921, 0.604, 1.),
+                        hsla(0., 0.742, 0.529, 1.),
+                    )),
                 );
             }
             let mut headers = row()
@@ -1097,10 +1098,13 @@ impl UsageDashboard {
                 .border_b_1()
                 .border_color(rgb(BORDER))
                 .child(
-                    label("Session", 11.)
+                    label("Session", 12.)
+                        .line_height(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(rgb(MUTED))
                         .w(relative(0.46))
-                        .px(px(12.)),
+                        .flex_none()
+                        .px(px(8.)),
                 );
             for (id, name, sort) in [
                 ("active", "Last active", SessionSort::LastActive),
@@ -1116,86 +1120,127 @@ impl UsageDashboard {
                         Action::Sort(sort),
                         cx,
                     )
-                    .flex_1()
+                    .w(relative(0.18))
+                    .flex_none()
                     .min_w_0()
                     .justify_end()
                     .h(px(28.))
-                    .child(icon("alt-arrow-down").size(px(12.)).ml(px(4.)))
-                    .when(!active, |v| v.opacity(0.6)),
-                );
-            }
-            let mut table = column().child(headers);
-            let loading = self.pending(Kind::Sessions);
-            if let Some(page) = self.page.as_ref() {
-                for group in &page.rows {
-                    table = table.child(
-                        table_row(
-                            vec![
-                                (group.label.clone(), 0.46),
-                                (date(group), 0.18),
-                                (tokens(group.summary.tokens.total()), 0.18),
-                                (money(group.summary.cost_usd), 0.18),
-                            ],
-                            false,
-                        )
-                        .h(px(36.)),
-                    );
-                }
-                if page.rows.is_empty() {
-                    table = table.child(row().h(px(80.)).justify_center().child(
-                        label("No sessions match these filters.", 12.).text_color(rgb(MUTED)),
-                    ));
-                }
-            } else {
-                table = table.child(
-                    row().h(px(80.)).justify_center().child(
-                        label(
-                            if loading {
-                                "Loading sessions…"
-                            } else {
-                                "No sessions to display."
-                            },
-                            12.,
-                        )
-                        .text_color(rgb(MUTED)),
+                    .px(px(8.))
+                    .text_size(px(12.))
+                    .line_height(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .whitespace_nowrap()
+                    .child(
+                        icon(if active {
+                            "alt-arrow-down"
+                        } else {
+                            "alt-arrow-up"
+                        })
+                        .size(px(14.))
+                        .ml(px(4.))
+                        .when(!active, |v| v.opacity(0.3)),
                     ),
                 );
             }
-            result = result.child(card().rounded(px(0.)).child(table));
+            result = result.child(headers);
+            let mut body = column().w_full();
+            let loading = self.pending(Kind::Sessions);
+            let mut has_rows = false;
+            if let Some(page) = self.page.as_ref() {
+                has_rows = !page.rows.is_empty();
+                for (i, group) in page.rows.iter().enumerate() {
+                    body = body.child(table::cells(
+                        [
+                            group.label.clone(),
+                            date(group),
+                            tokens(group.summary.tokens.total()),
+                            money(group.summary.cost_usd),
+                        ],
+                        [0.46, 0.18, 0.18, 0.18],
+                        true,
+                        i + 1 == page.rows.len(),
+                    ));
+                }
+            } else if loading {
+                has_rows = true;
+                body = body.child(
+                    row()
+                        .h(px(80.))
+                        .justify_center()
+                        .child(label("Loading sessions…", 12.).text_color(rgb(MUTED))),
+                );
+            }
+            if has_rows {
+                result = result.child(
+                    body.relative()
+                        .rounded(px(12.))
+                        .overflow_hidden()
+                        .bg(style::card_bg())
+                        .child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .rounded(px(12.))
+                                .border_1()
+                                .border_color(rgb(BORDER)),
+                        ),
+                );
+            }
             let total = self
                 .page
                 .as_ref()
                 .map(|p| p.total)
                 .unwrap_or(report.session_count);
             let page = self.offset / 10;
-            let count = total.div_ceil(10).max(1);
             let back = self
-                .text_button(
+                .button(
                     "usage-page-back",
-                    "‹",
+                    "Previous page",
                     false,
                     Action::Page(self.offset.saturating_sub(10)),
                     cx,
                 )
-                .when(page == 0, |v| v.opacity(0.3));
+                .size(px(28.))
+                .px_0()
+                .border_1()
+                .border_color(rgb(BORDER))
+                .bg(style::card_bg())
+                .child(icon("alt-arrow-left").size(px(16.)))
+                .when(page == 0 || loading, |v| v.opacity(0.5).tab_index(-1));
             let next_offset = self.page.as_ref().and_then(|p| p.next_offset);
             let next = self
-                .text_button(
+                .button(
                     "usage-page-next",
-                    "›",
+                    "Next page",
                     false,
                     Action::Page(next_offset.unwrap_or(self.offset)),
                     cx,
                 )
-                .when(next_offset.is_none(), |v| v.opacity(0.3));
+                .size(px(28.))
+                .px_0()
+                .border_1()
+                .border_color(rgb(BORDER))
+                .bg(style::card_bg())
+                .child(icon("alt-arrow-right").size(px(16.)))
+                .when(next_offset.is_none() || loading, |v| {
+                    v.opacity(0.5).tab_index(-1)
+                });
             result = result.child(
                 row()
                     .justify_between()
-                    .px(px(12.))
+                    .px(px(8.))
                     .py(px(8.))
                     .child(
                         label(
-                            format!("Page {} of {} · {} sessions", page + 1, count, total),
+                            format!(
+                                "{} of {}",
+                                if total == 0 {
+                                    "0".into()
+                                } else {
+                                    format!("{}–{}", self.offset + 1, (self.offset + 10).min(total))
+                                },
+                                total
+                            ),
                             11.,
                         )
                         .text_color(rgb(MUTED)),
@@ -1205,25 +1250,6 @@ impl UsageDashboard {
         }
         result.into_any_element()
     }
-}
-fn table_row(values: Vec<(String, f32)>, header: bool) -> Div {
-    let mut line = row()
-        .h(px(28.))
-        .w_full()
-        .border_b_1()
-        .border_color(rgb(BORDER).opacity(0.6));
-    for (i, (text, width)) in values.into_iter().enumerate() {
-        line = line.child(
-            label(text, if header { 11. } else { 12. })
-                .w(relative(width))
-                .min_w_0()
-                .px(px(12.))
-                .truncate()
-                .when(i >= 2, |v| v.text_align(TextAlign::Right))
-                .when(header || i == 1 || i == 3, |v| v.text_color(rgb(MUTED))),
-        );
-    }
-    line
 }
 fn meter(fraction: f32) -> Div {
     let mut bar = row().w_full().h(px(16.)).gap(px(2.));

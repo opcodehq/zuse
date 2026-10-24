@@ -1,12 +1,15 @@
 //! One recorded-usage controller and presentation for native and browser hosts.
 mod chart;
+mod format;
+mod provider_menu;
 mod scroll;
+mod table;
 mod view;
 use crate::input::TextInput;
 use chrono::{DateTime, Duration, Local, TimeZone, Utc};
 use gpui::{prelude::*, *};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 use zuse_protocol::{
     AgentAccountsSnapshot, methods,
     usage::{Overview, Request, SessionSort, SessionsPage},
@@ -31,6 +34,7 @@ pub enum Event {
         params: Value,
     },
     Cancel(u64),
+    ScopeChanged(bool),
     Close,
 }
 #[derive(Clone, Copy)]
@@ -54,7 +58,6 @@ enum Action {
     Page(usize),
     Day(usize),
     ClearDay,
-    RetrySessions,
 }
 pub struct UsageDashboard {
     properties: Properties,
@@ -62,7 +65,8 @@ pub struct UsageDashboard {
     project_scope: bool,
     period: i64,
     range: Option<(DateTime<Utc>, DateTime<Utc>, String)>,
-    report: Option<Overview>,
+    report: Option<Arc<Overview>>,
+    report_cache: BTreeMap<String, Arc<Overview>>,
     report_error: Option<String>,
     page: Option<SessionsPage>,
     page_error: Option<String>,
@@ -76,15 +80,20 @@ pub struct UsageDashboard {
     sessions_open: bool,
     provider: Option<&'static str>,
     provider_open: bool,
+    provider_cursor: usize,
+    provider_focus: Option<usize>,
+    provider_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     sort: SessionSort,
     offset: usize,
     cost: bool,
     contributor: usize,
     expanded: bool,
     hovered: Option<usize>,
+    hover_cursor: Option<f32>,
     scroll: ScrollHandle,
     scroll_drag: Option<f32>,
     plot_cache: std::rc::Rc<std::cell::RefCell<Option<chart::Raster>>>,
+    plot_bounds: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     focus: BTreeMap<String, FocusHandle>,
     root_focus: FocusHandle,
     _query: Subscription,
@@ -121,6 +130,7 @@ impl UsageDashboard {
             period: 7,
             range: None,
             report: None,
+            report_cache: Default::default(),
             report_error: None,
             page: None,
             page_error: None,
@@ -134,15 +144,20 @@ impl UsageDashboard {
             sessions_open: false,
             provider: None,
             provider_open: false,
+            provider_cursor: 0,
+            provider_focus: None,
+            provider_bounds: Default::default(),
             sort: SessionSort::Tokens,
             offset: 0,
             cost: true,
             contributor: 0,
             expanded: false,
             hovered: None,
+            hover_cursor: None,
             scroll: ScrollHandle::new(),
             scroll_drag: None,
             plot_cache: Default::default(),
+            plot_bounds: Default::default(),
             focus: Default::default(),
             root_focus: cx.focus_handle(),
             _query: observe,
@@ -154,25 +169,38 @@ impl UsageDashboard {
         }
         let owner = self.properties.owner != properties.owner
             || self.properties.target != properties.target;
-        let changed = owner || self.properties.project != properties.project;
+        let changed = owner
+            || self.project_scope
+                && self.properties.project.as_ref().map(|p| &p.id)
+                    != properties.project.as_ref().map(|p| &p.id);
+        let availability_changed = self.properties.available != properties.available;
         self.properties = properties;
+        if self.project_scope && self.properties.project.is_none() {
+            self.project_scope = false;
+            cx.emit(Event::ScopeChanged(false));
+        }
         if !self.properties.available {
             self.cancel_all(cx);
         }
         if changed {
             self.cancel_all(cx);
-            self.report = None;
+            if owner {
+                self.report_cache.clear();
+                self.report = None;
+            }
             self.page = None;
             self.report_error = None;
             self.page_error = None;
-            self.range = None;
             self.hovered = None;
+            self.hover_cursor = None;
+            self.provider_open = false;
+            self.provider_focus = None;
             if owner {
                 self.accounts = Default::default();
                 self.limits_error = None;
             }
         }
-        if self.visible {
+        if self.visible && (changed || availability_changed) {
             self.refresh(false, cx);
         }
         cx.notify();
@@ -183,6 +211,8 @@ impl UsageDashboard {
         {
             self.accounts = Default::default();
             self.limits_error = None;
+            self.report_cache.clear();
+            self.report = None;
         }
         self.cost = true;
         self.contributor = 0;
@@ -194,12 +224,12 @@ impl UsageDashboard {
             .update(cx, |input, cx| input.set_value(String::new(), cx));
         self.properties = properties;
         self.project_scope = project && self.properties.project.is_some();
-        self.report = None;
+        cx.emit(Event::ScopeChanged(self.project_scope));
         self.page = None;
         self.report_error = None;
         self.page_error = None;
-        self.range = None;
         self.hovered = None;
+        self.hover_cursor = None;
         self.provider_open = false;
         self.scroll.set_offset(Point::default());
         self.scroll_drag = None;
@@ -213,6 +243,9 @@ impl UsageDashboard {
         self.cancel_all(cx);
         self.query_task = None;
         self.provider_open = false;
+        self.provider_focus = None;
+        self.hovered = None;
+        self.hover_cursor = None;
         cx.notify();
     }
     pub fn visible(&self) -> bool {
@@ -313,6 +346,9 @@ impl UsageDashboard {
             return;
         }
         self.report_error = None;
+        if let Some(report) = self.report_cache.get(&self.report_key()).cloned() {
+            self.report = Some(report);
+        }
         self.cancel(Kind::Report, cx);
         let mut request = self.query_request(cx);
         request.force_refresh = force;
@@ -353,6 +389,8 @@ impl UsageDashboard {
                     .map_err(|_| "Usage report could not be read. Refresh to try again.".into())
             }) {
                 Ok(report) => {
+                    let report = Arc::new(report);
+                    self.report_cache.insert(self.report_key(), report.clone());
                     self.report = Some(report);
                     self.report_error = None;
                 }
@@ -389,29 +427,30 @@ impl UsageDashboard {
                 }
             }
             Action::Scope(project) => {
-                if project && self.properties.project.is_none() {
+                if self.project_scope == project || project && self.properties.project.is_none() {
                     return;
                 }
                 self.project_scope = project;
-                self.range = None;
-                self.report = None;
+                cx.emit(Event::ScopeChanged(project));
                 self.page = None;
                 self.offset = 0;
                 self.hovered = None;
+                self.hover_cursor = None;
                 self.refresh(false, cx);
             }
             Action::Period(period) => {
                 self.period = period;
                 self.range = None;
-                self.report = None;
                 self.page = None;
                 self.offset = 0;
                 self.hovered = None;
+                self.hover_cursor = None;
                 self.refresh(false, cx);
             }
             Action::Measure(cost) => {
                 self.cost = cost;
                 self.hovered = None;
+                self.hover_cursor = None;
             }
             Action::Contributors(tab) => {
                 self.contributor = tab;
@@ -427,13 +466,23 @@ impl UsageDashboard {
                     self.cancel(Kind::Sessions, cx);
                 }
             }
-            Action::ProviderMenu => self.provider_open = !self.provider_open,
+            Action::ProviderMenu => {
+                self.provider_open = !self.provider_open;
+                self.provider_cursor = self
+                    .provider
+                    .and_then(|id| view::PROVIDERS.iter().position(|p| p.1 == id))
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+                self.provider_focus = self.provider_open.then_some(self.provider_cursor);
+            }
             Action::Provider(provider) => {
                 if let Some(focus) = self.focus.get("usage-provider") {
                     window.focus(focus, cx);
                 }
                 self.provider = provider;
                 self.provider_open = false;
+                self.provider_focus = None;
+                self.query_task = None;
                 self.offset = 0;
                 self.cancel(Kind::Sessions, cx);
                 self.load_sessions(cx);
@@ -454,17 +503,21 @@ impl UsageDashboard {
             }
             Action::Day(index) => {
                 window.focus(&self.root_focus, cx);
-                if let Some(group) = self.report.as_ref().and_then(|r| r.groups.get(index)) {
+                if let Some(group) = self
+                    .report
+                    .as_ref()
+                    .and_then(|r| r.groups.get(r.groups.len().saturating_sub(90) + index))
+                {
                     if let Some(since) = group.started_at {
                         self.range = Some((
                             since,
                             group.ended_at.unwrap_or(since + Duration::days(1)),
                             group.label.clone(),
                         ));
-                        self.report = None;
                         self.page = None;
                         self.offset = 0;
                         self.hovered = None;
+                        self.hover_cursor = None;
                         self.refresh(false, cx);
                     }
                 }
@@ -472,15 +525,11 @@ impl UsageDashboard {
             Action::ClearDay => {
                 window.focus(&self.root_focus, cx);
                 self.range = None;
-                self.report = None;
                 self.page = None;
                 self.offset = 0;
                 self.hovered = None;
+                self.hover_cursor = None;
                 self.refresh(false, cx);
-            }
-            Action::RetrySessions => {
-                window.focus(&self.query.focus_handle(cx), cx);
-                self.load_sessions(cx);
             }
         }
         if self.provider_open {
@@ -489,6 +538,18 @@ impl UsageDashboard {
             }
         }
         cx.notify();
+    }
+    fn report_key(&self) -> String {
+        json!([
+            self.period,
+            if self.project_scope {
+                self.properties.project.as_ref().map(|p| &p.id)
+            } else {
+                None
+            },
+            self.range.as_ref().map(|r| (r.0, r.1)),
+        ])
+        .to_string()
     }
 }
 impl Render for UsageDashboard {

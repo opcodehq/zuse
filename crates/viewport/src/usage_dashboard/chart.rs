@@ -1,12 +1,17 @@
 //! Dithered series share the reference plot's margins, axes and hover/day selection.
-use super::view::{column, label, money, tokens};
+use super::view::{column, label, money, row, tokens};
 use super::*;
 use crate::palette::rgb;
 use crate::shell::{BORDER, MUTED};
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::sync::Arc;
 use zuse_protocol::usage::Group;
 impl UsageDashboard {
-    pub(super) fn chart(&self, groups: &[Group], cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn chart(
+        &self,
+        groups: &[Group],
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let groups = groups
             .iter()
             .rev()
@@ -59,7 +64,16 @@ impl UsageDashboard {
             .collect();
         let grid_ticks = ticks.clone();
         let count = groups.len();
-        let bounds = Rc::new(Cell::new(Bounds::default()));
+        let marker = self.hover_cursor.and(self.hovered).filter(|i| {
+            count > 1
+                && groups
+                    .get(*i)
+                    .is_some_and(|g| !cost || g.summary.cost_usd.is_some())
+        });
+        let marker_values = values.clone();
+        let raster_values = values.clone();
+        let entity_id = cx.entity_id();
+        let bounds = self.plot_bounds.clone();
         let painted = bounds.clone();
         let hover = bounds.clone();
         let cache = self.plot_cache.clone();
@@ -67,7 +81,11 @@ impl UsageDashboard {
         let border = rgb(BORDER);
         let plot = canvas(
             move |bounds, window, cx| {
+                let changed = painted.get().size != bounds.size;
                 painted.set(bounds);
+                if changed && marker.is_some() {
+                    cx.notify(entity_id);
+                }
                 let width = (f32::from(bounds.size.width) - 84.).max(1.);
                 let height = (f32::from(bounds.size.height) - 32.).max(1.);
                 let scale = window.scale_factor();
@@ -90,7 +108,7 @@ impl UsageDashboard {
                     scale,
                     cost,
                     max,
-                    values: values.clone(),
+                    values: raster_values.clone(),
                     ticks: grid_ticks.clone(),
                     background: rgb_bytes(background),
                     border: rgb_bytes(border),
@@ -104,7 +122,7 @@ impl UsageDashboard {
                 }
                 (cache.as_ref().unwrap().image.clone(), width, height)
             },
-            |bounds, (image, width, height), window, _| {
+            move |bounds, (image, width, height), window, _| {
                 let _ = window.paint_image(
                     Bounds::new(
                         bounds.origin + point(px(72.), px(10.)),
@@ -115,6 +133,28 @@ impl UsageDashboard {
                     0,
                     false,
                 );
+                if let Some(i) = marker {
+                    let columns = (width / 2.).round().clamp(8., 520.);
+                    let rows = (height / 2.).round().clamp(8., 200.);
+                    let cell = size(width / columns, height / rows);
+                    let x = (i as f32 / (count - 1) as f32 * (columns - 1.)).round() * cell.width;
+                    for (series, value) in marker_values[i].iter().enumerate() {
+                        let y = ((1. - value / max) as f32 * (rows - 1.)).round() * cell.height;
+                        let color = rgb([0x358ff3, 0x28d26e, 0x966eff, 0xff9632][series]);
+                        let origin = bounds.origin + point(px(72. + x), px(10. + y));
+                        window.paint_quad(fill(
+                            Bounds::new(origin, size(px(cell.width), px((height - y).max(0.)))),
+                            color.opacity(0.55),
+                        ));
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                origin - point(px(cell.width), px(cell.height)),
+                                size(px(cell.width * 3.), px(cell.height * 3.)),
+                            ),
+                            color,
+                        ));
+                    }
+                }
             },
         )
         .size_full();
@@ -126,15 +166,27 @@ impl UsageDashboard {
             .id("usage-chart")
             .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
                 let b = hover.get();
-                let x = f32::from(event.position.x - b.origin.x) - 72.;
+                if !b.contains(&event.position) {
+                    return;
+                }
+                let cursor = f32::from(event.position.x - b.origin.x);
+                let x = cursor - 72.;
                 let width = (f32::from(b.size.width) - 84.).max(1.);
-                let next = if x >= 0. && x <= width {
-                    Some(((x / width) * (count.saturating_sub(1) as f32)).round() as usize)
-                } else {
-                    None
-                };
-                if this.hovered != next {
+                let next = Some(
+                    ((x / width).clamp(0., 1.) * (count.saturating_sub(1) as f32)).round() as usize,
+                );
+                if this.hovered != next
+                    || this
+                        .hover_cursor
+                        .is_none_or(|previous| (previous - cursor).abs() > 0.5)
+                {
                     this.hovered = next;
+                    this.hover_cursor = Some(cursor);
+                    cx.notify();
+                }
+            }))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !hovered && this.hover_cursor.take().is_some() {
                     cx.notify();
                 }
             }));
@@ -184,7 +236,128 @@ impl UsageDashboard {
                     ),
             );
         }
-        chart.child(axis).into_any_element()
+        chart = chart.child(axis);
+        if let Some(index) = self.hovered.filter(|_| self.hover_cursor.is_some()) {
+            if let Some(group) = groups.get(index) {
+                let entries = if cost {
+                    vec![("Estimated cost", money(group.summary.cost_usd), 0x358ff3)]
+                } else {
+                    vec![
+                        ("Input", tokens(group.summary.tokens.input_tokens), 0x358ff3),
+                        (
+                            "Output",
+                            tokens(group.summary.tokens.output_tokens),
+                            0x28d26e,
+                        ),
+                        (
+                            "Cache",
+                            tokens(
+                                group.summary.tokens.cache_read_tokens
+                                    + group.summary.tokens.cache_creation_tokens,
+                            ),
+                            0x966eff,
+                        ),
+                        (
+                            "Reasoning",
+                            tokens(group.summary.tokens.reasoning_tokens),
+                            0xff9632,
+                        ),
+                    ]
+                };
+                let measure = |text: &str, size: f32| {
+                    let mut font = window.text_style().font();
+                    font.family = "Geist Mono".into();
+                    font.weight = FontWeight::NORMAL;
+                    f32::from(
+                        window
+                            .text_system()
+                            .shape_line(
+                                text.to_owned().into(),
+                                px(size),
+                                &[TextRun {
+                                    len: text.len(),
+                                    font,
+                                    color: window.text_style().color,
+                                    background_color: None,
+                                    underline: None,
+                                    strikethrough: None,
+                                }],
+                                None,
+                            )
+                            .width(),
+                    )
+                };
+                let tip_width = entries
+                    .iter()
+                    .map(|(label, value, _)| 28. + measure(label, 11.) + measure(value, 11.))
+                    .fold(measure(&group.label, 10.), f32::max)
+                    + 18.;
+                let tip_height = 10.
+                    + 15.5
+                    + 14.85 * entries.len() as f32
+                    + 2. * entries.len().saturating_sub(1) as f32;
+                let mut tip = column()
+                    .w(px(tip_width))
+                    .h(px(tip_height))
+                    .px(px(8.))
+                    .py(px(4.))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .rounded(px(6.))
+                    .bg(crate::palette::tone(
+                        gpui::rgb(0x191c1a).into(),
+                        gpui::rgb(0xffffff).into(),
+                    ))
+                    .shadow_sm()
+                    .font_family("Geist Mono")
+                    .child(
+                        label(group.label.clone(), 10.)
+                            .line_height(px(13.5))
+                            .mb(px(2.))
+                            .text_color(rgb(MUTED)),
+                    );
+                let count = entries.len();
+                for (i, (name, value, color)) in entries.into_iter().enumerate() {
+                    tip = tip.child(
+                        row()
+                            .h(px(14.85))
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .size(px(8.))
+                                    .rounded(px(1.))
+                                    .flex_none()
+                                    .bg(rgb(color)),
+                            )
+                            .child(
+                                label(name, 11.)
+                                    .line_height(px(14.85))
+                                    .text_color(rgb(MUTED)),
+                            )
+                            .child(
+                                label(value, 11.)
+                                    .line_height(px(14.85))
+                                    .ml_auto()
+                                    .pl(px(8.)),
+                            )
+                            .when(i + 1 < count, |v| v.mb(px(2.))),
+                    );
+                }
+                let cursor = self.hover_cursor.unwrap();
+                let plot_width = (f32::from(bounds.get().size.width) - 84.).max(1.);
+                let highest = values[index].iter().copied().fold(0., f64::max);
+                chart = chart.child(deferred(
+                    div()
+                        .absolute()
+                        .left(px(cursor.min(plot_width + 24.).max(48.) - tip_width / 2.))
+                        .top(px(
+                            (10. + 224. * (1. - highest / max) as f32).max(54.) - tip_height * 1.15
+                        ))
+                        .child(tip),
+                ));
+            }
+        }
+        chart.into_any_element()
     }
 }
 

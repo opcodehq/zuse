@@ -1246,7 +1246,7 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
-                if this.usage_open {
+                if this.usage_open && !this.settings {
                     if let Some(dashboard) = this.usage_dashboard.clone() { dashboard.update(cx, |dashboard,cx| dashboard.escape(window,cx)); }
                     return;
                 }
