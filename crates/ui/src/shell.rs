@@ -2507,6 +2507,7 @@ impl Shell {
         let composer_events = cx.subscribe(&composer, {
             let transcript = transcript.clone();
             move |this: &mut Shell, _, event: &ComposerEvent, cx| match event {
+                ComposerEvent::CloudLaunchChanged => { cx.notify(); },
                 ComposerEvent::ResumeCloud { .. } => {},
                 ComposerEvent::WorkspaceCommand(command) => {
                     this.pending_workspace_command = Some(*command);
@@ -11913,6 +11914,7 @@ impl Shell {
         let _ = (text, border);
         let has_selection = self.state.read(cx).selected_chat.is_some();
         let has_spaces = !self.state.read(cx).spaces.is_empty();
+        let cloud_starting = !has_selection && self.composer.read(cx).cloud_launch_pending(cx);
         let has_appshots = !self.composer.read(cx).staged_appshots().is_empty();
         let no_project = self.state.read(cx).no_project;
         let transcript_geometry_ready = bottom_stack_measurement_matches(
@@ -11952,7 +11954,7 @@ impl Shell {
         let dock_frame =
             self.composer_dock
                 .borrow_mut()
-                .tick(has_selection, self.reduced_motion, frame_time);
+                .tick(has_selection || cloud_starting, self.reduced_motion, frame_time);
         if dock_frame.active {
             self.motion_active.set(true);
         }
@@ -11981,9 +11983,9 @@ impl Shell {
         let composer_width = self.composer_dock.borrow_mut().layout_width(
             composer_target_width(
                 main_content_width - session_reserve
-                    - if has_selection { 0. } else { 2. * if self.viewport_width <= 800. { 16. } else { 24. } },
-                ui_settings.transcript_width,
-                has_selection,
+                    - if has_selection || cloud_starting { 0. } else { 2. * if self.viewport_width <= 800. { 16. } else { 24. } },
+                if cloud_starting { zuse_viewport::composer_style::CONVERSATION_WIDTH } else { ui_settings.transcript_width },
+                has_selection || cloud_starting,
             ),
             direct_width,
             frame_time,
@@ -12001,7 +12003,7 @@ impl Shell {
                 ),
             )));
         let term_h = self.terminal_geometry.get().height;
-        let new_thread_background_layer = (!has_selection || dock_frame.active).then(|| {
+        let new_thread_background_layer = (!cloud_starting && (!has_selection || dock_frame.active)).then(|| {
             if artwork_frame.active {
                 window.request_animation_frame();
             }
@@ -12064,6 +12066,8 @@ impl Shell {
                     el.child(div().absolute().inset_0().occlude())
                 })
                 .into_any_element()
+        } else if cloud_starting {
+            div().into_any_element()
         } else if !has_spaces && !no_project {
             // Onboarding (first boot / after the destructive wipe): no folders
             // to work in yet — one clear affordance.
@@ -12184,7 +12188,7 @@ impl Shell {
         if has_selection {
             self.set_harness_updates_expanded(false, cx);
         }
-        let harness_update_card = if chip_opacity > 0.001 && (!has_selection || dock_frame.active) {
+        let harness_update_card = if !cloud_starting && chip_opacity > 0.001 && (!has_selection || dock_frame.active) {
             self.render_harness_update_card(window, main_content_width, cx)
         } else {
             None
@@ -12346,6 +12350,7 @@ impl Shell {
                                     .id("persistent-composer")
                                     .relative()
                                     .w(px(composer_width))
+                                    .pb(px(if cloud_starting { 16. } else { 0. }))
                                     .opacity(composer_opacity)
                                     .mx_auto()
                                     .child(self.composer.clone())

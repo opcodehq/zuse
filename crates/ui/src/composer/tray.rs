@@ -557,10 +557,25 @@ impl Composer {
     ) -> Option<AnyElement> {
         let theme = Theme::of(cx).clone();
         let mut rows = Vec::new();
-        if let Some(message) = self.cloud.message.clone() {
-            rows.push(TrayRow::Pill(
-                TrayPill::new("native-cloud-startup", message).glyph(crate::icons::CLOUD),
-            ));
+        if let Some(request) = self.cloud.request.as_ref().filter(|_| self.state.read(cx).selected_chat.is_none()) {
+            rows.push(TrayRow::Element(zuse_viewport::cloud_queue::queue(
+                zuse_viewport::cloud_queue::Prompt::from_request(request),
+                self.cloud.message.clone().unwrap_or_else(|| if self.cloud.task.is_some() {
+                    "Preparing cloud workspace…".into()
+                } else {
+                    "Cloud startup needs attention. Your message is still queued.".into()
+                }),
+                self.cloud.task.is_some(), !crate::motion::reduced_motion(cx),
+                theme.text, theme.text_muted, theme.border.opacity(0.4),
+            ).into_any_element()));
+            if self.cloud.task.is_none() && self.visible_failure().is_none() {
+                rows.push(TrayRow::Element(div().w_full().flex().justify_end().px(px(12.)).py(px(4.))
+                    .child(tray_text_action("retry-cloud-launch", "Retry", None, &theme)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let text = this.input.read(cx).text().to_owned();
+                            this.send_cloud(text, cx);
+                        }))).into_any_element()));
+            }
         } else if let Some((message, retry)) = self.pickers.read(cx).cloud_model_notice(cx) {
             let row = TrayPill::new("native-cloud-models", message)
                 .glyph(crate::icons::DITHER_CLOUD);
@@ -611,6 +626,7 @@ impl Composer {
             );
         }
         let surface = tray_surface(&theme, cx.has_active_drag())
+            .when(self.cloud_launch_pending(cx), |surface| surface.bg(zuse_viewport::cloud_queue::background()))
             .debug_selector(|| "composer-tray".into())
             .children(rows);
         Some(

@@ -35,6 +35,7 @@ pub(super) struct Cloud {
     poll: Option<Task<()>>,
     pub guest_workspace: Option<String>,
     launch: Option<Value>,
+    queued_prompt: Option<crate::cloud_queue::Prompt>,
     status_request: Option<u64>,
     status: Value,
     history_request: Option<u64>,
@@ -108,6 +109,7 @@ impl WorkspaceView {
         }
     }
     fn close_cloud(&mut self) {
+        self.cloud.queued_prompt = None;
         if let Some(id) = self.cloud.pause.take() {
             self.cancel(id);
         }
@@ -197,6 +199,10 @@ impl WorkspaceView {
                 "expectedAccountId":self.cloud.account,
                 "attachmentTransfers":self.attachments.iter().map(|a| json!({"uploadId":a["uploadId"],"fileName":a["fileName"]})).collect::<Vec<_>>()
             }));
+            self.cloud.queued_prompt = self.cloud.launch.as_ref().map(crate::cloud_queue::Prompt::from_request);
+            self.input.update(cx, |input, cx| input.set_value(String::new(), cx));
+            self.attachments.clear();
+            self.sync_previews(true, cx);
         }
         let body = self.cloud.launch.clone().unwrap();
         self.cloud.create = Some(self.call(methods::CLOUD_CREATE, body));
@@ -327,33 +333,14 @@ impl WorkspaceView {
                         .collect()
                 }
                 3 => {
-                    let first = self
-                        .cloud
-                        .launch
-                        .as_ref()
-                        .and_then(|v| v["firstMessage"].as_str());
-                    if first == Some(self.input.read(cx).value(cx).as_str()) {
-                        self.input
-                            .update(cx, |input, cx| input.set_value(String::new(), cx));
-                    }
-                    if let Some(sent) = self
-                        .cloud
-                        .launch
-                        .as_ref()
-                        .and_then(|v| v["attachmentTransfers"].as_array())
-                    {
-                        self.attachments.retain(|attachment| {
-                            !sent
-                                .iter()
-                                .any(|file| file["uploadId"] == attachment["uploadId"])
-                        });
-                        self.sync_previews(true, cx);
-                    }
                     self.creation_source_picker.update(cx, |picker, cx| picker.clear_selection(cx));
                     self.cloud.launch = None;
+                    let queued = self.cloud.queued_prompt.take();
                     self.close_cloud();
+                    self.cloud.queued_prompt = queued;
                     let launch = &value["workspace"];
                     self.cloud.target = Some(launch.get("workspace").unwrap_or(launch).clone());
+                    self.cloud.notice = Some("Connecting to cloud workspace…".into());
                     self.connect_cloud();
                 }
                 4 => {

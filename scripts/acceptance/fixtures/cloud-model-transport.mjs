@@ -2,8 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 const [ipc,ready,assets]=process.argv.slice(2);
-const events=[],held=[];
-let faults={failContext:false,holdCreate:false,loseCreateResponse:false};
+const events=[],held=[],environments=[];
+let faults={failContext:false,holdCreate:false,loseCreateResponse:false,holdEnvironment:false};
 const headers={'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp','Cache-Control':'no-store'};
 function emit(client,frame){try{client.send(JSON.stringify(frame));}catch{}}
 function release(client,frame){
@@ -17,8 +17,9 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
    if(request.method==='POST'){
     faults={...faults,...await request.json()};
     if(!faults.holdCreate)for(const [client,frame] of held.splice(0))release(client,frame);
+    if(!faults.holdEnvironment)for(const [client,frame] of environments.splice(0))emit(client,frame);
    }
-   return Response.json({faults,events,held:held.length},{headers});
+   return Response.json({faults,events,held:held.length,environments:environments.length},{headers});
   }
   if(url.pathname==='/api/session/check'||url.pathname==='/api/session')return Response.json({ok:true},{headers});
   if(url.pathname==='/api/rpc'||(url.pathname==='/'&&request.headers.get('upgrade')?.toLowerCase()==='websocket')){
@@ -38,7 +39,8 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
     if(method==='CloudCreate'&&frame.ok){
      events.push({accepted:frame.ok});
      if(faults.holdCreate)held.push([client,frame]);else release(client,frame);
-    }else emit(client,frame);
+    }else if(method==='CloudEnvironment'&&faults.holdEnvironment){environments.push([client,frame]);}
+    else emit(client,frame);
    };
    upstream.onclose=()=>client.close();
   },

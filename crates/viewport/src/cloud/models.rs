@@ -15,8 +15,13 @@ pub(crate) struct State {
 }
 
 impl WorkspaceView {
+    pub(crate) fn cloud_startup_pending(&self) -> bool {
+        self.cloud.queued_prompt.is_some() && self.cloud.status["state"] != "ready"
+    }
+
     pub(crate) fn has_cloud_creation_notice(&self) -> bool {
-        self.cloud_models_active() && (self.cloud.notice.is_some() || !self.cloud_model_ready())
+        self.cloud_startup_pending()
+            || self.cloud_models_active() && (self.cloud.notice.is_some() || !self.cloud_model_ready())
     }
 
     pub(crate) fn cloud_creation_notice(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -24,6 +29,25 @@ impl WorkspaceView {
         let connection_retry = self.cloud.target.is_some() && (self.cloud.status_request.is_none()
             || matches!(self.cloud.status["state"].as_str(), Some("failed" | "blocked")));
         let model_retry = !self.cloud_model_ready() && !self.cloud_models_loading();
+        if let Some(prompt) = self.cloud.queued_prompt.clone() {
+            let busy = self.cloud.create.is_some()
+                || self.cloud.status_request.is_some() && !connection_retry;
+            let status = self.cloud.status["message"].as_str()
+                .filter(|message| !message.is_empty()).map(str::to_owned)
+                .or_else(|| self.cloud.notice.clone())
+                .unwrap_or_else(|| "Preparing cloud workspace…".into());
+            return column().w_full().min_w_0()
+                .child(crate::cloud_queue::queue(prompt, status, busy, true,
+                    rgb(crate::shell::TEXT).into(), rgb(MUTED).into(), rgb(BORDER).opacity(0.4).into()))
+                .when(launch_retry || connection_retry, |view| view.child(
+                    row().w_full().px_3().py_1().justify_end().child(
+                        control("retry-cloud-creation", "Retry").h(px(24.)).tab_index(0)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if connection_retry { this.connect_cloud(); cx.notify(); }
+                                else { this.submit_cloud(cx); }
+                            })))))
+                .into_any_element();
+        }
         let title = self
             .cloud
             .notice

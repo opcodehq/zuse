@@ -14,6 +14,7 @@ pub mod cloud_billing_view;
 mod cloud_history;
 pub mod cloud_repositories;
 pub mod cloud_settings;
+pub mod cloud_queue;
 mod composer_alerts;
 pub mod composer_style;
 pub mod creation_style;
@@ -1607,6 +1608,9 @@ impl WorkspaceView {
             return;
         }
         if self.settings {
+            return;
+        }
+        if self.cloud_startup_pending() {
             return;
         }
         if self.cloud.mode && self.selected.is_none() {

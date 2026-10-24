@@ -236,9 +236,10 @@ impl WorkspaceView {
         let working = self.is_working();
         let has_draft =
             !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty();
+        let starting = self.cloud_startup_pending();
         column()
             .w_full()
-            .max_w(px(if self.selected.is_none() {
+            .max_w(px(if self.selected.is_none() && !starting {
                 composer::LANDING_WIDTH.min((self.content_width
                     - 2. * if self.viewport_width <= 800. { 16. } else { 24. }).max(0.))
             } else {
@@ -275,10 +276,13 @@ impl WorkspaceView {
                         .self_center()
                         .rounded_t(px(19.))
                         .bg(crate::palette::composer_toolbar())
+                        .when(starting, |tray| tray.overflow_hidden().border_1()
+                            .border_color(crate::palette::tone(gpui::white().opacity(0.06), crate::palette::composer_border()))
+                            .bg(crate::cloud_queue::background()))
                         .child(self.composer_notices(cx)),
                 )
             })
-            .when(self.selected.is_none() && !self.cloud.guest, |view| {
+            .when(self.selected.is_none() && !self.cloud.guest && !starting, |view| {
                 view.child(self.cloud_toolbar(cx))
             })
             .when(!self.queue.is_empty(), |view| {
@@ -537,7 +541,8 @@ impl WorkspaceView {
                                         } else {
                                             "Send message"
                                         },
-                                        has_draft && (self.connected || self.cloud.cached) && !self.transcript_blocked(),
+                                        has_draft && (self.connected || self.cloud.cached) && !self.transcript_blocked()
+                                            && !self.cloud_model_change_pending(),
                                     )
                                     .on_click(cx.listener(
                                         |this, _, window, cx| this.submit(&Submit, window, cx),
@@ -574,7 +579,7 @@ impl WorkspaceView {
                     .child(icon("archive-minimalistic").size(px(24.)).text_color(rgb(MUTED)))
                     .child(label(if self.transcript_blocked() { "Loading saved conversation…" } else { "No messages in this archived chat." }).text_color(rgb(MUTED))))
             })
-            .when(self.messages.is_empty() && !archived && self.selected.is_none(), |d| {
+            .when(self.messages.is_empty() && !archived && self.selected.is_none() && !self.cloud_startup_pending(), |d| {
                 let title = self.creation_project_name().map(|name|format!("What should we build in {name}?")).unwrap_or_else(||"What should we build today?".to_owned());
                 d.px(px(if self.viewport_width <= 800. { 16. } else { 24. })).pt(px(32.)).child(column().flex_1().justify_center().items_center().w_full().max_w(px(768.)).self_center().gap_2()
                     .child(div().relative().top(px(3.)).text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::MEDIUM).child(title))
@@ -1126,7 +1131,7 @@ impl Render for WorkspaceView {
                 .child(self.transcript(cx))
                 .into_any_element();
         }
-        if self.cloud.target.is_some() {
+        if self.cloud.target.is_some() && !self.cloud_startup_pending() {
             return self.cloud_workspace(window, cx);
         }
         if self.connected && !self.transcript_blocked()

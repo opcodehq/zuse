@@ -10,11 +10,15 @@ pub(super) struct Launch {
     pub(super) request: Option<Value>,
     accepted: Option<Value>,
     issue: Option<StagedAttachment>,
+    staged: Vec<StagedAttachment>,
     pub pause_task: Option<Task<()>>,
     pub pause_error: Option<String>,
     pause_command: Option<String>,
 }
 impl Composer {
+    pub(crate) fn cloud_launch_pending(&self, cx: &App) -> bool {
+        self.cloud.request.is_some() && self.state.read(cx).selected_chat.is_none()
+    }
     pub(super) fn cached_cloud(&self) -> bool { self.cloud.cached.is_some() }
     pub(crate) fn set_cached_cloud(&mut self, paused: bool, cx: &mut Context<Self>) {
         if self.cloud.cached != Some(paused) {
@@ -73,7 +77,7 @@ impl Composer {
         )
     }
     pub(crate) fn cloud_has_draft(&self, cx: &App) -> bool {
-        self.has_draft(cx)
+        self.cloud.request.is_some() || self.has_draft(cx)
             || self
                 .drafts
                 .iter()
@@ -209,8 +213,14 @@ impl Composer {
                 StagedAttachment::from_file(&format!("issue-{number}.md"), markdown.into_bytes())
             });
         }
-        let mut staged = self.staged().to_vec();
-        staged.extend(self.cloud.issue.iter().cloned());
+        let mut staged = if self.cloud.request.is_some() {
+            self.cloud.staged.clone()
+        } else {
+            self.staged().to_vec()
+        };
+        if self.cloud.request.is_none() {
+            staged.extend(self.cloud.issue.iter().cloned());
+        }
         if self.cloud.request.is_none() {
             let (base_ref, branch) = self.pickers.read(cx).source_cloud_ref(project["defaultBranch"].as_str().unwrap_or("main"), cx);
             let config = self.pickers.read(cx).resolved(cx);
@@ -231,11 +241,17 @@ impl Composer {
             self.cloud.request = Some(
                 json!({"runtimeMode":runtime_mode,"projectId":project["projectId"],"providerId":project["providerId"],"baseRef":base_ref,"branch":branch,"agent":agent,"model":model,"reasoning":config.reasoning,"modelOptions":config.model_options,"idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text,"expectedAccountId":subject,"attachmentTransfers":staged.iter().map(|a|json!({"uploadId":a.id,"fileName":a.name})).collect::<Vec<_>>()}),
             );
+            self.cloud.staged = staged.clone();
+            self.input.update(cx, |input, cx| input.set_text("", cx));
+            let key = self.current_key.clone();
+            if let Some(files) = self.attachments.get_mut(&key) {
+                files.retain(|file| !staged.iter().any(|sent| sent.id == file.id));
+            }
+            self.sync_attachment_chips(cx);
+            cx.emit(ComposerEvent::CloudLaunchChanged);
         }
         self.pickers.update(cx, |pickers, cx| pickers.freeze_cloud_launch(true, cx));
-        let key = self.current_key.clone();
         let request = self.cloud.request.clone().unwrap();
-        let sent_text = request["firstMessage"].as_str().unwrap_or_default().to_owned();
         let accepted = self.cloud.accepted.clone();
         self.cloud.message = Some(
             if staged.is_empty() {
@@ -351,19 +367,14 @@ impl Composer {
                         initial_session: initial,
                     };
                     let _ = this.update(cx, |this, cx| {
-                        if this.current_key == key && this.input.read(cx).text() == sent_text {
-                            this.input.update(cx, |input, cx| input.set_text("", cx));
-                            if let Some(current) = this.attachments.get_mut(&key) {
-                                current.retain(|a| !staged.iter().any(|sent| sent.id == a.id));
-                            }
-                            this.sync_attachment_chips(cx);
-                        }
                         this.cloud.message = None;
                         this.cloud.request = None;
                         this.cloud.accepted = None;
                         this.cloud.issue = None;
+                        this.cloud.staged.clear();
                         this.cloud.task = None;
                         this.pickers.update(cx, |pickers, cx| pickers.finish_cloud_launch(cx));
+                        cx.emit(ComposerEvent::CloudLaunchChanged);
                         crate::open_cloud_window(target, cx);
                         cx.notify();
                     });
@@ -414,6 +425,27 @@ impl Composer {
 #[cfg(test)]
 mod cached_tests {
     use super::*;
+
+    #[gpui::test]
+    fn cloud_launch_does_not_block_a_selected_side_chat(cx: &mut gpui::TestAppContext) {
+        let parent = cx.new(|_| crate::state::AppState::new());
+        let chat = serde_json::from_value(json!({
+            "id":"local-chat", "deviceId":"local",
+            "createdAt":"2026-01-01T00:00:00Z", "archived":false
+        })).unwrap();
+        let state = cx.new(|cx| crate::state::AppState::side_chat_state(&parent, chat, true, cx));
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |composer, cx| {
+            composer.cloud.request = Some(json!({"firstMessage":"Pinned Cloud prompt"}));
+            assert!(!composer.cloud_launch_pending(cx));
+            assert!(!composer.send_blocked(cx));
+        });
+        state.update(cx, |state, _| state.selected_chat = None);
+        composer.update(cx, |composer, cx| {
+            assert!(composer.cloud_launch_pending(cx));
+            assert!(composer.send_blocked(cx));
+        });
+    }
 
     #[gpui::test]
     fn cached_cloud_submit_resumes_without_consuming_the_draft(cx: &mut gpui::TestAppContext) {

@@ -5589,6 +5589,7 @@ impl Render for ComposerInput {
 /// Events the shell listens for.
 #[derive(Debug, Clone)]
 pub enum ComposerEvent {
+    CloudLaunchChanged,
     ResumeCloud { text: String, send: bool },
     WorkspaceCommand(WorkspaceCommand),
     /// Arm the shared-element transition before the draft route is replaced
@@ -8926,6 +8927,7 @@ impl Composer {
         if self.queue_edit_finishing {
             return true;
         }
+        if self.cloud_launch_pending(cx) { return true; }
         if self.cached_cloud() { return false; }
         let state = self.state.read(cx);
         if state.configuration_blocked() {
@@ -11130,7 +11132,7 @@ impl Render for Composer {
         // On the new-chat canvas the rows ride inside the selector tray, above
         // its chips (one attached surface growing upward); in a thread they
         // form their own surface tucked behind the card's top edge.
-        let embed_tray = new_chat;
+        let embed_tray = new_chat && !self.cloud_launch_pending(cx);
         let tray_stack =
             self.render_tray_stack(show_queue_latest_shortcut, embed_tray, window, cx);
         let (embedded_tray, tray_stack) = if embed_tray {
@@ -11622,12 +11624,12 @@ impl Render for Composer {
             // Last, so it paints over the editor and toolbar while a file is
             // carried over the card.
             .child(tray::drop_overlay(&theme));
-        let new_thread_target_selectors = (new_thread_chrome_opacity > 0.0).then(|| {
+        let new_thread_target_selectors = (new_thread_chrome_opacity > 0.0 && !self.cloud_launch_pending(cx)).then(|| {
             self.pickers.update(cx, |pickers, cx| {
                 pickers.render_new_thread_target_selectors(cx)
             })
         });
-        let new_thread_git_selectors = (new_thread_chrome_opacity > 0.0)
+        let new_thread_git_selectors = (new_thread_chrome_opacity > 0.0 && !self.cloud_launch_pending(cx))
             .then(|| {
                 self.pickers.update(cx, |pickers, cx| {
                     pickers.render_new_thread_git_selectors(cx)
@@ -11696,7 +11698,9 @@ impl Render for Composer {
                         .children(new_thread_git_selectors),
                 )
         };
-        let container = if self.dock_frame.is_some() {
+        let container = if self.cloud_launch_pending(cx) {
+            container
+        } else if self.dock_frame.is_some() {
             // Floating selectors share the surface's origin and never change its height.
             container.relative().child(
                 div()
