@@ -39,6 +39,18 @@ impl Default for MenuState {
 }
 
 impl Pickers {
+    pub(super) fn settings_menu_height(&self, cx: &App) -> f32 {
+        let (_, body) = self.reference_items(cx);
+        let error = matches!(self.harnesses, Loadable::Error(_))
+            || self.rail_descriptors(cx).iter().any(|p| {
+                self.model_scope.is_none_or(|scope| scope == p.id)
+                    && self.model_refresh_errors.contains_key(&p.id)
+            });
+        (ui::SEARCH_HEIGHT + body + if error { 44. } else { 0. })
+            .max(44. + self.rail_descriptors(cx).len() as f32 * 36.)
+            .min(ui::MAX_HEIGHT)
+    }
+
     fn reference_key(&self, cx: &App) -> ModelRowsKey {
         ModelRowsKey {
             query: self.search.read(cx).text().trim().to_lowercase(),
@@ -218,8 +230,13 @@ impl Pickers {
         self.model_menu.list.scroll_to(gpui::ListOffset::default());
     }
 
-    fn set_reference_default(&mut self, provider: HarnessId, model: Model, cx: &mut Context<Self>) {
-        if self.state.read(cx).selected_chat.is_none() {
+    pub(super) fn set_reference_default(
+        &mut self,
+        provider: HarnessId,
+        model: Model,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings_model.defaults && self.state.read(cx).selected_chat.is_none() {
             self.config.harness = self.effective_harness(cx);
             self.config.model = self.selected_model(cx).map(|m| m.id.clone());
         }

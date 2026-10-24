@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     assets::icon,
-    model_picker::{PickerTarget, TriggerBounds},
+    model_picker::PickerTarget,
     settings_style as s,
     shell::{column, row},
 };
@@ -16,6 +16,7 @@ pub(super) struct TitleSettingsView {
     read: Option<u64>,
     save: Option<u64>,
     error: Option<String>,
+    attempt: Option<TitleSettings>,
 }
 impl TitleSettingsView {
     pub(super) fn new(window: &Window, cx: &mut Context<WorkspaceView>) -> Self {
@@ -27,6 +28,7 @@ impl TitleSettingsView {
             read: None,
             save: None,
             error: None,
+            attempt: None,
         }
     }
     pub(super) fn provider(&self) -> Option<String> {
@@ -95,6 +97,7 @@ impl WorkspaceView {
             self.cancel(id);
         }
         self.title_settings.error = None;
+        self.title_settings.attempt = Some(settings.clone());
         self.title_settings.save = Some(self.call(
             methods::SET_TITLE_SETTINGS,
             serde_json::to_value(settings).unwrap(),
@@ -138,10 +141,16 @@ impl WorkspaceView {
             });
         match result {
             Ok(settings) => {
+                let attempt = self.title_settings.attempt.take();
+                let reconciled = attempt.as_ref().is_some_and(|attempt| {
+                    attempt.harness == settings.harness && attempt.model == settings.model
+                });
                 self.title_settings.settings = Some(settings);
                 self.title_settings.confirmed = true;
-                self.title_settings.error = None;
-                if save && self.picker_target == PickerTarget::ThreadNaming {
+                if save || attempt.is_none() || reconciled {
+                    self.title_settings.error = None;
+                }
+                if (save || attempt.is_some()) && self.picker_target == PickerTarget::ThreadNaming {
                     self.model_picker = false;
                     self.picker_target = PickerTarget::Composer;
                     let focus = self.title_settings.focus.clone();
@@ -190,7 +199,7 @@ impl WorkspaceView {
                 .unwrap_or("Agent default".into())
         };
         let enabled = self.connected && state.confirmed && state.save.is_none();
-        let bounds = TriggerBounds::default();
+        let bounds = self.picker_menu.trigger.clone();
         let measure = bounds.clone();
         let open = self.model_picker && self.picker_target == PickerTarget::ThreadNaming;
         let trigger = column()

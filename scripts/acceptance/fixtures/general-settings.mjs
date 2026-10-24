@@ -2,9 +2,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {providerSettingsFixture} from './provider-settings.mjs';
+import {titleSettingsFixture} from './title-settings.mjs';
 const [ipc,ready,assets]=process.argv.slice(2);
 const clients=new Set(),events=[];
 const providerFixture=providerSettingsFixture(events);
+const titleFixture=titleSettingsFixture(events);
 let state={user:null,login:null,error:null},hold=false,failNext=false,loginTimer,cloud=false,holdCloud=false;
 const delayed=[],delayedWrites=[];
 let workspaceSync=null;
@@ -29,6 +31,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
     if(value.billing)billing={...billing,...value.billing};
     if(value.setup)setup={...setup,...value.setup};
     if(value.providers)providerFixture.configure(value.providers);
+    if(value.titles)titleFixture.configure(value.titles);
     if(value.workspaceSync)workspaceSync={hold:false,error:'Sync service is unavailable. Retry when connected.',...workspaceSync,...value.workspaceSync};
     if(workspaceSync&&!workspaceSync.hold)for(const [client,frame]of syncReplies.splice(0))emit(client,frame);
     if(Object.hasOwn(value,'holdCloud'))holdCloud=value.holdCloud;
@@ -36,7 +39,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
     if(!billing.holdWrites)for(const [client,frame]of delayedWrites.splice(0))emit(client,frame);
     publish();
    }
-   return Response.json({state,events,hold,billing,setup,workspaceSync,providers:providerFixture.snapshot()},{headers});
+   return Response.json({state,events,hold,billing,setup,workspaceSync,providers:providerFixture.snapshot(),titles:titleFixture.snapshot()},{headers});
   }
   if(url.pathname==='/api/session/check'||url.pathname==='/api/session')return Response.json({ok:true},{headers});
   if(url.pathname==='/api/rpc'||(url.pathname==='/'&&request.headers.get('upgrade')?.toLowerCase()==='websocket')){
@@ -52,7 +55,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
   open(client){
    clients.add(client);const upstream=new WebSocket('ws://127.0.0.1:'+ipc);client.data.upstream=upstream;
    upstream.onopen=()=>{client.data.ready=true;for(const value of client.data.waiting)upstream.send(value);client.data.waiting=[];};
-   upstream.onmessage=event=>{try{emit(client,JSON.parse(event.data));}catch{}};
+   upstream.onmessage=event=>{try{const frame=JSON.parse(event.data);if(!titleFixture.receive(client,frame,emit))emit(client,frame);}catch{}};
    upstream.onclose=()=>client.close();
   },
   message(client,message){
@@ -63,6 +66,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
    }
    if(frame.method==='WatchDocMessages')events.push({method:frame.method,chatId:frame.params?.chatId});
    if(providerFixture.handle(client,frame,emit))return;
+   if(titleFixture.admit(client,frame,emit))return;
    if(frame.cancel){events.push({cancel:frame.id});if(client.data.handled.delete(frame.id))return;}
    if(frame.method==='CloudAccountStatus'){
     client.data.handled.set(frame.id,frame.method);if(!hold)emit(client,{id:frame.id,item:state});return;

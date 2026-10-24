@@ -15,6 +15,7 @@ mod cloud;
 mod compact;
 mod workspace;
 mod model_menu;
+mod settings_models;
 mod creation_sources;
 pub(crate) use creation_sources::CreationIssueTitle;
 
@@ -791,6 +792,7 @@ pub struct Pickers {
     /// emits the local device's title settings instead of a composer draft.
     /// `config.harness` then only tracks the tab being browsed.
     title: Option<TitleSettings>,
+    settings_model: settings_models::State,
     /// Sticky last-used picks (zuse `zuse.composer.defaults:v1`): seeds the
     /// new-chat chips and is rewritten on every new-chat pick.
     defaults: ComposerDefaults,
@@ -918,7 +920,7 @@ pub struct Pickers {
 
 impl Pickers {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        Self::build(state, None, cx)
+        Self::build(state, None, false, cx)
     }
 
     /// The model picker bound to thread naming: only title-capable agents,
@@ -928,7 +930,7 @@ impl Pickers {
         settings: TitleSettings,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::build(state, Some(settings), cx)
+        Self::build(state, Some(settings), false, cx)
     }
 
     pub fn set_title_settings(&mut self, settings: TitleSettings, cx: &mut Context<Self>) {
@@ -941,6 +943,7 @@ impl Pickers {
     fn build(
         state: Entity<AppState>,
         title: Option<TitleSettings>,
+        default_settings: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let source_picker = Self::new_creation_sources(cx);
@@ -1056,7 +1059,7 @@ impl Pickers {
         // with that popover open — synthetic input can't reach the app on
         // headless compositors, so captures need a data-side path.
         let boot_open = match std::env::var("ZUSE_OPEN_PICKER").ok().as_deref() {
-            _ if title.is_some() => None,
+            _ if title.is_some() || default_settings => None,
             Some("model") => Some(PickerKind::HarnessModel),
             Some("traits") => Some(PickerKind::HarnessModel),
             Some("branch") => Some(PickerKind::Branch),
@@ -1077,7 +1080,7 @@ impl Pickers {
             .map(ComposerDefaults::load)
             .unwrap_or_default();
         // Restore explicit opt-outs as well as project picks before the first frame.
-        if title.is_none() {
+        if title.is_none() && !default_settings {
             state.update(cx, |s, _| s.restore_composer_target(&defaults));
         }
         let settings_observe =
@@ -1114,6 +1117,7 @@ impl Pickers {
             source_picker,
             source_tasks: Default::default(),
             title,
+            settings_model: settings_models::State::new(default_settings, cx),
             defaults,
             _settings_observe: settings_observe,
             data_dir,
@@ -1171,7 +1175,7 @@ impl Pickers {
     /// Persist the sticky defaults (best-effort; picks are rare and tiny).
     fn save_defaults(&self) {
         // The title picker never writes run picks into the composer's memory.
-        if self.title.is_some() {
+        if self.is_settings_model() {
             return;
         }
         self.persist_defaults();
@@ -1208,7 +1212,7 @@ impl Pickers {
     /// Keep a first-send snapshot stable while it is being submitted.
     fn harness_locked(&self, cx: &App) -> bool {
         let state = self.state.read(cx);
-        self.title.is_none()
+        !self.is_settings_model()
             && state.selected_chat.is_some()
             && !state.side_chat_harness_editable()
             && !state.conversation_provider_editable()
@@ -1235,7 +1239,7 @@ impl Pickers {
     /// anywhere" from a Mac without codex).
     fn space_target(&self, cx: &App) -> Option<String> {
         // Thread naming is this device's setting; so are its catalogs.
-        if self.title.is_some() {
+        if self.is_settings_model() {
             return None;
         }
         let state = self.state.read(cx);
@@ -1247,6 +1251,10 @@ impl Pickers {
     fn effective_harness(&self, cx: &App) -> Option<HarnessId> {
         if let Some(harness) = self.config.harness {
             return Some(harness);
+        }
+        if self.settings_model.defaults {
+            return crate::settings::default_model(cx).map(|selection| selection.provider)
+                .or_else(|| self.harnesses.ready().and_then(|list| self.offered(list).first().map(|row|row.id)));
         }
         if let Some(title) = &self.title {
             // Browsing starts on the saved agent, else the first title-capable one.
@@ -1301,6 +1309,11 @@ impl Pickers {
     /// Effective model id: the draft pick, the selected chat's config, or (on
     /// the new-chat canvas) the remembered last-used model for the harness.
     fn effective_model_id<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
+        if self.settings_model.defaults {
+            return crate::settings::default_model(cx)
+                .filter(|selection| Some(selection.provider) == self.effective_harness(cx))
+                .map(|selection| selection.model.as_str());
+        }
         if let Some(title) = &self.title {
             // Only the saved agent's tab shows a selected row.
             return title.model.as_deref().filter(|_| {
@@ -1543,7 +1556,8 @@ impl Pickers {
     /// Begin the exit animation (shared by every close path).
     fn animate_close(&mut self, cx: &mut Context<Self>) {
         if self.is_open() {
-            cx.emit(ReturnComposerFocus::default());
+            if self.is_settings_model() { self.return_settings_focus(cx); }
+            else { cx.emit(ReturnComposerFocus::default()); }
         }
         self.dismiss(cx);
     }
@@ -1592,6 +1606,11 @@ impl Pickers {
     }
 
     fn toggle(&mut self, kind: PickerKind, window: &mut Window, cx: &mut Context<Self>) {
+        if kind == PickerKind::HarnessModel && self.settings_model.pending.is_some() { return; }
+        if kind == PickerKind::HarnessModel && self.settings_model.defaults {
+            self.config.harness = None;
+            self.config.model = None;
+        }
         // A press that found this picker open closes it — the card's
         // `on_mouse_down_out` already began the close on that same press,
         // so by click time the popup reads as closed and a plain toggle
@@ -2157,6 +2176,15 @@ impl Pickers {
         if self.harness_locked(cx) {
             return;
         }
+        if self.is_settings_model() {
+            self.config.harness = Some(harness);
+            self.config.model = None;
+            self.config.reasoning = None;
+            self.ensure_models(harness, false, cx);
+            self.active = self.selected_model_index(cx);
+            cx.notify();
+            return;
+        }
         if self.state.read(cx).selected_chat.is_some()
             && self.effective_harness(cx) != Some(harness)
         {
@@ -2196,10 +2224,14 @@ impl Pickers {
 
     fn pick_model(&mut self, model_id: String, cx: &mut Context<Self>) {
         self.setting_menu = None;
+        if self.settings_model.defaults {
+            self.choose_default_model(model_id, cx);
+            return;
+        }
         if self.title.is_some() {
             let settings = TitleSettings {
                 harness: self.effective_harness(cx),
-                model: Some(model_id),
+                model: (model_id != "default" && !model_id.trim().is_empty()).then_some(model_id),
             };
             self.title = Some(settings.clone());
             self.catalog_rev += 1;
@@ -2536,6 +2568,7 @@ impl Pickers {
     /// search) switches the harness first, exactly like clicking its rail
     /// icon and then the model.
     fn activate_model_index(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if self.is_settings_model() && (!self.is_open() || self.settings_model.pending.is_some()) { return; }
         let Some(row) = self.model_rows(cx).get(ix).cloned() else {
             return;
         };
@@ -3126,7 +3159,7 @@ impl Pickers {
                 && event.keystroke.key.eq_ignore_ascii_case("f")
             {
                 if let Some(row) = self.model_rows(cx).get(self.active).cloned() {
-                    self.toggle_model_favorite(row.harness, &row.model.id, cx);
+                    self.set_reference_default(row.harness, row.model, cx);
                 }
                 cx.stop_propagation();
                 return;
@@ -3270,6 +3303,8 @@ impl Pickers {
     fn measure_trigger(&self, kind: PickerKind, cx: &Context<Self>) -> impl IntoElement {
         let entity = cx.entity().downgrade();
         let compact = kind == PickerKind::HarnessModel && self.compact_model_picker(cx);
+        let this_setting = self.is_settings_model();
+        let settings_height = this_setting.then(||self.settings_menu_height(cx));
         // New-thread model and workspace menus open down, matching the
         // centered composer's layout. In-thread menus retain adaptive placement.
         let below = (self.title.is_some() || self.state.read(cx).selected_chat.is_none())
@@ -3299,10 +3334,19 @@ impl Pickers {
                 }
                 // The compact card opens down on the new-chat canvas like the
                 // standard menu, and up from the docked composer.
-                if compact && !prefer_below {
+                if compact && !prefer_below && !this_setting {
                     geometry = popover::MenuGeometry {
                         height: (f32::from(bounds.top()) - 14.0).clamp(0.0, 640.0),
                         below: false,
+                    };
+                }
+                if let Some(required) = settings_height {
+                    let above = (f32::from(bounds.top()) - 14.).max(0.);
+                    let below = (f32::from(window.viewport_size().height - bounds.bottom()) - 14.).max(0.);
+                    let prefer_below = below >= required || below > above;
+                    geometry = popover::MenuGeometry {
+                        height: (if prefer_below {below} else {above}).min(640.),
+                        below: prefer_below,
                     };
                 }
                 entity
@@ -3795,6 +3839,11 @@ impl Pickers {
             .when(self.compact_model_picker(cx), |el| {
                 el.h(px(self.compact_motion.frame_height))
             })
+            .when(self.is_settings_model(), |el| {
+                el.on_action(cx.listener(|this, jump: &crate::shell::JumpSession, _, cx| {
+                    if this.jump_model_slot(jump.0, cx) { cx.stop_propagation(); }
+                }))
+            })
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.on_key_down(event, window, cx)
@@ -3821,6 +3870,7 @@ impl Pickers {
                     cx.emit(ReturnComposerFocus { pointer: Some(event.position) });
                     let entity = cx.entity().downgrade();
                     let menu_focus = this.focus.clone();
+                    let settings_trigger = this.is_settings_model().then(|| this.settings_model.trigger.clone());
                     window.defer(cx, move |window, cx| {
                         let empty = window.focused(cx).is_none();
                         let unchanged = window.focused(cx) == previous;
@@ -3829,7 +3879,8 @@ impl Pickers {
                         // each other as the menu closes. Keep a clicked control's
                         // focus, and return any focus left in the menu to the composer.
                         if empty || unchanged || retained {
-                            let _ = entity.update(cx, |_, cx| cx.emit(ReturnComposerFocus::default()));
+                            if let Some(trigger) = settings_trigger { window.focus(&trigger,cx); }
+                            else { let _ = entity.update(cx, |_, cx| cx.emit(ReturnComposerFocus::default())); }
                         }
                     });
                 }),
@@ -4825,7 +4876,7 @@ impl Pickers {
     /// one place the selected model's settings live.
     fn setting_groups(&self, cx: &App) -> Vec<SettingGroup> {
         // Titles always run at minimal reasoning with no model options.
-        if self.title.is_some() {
+        if self.is_settings_model() {
             return Vec::new();
         }
         if self.selected_model(cx).is_some_and(configured_in_place) {
@@ -6062,8 +6113,7 @@ fn attach_overlay_below(
     chip
 }
 
-/// Attach the menu ABOVE and RIGHT-ALIGNED to the trigger (t3code
-/// `align="end"` — right-edge controls like the model picker open leftward).
+/// Attach the model menu to the trigger's trailing edge.
 fn attach_overlay_end(
     chip: gpui::Stateful<gpui::Div>,
     overlay: &mut Option<(PickerKind, AnyElement)>,
@@ -6075,9 +6125,9 @@ fn attach_overlay_end(
         && let Some((_, element)) = overlay.take()
     {
         return chip.relative().child(if closing.1 {
-            popover::anchored_menu_below(id, element, closing.0)
+            popover::anchored_menu_below_end(id, element, closing.0)
         } else {
-            popover::anchored_menu_above(id, element, closing.0)
+            popover::anchored_menu_above_end(id, element, closing.0)
         });
     }
     chip
@@ -6177,12 +6227,18 @@ impl Render for Pickers {
         // loaded, so that's a conclusion, not a loading gap) — the chip says
         // so instead of wearing a brand mark for an agent that can't run.
         let no_agents = self.no_agents_available() && self.effective_harness(cx).is_none();
+        self.settings_model.window = Some(window.window_handle());
         let model_name = self.model_name(cx);
-        let model_label: SharedString = if let Some(title) = &self.title {
+        let model_label: SharedString = if let Some(pending) = self.settings_model.pending {
+            pending.into()
+        } else if self.settings_model.defaults {
+            crate::settings::default_model(cx).map(|selection|selection.label.clone())
+                .unwrap_or_else(|| "Agent default".into()).into()
+        } else if let Some(title) = &self.title {
             // The saved choice, not the tab being browsed.
             match (title.harness, title.model.as_deref()) {
                 (None, _) => "Session agent".into(),
-                (Some(_), None) => "Automatic".into(),
+                (Some(_), None) => "Agent default".into(),
                 (Some(harness), Some(id)) => self
                     .models
                     .get(&harness)
@@ -6264,17 +6320,16 @@ impl Render for Pickers {
         // tone — the ladder's level, else an effort option's choice (Cursor).
         // None for the title picker (titles always run at minimal reasoning).
         let chip_suffix = effort
-            .filter(|_| self.title.is_none())
+            .filter(|_| !self.is_settings_model())
             .map(|level| (SharedString::from(reasoning_label(level)), None))
             .or_else(|| {
-                self.title
-                    .is_none()
+                (!self.is_settings_model())
                     .then(|| self.compact_effort(cx))
                     .flatten()
                     .and_then(|e| e.labels.get(e.selected).cloned())
                     .map(|label| (label, None))
             });
-        let fast = self.selected_model(cx).is_some_and(|model| {
+        let fast = !self.is_settings_model() && self.selected_model(cx).is_some_and(|model| {
             model.options.iter().any(|option| {
                 fast_mode_values(option).is_some_and(|(on, _)| {
                     self.resolved(cx)
@@ -6322,7 +6377,23 @@ impl Render for Pickers {
                     .ml_auto()
                     .text_color(theme.text_muted),
             );
-        let model_chip = model_chip.w(px(chip_width));
+        let model_chip = model_chip.w(px(chip_width)).when(self.is_settings_model(), |view| {
+            view.w(px(256.)).max_w(window.viewport_size().width * 0.4)
+                .h(px(28.)).rounded(px(7.)).border_1()
+                .border_color(zuse_viewport::palette::tone(gpui::hsla(128./360.,0.05,0.17,1.),gpui::hsla(112./360.,0.12,0.82,1.)))
+                .bg(zuse_viewport::settings_style::card_bg()).font_weight(gpui::FontWeight::NORMAL).text_size(px(12.))
+                .hover(|view|view.bg(theme.settings_frame_bg()))
+                .track_focus(&self.settings_model.trigger)
+                .aria_label(if self.settings_model.defaults { "Default model" } else { "Thread naming model" })
+                .when(self.settings_model.pending.is_some(), |view|view.opacity(0.6))
+                .on_key_down(cx.listener(|this,event:&KeyDownEvent,window,cx|{
+                    if this.settings_model.trigger.is_focused(window)
+                        && matches!(event.keystroke.key.as_str(),"enter"|"space") {
+                        this.toggle(PickerKind::HarnessModel,window,cx);
+                        cx.stop_propagation();
+                    }
+                }))
+        });
         // Both presentations align to the chip's trailing edge beside Send.
         let model_chip = attach_overlay_end(
             model_chip,

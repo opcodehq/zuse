@@ -470,7 +470,7 @@ impl WorkspaceView {
                                 row()
                                     .id("model-picker")
                                     .relative()
-                                    .child({let bounds=self.picker_menu.trigger.clone();canvas(move|b,_,_|bounds.set(Some(b)),|_,_,_,_|{}).absolute().size_full()})
+                                    .child({let bounds=self.picker_menu.trigger.clone();canvas(move|b,_,_|bounds.set(Some(b)),|_,_,_,_|{}).absolute().left_0().top_0().size_full()})
                                     .role(Role::Button)
                                     .aria_label("Change model")
                                     .cursor_pointer()

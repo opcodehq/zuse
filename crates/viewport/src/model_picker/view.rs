@@ -610,12 +610,12 @@ impl WorkspaceView {
         deferred(
             anchored()
                 .anchor(if below {
-                    Anchor::TopLeft
+                    Anchor::TopRight
                 } else {
-                    Anchor::BottomLeft
+                    Anchor::BottomRight
                 })
                 .when_some(anchor, |v, b| {
-                    v.position(point(b.left(), if below { b.bottom() } else { b.top() }))
+                    v.position(point(b.right(), if below { b.bottom() } else { b.top() }))
                 })
                 .offset(point(px(0.), px(if below { 6. } else { -6. })))
                 .snap_to_window_with_margin(px(8.))

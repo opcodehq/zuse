@@ -20,10 +20,10 @@ try {
  page=browser('model-menu');page.open(url,fixture('general-settings-observer.js'));
  page.wait('window.__generalParity.methods.includes("ListModels")');await click(70,55);
  stage='draft and grouped menu';await click(600,891);page.run(['keyboard','type','Keep this model-menu draft']);await click(1010,946);shot('grouped');
- assert.ok(red('model-menu-grouped.png',900,740)>20&&red('model-menu-grouped.png',1270,740)>20,'380px menu fits the window');
- stage='provider filter preserves draft model';await click(913,711);shot('scoped');assert.equal(preferences().modelConfigHistory?.length??0,0);
- stage='default star is independent of current selection';await click(1222,867);shot('star');assert.equal(preferences().defaultProvider,'codex');assert.equal(preferences().defaultModels.codex,'balanced');assert.equal(preferences().modelConfigHistory.length,0);
- stage='row selection closes';await click(1020,900);shot('selected');assert.equal(preferences().modelConfigHistory[0].provider,'codex');assert.equal(preferences().modelConfigHistory[0].model,'deep');assert.ok(red('model-menu-selected.png',1200,750)<20,'Selection closes the popup');
+ assert.ok(red('model-menu-grouped.png',715,740)>20&&red('model-menu-grouped.png',1080,740)>20&&red('model-menu-grouped.png',1095,740)<20,'380px menu aligns to the trigger trailing edge');
+ stage='provider filter preserves draft model';await click(729,711);shot('scoped');assert.equal(preferences().modelConfigHistory?.length??0,0);
+ stage='default star is independent of current selection';await click(1038,867);shot('star');assert.equal(preferences().defaultProvider,'codex');assert.equal(preferences().defaultModels.codex,'balanced');assert.equal(preferences().modelConfigHistory.length,0);
+ stage='row selection closes';await click(836,900);shot('selected');assert.equal(preferences().modelConfigHistory[0].provider,'codex');assert.equal(preferences().modelConfigHistory[0].model,'deep');assert.ok(red('model-menu-selected.png',1046,750)<20,'Selection closes the popup');
  stage='search shortcuts and separate default';await click(1010,946);page.run(['keyboard','type','  DEEP  ']);await sleep(300);shot('filtered');press('Control+1');await sleep(350);assert.equal(preferences().modelConfigHistory[0].provider,'claude-code');assert.equal(preferences().modelConfigHistory[0].model,'deep');assert.equal(preferences().defaultModels.codex,'balanced');
  stage='no match Enter and Escape';await click(1010,946);page.run(['keyboard','type','not-a-model']);await sleep(300);press('Enter');shot('empty');assert.equal(preferences().modelConfigHistory[0].provider,'claude-code');press('Escape');await sleep(250);shot('dismissed');
  stage='outside dismissal restores composer input';await click(1010,946);await click(600,891);page.run(['keyboard','type',' stays here']);shot('draft');

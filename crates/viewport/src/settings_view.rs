@@ -502,7 +502,7 @@ impl WorkspaceView {
     }
     fn default_model_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         use super::model_picker::TriggerBounds;
-        let model_bounds = TriggerBounds::default();
+        let model_bounds = self.picker_menu.trigger.clone();
         let model_bounds_measure = model_bounds.clone();
         let permission_bounds = TriggerBounds::default();
         let permission_bounds_measure = permission_bounds.clone();
