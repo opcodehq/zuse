@@ -14,6 +14,7 @@ use zuse_usage::{
     Data,
     aggregate::Selection,
     import::{Format, Importer, Source},
+    pricing::Pricing,
 };
 
 #[derive(Clone)]
@@ -21,6 +22,7 @@ pub struct Usage {
     inner: Arc<Mutex<Cache>>,
     sources: Arc<Vec<Source>>,
     ledger: Option<Arc<PathBuf>>,
+    pricing: Pricing,
 }
 struct Cache {
     importer: Importer,
@@ -39,12 +41,17 @@ impl Usage {
             })),
             sources: Arc::new(sources),
             ledger: None,
+            pricing: Pricing::bundled(),
         }
     }
     pub fn persistent(sources: Vec<Source>, ledger: PathBuf) -> Self {
         let mut usage = Self::new(sources);
         usage.ledger = Some(Arc::new(ledger));
         usage
+    }
+    pub fn with_pricing(mut self, pricing: Pricing) -> Self {
+        self.pricing = pricing;
+        self
     }
     pub fn local(journals: PathBuf) -> Self {
         let home = std::env::var_os("HOME")
@@ -115,7 +122,7 @@ impl Usage {
                 "grok",
                 "Grok",
                 Format::Grok,
-                vec![home.join(".grok/sessions")],
+                roots("GROK_DATA_DIR", vec![home.join(".grok/sessions")]),
             ),
         ];
         let legacy = std::env::var_os("ZUSE_USER_DATA_DIR")
@@ -129,10 +136,9 @@ impl Usage {
                 }
             });
         sources.push(Source::new("zuse", "Zuse (Beta)", Format::Legacy, legacy));
-        Self::persistent(
-            sources,
-            journals.parent().unwrap_or(&journals).join("usage.sqlite"),
-        )
+        let profile = journals.parent().unwrap_or(&journals);
+        Self::persistent(sources, profile.join("usage.sqlite"))
+            .with_pricing(Pricing::cached(&profile.join("usage-pricing")))
     }
     async fn data(&self, force: bool) -> Result<Arc<Data>, RpcError> {
         let mut cache = self.inner.clone().lock_owned().await;
@@ -147,6 +153,7 @@ impl Usage {
         }
         let sources = self.sources.clone();
         let ledger_path = self.ledger.clone();
+        let prices = self.pricing.load(force).await;
         // Move the owned guard into the worker: disconnecting one caller cannot
         // start a second scan or lose the source cache halfway through a read.
         tokio::task::spawn_blocking(move || {
@@ -160,6 +167,9 @@ impl Usage {
                 }
                 data = cache.ledger.as_mut().unwrap().merge(data).map_err(|_| RpcError::Failed("Saved usage history could not be updated. Check profile storage and retry.".into()))?;
             }
+            // The ledger and import cache retain logged costs only, so a later
+            // catalogue can reprice history even after its source file is pruned.
+            prices.apply(&mut data);
             let data = Arc::new(data);
             cache.data = Some(data.clone());
             cache.refreshed = Some(Instant::now());

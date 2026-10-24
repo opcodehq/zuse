@@ -295,6 +295,7 @@ fn record(source: &Source, path: &Path, time: DateTime<Utc>, tokens: TokenCounts
         ended_at: time,
         tokens,
         cost_usd: None,
+        fast: false,
         provenance: path.to_string_lossy().into_owned(),
         confidence: "exact".into(),
         possible_duplicate: false,
@@ -329,6 +330,7 @@ fn read_claude(lines: impl Iterator<Item = Value>, path: &Path, source: &Source,
         row.project_path = text(&v["cwd"]);
         row.workspace_path = row.project_path.clone();
         row.cost_usd = v["costUSD"].as_f64();
+        row.fast = usage["speed"] == "fast";
         let identity = text(&v["message"]["id"])
             .map(|id| format!("{id}:{}", v["requestId"].as_str().unwrap_or_default()))
             .unwrap_or_else(|| {

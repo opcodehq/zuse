@@ -2,6 +2,7 @@
 pub mod aggregate;
 pub mod import;
 pub mod ledger;
+pub mod pricing;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,8 @@ pub struct Record {
     #[serde(flatten)]
     pub tokens: TokenCounts,
     pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub fast: bool,
     pub provenance: String,
     pub confidence: String,
     pub possible_duplicate: bool,

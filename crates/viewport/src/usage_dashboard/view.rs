@@ -421,7 +421,7 @@ impl UsageDashboard {
                 }
                 CostStatus::Partial => "Some models are unpriced. Actual billing may vary.".into(),
                 CostStatus::Known => {
-                    "Estimated from local usage with recorded costs. Actual billing may vary."
+                    "Estimated from local usage at published provider rates. Actual billing may vary."
                         .into()
                 }
             }

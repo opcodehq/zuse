@@ -14760,11 +14760,13 @@ version = "0.25.0"
 dependencies = [
  "chrono",
  "chrono-tz",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "tokio",
  "zuse-protocol",
 ]
 

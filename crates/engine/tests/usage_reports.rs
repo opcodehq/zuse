@@ -9,6 +9,136 @@ use zuse_protocol::{
 use zuse_usage::import::{Format, Source};
 
 #[tokio::test]
+async fn usage_rpc_estimates_costs_and_reprices_pruned_history_without_changing_logged_costs() {
+    use zuse_usage::{
+        CostStatus,
+        pricing::{Catalogue, Pricing},
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let exports = temp.path().join("exports");
+    std::fs::create_dir(&exports).unwrap();
+    let export = |id, model, cost, speed| json!({"sessionId":id,"timestamp":"2026-10-23T12:00:00Z","costUSD":cost,"message":{"id":id,"model":model,"usage":{"input_tokens":100,"output_tokens":10,"speed":speed}}});
+    let rows = [
+        export("estimated", "priced-model", None, "fast"),
+        export("logged", "priced-model", Some(0.25), "fast"),
+        export("free", "priced-model", Some(0.), "fast"),
+        export("unpriced", "missing-xyz", None, "standard"),
+    ];
+    let path = exports.join("a.jsonl");
+    std::fs::write(
+        &path,
+        rows.iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let core = EngineCore::assemble(
+        &temp.path().join("profile"),
+        Arc::new(HarnessRegistry::new()),
+        HarnessId::Mock,
+        None,
+    )
+    .unwrap();
+    let sources = vec![Source::new(
+        "claude",
+        "Claude Code",
+        Format::Claude,
+        vec![exports],
+    )];
+    let ledger = temp.path().join("usage.sqlite");
+    let client = |rates: &str| {
+        let prices = Pricing::fixed(Arc::new(Catalogue::parse(rates.as_bytes()).unwrap()));
+        let usage = zuse_engine::usage::Usage::persistent(sources.clone(), ledger.clone())
+            .with_pricing(prices);
+        zuse_rpc::memory_client(Arc::new(
+            core.rpc_service().as_ref().clone().with_usage(usage),
+        ))
+    };
+    let old_rates = client(
+        r#"{"priced-model":{"input_cost_per_token":0.001,"output_cost_per_token":0.002,"provider_specific_entry":{"fast":6}}}"#,
+    );
+    let report: Overview = old_rates
+        .call_as(zuse_protocol::usage::OVERVIEW, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(report.session_count, 4);
+    assert_eq!(report.summary.cost_status, CostStatus::Partial);
+    assert!((report.summary.cost_usd.unwrap() - 0.97).abs() < 1e-9);
+    let cached: Overview = old_rates
+        .call_as(zuse_protocol::usage::OVERVIEW, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(cached.summary.cost_usd, report.summary.cost_usd);
+    let forced: Overview = old_rates
+        .call_as(zuse_protocol::usage::OVERVIEW, json!({"forceRefresh":true}))
+        .await
+        .unwrap();
+    assert_eq!(forced.summary.cost_usd, report.summary.cost_usd);
+    // Stored JSON remains imported data, including its fast-mode flag.
+    let db = rusqlite::Connection::open(&ledger).unwrap();
+    let saved: Vec<String> = db
+        .prepare("SELECT record_json FROM usage_records")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let saved: Vec<zuse_usage::Record> = saved
+        .into_iter()
+        .map(|row| serde_json::from_str(&row).unwrap())
+        .collect();
+    let estimated = saved
+        .iter()
+        .find(|r| r.session_id.as_deref() == Some("estimated"))
+        .unwrap();
+    assert_eq!(estimated.cost_usd, None);
+    assert!(estimated.fast);
+    std::fs::remove_file(path).unwrap();
+    let new_rates = client(
+        r#"{"priced-model":{"input_cost_per_token":0.002,"output_cost_per_token":0.004,"provider_specific_entry":{"fast":6}}}"#,
+    );
+    let repriced: Overview = new_rates
+        .call_as(zuse_protocol::usage::OVERVIEW, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(repriced.session_count, 4);
+    assert_eq!(repriced.summary.cost_status, CostStatus::Partial);
+    assert!((repriced.summary.cost_usd.unwrap() - 1.69).abs() < 1e-9);
+    let sessions: SessionsPage = new_rates
+        .call_as(zuse_protocol::usage::SESSIONS, json!({"sort":"cost"}))
+        .await
+        .unwrap();
+    assert_eq!(sessions.rows[0].key, "estimated");
+    assert!((sessions.rows[0].summary.cost_usd.unwrap() - 1.44).abs() < 1e-9);
+    for (key, expected) in [
+        ("logged", Some(0.25)),
+        ("free", Some(0.)),
+        ("unpriced", None),
+    ] {
+        assert_eq!(
+            sessions
+                .rows
+                .iter()
+                .find(|row| row.key == key)
+                .unwrap()
+                .summary
+                .cost_usd,
+            expected
+        );
+    }
+    let forced_repriced: Overview = new_rates
+        .call_as(zuse_protocol::usage::OVERVIEW, json!({"forceRefresh":true}))
+        .await
+        .unwrap();
+    assert_eq!(forced_repriced.summary.cost_status, CostStatus::Partial);
+    assert_eq!(forced_repriced.summary.cost_usd, repriced.summary.cost_usd);
+    assert!(
+        core.workspace.read_sessions().unwrap().is_empty(),
+        "Usage must not create a chat or start an agent"
+    );
+}
+
+#[tokio::test]
 async fn usage_rpc_scopes_refreshes_and_paginates_without_starting_a_run() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("alpha");
