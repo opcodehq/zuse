@@ -133,6 +133,14 @@ pub struct DefaultModelSelection {
     pub label: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceMode {
+    #[default]
+    Worktree,
+    Local,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WorkspacePreferences {
@@ -146,6 +154,7 @@ pub struct WorkspacePreferences {
     pub provider_update_notifications: bool,
     pub default_permission_mode: PermissionMode,
     pub collapsed_projects: Vec<String>,
+    pub workspace_by_project: BTreeMap<String, WorkspaceMode>,
     pub default_provider: Option<String>,
     pub default_models: BTreeMap<String, String>,
     pub recent_models: Vec<ModelSelection>,

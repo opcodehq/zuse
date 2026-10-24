@@ -456,6 +456,7 @@ impl WorkspaceView {
                 },
                 cx,
             ))
+            .when_some(self.creation_workspace_control(cx), |view, control| view.child(control))
             .when(self.cloud.mode, |v| {
                 v.child(div().flex_1()).child(self.creation_chip(
                     "branch",

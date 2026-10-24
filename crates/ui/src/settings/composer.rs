@@ -71,6 +71,8 @@ pub struct ComposerDefaults {
     pub project: Option<String>,
     /// Remembered "Don't work in a project" opt-out.
     pub no_project: bool,
+    /// New-chat workspace mode, remembered independently for each project.
+    pub workspace_by_project: HashMap<String, zuse_protocol::presentation::WorkspaceMode>,
     /// Starred models (the picker's favorites rail), in starring order.
     pub favorites: Vec<FavoriteModel>,
 }

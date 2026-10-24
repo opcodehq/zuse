@@ -17,6 +17,7 @@ pub mod cloud_settings;
 mod composer_alerts;
 pub mod composer_style;
 pub mod creation_style;
+mod creation_checkout;
 pub mod dither;
 mod glass;
 pub mod sidebar_controls;
@@ -211,6 +212,7 @@ pub struct WorkspaceView {
     draft_journal_last: Option<Value>,
     draft_journal_error: Option<String>,
     creating: Option<(u64, Value, Value)>,
+    creation_checkout: creation_checkout::State,
     queue: Vec<Value>,
     queue_watch: Option<u64>,
     queue_edit: Option<queue_edit::QueueEdit>,
@@ -652,6 +654,7 @@ impl WorkspaceView {
             draft_journal_last: None,
             draft_journal_error: None,
             creating: None,
+            creation_checkout: Default::default(),
             queue: vec![],
             queue_watch: None,
             queue_edit: None,
@@ -1508,6 +1511,7 @@ impl WorkspaceView {
     }
 
     fn new_chat(&mut self, cx: &mut Context<Self>) -> bool {
+        self.creation_checkout.dismiss();
         self.close_usage(cx);
         self.close_project_archives();
         if !self.require_connection(cx) {
@@ -1701,7 +1705,7 @@ impl WorkspaceView {
             draft.chat_id = Some(uuid::Uuid::new_v4().to_string());
         }
         self.persist_outgoing_draft(draft.clone(), cx);
-        let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"cwd":self.cwd(),"sandbox":self.sandbox,"autoApprove":self.sandbox==zuse_protocol::SandboxLevel::DangerFullAccess,"resume":null,"attachments":self.attachment_paths()}});
+        let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"cwd":self.cwd(),"sandbox":self.sandbox,"autoApprove":self.sandbox==zuse_protocol::SandboxLevel::DangerFullAccess,"resume":null,"attachments":self.attachment_paths(),"worktree":self.creation_worktree()}});
         let send = if let Some(chat) = &self.selected {
             self.call(
                 methods::QUEUE_COMMAND,

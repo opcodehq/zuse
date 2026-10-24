@@ -13,6 +13,7 @@
 
 mod cloud;
 mod compact;
+mod workspace;
 
 use crate::roll_text::{roll_text, rolling};
 use std::collections::{HashMap, HashSet};
@@ -856,6 +857,8 @@ pub struct Pickers {
     held_ref: Option<RepoRef>,
     /// Highlighted row in the open list (keyboard nav).
     active: usize,
+    workspace_keyboard: bool,
+    workspace_ready: bool,
     /// Models-list scroll — keyboard nav keeps the highlighted row in view.
     /// A `UniformListScrollHandle`: the model list virtualizes (7k-model
     /// catalogs must scroll smoothly), and this is its handle; the plain
@@ -991,15 +994,17 @@ impl Pickers {
             let space = state.read(cx).selected_space.clone();
             let device = state.read(cx).effective_device_id();
             let device_changed = device != this.device_owner;
-            if space != this.space_owner || device_changed {
+            let workspace_ready = state.read(cx).selected_space_row().is_some_and(|s| s.git_detected);
+            if space != this.space_owner || device_changed || workspace_ready != this.workspace_ready {
                 this.space_owner = space;
                 this.device_owner = device;
+                this.workspace_ready = workspace_ready;
                 this.setting_menu = None;
                 this.setting_bounds = None;
                 this.held_ref = this.selected_ref().cloned().or(this.held_ref.take());
                 this.refs_task = None;
                 this.config.branch = None;
-                this.config.checkout = CheckoutKind::default();
+                this.config.checkout = Self::remembered_checkout(&state, &this.defaults, cx);
                 this.refs = Loadable::Idle;
                 this.refs_space = None;
             }
@@ -1069,6 +1074,8 @@ impl Pickers {
         let draft_owner = state.read(cx).selected_chat.clone();
         let space_owner = state.read(cx).selected_space.clone();
         let device_owner = state.read(cx).effective_device_id();
+        let checkout = Self::remembered_checkout(&state, &defaults, cx);
+        let workspace_ready = state.read(cx).selected_space_row().is_some_and(|s| s.git_detected);
         Self {
             cloud: Default::default(),
             state,
@@ -1086,7 +1093,10 @@ impl Pickers {
             compact_motion: compact::CompactMotion::default(),
             compact_keyboard: false,
             effort_bounds: None,
-            config: DraftConfig::default(),
+            config: DraftConfig {
+                checkout,
+                ..Default::default()
+            },
             title,
             defaults,
             _settings_observe: settings_observe,
@@ -1117,6 +1127,8 @@ impl Pickers {
             refs_space: None,
             held_ref: None,
             active: 0,
+            workspace_keyboard: false,
+            workspace_ready,
             model_scroll: gpui::UniformListScrollHandle::new(),
             model_rows_cache: std::cell::RefCell::new(None),
             catalog_rev: 0,
@@ -1632,14 +1644,17 @@ impl Pickers {
         // otherwise reads as a second active row (user report).
         self.active = match kind {
             PickerKind::Checkout => match self.config.checkout {
-                CheckoutKind::Local => 0,
-                CheckoutKind::NewWorktree => 1,
+                CheckoutKind::NewWorktree => 0,
+                CheckoutKind::Local => 1,
             },
             PickerKind::Branch => self.selected_ref_index(cx),
             PickerKind::HarnessModel => self.selected_model_index(cx),
             PickerKind::Space => if self.state.read(cx).no_project { 0 } else { self.selected_project_index(cx)+1 },
             PickerKind::Device => self.selected_device_index(cx),
         };
+        if kind == PickerKind::Checkout {
+            self.workspace_keyboard = false;
+        }
         if kind == PickerKind::HarnessModel {
             // scroll_to_item below may land anywhere; the first note of the
             // settled position is the fresh baseline, not scroll motion.
@@ -2103,6 +2118,17 @@ impl Pickers {
             self.config.branch = None;
         }
         self.config.checkout = kind;
+        if let Some(space) = self.state.read(cx).selected_space_row() {
+            self.defaults.workspace_by_project.insert(
+                zuse_protocol::view::project_key(space),
+                if kind == CheckoutKind::NewWorktree {
+                    zuse_protocol::presentation::WorkspaceMode::Worktree
+                } else {
+                    zuse_protocol::presentation::WorkspaceMode::Local
+                },
+            );
+            self.save_defaults();
+        }
         self.animate_close(cx);
         cx.notify();
     }
@@ -2590,11 +2616,6 @@ impl Pickers {
         }
     }
 
-    fn display_ref_is_worktree(&self) -> bool {
-        self.display_ref()
-            .is_some_and(|row| row.worktree_path.is_some())
-    }
-
     /// The existing worktree the picked ref is materialized in, if any.
     fn selected_ref_worktree(&self) -> Option<String> {
         self.selected_ref().and_then(|r| r.worktree_path.clone())
@@ -2618,18 +2639,11 @@ impl Pickers {
         }
     }
 
-    /// Label of the checkout-kind trigger (t3code `resolveEnvModeLabel` /
-    /// `resolveCurrentWorkspaceLabel`).
+    /// Workspace mode is independent of the selected base branch.
     fn checkout_label(&self) -> &'static str {
         match self.config.checkout {
-            CheckoutKind::NewWorktree => "New worktree",
-            CheckoutKind::Local => {
-                if self.display_ref_is_worktree() {
-                    "Current worktree"
-                } else {
-                    "Current checkout"
-                }
-            }
+            CheckoutKind::NewWorktree => "Worktree",
+            CheckoutKind::Local => "Local",
         }
     }
 
@@ -3060,6 +3074,19 @@ impl Pickers {
         if !self.open.is_open() {
             return;
         }
+        if self.open_kind() == Some(PickerKind::Checkout) {
+            match event.keystroke.key.as_str() {
+                "home" | "end" => {
+                    self.workspace_keyboard = true;
+                    self.active = usize::from(event.keystroke.key == "end");
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
+                "up" | "down" => self.workspace_keyboard = true,
+                _ => {}
+            }
+        }
         if self.open_kind() == Some(PickerKind::HarnessModel) && self.compact_model_picker(cx) {
             // Escape only steps back a page or closes a submenu: it should
             // not light focus rings on the controls it returns to. The next
@@ -3185,9 +3212,9 @@ impl Pickers {
                     self.activate_model_row(cx);
                 } else if self.open_kind() == Some(PickerKind::Checkout) {
                     let kind = if self.active == 0 {
-                        CheckoutKind::Local
-                    } else {
                         CheckoutKind::NewWorktree
+                    } else {
+                        CheckoutKind::Local
                     };
                     self.pick_checkout(kind, cx);
                 } else {
@@ -3220,7 +3247,7 @@ impl Pickers {
         let below = (self.title.is_some() || self.state.read(cx).selected_chat.is_none())
             && matches!(
                 kind,
-                PickerKind::HarnessModel | PickerKind::Branch | PickerKind::Checkout | PickerKind::Space
+                PickerKind::HarnessModel | PickerKind::Branch | PickerKind::Space
             );
         gpui::canvas(
             move |bounds, window, cx| {
@@ -3641,6 +3668,7 @@ impl Pickers {
                 "device-popover",
                 closing,
             ))
+            .children(self.render_creation_workspace(cx))
             .into_any_element()
     }
 
@@ -3669,24 +3697,8 @@ impl Pickers {
                 let content = self.render_branch_popover(cx);
                 Some((PickerKind::Branch, self.popover_frame(320.0, content, cx)))
             }
-            Some(PickerKind::Checkout) => {
-                let content = self.render_checkout_popover(cx);
-                Some((PickerKind::Checkout, self.popover_frame(224.0, content, cx)))
-            }
             _ => None,
         };
-        let kind_icon = match (self.config.checkout, self.display_ref_is_worktree()) {
-            (CheckoutKind::Local, false) => crate::icons::FOLDER,
-            _ => crate::icons::WORKTREE,
-        };
-        let checkout_chip = self.tray_chip(
-            PickerKind::Checkout,
-            "picker-checkout",
-            kind_icon,
-            SharedString::from(self.checkout_label()),
-            &theme,
-            cx,
-        );
         let branch_chip = self.tray_chip(
             PickerKind::Branch,
             "picker-branch",
@@ -3699,13 +3711,6 @@ impl Pickers {
             workspace_footer_row()
                 .w_auto()
                 .flex_none()
-                .child(attach_overlay_below(
-                    checkout_chip,
-                    &mut overlay,
-                    PickerKind::Checkout,
-                    "checkout-popover",
-                    closing,
-                ))
                 .child(attach_overlay_below(
                     branch_chip,
                     &mut overlay,
@@ -3721,6 +3726,9 @@ impl Pickers {
         let theme = Theme::of(cx).for_popup();
         popover::popover_card(&theme)
             .w(px(width))
+            .when(self.mounted_kind() == Some(PickerKind::Checkout), |v| {
+                v.p(px(8.)).border_0().rounded(px(10.)).gap(px(0.))
+            })
             .when(
                 matches!(
                     self.mounted_kind(),
@@ -3751,8 +3759,17 @@ impl Pickers {
                     {
                         return;
                     }
+                    let workspace = this.mounted_kind() == Some(PickerKind::Checkout);
+                    let previous = window.focused(cx);
                     this.dismiss(cx);
-                    if this.focus.contains_focused(window, cx) {
+                    if workspace {
+                        let entity = cx.entity().downgrade();
+                        window.defer(cx, move |window, cx| {
+                            if window.focused(cx) == previous {
+                                let _ = entity.update(cx, |_, cx| cx.emit(ReturnComposerFocus));
+                            }
+                        });
+                    } else if this.focus.contains_focused(window, cx) {
                         window.blur();
                     }
                 }),
@@ -4030,68 +4047,6 @@ impl Pickers {
             );
         }
         popover.into_any_element()
-    }
-
-    /// The checkout-kind dropdown (t3code BranchToolbarEnvModeSelector): two
-    /// rows — "Current checkout"/"Current worktree" (local) and "New worktree".
-    fn render_checkout_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::of(cx).for_popup();
-        let has_worktree = self.selected_ref_worktree().is_some();
-        let local_label: &'static str = if has_worktree {
-            "Current worktree"
-        } else {
-            "Current checkout"
-        };
-        let local_icon = if has_worktree {
-            crate::icons::WORKTREE
-        } else {
-            crate::icons::FOLDER
-        };
-        let options: [(CheckoutKind, &'static str, &'static str); 2] = [
-            (CheckoutKind::Local, local_label, local_icon),
-            (
-                CheckoutKind::NewWorktree,
-                "New worktree",
-                crate::icons::WORKTREE,
-            ),
-        ];
-        let active = self.active;
-        let current = self.config.checkout;
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(2.0))
-            .children(
-                options
-                    .into_iter()
-                    .enumerate()
-                    .map(|(ix, (kind, label, icon_path))| {
-                        let is_selected = current == kind;
-                        popover::menu_row_nav(
-                            &theme,
-                            is_selected,
-                            ix == active,
-                            format!("checkout-row-{ix}"),
-                        )
-                        .id(("checkout-row", ix))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.pick_checkout(kind, cx);
-                        }))
-                        .child(
-                            crate::icons::icon(icon_path)
-                                .size(px(14.0))
-                                .text_color(theme.text_muted),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .child(SharedString::from(label)),
-                        )
-                    }),
-            )
-            .into_any_element()
     }
 
     /// Model picker with a provider rail beside a scoped search.
@@ -7448,13 +7403,18 @@ mod tests {
         });
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
         pickers.update(cx, |pickers, _| {
+            pickers.config.checkout = CheckoutKind::Local;
+            pickers.defaults.workspace_by_project.insert(
+                "b".into(),
+                zuse_protocol::presentation::WorkspaceMode::Local,
+            );
             pickers.refs = Loadable::Ready(vec![
                 repo_ref("main", false, None),
                 repo_ref("feature", true, Some("/wt/feature")),
             ]);
             pickers.refs_space = Some("a".into());
             assert_eq!(pickers.ref_label(), SharedString::from("feature"));
-            assert_eq!(pickers.checkout_label(), "Current worktree");
+            assert_eq!(pickers.checkout_label(), "Local");
         });
         state.update(cx, |state, cx| state.select_space(Some("b".into()), cx));
         cx.run_until_parked();
@@ -7462,7 +7422,7 @@ mod tests {
             // The chips keep naming the last ref while b's refs load...
             assert!(matches!(pickers.refs, Loadable::Idle));
             assert_eq!(pickers.ref_label(), SharedString::from("feature"));
-            assert_eq!(pickers.checkout_label(), "Current worktree");
+            assert_eq!(pickers.checkout_label(), "Local");
             // ...but nothing that acts on refs sees a's rows.
             assert!(pickers.filtered_ref_rows(cx).is_empty());
             assert_eq!(
@@ -7472,7 +7432,7 @@ mod tests {
             pickers.refs = Loadable::Ready(vec![repo_ref("trunk", true, None)]);
             pickers.held_ref = None; // as the refs load does on landing
             assert_eq!(pickers.ref_label(), SharedString::from("trunk"));
-            assert_eq!(pickers.checkout_label(), "Current checkout");
+            assert_eq!(pickers.checkout_label(), "Local");
         });
     }
 
