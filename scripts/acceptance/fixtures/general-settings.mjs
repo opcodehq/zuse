@@ -7,6 +7,8 @@ const clients=new Set(),events=[];
 const providerFixture=providerSettingsFixture(events);
 let state={user:null,login:null,error:null},hold=false,failNext=false,loginTimer,cloud=false,holdCloud=false;
 const delayed=[],delayedWrites=[];
+let workspaceSync=null;
+const syncReplies=[];
 let setup={projects:null,github:null,image:null,imageError:null,projectError:null,failNextBuild:false};
 let billing={subscribed:true,capMicros:25000000,creditCents:2500,debitCents:0,creditAvailable:true,status:'active',usedMicros:5000000,overageMicros:0,usageCount:1,summaryError:null,entitlementError:null,creditError:null,failNextCap:false,writeDelay:450,holdWrites:false,workspaces:[]};
 const summary=()=>({currency:'USD',status:billing.status,periodStart:1790812800000,periodEnd:1793491200000,basePriceMicros:40000000,includedProviderCostMicros:35000000,providerCostMicros:billing.usedMicros,storageCostMicros:0,includedUsedMicros:Math.min(billing.usedMicros,35000000),includedRemainingMicros:Math.max(0,35000000-billing.usedMicros),overageProviderCostMicros:billing.overageMicros,overageChargeMicros:billing.overageMicros,overageCapMicros:billing.capMicros,markupBasisPoints:500,currentInvoiceEstimateMicros:40000000+billing.overageMicros,usageProvisional:false});
@@ -27,12 +29,14 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
     if(value.billing)billing={...billing,...value.billing};
     if(value.setup)setup={...setup,...value.setup};
     if(value.providers)providerFixture.configure(value.providers);
+    if(value.workspaceSync)workspaceSync={hold:false,error:'Sync service is unavailable. Retry when connected.',...workspaceSync,...value.workspaceSync};
+    if(workspaceSync&&!workspaceSync.hold)for(const [client,frame]of syncReplies.splice(0))emit(client,frame);
     if(Object.hasOwn(value,'holdCloud'))holdCloud=value.holdCloud;
     if(!holdCloud)for(const [client,frame]of delayed.splice(0))emit(client,frame);
     if(!billing.holdWrites)for(const [client,frame]of delayedWrites.splice(0))emit(client,frame);
     publish();
    }
-   return Response.json({state,events,hold,billing,setup,providers:providerFixture.snapshot()},{headers});
+   return Response.json({state,events,hold,billing,setup,workspaceSync,providers:providerFixture.snapshot()},{headers});
   }
   if(url.pathname==='/api/session/check'||url.pathname==='/api/session')return Response.json({ok:true},{headers});
   if(url.pathname==='/api/rpc'||(url.pathname==='/'&&request.headers.get('upgrade')?.toLowerCase()==='websocket')){
@@ -53,6 +57,10 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,
   },
   message(client,message){
    const text=message.toString(),frame=JSON.parse(text);
+   if(frame.method==='SignIn'&&workspaceSync){
+    events.push({method:frame.method});const reply={id:frame.id,err:workspaceSync.error,done:true};
+    if(workspaceSync.hold)syncReplies.push([client,reply]);else emit(client,reply);return;
+   }
    if(frame.method==='WatchDocMessages')events.push({method:frame.method,chatId:frame.params?.chatId});
    if(providerFixture.handle(client,frame,emit))return;
    if(frame.cancel){events.push({cancel:frame.id});if(client.data.handled.delete(frame.id))return;}

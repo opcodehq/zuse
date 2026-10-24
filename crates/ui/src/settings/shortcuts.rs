@@ -63,6 +63,7 @@ pub struct ShortcutsPage {
     appshots_page: bool,
     general_page: bool,
     general_account: Entity<crate::settings::plugins::PluginsCard>,
+    general_updates_focus: FocusHandle,
     completion_preset_select: widgets::SelectState,
     appshots_focus_pending: bool,
     scroll: crate::settings::widgets::PageScroll,
@@ -110,6 +111,7 @@ impl ShortcutsPage {
         Self {
             appshots_page: false,
             general_page: false,
+            general_updates_focus: cx.focus_handle().tab_stop(true),
             completion_preset_select: Default::default(),
             appshots_focus_pending: false,
             scroll: crate::settings::widgets::PageScroll::default(),
@@ -972,7 +974,8 @@ impl Render for ShortcutsPage {
                                                     .child(pull_request_destination_row),
                                             ))
                                             .child(self.thread_naming.clone())
-                                            .child(self.worktrees.clone()),
+                                            .child(self.worktrees.clone())
+                                            .when(!cfg!(target_os = "macos"), |stack| stack.child(self.general_app_updates(&theme, cx))),
                                     ),
                             ),
                     )

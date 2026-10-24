@@ -92,6 +92,7 @@ mod side_chats;
 mod sidebar_pins;
 mod sidebar_controls;
 mod workspace_layout;
+mod workspace_storage;
 mod sidebar_sections;
 pub(crate) mod spaces;
 mod thread_search;
@@ -5791,8 +5792,11 @@ impl Shell {
             }
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
-                    let state = self.state.clone();
-                    self.devices_page = Some(cx.new(|cx| DevicesPage::new(state, cx)));
+                    self.devices_page = Some(self.create_devices_page(cx));
+                }
+                let storage = self.workspace_storage_properties(cx);
+                if let Some(page) = &self.devices_page {
+                    page.update(cx, |page, cx| page.set_workspace_storage(storage, cx));
                 }
                 match &self.devices_page {
                     Some(page) => page.clone().into_any_element(),
@@ -10019,10 +10023,13 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The sidebar's top block: the workspace switcher, then the New chat,
-    /// New project and Plugins rows.
+    /// Compact New chat, New project and Plugins actions.
     fn render_sidebar_nav(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let workspace = self.render_workspace_switcher(theme, cx);
+        // Organization switching requires capabilities from the General account.
+        // The legacy device sync menu stays on the PR route; workspace routes
+        // expose those controls in Remote access.
+        let workspace = (self.workspace_gutter() == 0.)
+            .then(|| self.render_workspace_switcher(theme, cx));
         let new_chat_hint: SharedString =
             crate::settings::badge_combo(self.settings.keymap.get(ShortcutId::NewSession)).into();
         let plugins_open = matches!(self.route, Route::Plugins);
@@ -10078,9 +10085,11 @@ impl Shell {
             .flex_col()
             .gap(px(2.0))
             .px(px(6.0))
-            .pt(px(2.0))
+            .pt(px(4.0))
             .pb(px(4.0))
-            .child(div().px(px(2.0)).pt(px(2.0)).pb(px(6.0)).child(workspace))
+            .when_some(workspace, |view, workspace| {
+                view.child(div().px(px(2.0)).pb(px(6.0)).child(workspace))
+            })
             .child(
                 row(
                     "sidebar-new-chat-row",

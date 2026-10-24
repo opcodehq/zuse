@@ -17,6 +17,8 @@ use crate::popover;
 use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
+mod workspace_storage;
+pub(crate) use workspace_storage::{StorageEvent, WorkspaceStorage};
 
 /// A device that pinged within this window shows a presence dot (engines
 /// heartbeat every 15s; 70s tolerates a couple of missed beats).
@@ -74,6 +76,8 @@ pub struct DevicesPage {
     copy_task: Option<Task<()>>,
     _observe: Subscription,
     _managed: Subscription,
+    workspace_storage: Option<WorkspaceStorage>,
+    storage_focus: gpui::FocusHandle,
 }
 
 impl DevicesPage {
@@ -100,6 +104,8 @@ impl DevicesPage {
             task: None,
             copy_task: None,
             _observe: observe,
+            workspace_storage: None,
+            storage_focus: cx.focus_handle().tab_stop(true),
         }
     }
 
@@ -440,6 +446,7 @@ impl Render for DevicesPage {
                                 ))
                                 .child(
                                     widgets::section_stack()
+                                        .children(self.render_workspace_storage(cx))
                                         .child(self.managed.clone())
                                         .child(self.pairing.clone())
                                         .child(card),
