@@ -12,6 +12,7 @@
 //! rendered as skeletons / inline errors with Retry.
 
 mod cloud;
+mod cloud_models;
 mod compact;
 mod workspace;
 mod model_menu;
@@ -1199,6 +1200,7 @@ impl Pickers {
     }
 
     pub fn set_draft_sandbox(&mut self, sandbox: SandboxLevel, cx: &mut Context<Self>) {
+        if self.cloud_launch_frozen() { return; }
         if self.state.read(cx).selected_chat.is_none() {
             self.config.sandbox = Some(sandbox);
             cx.notify();
@@ -1249,6 +1251,14 @@ impl Pickers {
 
     /// Effective harness: picked, or the chat's config, or the first listed.
     fn effective_harness(&self, cx: &App) -> Option<HarnessId> {
+        if self.cloud_models_active(cx) {
+            return self.cloud.catalog.as_ref().and_then(|catalog| {
+                catalog.providers.iter().find(|row| Some(row.id) == self.config.harness)
+                    .or_else(|| catalog.providers.iter().find(|row| crate::settings::default_model(cx).is_some_and(|model| row.id == model.provider)))
+                    .or_else(|| catalog.providers.iter().find(|row| Some(row.id) == self.defaults.harness))
+                    .or_else(|| catalog.providers.first()).map(|row| row.id)
+            });
+        }
         if let Some(harness) = self.config.harness {
             return Some(harness);
         }
@@ -1309,6 +1319,14 @@ impl Pickers {
     /// Effective model id: the draft pick, the selected chat's config, or (on
     /// the new-chat canvas) the remembered last-used model for the harness.
     fn effective_model_id<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
+        if self.cloud_models_active(cx) {
+            let provider = self.cloud.catalog.as_ref()?.providers.iter()
+                .find(|row| Some(row.id) == self.effective_harness(cx))?;
+            return self.config.model.as_deref().and_then(|model| provider.resolve_model(model))
+                .or_else(|| crate::settings::default_model(cx).filter(|model| model.provider == provider.id).and_then(|model| provider.resolve_model(&model.model)))
+                .or_else(|| self.defaults.model_for(provider.id).and_then(|model| provider.resolve_model(&model.id)))
+                .map(|model| model.id.as_str()).or(Some(provider.default_model.as_str()));
+        }
         if self.settings_model.defaults {
             return crate::settings::default_model(cx)
                 .filter(|selection| Some(selection.provider) == self.effective_harness(cx))
@@ -1355,10 +1373,11 @@ impl Pickers {
     }
 
     fn effective_reasoning(&self, cx: &App) -> Option<ReasoningLevel> {
+        if !self.model_configuration_available(cx) { return None; }
         let explicit = self.explicit_reasoning(cx);
         // The old device's ladder must not clamp the chip's level either:
         // a send in this window carries the unclamped value.
-        let stale = self
+        let stale = !self.cloud_models_active(cx) && self
             .effective_harness(cx)
             .is_some_and(|h| self.stale_models.contains(&h));
         if stale || self.selected_model(cx).is_none() {
@@ -1373,7 +1392,7 @@ impl Pickers {
     /// absent from the live catalog keeps its identity and remembered chip label.
     fn selected_model<'a>(&'a self, cx: &'a App) -> Option<&'a Model> {
         let harness = self.effective_harness(cx)?;
-        let models = self.models.get(&harness)?.ready()?;
+        let models = self.model_catalog(cx).get(&harness)?.ready()?;
         let selected = self.effective_model_id(cx);
         // An unset title model means "cheapest", not the catalog default.
         if self.title.is_some() && selected.is_none() {
@@ -1383,7 +1402,7 @@ impl Pickers {
     }
 
     fn model_name(&self, cx: &App) -> ModelName {
-        if self.no_agents_available() && self.effective_harness(cx).is_none() {
+        if self.no_agents_available(cx) && self.effective_harness(cx).is_none() {
             return ModelName::None { no_agents: true };
         }
         if let Some(label) = self.selected_model_label(cx) {
@@ -1391,10 +1410,10 @@ impl Pickers {
         }
         // A list still from the previous device is loading for this one.
         let catalog_loading =
-            self.harnesses_stale || matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
+            (!self.cloud_models_active(cx) && self.harnesses_stale) || matches!(self.harness_catalog(cx), Loadable::Idle | Loadable::Loading);
         let models_loading = self.effective_harness(cx).is_some_and(|harness| {
             !matches!(
-                self.models.get(&harness),
+                self.model_catalog(cx).get(&harness),
                 Some(Loadable::Ready(_)) | Some(Loadable::Error(_))
             )
         });
@@ -1437,6 +1456,7 @@ impl Pickers {
     /// selections for existing chats, the remembered picks for the model the
     /// new-chat canvas resolves to (same id [`Self::resolved`] sends).
     fn explicit_options(&self, cx: &App) -> serde_json::Map<String, serde_json::Value> {
+        if !self.model_configuration_available(cx) { return Default::default(); }
         if let Some(chat) = self.state.read(cx).selected_chat_row() {
             return chat
                 .config
@@ -1469,19 +1489,19 @@ impl Pickers {
     /// state (every enabled harness is missing its CLI, or nothing is
     /// enabled). False while the catalog is still loading or failed
     /// (nothing to conclude yet; offline sends must not be blocked on it).
-    pub fn no_agents_available(&self) -> bool {
+    pub fn no_agents_available(&self, cx: &App) -> bool {
         // The previous device's list can't speak for this one.
-        self.harnesses
+        self.harness_catalog(cx)
             .ready()
-            .filter(|_| !self.harnesses_stale)
+            .filter(|_| self.cloud_models_active(cx) || !self.harnesses_stale)
             .is_some_and(|list| self.offered(list).is_empty())
     }
 
     pub(crate) fn steering_capability(&self, cx: &App) -> Option<bool> {
-        if self.harnesses_stale {
+        if !self.cloud_models_active(cx) && self.harnesses_stale {
             return None;
         }
-        self.harnesses
+        self.harness_catalog(cx)
             .ready()
             .and_then(|list| {
                 let selected = self.effective_harness(cx)?;
@@ -1512,7 +1532,7 @@ impl Pickers {
         // A catalog still from the previous device must not pick for this
         // one (its default model, its effort ladder): send only what was
         // chosen or remembered, as when no catalog has loaded.
-        if harness.is_some_and(|h| self.stale_models.contains(&h)) {
+        if !self.cloud_models_active(cx) && harness.is_some_and(|h| self.stale_models.contains(&h)) {
             return ResolvedRunConfig {
                 harness,
                 sandbox,
@@ -1606,6 +1626,7 @@ impl Pickers {
     }
 
     fn toggle(&mut self, kind: PickerKind, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cloud_launch_frozen() { return; }
         if kind == PickerKind::HarnessModel && self.settings_model.pending.is_some() { return; }
         if kind == PickerKind::HarnessModel && self.settings_model.defaults {
             self.config.harness = None;
@@ -1758,6 +1779,11 @@ impl Pickers {
     // ---- loads ----
 
     fn ensure_harnesses(&mut self, force: bool, cx: &mut Context<Self>) {
+        if self.cloud_models_active(cx) {
+            if force { self.cloud.refresh(); }
+            self.ensure_cloud(cx);
+            return;
+        }
         // Non-forced (the render loop's eager kick) only loads from Idle: an
         // Error that could re-trigger a load would flip back to Loading
         // before the retry row ever painted (and spam the engine); Retry
@@ -1830,6 +1856,10 @@ impl Pickers {
     /// "Loading models…" round-trip. Each `ensure_models` call is guarded by
     /// its slot state, so re-running this every catalog load/render is free.
     fn prefetch_models(&mut self, force: bool, cx: &mut Context<Self>) {
+        if self.cloud_models_active(cx) {
+            self.ensure_cloud(cx);
+            return;
+        }
         let mut targets: Vec<HarnessId> = match self.harnesses.ready() {
             Some(list) => self.offered(list).iter().map(|d| d.id).collect(),
             None => Vec::new(),
@@ -1847,6 +1877,10 @@ impl Pickers {
     }
 
     fn ensure_models(&mut self, harness: HarnessId, force: bool, cx: &mut Context<Self>) {
+        if self.cloud_models_active(cx) {
+            self.ensure_cloud(cx);
+            return;
+        }
         // Normal prefetches load absent/Idle slots once. Picker-open refreshes
         // also retry Ready/Error slots, while an in-flight load is always
         // reused. Ready rows stay visible until the replacement lands.
@@ -2173,6 +2207,7 @@ impl Pickers {
     }
 
     fn pick_harness(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
+        if self.cloud_launch_frozen() { return; }
         if self.harness_locked(cx) {
             return;
         }
@@ -2223,6 +2258,7 @@ impl Pickers {
     }
 
     fn pick_model(&mut self, model_id: String, cx: &mut Context<Self>) {
+        if self.cloud_launch_frozen() { return; }
         self.setting_menu = None;
         if self.settings_model.defaults {
             self.choose_default_model(model_id, cx);
@@ -2253,7 +2289,7 @@ impl Pickers {
             self.config.reasoning = None;
             if let Some(harness) = self.effective_harness(cx) {
                 let label = self
-                    .models
+                    .model_catalog(cx)
                     .get(&harness)
                     .and_then(|l| l.ready())
                     .and_then(|models| models.iter().find(|m| m.id == model_id))
@@ -2267,6 +2303,7 @@ impl Pickers {
     }
 
     fn pick_reasoning(&mut self, level: ReasoningLevel, cx: &mut Context<Self>) {
+        if self.cloud_launch_frozen() { return; }
         // Always a concrete selection (no toggle-back-to-default).
         if self.state.read(cx).selected_chat.is_some() {
             self.update_chat_config(cx, move |config| config.reasoning = Some(level));
@@ -2291,6 +2328,7 @@ impl Pickers {
         default: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.cloud_launch_frozen() { return; }
         if self.state.read(cx).selected_chat.is_some() {
             self.update_chat_config(cx, move |config| {
                 if default {
@@ -2394,7 +2432,7 @@ impl Pickers {
         }
         self.effective_harness(cx)
             .and_then(|h| {
-                self.harnesses
+                self.harness_catalog(cx)
                     .ready()
                     .and_then(|list| list.iter().find(|d| d.id == h))
                     .map(|d| d.reasoning_levels.clone())
@@ -2407,7 +2445,7 @@ impl Pickers {
     /// dev session's mock harness, or one disabled after the chat existed).
     /// Existing chats only offer their own harness.
     fn rail_descriptors(&self, cx: &App) -> Vec<HarnessDescriptor> {
-        let Some(list) = self.harnesses.ready() else {
+        let Some(list) = self.harness_catalog(cx).ready() else {
             return Vec::new();
         };
         let mut descriptors = self.offered(list);
@@ -2473,7 +2511,7 @@ impl Pickers {
             effective,
             &descriptors,
             |harness| {
-                self.models
+                self.model_catalog(cx)
                     .get(&harness)
                     .and_then(|l| l.ready())
                     .map(|models| models.as_slice())
@@ -2486,7 +2524,7 @@ impl Pickers {
             && let Some(harness) = effective
             && let Some(id) = self.effective_model_id(cx)
             && self
-                .models
+                .model_catalog(cx)
                 .get(&harness)
                 .and_then(Loadable::ready)
                 .is_some_and(|models| !models.iter().any(|m| m.id == id))
@@ -4334,7 +4372,7 @@ impl Pickers {
         //    renders, so a 7k-model catalog scrolls as smoothly as seven
         //    (field report: the un-virtualized stack was the picker's lag).
         //    Keyboard nav scrolls via the UniformListScrollHandle.
-        let effective_models = effective.and_then(|h| self.models.get(&h));
+        let effective_models = effective.and_then(|h| self.model_catalog(cx).get(&h));
         // The compact list interleaves its section label and provider
         // headings with the rows (`compact::CompactItem`).
         let items = self
@@ -4876,7 +4914,7 @@ impl Pickers {
     /// one place the selected model's settings live.
     fn setting_groups(&self, cx: &App) -> Vec<SettingGroup> {
         // Titles always run at minimal reasoning with no model options.
-        if self.is_settings_model() {
+        if self.is_settings_model() || !self.model_configuration_available(cx) {
             return Vec::new();
         }
         if self.selected_model(cx).is_some_and(configured_in_place) {
@@ -6226,7 +6264,7 @@ impl Render for Pickers {
         // No-agents state: nothing runnable resolved (and the catalog is
         // loaded, so that's a conclusion, not a loading gap) — the chip says
         // so instead of wearing a brand mark for an agent that can't run.
-        let no_agents = self.no_agents_available() && self.effective_harness(cx).is_none();
+        let no_agents = self.no_agents_available(cx) && self.effective_harness(cx).is_none();
         self.settings_model.window = Some(window.window_handle());
         let model_name = self.model_name(cx);
         let model_label: SharedString = if let Some(pending) = self.settings_model.pending {
@@ -6266,7 +6304,7 @@ impl Render for Pickers {
         };
         // A list still from the previous device is loading for this one.
         let catalog_loading =
-            self.harnesses_stale || matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
+            (!self.cloud_models_active(cx) && self.harnesses_stale) || matches!(self.harness_catalog(cx), Loadable::Idle | Loadable::Loading);
         // Harness unknown while the catalog resolves: the pixel-glyph loader
         // instead of guessing a brand mark.
         let chip_icon_loading = self.title.is_none()

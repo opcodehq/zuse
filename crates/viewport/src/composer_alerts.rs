@@ -79,6 +79,7 @@ impl WorkspaceView {
             || !self.uncertain_drafts.is_empty()
             || self.is_working()
             || self.provider_update_notice()
+            || self.has_cloud_creation_notice()
     }
     pub(super) fn composer_notices(&self, cx: &mut Context<Self>) -> AnyElement {
         let alert = self
@@ -90,6 +91,9 @@ impl WorkspaceView {
                     .map(|(id, text)| (id, text, false))
             });
         let mut view = column().w_full();
+        if self.has_cloud_creation_notice() {
+            view = view.child(self.cloud_notices(cx));
+        }
         if self.cloud.guest && self.cloud.guest_status["state"] != "ready" {
             let state = self.cloud.guest_status["state"].as_str().unwrap_or("connecting");
             let retry = matches!(state, "blocked" | "failed" | "paused");

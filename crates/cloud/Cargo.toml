@@ -6,13 +6,18 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-runtime-acceptance = ["zuse-cloud-runtime/engine", "dep:zuse-engine", "dep:zuse-providers", "dep:zuse-rpc", "dep:tokio-util"]
+runtime-acceptance = ["zuse-cloud-runtime/engine", "dep:zuse-engine", "zuse-engine/test-support", "dep:zuse-rpc", "dep:tokio-util"]
+
+[[example]]
+name = "cloud-ui-host"
+path = "examples/ui_host.rs"
+required-features = ["runtime-acceptance"]
 
 [dependencies]
 zuse-cloud-projection.workspace = true
 zuse-engine = { workspace = true, optional = true }
 zuse-cloud-runtime = { path = "../cloud-runtime", features = ["engine"] }
-zuse-providers = { workspace = true, optional = true }
+zuse-providers.workspace = true
 zuse-rpc = { workspace = true, optional = true }
 tempfile.workspace = true
 tokio-util = { workspace = true, features = ["rt"], optional = true }

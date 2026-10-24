@@ -2,6 +2,7 @@
 mod uploads;
 mod creation;
 mod sync;
+pub(super) mod models;
 use super::*;
 use crate::assets::icon;
 use crate::shell::{BG, BORDER, MUTED, column, control, icon_button, label, row};
@@ -81,7 +82,7 @@ impl WorkspaceView {
             }
         }));
     }
-    fn refresh_cloud(&mut self) {
+    pub(super) fn refresh_cloud(&mut self) {
         if self.cloud.context.is_none() {
             self.cloud.context = Some(self.call(methods::CLOUD_CONTEXT, json!({})));
         }
@@ -153,7 +154,7 @@ impl WorkspaceView {
             return;
         }
         let text = self.input.read(cx).value(cx);
-        if text.trim().is_empty() && self.attachments.is_empty() {
+        if self.cloud.launch.is_none() && text.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
         if self.uploading > 0 {
@@ -166,13 +167,32 @@ impl WorkspaceView {
             cx.notify();
             return;
         };
+        if self.cloud.launch.is_none() && !self.cloud_model_ready() {
+            self.error = Some("Choose an available Cloud model before starting. Your draft is preserved.".into());
+            cx.notify();
+            return;
+        }
         if self.cloud.launch.is_none() {
             let branch = self.cloud_branch.read(cx).value(cx);
-            let model = self.cloud_model.read(cx).value(cx);
+            let model = self.selected_model().unwrap().id.clone();
+            let configured = self.cloud_model_configuration_available();
+            let mode = match self.sandbox {
+                zuse_protocol::SandboxLevel::WorkspaceWrite => "approval-required",
+                zuse_protocol::SandboxLevel::Auto => "auto",
+                zuse_protocol::SandboxLevel::DangerFullAccess => "full-access",
+                zuse_protocol::SandboxLevel::ReadOnly => {
+                    self.error = Some("Choose a supported permission mode before starting Cloud.".into());
+                    cx.notify();
+                    return;
+                }
+            };
             self.cloud.launch = Some(json!({
                 "projectId":project["projectId"],"providerId":project["providerId"],
                 "baseRef":if branch.trim().is_empty(){project["defaultBranch"].as_str().unwrap_or("main")}else{branch.trim()},
-                "agent":"claude-code", "model":if model.trim().is_empty(){"sonnet"}else{model.trim()},
+                "agent":self.composer_provider().map(|provider| provider["id"].clone()), "model":model,
+                "reasoning":if configured { self.reasoning } else { None },
+                "modelOptions":if configured { self.model_options.clone() } else { Default::default() },
+                "runtimeMode":mode,
                 "idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text,
                 "expectedAccountId":self.cloud.account,
                 "attachmentTransfers":self.attachments.iter().map(|a| json!({"uploadId":a["uploadId"],"fileName":a["fileName"]})).collect::<Vec<_>>()
@@ -216,6 +236,7 @@ impl WorkspaceView {
                 if self.cloud.account.is_some() && owner != self.cloud.account {
                     self.close_cloud();
                     self.cloud = Cloud::default();
+                    self.cloud_models = Default::default();
                 }
             }
         }
@@ -256,6 +277,11 @@ impl WorkspaceView {
             return false;
         };
         if let Some(error) = frame.get("err") {
+            if kind == 1 {
+                self.cloud_models.error = Some(error.as_str().or_else(|| error["message"].as_str())
+                    .unwrap_or("Couldn't load Cloud models. Retry when connected.").to_owned());
+                self.invalidate_picker_menu();
+            }
             if kind == 7 {
                 self.cloud.metadata_failures += 1;
                 if self.cloud.metadata_failures >= 8 {
@@ -279,7 +305,9 @@ impl WorkspaceView {
                         self.cloud.workspaces.clear();
                     }
                     self.cloud.account = account;
+                    if self.cloud.launch.is_none() && self.cloud.target.is_none() { self.cloud.notice = None; }
                     self.cloud.projects = value["projects"].as_array().cloned().unwrap_or_default();
+                    self.receive_cloud_models(value["agentCatalog"].clone(), cx);
                     self.cloud.project = self
                         .cloud
                         .project
@@ -431,20 +459,7 @@ impl WorkspaceView {
         true
     }
     pub(super) fn cloud_notices(&self, cx: &mut Context<Self>) -> AnyElement {
-        column()
-            .when_some(self.cloud.notice.clone(), |view, notice| {
-                view.child(label(notice).px_3().py_2())
-            })
-            .when(
-                self.cloud.launch.is_some() && self.cloud.create.is_none(),
-                |view| {
-                    view.child(
-                        control("retry-cloud-launch", "Retry launch")
-                            .on_click(cx.listener(|this, _, _, cx| this.submit_cloud(cx))),
-                    )
-                },
-            )
-            .into_any_element()
+        self.cloud_creation_notice(cx)
     }
     pub(super) fn cloud_recent(&self, cx: &mut Context<Self>) -> AnyElement {
         column()

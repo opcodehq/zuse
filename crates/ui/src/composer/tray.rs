@@ -561,6 +561,15 @@ impl Composer {
             rows.push(TrayRow::Pill(
                 TrayPill::new("native-cloud-startup", message).glyph(crate::icons::CLOUD),
             ));
+        } else if let Some((message, retry)) = self.pickers.read(cx).cloud_model_notice(cx) {
+            let row = TrayPill::new("native-cloud-models", message)
+                .glyph(crate::icons::DITHER_CLOUD);
+            rows.push(TrayRow::Pill(if retry {
+                row.action(tray_text_action("retry-cloud-models", "Retry", None, &theme)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.pickers.update(cx, |picker, cx| picker.refresh_cloud_models(cx));
+                    })))
+            } else { row }));
         }
         rows.extend(self.live_cloud_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.connection_row(cx).map(TrayRow::Pill));
@@ -1150,7 +1159,15 @@ impl Composer {
         // A failed send in this composer outranks the transcript's error.
         if let Some(message) = self.visible_failure() {
             let offline = message.as_ref() == "Engine not connected";
-            let sign_in = self.sign_in_row(None, harness, label, theme, cx);
+            let cloud_launch = self.cloud.request.is_some();
+            let sign_in = if cloud_launch { None } else { self.sign_in_row(None, harness, label, theme, cx) };
+            let actions = if cloud_launch {
+                vec![tray_text_action("retry-cloud-launch", "Retry", None, theme)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let text = this.input.read(cx).text().to_owned();
+                        this.send_cloud(text, cx);
+                    })).into_any_element()]
+            } else { Vec::new() };
             let (title, subtitle) = if offline {
                 ("Engine not connected", None)
             } else {
@@ -1171,7 +1188,7 @@ impl Composer {
                 title,
                 subtitle,
                 message.to_string(),
-                Vec::new(),
+                actions,
                 theme,
                 cx.listener(|this, _, _, cx| {
                     this.failure = None;

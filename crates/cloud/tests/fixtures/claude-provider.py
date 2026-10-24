@@ -13,6 +13,8 @@ for line in sys.stdin:
  elif m.get('type')=='user':
   if '--system-prompt' not in sys.argv:
    with open(os.environ['ZUSE_TEST_PROVIDER_SEEN'],'a') as f:f.write('credential-only-in-child\n')
+   configuration={flag:sys.argv[sys.argv.index(flag)+1] for flag in ['--model','--effort','--settings'] if flag in sys.argv}
+   with open(os.environ['ZUSE_TEST_PROVIDER_SEEN']+'.configuration','a') as f:f.write(json.dumps(configuration)+'\n')
   reply='Brokered native provider reply'
   content=m.get('message',{}).get('content',[])
   blocks=content if isinstance(content,list) else [{'type':'text','text':content}]

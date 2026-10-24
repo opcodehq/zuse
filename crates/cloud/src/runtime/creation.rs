@@ -160,6 +160,13 @@ impl RuntimeControl {
         let build:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(b) FROM api_cloud_project_builds b WHERE account_id=$1 AND provider=$2 AND state='ready' AND (settings->>'rustRuntimeCheckoutProjectId'=$3 OR settings->'rustRuntimeRepositoryLayouts' ? $3) AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE (s.provider=b.provider OR (b.provider='boxd' AND s.provider='box')) AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY updated_at DESC,build_id DESC LIMIT 1 FOR SHARE")
             .bind(owner).bind(&body.provider_id).bind(&body.project_id).fetch_optional(&mut *tx).await?;
         let build = build.ok_or_else(|| ApiError::conflict("cloud_project_not_ready"))?;
+        if (body.reasoning.is_some() || !body.model_options.is_empty())
+            && build["settings"]["rustLaunchModelConfigVersion"] != 1
+        {
+            return Err(ApiError::conflict(
+                "cloud_model_configuration_runtime_update_required",
+            ));
+        }
         let layout = build["settings"]["rustRuntimeRepositoryLayouts"].get(&body.project_id);
         if let Some(layout) = layout {
             let cache = layout["cachePath"]
@@ -262,6 +269,12 @@ impl RuntimeControl {
             line.to_owned()
         };
         let mut intent = json!({"commandId":command,"turnId":turn,"title":title,"agent":body.agent,"model":body.model,"permissions":body.permissions.clone().unwrap_or_default(),"runtimeMode":body.runtime_mode.unwrap_or(CloudRuntimeMode::ApprovalRequired)});
+        if let Some(reasoning) = body.reasoning {
+            intent["reasoning"] = json!(reasoning);
+        }
+        if !body.model_options.is_empty() {
+            intent["modelOptions"] = json!(body.model_options);
+        }
         if !body.attachments.is_empty() {
             intent["attachments"] = json!(body.attachments);
         }

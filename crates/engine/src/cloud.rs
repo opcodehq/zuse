@@ -539,7 +539,7 @@ impl CloudApi {
                 let value = self
                     .request(&token, &["v1", "cloud", "context"], None)
                     .await?;
-                json!({"accountId":account,"projects":value["projects"]})
+                json!({"accountId":account,"projects":value["projects"],"agentCatalog":value["agentCatalog"]})
             }
             zuse_protocol::methods::CLOUD_CREATE => {
                 let mut params = params;

@@ -223,8 +223,8 @@ impl Account {
         })))
     }
 
-    #[cfg(test)]
-    pub(crate) fn fixture_signed_in(root: &Path, api_url: String, subject: &str) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fixture_signed_in(root: &Path, api_url: String, subject: &str) -> Self {
         let account = Self::configured(
             root,
             api_url,
@@ -235,7 +235,7 @@ impl Account {
         account.fixture_install(subject);
         account
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn fixture_install(&self, subject: &str) {
         let payload = URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(&json!({"sub":subject,"exp":now()+3600})).unwrap());

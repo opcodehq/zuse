@@ -74,7 +74,11 @@ impl Pickers {
             if self.model_scope.is_some_and(|scope| scope != provider.id) {
                 continue;
             }
-            if let Some(models) = self.models.get(&provider.id).and_then(Loadable::ready) {
+            if let Some(models) = self
+                .model_catalog(cx)
+                .get(&provider.id)
+                .and_then(Loadable::ready)
+            {
                 for model in models {
                     if query.is_empty()
                         || model.id.to_lowercase().contains(&query)
@@ -358,20 +362,27 @@ impl Pickers {
         let theme = Theme::of(cx).for_popup();
         let (items, body) = self.reference_items(cx);
         let empty = items.is_empty();
-        let error = match &self.harnesses {
+        let error = if self.cloud_models_active(cx) {
+            self.cloud.model_error.clone()
+        } else {
+            None
+        }
+        .or_else(|| match self.harness_catalog(cx) {
             Loadable::Error(message) => Some(message.clone()),
             _ => self.rail_descriptors(cx).iter().find_map(|p| {
                 if self.model_scope.is_some_and(|scope| scope != p.id) {
                     return None;
                 }
-                self.model_refresh_errors.get(&p.id).cloned()
+                (!self.cloud_models_active(cx))
+                    .then(|| self.model_refresh_errors.get(&p.id).cloned())
+                    .flatten()
             }),
-        };
-        let loading = matches!(self.harnesses, Loadable::Loading | Loadable::Idle)
+        });
+        let loading = matches!(self.harness_catalog(cx), Loadable::Loading | Loadable::Idle)
             || self.rail_descriptors(cx).iter().any(|p| {
                 self.model_scope.is_none_or(|scope| scope == p.id)
                     && matches!(
-                        self.models.get(&p.id),
+                        self.model_catalog(cx).get(&p.id),
                         None | Some(Loadable::Loading | Loadable::Idle)
                     )
             });
@@ -435,7 +446,7 @@ impl Pickers {
                     ("harness-tab", index),
                     format!("{} models", p.name),
                     self.model_scope == Some(provider),
-                    self.models
+                    self.model_catalog(cx)
                         .get(&provider)
                         .is_some_and(|m| matches!(m, Loadable::Ready(_))),
                     Some(crate::icons::icon(path).text_color(theme.text_muted)),

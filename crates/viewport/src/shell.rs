@@ -279,8 +279,7 @@ impl WorkspaceView {
                 )
             })
             .when(self.selected.is_none() && !self.cloud.guest, |view| {
-                view.when(self.cloud.mode, |view| view.child(self.cloud_notices(cx)))
-                    .child(self.cloud_toolbar(cx))
+                view.child(self.cloud_toolbar(cx))
             })
             .when(!self.queue.is_empty(), |view| {
                 view.child(self.queue_view(cx))
@@ -487,13 +486,7 @@ impl WorkspaceView {
                                     })
                                     .child(
                                         icon(provider_icon(
-                                            if self.cloud.mode && self.selected.is_none() {
-                                                "claude-code"
-                                            } else {
-                                                provider
-                                                    .and_then(|p| p["id"].as_str())
-                                                    .unwrap_or_default()
-                                            },
+                                            provider.and_then(|p| p["id"].as_str()).unwrap_or_default(),
                                         ))
                                         .size(px(12.))
                                         .text_color(rgb(MUTED)),
@@ -506,16 +499,7 @@ impl WorkspaceView {
                                             .text_size(px(11.))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(rgb(TEXT))
-                                            .child(if self.cloud.mode && self.selected.is_none() {
-                                                let model = self.cloud_model.read(cx).value(cx);
-                                                if model.is_empty() {
-                                                    "Sonnet".to_owned()
-                                                } else {
-                                                    model
-                                                }
-                                            } else {
-                                                self.picker_label()
-                                            }),
+                                            .child(self.picker_label()),
                                     )
                                     .when_some(self.picker_effort_label(), |view, detail| {
                                         view.child(
@@ -528,11 +512,7 @@ impl WorkspaceView {
                                     })
                                     .child(icon("alt-arrow-down").size(px(12.)).opacity(0.6))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        if this.cloud.mode && this.selected.is_none() {
-                                            this.open_creation_picker("model", window, cx);
-                                        } else {
-                                            this.open_model_picker(window, cx)
-                                        }
+                                        this.open_model_picker(window, cx)
                                     })),
                             )
                             .when_some(self.context_control(cx), |view, control| {
@@ -600,7 +580,7 @@ impl WorkspaceView {
                     .child(div().relative().top(px(3.)).text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::MEDIUM).child(title))
                     .when(self.project.is_some() || self.cloud.mode, |view| view.child(control("welcome-without-project", "Start without a project")
                         .text_color(rgb(MUTED)).text_size(px(12.))
-                        .on_click(cx.listener(|this, _, _, cx| { this.project = None; this.cloud.mode = false; cx.notify(); })))))
+                        .on_click(cx.listener(|this, _, _, cx| { this.project = None; this.set_creation_destination(false, cx); cx.notify(); })))))
             })
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);

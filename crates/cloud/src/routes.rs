@@ -524,7 +524,7 @@ async fn context(
     let access = state.access(&headers, AccessKind::Content).await?;
     let projects = state.store.launch_projects(&access.owner_id).await?;
     Ok(Json(
-        json!({"actor":access.actor,"scope":access.scope,"ownerId":access.owner_id,"projects":projects}),
+        json!({"actor":access.actor,"scope":access.scope,"ownerId":access.owner_id,"projects":projects,"agentCatalog":crate::model_catalog::launch_catalog()}),
     ))
 }
 async fn entitlements(

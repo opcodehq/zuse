@@ -7,7 +7,7 @@ pub(super) struct Launch {
     pub message: Option<String>,
     cached: Option<bool>,
     owner: Option<String>,
-    request: Option<Value>,
+    pub(super) request: Option<Value>,
     accepted: Option<Value>,
     pub pause_task: Option<Task<()>>,
     pub pause_error: Option<String>,
@@ -163,6 +163,12 @@ impl Composer {
         if self.cloud.task.is_some() {
             return true;
         }
+        if self.cloud.request.is_none() && !self.pickers.read(cx).cloud_model_ready(cx) {
+            self.failure = Some("Choose an available Cloud model before starting. Your draft is preserved.".into());
+            self.failure_key = None;
+            cx.notify();
+            return true;
+        }
         if !self.staged_appshots().is_empty() {
             self.failure = Some(
                 "Start the cloud thread before attaching app captures. Your draft is preserved."
@@ -200,6 +206,7 @@ impl Composer {
         }
         if self.cloud.request.is_none() {
             let config = self.pickers.read(cx).resolved(cx);
+            let (Some(agent), Some(model)) = (config.harness, config.model) else { return true; };
             let runtime_mode = match config.sandbox {
                 SandboxLevel::WorkspaceWrite => "approval-required",
                 SandboxLevel::Auto => "auto",
@@ -214,9 +221,10 @@ impl Composer {
                 }
             };
             self.cloud.request = Some(
-                json!({"runtimeMode":runtime_mode,"projectId":project["projectId"],"providerId":project["providerId"],"baseRef":project["defaultBranch"],"agent":config.harness.unwrap_or(HarnessId::ClaudeCode),"model":config.model.unwrap_or_else(||"sonnet".into()),"idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text,"expectedAccountId":subject,"attachmentTransfers":staged.iter().map(|a|json!({"uploadId":a.id,"fileName":a.name})).collect::<Vec<_>>()}),
+                json!({"runtimeMode":runtime_mode,"projectId":project["projectId"],"providerId":project["providerId"],"baseRef":project["defaultBranch"],"agent":agent,"model":model,"reasoning":config.reasoning,"modelOptions":config.model_options,"idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text,"expectedAccountId":subject,"attachmentTransfers":staged.iter().map(|a|json!({"uploadId":a.id,"fileName":a.name})).collect::<Vec<_>>()}),
             );
         }
+        self.pickers.update(cx, |pickers, cx| pickers.freeze_cloud_launch(true, cx));
         let key = self.current_key.clone();
         let request = self.cloud.request.clone().unwrap();
         let accepted = self.cloud.accepted.clone();
@@ -345,6 +353,7 @@ impl Composer {
                         this.cloud.request = None;
                         this.cloud.accepted = None;
                         this.cloud.task = None;
+                        this.pickers.update(cx, |pickers, cx| pickers.freeze_cloud_launch(false, cx));
                         crate::open_cloud_window(target, cx);
                         cx.notify();
                     });

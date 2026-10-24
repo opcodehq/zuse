@@ -8935,13 +8935,13 @@ impl Composer {
             return false;
         }
         if state.cloud_project.is_some() {
-            return false;
+            return !self.pickers.read(cx).cloud_model_ready(cx);
         }
         // New-chat canvas: needs a runnable agent. The
         // no-agents check only fires once the catalog is loaded — offline
         // and still-loading states must not block (the harness resolves from
         // the remembered default and the engine reports real failures).
-        self.pickers.read(cx).no_agents_available()
+        self.pickers.read(cx).no_agents_available(cx)
     }
 
     fn button_mode(&self, cx: &App) -> SendButtonMode {

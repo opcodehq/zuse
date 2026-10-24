@@ -395,7 +395,7 @@ impl Pickers {
         let count: usize = self
             .rail_descriptors(cx)
             .iter()
-            .filter_map(|p| self.models.get(&p.id).and_then(Loadable::ready))
+            .filter_map(|p| self.model_catalog(cx).get(&p.id).and_then(Loadable::ready))
             .map(Vec::len)
             .sum();
         format!("Search {count} models").into()
@@ -412,7 +412,7 @@ impl Pickers {
     }
 
     pub(super) fn compact_model_picker(&self, cx: &App) -> bool {
-        self.is_settings_model() || crate::settings::compact_model_picker(cx)
+        self.is_settings_model() || self.cloud_models_active(cx) || crate::settings::compact_model_picker(cx)
     }
 
     pub(super) fn show_compact_models(&mut self, cx: &mut Context<Self>) {
@@ -512,7 +512,7 @@ impl Pickers {
     }
 
     pub(super) fn compact_fast_choice(&self, cx: &App) -> Option<(String, String, bool, bool)> {
-        if self.is_settings_model() { return None; }
+        if self.is_settings_model() || !self.model_configuration_available(cx) { return None; }
         let (option, on, off) = self
             .selected_model(cx)?
             .options
@@ -537,7 +537,7 @@ impl Pickers {
     /// shaped like one (Cursor's `effort`/`reasoning` choices), so every
     /// model with an effort gets the same slider.
     pub(super) fn compact_effort(&self, cx: &App) -> Option<CompactEffort> {
-        if self.is_settings_model() { return None; }
+        if self.is_settings_model() || !self.model_configuration_available(cx) { return None; }
         let levels = self.trait_ladder(cx);
         if !levels.is_empty() {
             let current = self.effective_reasoning(cx);

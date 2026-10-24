@@ -6,6 +6,7 @@ pub mod config;
 pub mod crypto;
 pub mod error;
 pub mod jobs;
+pub mod model_catalog;
 pub mod providers;
 pub mod routes;
 pub mod runtime;

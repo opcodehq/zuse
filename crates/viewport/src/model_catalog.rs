@@ -28,6 +28,7 @@ impl WorkspaceView {
         }
     }
     pub(super) fn composer_providers(&self) -> &[Value] {
+        if self.cloud_models_active() { return &self.cloud_models.providers; }
         if self.model_host.target.is_some() {
             &self.model_host.rows
         } else {
@@ -57,6 +58,7 @@ impl WorkspaceView {
         }
     }
     pub(super) fn composer_catalog(&self) -> &PickerCatalog {
+        if self.cloud_models_active() { return &self.cloud_models.catalog; }
         if self.model_host.target.is_some() {
             &self.model_host.catalog
         } else {
@@ -164,6 +166,11 @@ impl WorkspaceView {
         }
     }
     pub(super) fn load_picker_catalogs(&mut self, force: bool) {
+        if self.cloud_models_active() && !self.picker_in_settings() {
+            self.refresh_cloud();
+            self.invalidate_picker_menu();
+            return;
+        }
         self.sync_catalog_target();
         self.load_catalogs_for(
             self.picker_in_settings() || self.model_host.target.is_none(),

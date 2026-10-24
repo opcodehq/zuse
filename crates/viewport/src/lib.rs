@@ -105,6 +105,7 @@ use zuse_protocol::browser_drafts::BrowserDraft as Draft;
 pub struct WorkspaceView {
     cloud_archive: cloud_history::ArchiveView,
     cloud: cloud::Cloud,
+    cloud_models: cloud::models::State,
     repository_panel: Entity<cloud_repositories::RepositoryPanel>,
     repository_requests: HashMap<u64, u64>,
     billing: cloud_billing::Billing,
@@ -113,7 +114,6 @@ pub struct WorkspaceView {
     billing_cap: Entity<input::TextInput>,
     cloud_branch: Entity<input::TextInput>,
     cloud_sync_path: Entity<input::TextInput>,
-    cloud_model: Entity<input::TextInput>,
     cached_only: bool,
     managed_access: managed_access::ManagedAccess,
     managed_name: Entity<input::TextInput>,
@@ -551,7 +551,6 @@ impl WorkspaceView {
         });
         let cloud_sync_path = cx.new(|cx| input::TextInput::new("Absolute folder on host", window, cx));
         let cloud_branch = cx.new(|cx| input::TextInput::new("Branch (main)", window, cx));
-        let cloud_model = cx.new(|cx| input::TextInput::new("Model (sonnet)", window, cx));
         let sidebar_controls = Self::create_sidebar_controls(cx);
         let view = Self {
             environment: Default::default(),
@@ -560,6 +559,7 @@ impl WorkspaceView {
             input,
             cloud_archive: Default::default(),
             cloud: Default::default(),
+            cloud_models: Default::default(),
             repository_panel,
             repository_requests: HashMap::new(),
             billing: Default::default(),
@@ -568,7 +568,6 @@ impl WorkspaceView {
             billing_cap: cx.new(|cx| input::TextInput::new("Monthly overage cap in dollars", window, cx)),
             cloud_branch,
             cloud_sync_path,
-            cloud_model,
             cached_only: false,
             requests: transport.requests,
             next_id: 1,

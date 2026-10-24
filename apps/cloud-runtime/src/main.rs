@@ -472,7 +472,7 @@ async fn adopt(
             .map_err(|_| anyhow::anyhow!("runtime_permission_mode_requires_port"))?;
     }
     let service = core.rpc_service();
-    service.handle(methods::MUTATE,serde_json::json!({"op":"createChat","chatId":bootstrap.chat_id,"deviceId":core.device_id,"cwd":checkout,"config":{"harness":harness,"model":intent.model,"sandbox":sandbox}})).await?;
+    service.handle(methods::MUTATE,serde_json::json!({"op":"createChat","chatId":bootstrap.chat_id,"deviceId":core.device_id,"cwd":checkout,"config":{"harness":harness,"model":intent.model,"reasoning":intent.reasoning,"modelOptions":intent.model_options,"sandbox":sandbox}})).await?;
     if bootstrap.initial_session_id != bootstrap.chat_id {
         service.handle(methods::CREATE_THREAD_SESSION,serde_json::json!({"chatId":bootstrap.initial_session_id,"threadId":bootstrap.chat_id})).await?;
     }
@@ -507,7 +507,7 @@ async fn adopt(
     {
         let prompt = zuse_protocol::message_attachments::with_attachments(prompt, &paths);
         let entry: zuse_doc::SessionCommandEntry = serde_json::from_value(
-            serde_json::json!({"id":intent.command_id,"payload":{"kind":"run","messageId":intent.turn_id,"request":{"prompt":prompt,"attachments":paths,"harness":harness,"model":intent.model,"cwd":checkout,"sandbox":sandbox,"autoApprove":auto}},"issuedBy":format!("cloud-mailbox:{fingerprint}"),"issuedAt":zuse_cloud_runtime::now_ms(),"expiresAt":9_007_199_254_740_991i64,"status":"pending"}),
+            serde_json::json!({"id":intent.command_id,"payload":{"kind":"run","messageId":intent.turn_id,"request":{"prompt":prompt,"attachments":paths,"harness":harness,"model":intent.model,"reasoning":intent.reasoning,"modelOptions":intent.model_options,"cwd":checkout,"sandbox":sandbox,"autoApprove":auto}},"issuedBy":format!("cloud-mailbox:{fingerprint}"),"issuedAt":zuse_cloud_runtime::now_ms(),"expiresAt":9_007_199_254_740_991i64,"status":"pending"}),
         )?;
         core.doc_host
             .admit_mailbox_command(&bootstrap.initial_session_id, entry)

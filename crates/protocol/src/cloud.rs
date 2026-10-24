@@ -59,6 +59,10 @@ pub struct CloudLaunchIntent {
     pub title: String,
     pub agent: String,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<crate::ReasoningLevel>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub model_options: std::collections::BTreeMap<String, serde_json::Value>,
     pub permissions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_mode: Option<CloudRuntimeMode>,
@@ -194,6 +198,38 @@ pub fn archive_deadline(requested: Option<i64>, previous: Option<i64>) -> Option
 mod tests {
     use super::*;
     #[test]
+    fn legacy_launch_configuration_keeps_its_serialized_request() {
+        let text = r#"{"projectId":"project","providerId":"boxd","baseRef":"main","agent":"claude-code","model":"sonnet","idempotencyKey":"original"}"#;
+        let request: CloudWorkspaceCreateRequest = serde_json::from_str(text).unwrap();
+        assert!(request.reasoning.is_none());
+        assert!(request.model_options.is_empty());
+        assert_eq!(serde_json::to_string(&request).unwrap(), text);
+
+        let intent = serde_json::json!({"commandId":"command","turnId":"turn","title":"Title","agent":"claude-code","model":"sonnet","permissions":[]});
+        let decoded: CloudLaunchIntent = serde_json::from_value(intent.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), intent);
+    }
+
+    #[test]
+    fn launch_configuration_survives_request_and_sealed_intent() {
+        let configuration = serde_json::json!({"reasoning":"high","modelOptions":{"fastMode":"on","contextWindow":"1m"}});
+        let mut request = serde_json::json!({"projectId":"project","providerId":"boxd","baseRef":"main","agent":"claude-code","model":"claude-opus-5-5","idempotencyKey":"configured"});
+        let mut intent = serde_json::json!({"commandId":"command","turnId":"turn","title":"Title","agent":"claude-code","model":"claude-opus-5-5","permissions":[]});
+        for field in ["reasoning", "modelOptions"] {
+            request[field] = configuration[field].clone();
+            intent[field] = configuration[field].clone();
+        }
+        let request: CloudWorkspaceCreateRequest = serde_json::from_value(request).unwrap();
+        let intent: CloudLaunchIntent = serde_json::from_value(intent).unwrap();
+        assert_eq!(request.reasoning, intent.reasoning);
+        assert_eq!(request.model_options, intent.model_options);
+        assert_eq!(
+            serde_json::to_value(intent).unwrap()["modelOptions"],
+            configuration["modelOptions"]
+        );
+    }
+
+    #[test]
     fn legacy_archive_round_trip_and_retirement_barrier() {
         let mut value = serde_json::json!({"version":1,"id":"operation","sourceSandboxId":"machine",
             "archivedAtMs":100,"expiresAtMs":3600100,"phase":"verifying","verifiedChunks":0,
@@ -302,6 +338,10 @@ pub struct CloudWorkspaceCreateRequest {
     pub base_ref: String,
     pub agent: String,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<crate::ReasoningLevel>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub model_options: std::collections::BTreeMap<String, serde_json::Value>,
     pub idempotency_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,

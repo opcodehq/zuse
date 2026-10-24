@@ -3,13 +3,18 @@ use super::*;
 use serde_json::{Value, json};
 #[derive(Default)]
 pub(super) struct Cloud {
+    pub(super) frozen: bool,
     owner: Option<String>,
     loaded: bool,
     task: Option<Task<()>>,
     rows: Vec<Value>,
     workspaces: Vec<Value>,
     error: Option<String>,
-    local: Option<DraftConfig>,
+    local_checkout: Option<(Option<String>, CheckoutKind)>,
+    pub(super) catalog: Option<zuse_protocol::cloud_catalog::CloudAgentCatalog>,
+    pub(super) harnesses: Loadable<Vec<HarnessDescriptor>>,
+    pub(super) models: HashMap<HarnessId, Loadable<Vec<Model>>>,
+    pub(super) model_error: Option<String>,
 }
 impl Cloud {
     pub(super) fn refresh(&mut self) {
@@ -22,9 +27,11 @@ impl Pickers {
     }
     pub(super) fn leave_cloud(&mut self, cx: &mut Context<Self>) {
         self.state.update(cx, |state, _| state.cloud_project = None);
-        if let Some(config) = self.cloud.local.take() {
-            self.config = config;
+        if let Some((branch, checkout)) = self.cloud.local_checkout.take() {
+            self.config.branch = branch;
+            self.config.checkout = checkout;
         }
+        self.catalog_rev += 1;
     }
     fn select_cloud(&mut self, row: Value, cx: &mut Context<Self>) {
         if row["prepared"] != true || row["state"] != "ready" {
@@ -38,27 +45,73 @@ impl Pickers {
             cx.notify();
             return;
         }
-        self.cloud.local.get_or_insert_with(|| self.config.clone());
-        self.config.harness = Some(HarnessId::ClaudeCode);
-        self.config.model = Some("sonnet".into());
-        self.config.reasoning = None;
-        self.config.sandbox = Some(SandboxLevel::WorkspaceWrite);
+        self.cloud
+            .local_checkout
+            .get_or_insert_with(|| (self.config.branch.clone(), self.config.checkout));
+        let current = self.resolved(cx);
+        if let Some(provider) = self.cloud.catalog.as_ref().and_then(|catalog| {
+            catalog
+                .providers
+                .iter()
+                .find(|provider| Some(provider.id) == current.harness)
+                .or_else(|| catalog.providers.first())
+        }) {
+            let same = current
+                .model
+                .as_deref()
+                .filter(|_| current.harness == Some(provider.id))
+                .and_then(|model| provider.resolve_model(model));
+            let model = same
+                .or_else(|| {
+                    crate::settings::default_model(cx)
+                        .filter(|model| model.provider == provider.id)
+                        .and_then(|model| provider.resolve_model(&model.model))
+                })
+                .or_else(|| {
+                    self.defaults
+                        .model_for(provider.id)
+                        .and_then(|model| provider.resolve_model(&model.id))
+                })
+                .map(|model| model.id.clone())
+                .unwrap_or_else(|| provider.default_model.clone());
+            self.config.reasoning = if same.is_some() {
+                current.reasoning
+            } else {
+                None
+            };
+            if same.is_some() {
+                *self.defaults.model_options_mut(provider.id, &model) = current.model_options;
+            }
+            self.config.harness = Some(provider.id);
+            self.config.model = Some(model);
+        } else {
+            self.config.harness = None;
+            self.config.model = None;
+            self.config.reasoning = None;
+        }
         self.config.branch = None;
+        self.catalog_rev += 1;
         self.state.update(cx, |state, cx| {
             state.cloud_project = Some(row);
             cx.notify();
         });
         self.close(cx);
     }
-    fn ensure_cloud(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn ensure_cloud(&mut self, cx: &mut Context<Self>) {
         let state = self.state.read(cx);
         let owner = state.cloud_user_id().map(str::to_owned);
         if self.cloud.owner != owner {
+            self.cloud.frozen = false;
             self.cloud.owner = owner.clone();
             self.cloud.loaded = false;
             self.cloud.rows.clear();
             self.cloud.workspaces.clear();
             self.cloud.task = None;
+            self.cloud.models.clear();
+            self.cloud.harnesses = Loadable::Idle;
+            self.cloud.catalog = None;
+            self.cloud.model_error = None;
+            self.catalog_rev += 1;
         }
         if self.cloud.loaded || self.cloud.task.is_some() {
             return;
@@ -83,47 +136,56 @@ impl Pickers {
         });
         self.cloud.task = Some(cx.spawn(async move |this, cx| {
             let result = job.await;
-            let _ =
-                this.update(cx, |this, cx| {
-                    if this.state.read(cx).cloud_user_id() != Some(owner.as_str()) {
-                        return;
+            let _ = this.update(cx, |this, cx| {
+                if this.state.read(cx).cloud_user_id() != Some(owner.as_str()) {
+                    return;
+                }
+                this.cloud.task = None;
+                match result {
+                    Ok(Ok((value, list)))
+                        if value["accountId"].as_str() == Some(owner.as_str()) =>
+                    {
+                        this.receive_cloud_models(value["agentCatalog"].clone(), cx);
+                        this.cloud.workspaces = list["workspaces"]
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|w| {
+                                w["desiredState"] != "deleted"
+                                    && w["desiredState"] != "archived"
+                                    && w["state"] != "deleted"
+                            })
+                            .collect();
+                        this.cloud.rows = value["projects"]
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|mut row| {
+                                row["accountId"] = json!(owner);
+                                row
+                            })
+                            .collect();
+                        this.cloud.error = None;
                     }
-                    this.cloud.task = None;
-                    match result {
-                        Ok(Ok((value, list)))
-                            if value["accountId"].as_str() == Some(owner.as_str()) =>
-                        {
-                            this.cloud.workspaces = list["workspaces"]
-                                .as_array()
-                                .cloned()
-                                .unwrap_or_default()
-                                .into_iter()
-                                .filter(|w| {
-                                    w["desiredState"] != "deleted"
-                                        && w["desiredState"] != "archived"
-                                        && w["state"] != "deleted"
-                                })
-                                .collect();
-                            this.cloud.rows = value["projects"]
-                                .as_array()
-                                .cloned()
-                                .unwrap_or_default()
-                                .into_iter()
-                                .map(|mut row| {
-                                    row["accountId"] = json!(owner);
-                                    row
-                                })
-                                .collect();
-                            this.cloud.error = None;
+                    result => {
+                        let error = match result {
+                            Ok(Err(error)) => error.to_string(),
+                            _ => {
+                                "Could not load Cloud destinations. Open the picker again to retry."
+                                    .into()
+                            }
+                        };
+                        this.cloud.error = Some(error.clone());
+                        this.cloud.model_error = Some(error.clone());
+                        if this.cloud.catalog.is_none() {
+                            this.cloud.harnesses = Loadable::Error(error);
                         }
-                        Ok(Err(error)) => this.cloud.error = Some(error.to_string()),
-                        _ => this.cloud.error = Some(
-                            "Could not load cloud destinations. Open the picker again to retry."
-                                .into(),
-                        ),
                     }
-                    cx.notify();
-                });
+                }
+                cx.notify();
+            });
         }));
     }
     pub(super) fn filtered_cloud_projects(&self, cx: &App) -> Vec<Value> {

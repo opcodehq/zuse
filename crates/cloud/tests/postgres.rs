@@ -22,6 +22,13 @@ struct TestIdentity;
 #[async_trait]
 impl Identity for TestIdentity {
     async fn verify(&self, token: &str) -> Result<Principal, ApiError> {
+        let token = if std::env::var_os("ZUSE_CLOUD_MODEL_ACCEPTANCE").is_some() && token.starts_with("fixture.") && token.ends_with(".signature") {
+            use base64::Engine as _;
+            let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token.split('.').nth(1).unwrap()).unwrap();
+            let claims: Value = serde_json::from_slice(&payload).unwrap();
+            assert_eq!(claims["sub"], "user-bob");
+            "bob"
+        } else { token };
         let token = if token == "dev-user"
             && std::env::var_os("ZUSE_CLOUD_BILLING_UI_FIXTURE_FILE").is_some()
         {
@@ -1930,6 +1937,9 @@ mod runtime_engine {
         sqlx::raw_sql("CREATE TABLE api_cloud_auth_authorities(account_id text PRIMARY KEY,storage_incarnation_id text NOT NULL,auth_epoch bigint NOT NULL,state text NOT NULL); INSERT INTO api_cloud_auth_authorities VALUES('user-bob','original-auth-storage',1,'ready'); UPDATE api_cloud_project_builds SET settings=settings||'{\"providerAuthDeliveryVersion\":1}'::jsonb WHERE build_id='rust-build';").execute(&api.pool).await.unwrap();
         sqlx::raw_sql(zuse_cloud::runtime::assets::MIGRATION).execute(&api.pool).await.unwrap();
         sqlx::query("UPDATE api_cloud_project_builds SET settings=settings||'{\"rustLaunchAssetsVersion\":1}'::jsonb WHERE build_id='rust-build'").execute(&api.pool).await.unwrap();
+        if std::env::var_os("ZUSE_CLOUD_MODEL_ACCEPTANCE").is_some() {
+            sqlx::query("UPDATE api_cloud_project_builds SET settings=settings||'{\"rustLaunchModelConfigVersion\":1}'::jsonb WHERE build_id='rust-build'").execute(&api.pool).await.unwrap();
+        }
         let now = chrono::Utc::now().timestamp_millis();
         sqlx::query("INSERT INTO api_cloud_billing_periods(period_id,account_id,status,period_start,period_end,included_provider_cost_micros,markup_basis_points,overage_cap_micros) VALUES('launch-period','user-bob','active',$1,$2,100000000,0,0)").bind(now-1000).bind(now+3600000).execute(&api.pool).await.unwrap();
         let root = tempfile::Builder::new()
@@ -4680,8 +4690,22 @@ async fn authenticated_creation_is_atomic_idempotent_and_honors_existing_billing
         },
         vec![],
     );
-    let body = json!({"projectId":"create-project","providerId":"boxd","baseRef":"main","branch":"cloud/created","agent":"codex","model":"fixture","firstMessage":"Original retained prompt","idempotencyKey":"create-once"});
+    let mut body = json!({"projectId":"create-project","providerId":"boxd","baseRef":"main","branch":"cloud/created","agent":"codex","model":"fixture","firstMessage":"Original retained prompt","idempotencyKey":"create-once"});
+    let (_, context) = request(&app, "/v1/cloud/context", "bob", None).await;
+    assert_eq!(context["projects"][0]["supportsModelConfiguration"], false);
+    let catalog: zuse_protocol::cloud_catalog::CloudAgentCatalog = serde_json::from_value(context["agentCatalog"].clone()).unwrap();
+    assert_eq!(catalog.providers.len(), 1);
+    assert_eq!(catalog.providers[0].id, zuse_protocol::HarnessId::ClaudeCode);
+    assert!(catalog.providers[0].resolve_model(&catalog.providers[0].default_model).is_some());
+    body["reasoning"] = json!("high");
+    body["modelOptions"] = json!({"contextWindow":"1m","fastMode":"on"});
     let endpoint = "/v1/cloud/workspaces";
+    assert_eq!(runtime_post(&app, endpoint, "bob", &body).await.1["error"], "cloud_model_configuration_runtime_update_required");
+    let allocations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM zuse_rust_allocations").fetch_one(&pool).await.unwrap();
+    assert_eq!(allocations, 0, "Unsupported image must not allocate compute");
+    sqlx::query("UPDATE api_cloud_project_builds SET settings=settings||'{\"rustLaunchModelConfigVersion\":1}'::jsonb WHERE build_id='rust-build'").execute(&pool).await.unwrap();
+    let (_, context) = request(&app, "/v1/cloud/context", "bob", None).await;
+    assert_eq!(context["projects"][0]["supportsModelConfiguration"], true);
     assert_eq!(
         runtime_post(&app, endpoint, "", &body).await.0,
         StatusCode::UNAUTHORIZED
@@ -4713,6 +4737,8 @@ async fn authenticated_creation_is_atomic_idempotent_and_honors_existing_billing
     assert_eq!(decoded["firstMessage"], body["firstMessage"]);
     assert_eq!(decoded["commandId"], intent.1);
     assert_eq!(decoded["turnId"], intent.2);
+    assert_eq!(decoded["reasoning"], body["reasoning"]);
+    assert_eq!(decoded["modelOptions"], body["modelOptions"]);
     let counts:(i64,i64,i64)=sqlx::query_as("SELECT (SELECT COUNT(*) FROM zuse_rust_allocations WHERE workspace_id=$1),(SELECT COUNT(*) FROM zuse_rust_jobs WHERE resource_id=$1),(SELECT COUNT(*) FROM zuse_rust_control_owners WHERE resource_id=$1 AND generation=1 AND backend='rust')").bind(id).fetch_one(&pool).await.unwrap();
     assert_eq!(counts, (1, 1, 1));
     let settings: Value =

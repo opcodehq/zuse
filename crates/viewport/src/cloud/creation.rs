@@ -159,14 +159,7 @@ impl WorkspaceView {
     }
     fn close_creation_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(kind) = self.cloud.picker.take() {
-            window.focus(
-                &if kind == "model" {
-                    self.input.focus_handle(cx)
-                } else {
-                    self.cloud.creation.handle(kind, cx)
-                },
-                cx,
-            );
+            window.focus(&self.cloud.creation.handle(kind, cx), cx);
         }
         cx.notify();
     }
@@ -176,6 +169,9 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.cloud_model_change_pending() {
+            return;
+        }
         if self.cloud.picker == Some(kind) {
             self.close_creation_picker(window, cx);
             return;
@@ -199,8 +195,6 @@ impl WorkspaceView {
             self.refresh_cloud();
         } else if kind == "branch" {
             window.focus(&self.cloud_branch.focus_handle(cx), cx);
-        } else if kind == "model" {
-            window.focus(&self.cloud_model.focus_handle(cx), cx);
         } else {
             self.refresh_cloud();
             window.focus(&self.cloud.creation.handle("menu", cx), cx);
@@ -210,7 +204,7 @@ impl WorkspaceView {
     fn pick_creation(&mut self, pick: Pick, window: &mut Window, cx: &mut Context<Self>) {
         match pick {
             Pick::Local(project) => {
-                self.cloud.mode = false;
+                self.set_creation_destination(false, cx);
                 self.project = Some(project);
             }
             Pick::Repository(i) | Pick::Cloud(i) => {
@@ -226,13 +220,13 @@ impl WorkspaceView {
                         .update(cx, |v, cx| v.set_value(String::new(), cx));
                 }
                 self.cloud.project = i;
-                self.cloud.mode = true;
+                self.set_creation_destination(true, cx);
             }
             Pick::NoProject => {
-                self.cloud.mode = false;
+                self.set_creation_destination(false, cx);
                 self.project = None;
             }
-            Pick::Computer => self.cloud.mode = false,
+            Pick::Computer => self.set_creation_destination(false, cx),
             Pick::AddProject => self.project_picker = true,
             Pick::AddComputer => {
                 self.settings = true;
@@ -262,7 +256,7 @@ impl WorkspaceView {
                     cx.stop_propagation();
                     return;
                 }
-                if kind == "branch" || kind == "model" {
+                if kind == "branch" {
                     if key == "enter" {
                         this.close_creation_picker(window, cx);
                         cx.stop_propagation();
@@ -289,25 +283,13 @@ impl WorkspaceView {
                 cx.stop_propagation();
                 cx.notify();
             }));
-        if kind == "branch" || kind == "model" {
+        if kind == "branch" {
             menu = menu
-                .child(
-                    ui::meta(if kind == "branch" {
-                        "Base branch"
-                    } else {
-                        "Claude model"
-                    })
-                    .px(px(8.))
-                    .py(px(6.)),
-                )
+                .child(ui::meta("Base branch").px(px(8.)).py(px(6.)))
                 .child(
                     crate::settings_style::field()
                         .px(px(8.))
-                        .child(if kind == "branch" {
-                            self.cloud_branch.clone()
-                        } else {
-                            self.cloud_model.clone()
-                        }),
+                        .child(self.cloud_branch.clone()),
                 )
                 .child(
                     ui::option("cloud-config-done", "Done", "check", false).on_click(
@@ -456,8 +438,13 @@ impl WorkspaceView {
                 },
                 cx,
             ))
-            .when_some(self.creation_workspace_control(cx), |view, control| view.child(control))
-            .when(!self.cloud.mode, |view| view.child(div().flex_1()).children(self.creation_source_control(cx)))
+            .when_some(self.creation_workspace_control(cx), |view, control| {
+                view.child(control)
+            })
+            .when(!self.cloud.mode, |view| {
+                view.child(div().flex_1())
+                    .children(self.creation_source_control(cx))
+            })
             .when(self.cloud.mode, |v| {
                 v.child(div().flex_1()).child(self.creation_chip(
                     "branch",
@@ -475,17 +462,6 @@ impl WorkspaceView {
                     "git-branch",
                     cx,
                 ))
-            })
-            .when(self.cloud.picker == Some("model"), |v| {
-                v.child(
-                    div().absolute().bottom_full().right_0().child(deferred(
-                        anchored()
-                            .anchor(Anchor::BottomRight)
-                            .offset(point(px(0.), px(-4.)))
-                            .snap_to_window_with_margin(px(8.))
-                            .child(self.creation_menu("model", cx)),
-                    )),
-                )
             })
             .into_any_element()
     }

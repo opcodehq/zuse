@@ -30,7 +30,7 @@ impl WorkspaceView {
         }
     }
     pub(super) fn can_change_model(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.creating.is_some() {
+        if self.creating.is_some() || self.cloud_model_change_pending() {
             self.error =
                 Some("Wait for the conversation to open before changing model choices.".into());
             cx.notify();
@@ -57,7 +57,7 @@ impl WorkspaceView {
             true
         }
     }
-    fn current_model_config(&self) -> Option<RememberedModelConfig> {
+    pub(super) fn current_model_config(&self) -> Option<RememberedModelConfig> {
         let provider = self.composer_providers().get(self.provider_index)?["id"].as_str()?;
         Some(RememberedModelConfig {
             provider: provider.into(),
@@ -175,7 +175,7 @@ impl WorkspaceView {
         value: String,
         cx: &mut Context<Self>,
     ) {
-        if !self.can_change_model(cx) {
+        if !self.cloud_model_configuration_available() || !self.can_change_model(cx) {
             return;
         }
         let Some(option) = self
