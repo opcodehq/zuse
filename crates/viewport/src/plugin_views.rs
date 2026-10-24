@@ -17,7 +17,7 @@ impl WorkspaceView {
             self.right_open = right_open;
         }
     }
-    fn open_plugins_browse(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_plugins_browse(&mut self, cx: &mut Context<Self>) {
         if self.plugins_return_right.is_none() {
             self.plugins_return_right = Some(self.right_open);
         }

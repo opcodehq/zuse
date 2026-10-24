@@ -51,6 +51,8 @@ assets!(
     "pi-mark",
     "devin-mark",
     "grok-mark",
+    "gemini-mark",
+    "kiro-mark",
     "hermes-mark",
     "antigravity-mark",
     "check",

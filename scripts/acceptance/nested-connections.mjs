@@ -4,7 +4,7 @@ import {engine,browser,fixture,artifact,sleep} from './harness.mjs';
 const first='7a5ef180-af4a-44a3-b86b-e1ce925eb827',second='39b98f91-2e8a-4da2-b94c-467ef55114ac';
 let host,page,stage='startup';
 function attachBoundary(){if(!page.evaluate('!!window.__accountConnectionProof'))page.evaluate(fs.readFileSync(fixture('account-connection.js'),'utf8'));page.run(['set','viewport','1280','1000']);}
-async function settings(){page.click(263,964);await sleep(150);page.click(100,182);await sleep(200);}
+async function settings(){page.click(274,982);await sleep(150);page.click(100,182);await sleep(200);}
 try{
  host=await engine('nested-account');page=browser('nested-account');page.open(host.url,fixture('account-connection.js'));
  page.wait('window.__accountConnectionProof?.calls.some(c=>c.method==="WatchChats")');

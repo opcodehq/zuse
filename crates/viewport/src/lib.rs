@@ -17,6 +17,10 @@ pub mod cloud_settings;
 mod composer_alerts;
 pub mod composer_style;
 pub mod creation_style;
+pub mod dither;
+mod glass;
+pub mod sidebar_controls;
+mod sidebar_host;
 mod connection;
 pub mod context_status;
 mod custom_acp;
@@ -219,6 +223,8 @@ pub struct WorkspaceView {
     project: Option<Value>,
     project_picker: bool,
     project_input: Entity<input::TextInput>,
+    sidebar_controls: Entity<sidebar_controls::SidebarControls>,
+    sidebar_control_requests: HashMap<u64, u64>,
     sidebar_open: bool,
     search_open: bool,
     session_search: Entity<input::TextInput>,
@@ -478,6 +484,8 @@ impl WorkspaceView {
             }
             let _ = this.update(cx, |this, cx| {
                 this.status = "Disconnected".into();
+                this.sidebar_controls
+                    .update(cx, |controls, cx| controls.interrupted(cx));
                 for remote in this
                     .repository_requests
                     .drain()
@@ -512,6 +520,7 @@ impl WorkspaceView {
         let cloud_sync_path = cx.new(|cx| input::TextInput::new("Absolute folder on host", window, cx));
         let cloud_branch = cx.new(|cx| input::TextInput::new("Branch (main)", window, cx));
         let cloud_model = cx.new(|cx| input::TextInput::new("Model (sonnet)", window, cx));
+        let sidebar_controls = Self::create_sidebar_controls(cx);
         let view = Self {
             environment: Default::default(),
             browser,
@@ -638,6 +647,8 @@ impl WorkspaceView {
             project: None,
             project_picker: false,
             project_input,
+            sidebar_controls,
+            sidebar_control_requests: Default::default(),
             sidebar_open: true,
             search_open: false,
             session_search,
@@ -962,6 +973,9 @@ impl WorkspaceView {
             }
             return;
         }
+        if self.receive_sidebar_controls(id, &frame, cx) {
+            return;
+        }
         if self.receive_pull_requests(id, &frame, cx) {
             return;
         }
@@ -1118,6 +1132,7 @@ impl WorkspaceView {
                 methods::CLOUD_ACCOUNT_STATUS => {
                     let changed = self.cloud_account["user"]["id"] != value["user"]["id"];
                     self.cloud_account = value.clone();
+                    self.update_sidebar_controls(cx);
                     if changed || value["login"].is_object() {self.account_action_error=None;}
                     self.managed_account_updated(changed);
                     if changed {

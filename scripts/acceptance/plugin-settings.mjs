@@ -11,7 +11,7 @@ async function until(check,label){for(let n=0;n<50;n++){const value=await proof(
 const click=async(x,y)=>{page.click(x,y);await sleep(150);};
 const press=key=>page.run(['press',key]);
 const type=value=>page.run(['keyboard','type',value]);
-async function settings(){await click(265,964);await click(70,152);}
+async function settings(){await click(274,982);await click(70,152);}
 async function browse(){await click(1087,163);await click(990,199);}
 try {
   host=await engine('plugin-settings');

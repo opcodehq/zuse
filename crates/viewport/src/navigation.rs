@@ -103,6 +103,7 @@ impl WorkspaceView {
     }
 
     pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+        self.update_sidebar_controls(cx);
         let query = if self.search_open {
             self.session_search.read(cx).value(cx).to_lowercase()
         } else {
@@ -149,36 +150,60 @@ impl WorkspaceView {
             .border_color(rgb(BORDER))
             .child(
                 row()
-                    .h(px(44.))
-                    .px_3()
-                    .gap_1()
+                    .h(px(36.))
+                    .pl(px(12.))
+                    .pr(px(4.))
+                    .gap(px(4.))
                     .child(
-                        icon_button("sidebar-collapse", "split-columns", "Hide sidebar").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.sidebar_open = false;
-                                cx.notify();
-                            }),
-                        ),
-                    )
-                    .child(
-                        label("Zuse")
-                            .text_size(px(13.))
-                            .text_color(rgb(TEXT))
-                            .font_weight(FontWeight::SEMIBOLD),
+                        label("Zuse (Beta)")
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(TEXT)),
                     )
                     .child(div().flex_1())
                     .child(
                         icon_button("search-sessions", "magnifer", "Search threads")
-                            .when(self.search_open, |d| d.bg(rgb(RAISED)))
+                            .size(px(28.))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.toggle_search(window, cx)),
                             ),
                     )
                     .child(
-                        icon_button("new-session-icon", "pen-new-square", "New thread").on_click(
-                            cx.listener(|this, _, window, cx| this.start_new_session(window, cx)),
-                        ),
+                        icon_button("sidebar-collapse", "split-columns", "Hide sidebar")
+                            .size(px(28.))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.sidebar_open = false;
+                                cx.notify();
+                            })),
                     ),
+            )
+            .child(
+                column()
+                    .px(px(6.))
+                    .py(px(4.))
+                    .gap(px(2.))
+                    .child(
+                        sidebar_action("sidebar-new-chat", "New chat", "pen-new-square")
+                            .child(label("Ctrl+N").text_size(px(12.)).text_color(rgb(MUTED)))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.start_new_session(window, cx)
+                            })),
+                    )
+                    .child(
+                        sidebar_action("sidebar-new-project", "New project", "folder-with-files")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.project_picker = true;
+                                cx.notify();
+                            })),
+                    )
+                    .when(self.cloud_account["user"].is_object(), |v| {
+                        v.child(
+                            sidebar_action("sidebar-plugins", "Plugins", "settings-plugins")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_plugins_browse(cx);
+                                })),
+                        )
+                    }),
             )
             .when(self.search_open, |d| {
                 d.child(
@@ -418,67 +443,19 @@ impl WorkspaceView {
             })
             .child(
                 row()
-                    .p_4()
-                    .gap_2()
+                    .h(px(36.))
+                    .px(px(8.))
+                    .gap(px(2.))
                     .child(
                         div()
-                            .size(px(28.))
-                            .rounded_full()
-                            .bg(rgb(0xe5e5e5))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(12.))
-                            .text_color(rgb(BG))
-                            .child("Z"),
-                    )
-                    .child(
-                        column()
                             .flex_1()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(if self.cloud.guest {
-                                        "Cloud workspace"
-                                    } else if self.account_remote {
-                                        "Account workspace"
-                                    } else if self.paired {
-                                        "Paired workspace"
-                                    } else {
-                                        "Local workspace"
-                                    }),
-                            )
-                            .child(
-                                row()
-                                    .gap_1()
-                                    .child(
-                                        div().size(px(4.)).rounded_full().bg(rgb(
-                                            if self.connected { 0x76b993 } else { 0xb79363 },
-                                        )),
-                                    )
-                                    .child(
-                                        label(if self.connected {
-                                            if self.cloud.guest {
-                                                "Cloud runtime"
-                                            } else if self.account_remote {
-                                                "Account computer"
-                                            } else if self.paired {
-                                                "Paired engine"
-                                            } else {
-                                                "This device"
-                                            }
-                                        } else {
-                                            &self.status
-                                        })
-                                        .text_size(px(10.))
-                                        .text_color(rgb(FAINT)),
-                                    ),
-                            ),
+                            .min_w_0()
+                            .child(self.sidebar_controls.clone()),
                     )
                     .child(
-                        icon_button("settings", "settings-minimalistic", "Settings & usage")
+                        crate::sidebar_controls::footer_button("settings", "Settings")
+                            .w(px(28.))
+                            .child(icon("settings-minimalistic").size(px(16.)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.close_plugins_browse();
                                 this.settings = !this.settings;
@@ -486,10 +463,6 @@ impl WorkspaceView {
                                     this.refresh_worktree_settings();
                                     this.refresh_title_settings();
                                 }
-                                this.call(
-                                    methods::LIST_AGENT_ACCOUNTS,
-                                    json!({"forceUsage":false}),
-                                );
                                 cx.notify();
                             })),
                     ),
@@ -705,4 +678,28 @@ impl WorkspaceView {
             }))
             .into_any_element()
     }
+}
+
+fn sidebar_action(id: &'static str, label: &'static str, glyph: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label)
+        .tab_index(0)
+        .w_full()
+        .min_h(px(24.))
+        .px(px(8.))
+        .py(px(2.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .rounded(px(7.))
+        .text_size(px(12.))
+        .line_height(px(16.))
+        .text_color(rgb(MUTED))
+        .cursor_pointer()
+        .hover(|v| v.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+        .focus_visible(|v| v.border_1().border_color(rgb(0x89ca21)))
+        .child(icon(glyph).size(px(16.)))
+        .child(div().flex_1().min_w_0().truncate().child(label))
 }

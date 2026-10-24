@@ -1,6 +1,7 @@
 // Deterministic execution-host contracts; no installed CLI or login service is invoked.
 export function providerSettingsFixture(events) {
-  let enabled = false, hold = false;
+  let enabled = false, hold = false, accounts = [], usageError = null, holdUsage = false;
+  const usageWaiting = [];
   const waiting = [], watches = new Map();
   const descriptors = [
     ['claude-code', 'Claude Code', true, true],
@@ -16,7 +17,7 @@ export function providerSettingsFixture(events) {
   const reply = (send,client,frame) => hold ? waiting.push([send,client,frame]) : send(client,frame);
   return {
     snapshot,
-    configure(value) { enabled=true; hold=value.hold??false; if(!hold)for(const [send,client,frame] of waiting.splice(0))send(client,frame); },
+    configure(value) { enabled=true; hold=value.hold??false; if(value.accounts)accounts=value.accounts; if(Object.hasOwn(value,'usageError'))usageError=value.usageError; if(Object.hasOwn(value,'holdUsage'))holdUsage=value.holdUsage; if(!holdUsage)for(const [send,client,frame]of usageWaiting.splice(0))send(client,frame); if(!hold)for(const [send,client,frame] of waiting.splice(0))send(client,frame); },
     handle(client,frame,send) {
       if(frame.cancel && watches.get(client)?.delete(frame.id))return true;
       if(!enabled)return false;
@@ -26,7 +27,10 @@ export function providerSettingsFixture(events) {
       let data;
       if(method==='ListHarnesses')data=descriptors;
       if(method==='ListModels')data=models[p.harness]??[];
-      if(method==='ListAgentAccounts')data={accounts:[],warnings:[]};
+      if(method==='ListAgentAccounts'){
+        const response=usageError?{id:frame.id,err:usageError,done:true}:{id:frame.id,ok:{accounts:structuredClone(accounts),warnings:[]}};
+        if(holdUsage)usageWaiting.push([send,client,response]);else reply(send,client,response);return true;
+      }
       if(method==='CheckHarnessUpdates')data=updates;
       if(method==='WatchHarnessUpdates'){
         let ids=watches.get(client);if(!ids)watches.set(client,ids=new Set());ids.add(frame.id);

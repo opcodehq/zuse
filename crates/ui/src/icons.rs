@@ -181,6 +181,8 @@ icon_assets![
     (CURSOR_MARK, "cursor-mark"),
     (DEVIN_MARK, "devin-mark"),
     (GROK_MARK, "grok-mark"),
+    (GEMINI_MARK, "gemini-mark"),
+    (KIRO_MARK, "kiro-mark"),
     (HERMES_MARK, "hermes-mark"),
     (PI_MARK, "pi-mark"),
     (OPENCODE_MARK, "opencode-mark"),

@@ -31,7 +31,7 @@ try {
   page.wait('window.__browserProof.preview?.count===1');
   assert.equal(page.evaluate('window.__browserProof.preview.socket'),'WebSocket connected');
   page.screenshot('browser-frame-final.png');
-  stage='hide';page.click(263,964);page.wait('document.querySelector("#zuse-browser-frame")?.style.display==="none"');
+  stage='hide';page.click(274,982);page.wait('document.querySelector("#zuse-browser-frame")?.style.display==="none"');
   page.run(['press','Escape']);page.wait('document.querySelector("#zuse-browser-frame")?.style.display==="block"');
   const inspected=page.evaluate('window.__browserProof.inspect()');
   page.wait(`window.__browserProof.previewRevision>${inspected}`);

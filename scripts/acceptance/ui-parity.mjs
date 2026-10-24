@@ -30,7 +30,7 @@ try {
   assert.ok(outline.slice(0,4).every(red => red >= 30 && red < 65), 'Composer outline must match the reference 744×106px bounds');
   assert.ok(outline.slice(4).every(red => red < 20), 'Composer must end at the reference bounds');
 
-  page.click(265,964); await sleep(180);
+  page.click(274,982); await sleep(180);
   page.click(80,272); await sleep(200);
   page.click(600,163); page.run(['keyboard','type','integration']); await sleep(150);
   page.click(1037,272);

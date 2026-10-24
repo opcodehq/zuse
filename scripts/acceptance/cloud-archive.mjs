@@ -14,7 +14,7 @@ try {
   page=browser('cloud-archive');page.open(host.url,fixture('cloud-archive-observer.js'));
   page.wait('window.__cloudArchiveProof?.methods.includes("WatchChats")');
   await sleep(200);
-  stage='archive-list';page.click(263,964);await sleep(150);page.click(100,242);
+  stage='archive-list';page.click(274,982);await sleep(150);page.click(100,242);
   page.wait('window.__cloudArchiveProof?.list?.some(w=>w.workspaceId==="ws-bob"&&w.state==="archived")');
   await sleep(150);
   page.screenshot('cloud-archived-list.png');

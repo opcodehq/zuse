@@ -90,6 +90,7 @@ mod search_warm;
 mod session_info;
 mod side_chats;
 mod sidebar_pins;
+mod sidebar_controls;
 mod sidebar_sections;
 pub(crate) mod spaces;
 mod thread_search;
@@ -2025,6 +2026,8 @@ enum PendingExit {
 pub struct Shell {
     state: Entity<AppState>,
     sidebar_pane: Entity<SidebarPane>,
+    sidebar_controls: Entity<zuse_viewport::sidebar_controls::SidebarControls>,
+    sidebar_control_tasks: std::collections::HashMap<u64, Task<()>>,
     transcript: Entity<Transcript>,
     composer: Entity<Composer>,
     /// The window's voice orchestrator: independent of the selected chat.
@@ -2607,9 +2610,12 @@ impl Shell {
             shell: shell.downgrade(),
             _observation: cx.observe(&shell, |_, _, cx| cx.notify()),
         });
+        let sidebar_controls = Self::create_sidebar_controls(state.clone(), cx);
         Self {
             state: state.clone(),
             sidebar_pane,
+            sidebar_controls,
+            sidebar_control_tasks: Default::default(),
             transcript,
             composer,
             voice,
@@ -9994,7 +10000,8 @@ impl Shell {
             .when_some(update_strip, |el, strip| el.child(strip))
             .child(
                 div()
-                    .p(px(Theme::SPACE_SM))
+                    .px(px(8.))
+                    .h(px(36.))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -10017,12 +10024,14 @@ impl Shell {
                 .debug_selector(move || id.into())
                 .role(gpui::Role::Button)
                 .tab_index(0)
-                .h(px(28.0))
+                .min_h(px(24.0))
+                .py(px(2.0))
+                .line_height(px(16.0))
                 .px(px(Theme::SPACE_SM))
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(Theme::SPACE_SM))
+                .gap(px(6.0))
                 .rounded(px(SIDEBAR_ROW_RADIUS))
                 .cursor_pointer()
                 .text_size(crate::typography::text_xs())
@@ -10044,7 +10053,7 @@ impl Shell {
                 .focus_visible(|el| el.border_1().border_color(theme.border_strong))
                 .child(
                     icon(glyph)
-                        .size(px(15.0))
+                        .size(px(16.0))
                         .flex_none()
                         .text_color(if active {
                             theme.text
@@ -10059,9 +10068,10 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .px(px(Theme::SPACE_SM))
+            .px(px(6.0))
             .pt(px(2.0))
-            .child(div().pb(px(4.0)).child(workspace))
+            .pb(px(4.0))
+            .child(div().px(px(2.0)).pt(px(2.0)).pb(px(6.0)).child(workspace))
             .child(
                 row(
                     "sidebar-new-chat-row",
@@ -10092,16 +10102,18 @@ impl Shell {
                 .aria_label("New project")
                 .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
             )
-            .child(
-                row(
-                    "sidebar-plugins-row",
-                    icons::SETTINGS_PLUGINS,
-                    "Plugins",
-                    plugins_open,
+            .when(self.state.read(cx).cloud_user_id().is_some(), |view| {
+                view.child(
+                    row(
+                        "sidebar-plugins-row",
+                        icons::SETTINGS_PLUGINS,
+                        "Plugins",
+                        plugins_open,
+                    )
+                    .aria_label("Plugins")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
                 )
-                .aria_label("Plugins")
-                .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
-            )
+            })
             .into_any_element()
     }
 
@@ -10514,96 +10526,27 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Footer: where the workspace lives (Cloud when synced, else Local,
-    /// with the storage detail as its tooltip) on the left; running agents,
-    /// voice, Pull requests and the Settings toggle on the right.
+    /// General-account plan and provider limits, followed by native voice,
+    /// Pull requests and Settings actions.
     fn render_sidebar_footer(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let (cloud, detail, working) = {
-            let state = self.state.read(cx);
-            let (_, identity) =
-                sidebar_account_identity(state.workspace_scope, self.sync_flow, state.auth_user());
-            let cloud = state
-                .engine()
-                .and_then(|engine| engine.cloud_workspace())
-                .is_some()
-                || (matches!(state.workspace_scope, Some(WorkspaceScope::Synced))
-                    && state.auth_user().is_some());
-            let working = state
-                .sidebar_chats(Utc::now(), None)
-                .into_iter()
-                .filter(|(status, _)| *status == zuse_protocol::ChatIndicator::Working)
-                .count();
-            (cloud, identity, working)
-        };
-        let location = div()
-            .id("sidebar-location")
-            .debug_selector(|| "sidebar-location".into())
-            .h(px(SIDEBAR_FOOTER_BUTTON_SIZE))
-            .min_w_0()
-            .px(px(Theme::SPACE_SM))
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .rounded(px(7.0))
-            .text_size(crate::typography::text_xs())
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.text_muted)
-            .tooltip(crate::settings::widgets::text_tooltip(detail))
-            .child(
-                icon(if cloud { icons::CLOUD } else { icons::LAPTOP })
-                    .size(px(14.0))
-                    .flex_none()
-                    .text_color(theme.text_muted),
-            )
-            .child(SharedString::from(if cloud { "Cloud" } else { "Local" }));
-        let agents = div()
-            .id("sidebar-running-agents")
-            .debug_selector(|| "sidebar-running-agents".into())
-            .h(px(SIDEBAR_FOOTER_BUTTON_SIZE))
-            .px(px(6.0))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .rounded(px(8.0))
-            .text_size(crate::typography::text_xs())
-            .text_color(if working > 0 {
-                theme.text
-            } else {
-                theme.text_muted
-            })
-            .tooltip(crate::settings::widgets::text_tooltip(if working == 1 {
-                "1 agent working".to_string()
-            } else {
-                format!("{working} agents working")
-            }))
-            .child(icon(icons::BOT).size(px(15.0)).text_color(if working > 0 {
-                theme.text
-            } else {
-                theme.text_muted
-            }))
-            .child(SharedString::from(working.to_string()));
-        let pull_requests = self.render_pull_requests_button(theme, cx);
+        self.update_sidebar_controls(cx);
         let voice_trigger = self.render_voice_trigger(theme, cx);
+        let pull_requests = self.render_pull_requests_button(theme, cx);
         let settings = self.render_settings_trigger(theme, cx);
         div()
             .w_full()
             .flex()
             .items_center()
-            .justify_between()
-            .gap(px(4.0))
-            .child(location)
+            .gap(px(2.))
             .child(
                 div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(2.0))
-                    .child(agents)
-                    .children(voice_trigger)
-                    .child(pull_requests)
-                    .child(settings),
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.sidebar_controls.clone()),
             )
+            .children(voice_trigger)
+            .child(pull_requests)
+            .child(settings)
             .into_any_element()
     }
 
@@ -11360,6 +11303,14 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.keystroke.key == "escape"
+            && self.sidebar_controls.update(cx, |controls, cx| {
+                controls.dismiss_on_escape(window, cx)
+            })
+        {
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key == "escape" && self.voice.read(cx).stage_open {
             self.set_voice_stage_open(false, cx);
             cx.stop_propagation();
@@ -17124,7 +17075,7 @@ mod exit_regressions {
         let shell = host.read_with(cx, |host, _| host.0.clone());
         for expect_open in [true, false] {
             cx.update(|window, cx| window.draw(cx).clear());
-            assert!(cx.debug_bounds("sidebar-location").is_some());
+            assert!(cx.debug_bounds("sidebar-account").is_some());
             let trigger = cx.debug_bounds("settings-trigger").unwrap().center();
             cx.simulate_click(trigger, gpui::Modifiers::default());
             shell.read_with(cx, |shell, _| {

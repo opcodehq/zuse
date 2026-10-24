@@ -1235,6 +1235,11 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
+                if this.sidebar_controls.update(cx, |controls, cx| {
+                    controls.dismiss_on_escape(window, cx)
+                }) {
+                    return;
+                }
                 if this.cloud.picker.take().is_some() {
                     cx.notify();
                     return;

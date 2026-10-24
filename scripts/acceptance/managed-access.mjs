@@ -6,7 +6,7 @@ try {
   page=browser('managed-controls');page.open(host.url,fixture('managed-access-observer.js'));
   page.wait('window.__managedAccessProof?.methods.includes("WatchChats")');
   await sleep(200);
-  stage='settings';page.click(263,964);await sleep(150);
+  stage='settings';page.click(274,982);await sleep(150);
   page.click(100,182);
   page.wait('window.__managedAccessProof?.host?.configured===false');
   const proof=page.evaluate('window.__managedAccessProof');

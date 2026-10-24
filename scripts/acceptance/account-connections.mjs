@@ -6,7 +6,7 @@ try {
   host=await engine('account-connection');page=browser('account-connection');
   page.open(host.url,fixture('account-connection.js'));
   page.wait('window.__accountConnectionProof?.calls.some(c=>c.method==="WatchChats")');
-  page.click(263,964);await sleep(150);page.click(100,182);
+  page.click(274,982);await sleep(150);page.click(100,182);
   page.wait('window.__accountConnectionProof?.calls.some(c=>c.method==="ListAccountEnvironments")');
   await sleep(150);stage='open destination';page.click(1070,520);await sleep(500);
   const tabs=page.run(['tab']);artifact('account-connections-tabs.json',tabs);

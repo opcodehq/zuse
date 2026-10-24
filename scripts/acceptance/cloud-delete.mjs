@@ -29,7 +29,7 @@ try {
   host=await engine('cloud-delete');page=browser('cloud-delete');
   page.open(host.url,fixture('cloud-delete-observer.js'));
   page.wait('window.__cloudArchiveProof?.methods.includes("WatchChats")');await sleep(200);
-  page.click(263,964);await sleep(150);page.click(100,242);
+  page.click(274,982);await sleep(150);page.click(100,242);
   page.wait('window.__cloudArchiveProof?.list?.some(w=>w.workspaceId==="ws-bob"&&w.state==="archived")');await sleep(250);
   if(mirror) {
     stage='local-cleanup-error';
