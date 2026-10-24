@@ -1,9 +1,8 @@
 //! Combined provider/model picker, following Zuse's provider rail and model list.
+pub(super) mod view;
 use super::*;
 use crate::assets::icon;
-use crate::shell::{
-    BORDER, FAINT, MUTED, TEXT, column, control, icon_button, label, provider_icon, row,
-};
+use crate::shell::{BORDER, MUTED, TEXT, column, control, label, provider_icon, row};
 use zuse_protocol::{Model, presentation::ModelSelection};
 const ACCENT: u32 = 0x89ca21;
 pub(super) type TriggerBounds = std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>;
@@ -31,6 +30,13 @@ impl WorkspaceView {
                 .preferences
                 .default_provider
                 .clone()
+                .or_else(|| {
+                    self.providers
+                        .iter()
+                        .find(|p| p["installed"] != false && p["enabled"] != false)
+                        .and_then(|p| p["id"].as_str())
+                        .map(str::to_owned)
+                })
                 .unwrap_or_default(),
             PickerTarget::ThreadNaming => self.title_settings.provider().unwrap_or_default(),
         }
@@ -68,7 +74,10 @@ impl WorkspaceView {
         let provider = self.composer_providers().get(self.provider_index)?["id"].as_str()?;
         let models = &self.composer_catalog().providers.get(provider)?.models;
         let id = self.model.as_deref().unwrap_or("default");
-        models.iter().find(|m| m.id == id)
+        models
+            .iter()
+            .find(|m| m.id == id)
+            .or_else(|| (id == "default").then(|| models.first()).flatten())
     }
     pub(super) fn picker_label(&self) -> String {
         self.selected_model()
@@ -104,7 +113,7 @@ impl WorkspaceView {
                 self.refresh_model_config_watch();
             }
             self.picker_scope = None;
-            self.picker_anchors.clear();
+            self.picker_menu.invalidate();
             self.model_search
                 .update(cx, |input, cx| input.set_value(String::new(), cx));
             window.focus(&self.model_search.focus_handle(cx), cx);
@@ -119,6 +128,7 @@ impl WorkspaceView {
             self.picker_active = None;
             self.configure_reasoning_slider(cx);
             self.load_picker_catalogs(false);
+            self.refresh_picker_placeholder(cx);
         }
         cx.notify();
     }
@@ -144,6 +154,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> bool {
         if self.receive_host_catalog(id, frame, cx) {
+            self.refresh_picker_placeholder(cx);
             return true;
         }
         let local = self.picker_catalog.contains_request(id);
@@ -165,12 +176,13 @@ impl WorkspaceView {
         } else {
             self.model_host.catalog.complete(id, result);
         }
-        self.sync_picker_anchors();
+        self.invalidate_picker_menu();
         self.pending.remove(&id);
         if self.selected.is_none() {
             self.restore_model_choices();
         }
         self.configure_reasoning_slider(cx);
+        self.refresh_picker_placeholder(cx);
         cx.notify();
         true
     }
@@ -221,605 +233,14 @@ impl WorkspaceView {
         self.model_picker = false;
         self.model_choices_changed(cx);
     }
-    fn model_row(
-        &self,
-        provider: &str,
-        model: &Model,
-        ordinal: usize,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let provider_id = provider.to_owned();
-        let model_id = model.id.clone();
-        let active_chat = self
-            .picker_providers()
-            .get(self.provider_index)
-            .is_some_and(|p| p["id"] == provider)
-            && (self.model.as_deref() == Some(&model.id)
-                || (self.model.is_none() && model.id == "default"));
-        let default = self.preferences.default_provider.as_deref() == Some(provider)
-            && self.preferences.default_models.get(provider) == Some(&model.id);
-        let active = match self.picker_target {
-            PickerTarget::Defaults => default,
-            PickerTarget::Composer => active_chat,
-            PickerTarget::ThreadNaming => {
-                self.title_settings.provider().as_deref() == Some(provider)
-                    && self
-                        .title_settings
-                        .settings
-                        .as_ref()
-                        .and_then(|settings| settings.model.as_deref())
-                        .unwrap_or("default")
-                        == model.id
-            }
-        };
-        let selection = ModelSelection {
-            provider: provider.to_owned(),
-            model: model.id.clone(),
-        };
-        row()
-            .id(SharedString::from(format!(
-                "model-row-{provider}-{}-{ordinal}",
-                model.id
-            )))
-            .role(Role::Button)
-            .anchor_scroll(
-                self.picker_anchors
-                    .get(&format!("{provider}:{}", model.id))
-                    .cloned(),
-            )
-            .aria_label(SharedString::from(format!("Choose {}", model.label)))
-            .relative()
-            .min_h(px(32.))
-            .flex_shrink_0()
-            .px_2()
-            .py(px(6.))
-            .gap(px(6.))
-            .rounded(px(7.))
-            .cursor_pointer()
-            .when(
-                self.picker_active
-                    .as_ref()
-                    .is_some_and(|m| m.provider == provider && m.model == model.id),
-                |d| d.bg(crate::settings_style::frame_bg().opacity(0.6)),
-            )
-            .when(active, |d| d.bg(rgb(ACCENT).opacity(0.12)))
-            .hover(|d| {
-                d.bg(if active {
-                    rgb(ACCENT).opacity(0.12).into()
-                } else {
-                    crate::settings_style::frame_bg().opacity(0.6)
-                })
-            })
-            .when(active, |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_1_2()
-                        .mt(px(-8.))
-                        .h(px(16.))
-                        .w(px(2.))
-                        .rounded_full()
-                        .bg(rgb(ACCENT)),
-                )
-            })
-            .child(
-                icon(provider_icon(provider))
-                    .size(px(16.))
-                    .text_color(rgb(MUTED)),
-            )
-            .child(
-                column()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(TEXT))
-                            .child(model.label.clone()),
-                    )
-                    .when_some(model.description.clone(), |d, description| {
-                        d.child(label(description).text_size(px(11.)).text_color(rgb(MUTED)))
-                    }),
-            )
-            .child(
-                icon_button(
-                    SharedString::from(format!("default-{provider}-{}-{ordinal}", model.id)),
-                    "star",
-                    "Use this model by default",
-                )
-                .size(px(20.))
-                .text_color(rgb(if default { ACCENT } else { FAINT }))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.preferences.set_default(selection.clone());
-                    this.save_preferences();
-                    cx.notify();
-                })),
-            )
-            .when(active, |d| {
-                d.child(icon("check").size(px(14.)).text_color(rgb(ACCENT)))
-            })
-            .on_click(cx.listener(move |this, _, window, cx| {
-                let target = this.picker_target;
-                this.choose_model(provider_id.clone(), Some(model_id.clone()), cx);
-                if !this.model_picker {
-                    this.return_model_picker_focus(target, window, cx);
-                }
-            }))
-            .into_any_element()
-    }
-    pub(super) fn composer_picker(
-        &self,
-        cx: &mut Context<Self>,
-        trigger: Option<TriggerBounds>,
-    ) -> AnyElement {
-        let query = self.model_search.read(cx).value(cx).to_lowercase();
-        let current = self.picker_current_provider();
-        let total = self
-            .active_picker_catalog()
-            .providers
-            .iter()
-            .map(|(_, catalog)| catalog.models.len())
-            .sum::<usize>();
-        let width = (self.content_width - 48.).clamp(272., 380.);
-        let height = if self.content_height > 0. {
-            (self.content_height - 220.).clamp(230., 480.)
-        } else {
-            480.
-        };
-        row()
-            .id("composer-picker")
-            .absolute()
-            .when(!self.picker_in_settings(), |view| view.bottom_full().mb_2())
-            .when(self.picker_in_settings(), |view| view.top_full().mt_2())
-            .right_0()
-            .w(px(width))
-            .h(px(height))
-            .items_stretch()
-            .overflow_hidden()
-            .rounded(px(16.))
-            .border_1()
-            .border_color(crate::settings_style::card_border())
-            .bg(crate::palette::tone(
-                hsla(132. / 360., 0.05, 0.105, 1.),
-                hsla(0., 0., 1., 1.),
-            ))
-            .shadow_lg()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .capture_key_down(cx.listener(Self::on_picker_key))
-            .when_some(trigger, |view, trigger| {
-                view.on_mouse_down_out(cx.listener(
-                    move |this, event: &MouseDownEvent, window, cx| {
-                        if !trigger
-                            .get()
-                            .is_some_and(|bounds| bounds.contains(&event.position))
-                        {
-                            let target = this.picker_target;
-                            this.model_picker = false;
-                            this.picker_target = PickerTarget::Composer;
-                            this.return_model_picker_focus(target, window, cx);
-                            cx.notify();
-                        }
-                    },
-                ))
-            })
-            .child(
-                column()
-                    .id("provider-rail")
-                    .w(px(44.))
-                    .flex_shrink_0()
-                    .overflow_y_scroll()
-                    .p(px(6.))
-                    .gap_1()
-                    .border_r_1()
-                    .border_color(rgb(BORDER).opacity(0.5))
-                    .bg(crate::settings_style::frame_bg().opacity(0.2))
-                    .child(
-                        control("models-all", "All")
-                            .h(px(32.))
-                            .flex_shrink_0()
-                            .justify_center()
-                            .px_1()
-                            .text_size(px(10.))
-                            .when(self.picker_scope.is_none(), |d| {
-                                d.bg(rgb(ACCENT).opacity(0.12)).text_color(rgb(TEXT))
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.picker_scope = None;
-                                cx.notify();
-                            })),
-                    )
-                    .children(
-                        self.picker_providers()
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, p)| {
-                                (p["installed"] != false && p["enabled"] != false)
-                                    || (!self.picker_in_settings()
-                                        && self.selected.is_some()
-                                        && p["id"] == current)
-                            })
-                            .map(|(i, p)| {
-                                let provider = p["id"].as_str().unwrap_or_default().to_owned();
-                                let live = self
-                                    .active_picker_catalog()
-                                    .providers
-                                    .get(&provider)
-                                    .is_some_and(|c| c.loaded && c.error.is_none());
-                                icon_button(
-                                    ("model-provider", i),
-                                    provider_icon(&provider),
-                                    "Filter models by agent",
-                                )
-                                .relative()
-                                .size(px(32.))
-                                .flex_shrink_0()
-                                .when(self.picker_scope.as_deref() == Some(&provider), |d| {
-                                    d.bg(rgb(ACCENT).opacity(0.12)).text_color(rgb(TEXT))
-                                })
-                                .when(live, |d| {
-                                    d.child(
-                                        div()
-                                            .absolute()
-                                            .right(px(3.))
-                                            .bottom(px(3.))
-                                            .size(px(4.))
-                                            .rounded_full()
-                                            .bg(rgb(ACCENT)),
-                                    )
-                                })
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        this.picker_scope = Some(provider.clone());
-                                        cx.notify();
-                                    },
-                                ))
-                            }),
-                    ),
-            )
-            .child(
-                column()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .child(
-                        row()
-                            .flex_shrink_0()
-                            .p(px(10.))
-                            .gap_1()
-                            .border_b_1()
-                            .border_color(rgb(BORDER))
-                            .child(
-                                row()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .h(px(32.))
-                                    .px(px(10.))
-                                    .gap_2()
-                                    .rounded(px(7.))
-                                    .border_1()
-                                    .border_color(rgb(BORDER))
-                                    .bg(rgb(crate::shell::BG))
-                                    .child(icon("magnifer").size(px(14.)).text_color(rgb(FAINT)))
-                                    .child(
-                                        div().flex_1().min_w_0().child(self.model_search.clone()),
-                                    ),
-                            )
-                            .child(
-                                icon_button(
-                                    "refresh-model-catalog",
-                                    "refresh",
-                                    "Refresh available models",
-                                )
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        this.load_picker_catalogs(true);
-                                        cx.notify();
-                                    },
-                                )),
-                            ),
-                    )
-                    .when(
-                        !self.picker_in_settings()
-                            && self.model_host.request.is_some()
-                            && !self.model_host.confirmed,
-                        |d| {
-                            d.child(
-                                div()
-                                    .px_3()
-                                    .py_2()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(MUTED))
-                                    .child("Loading agents from the execution host…"),
-                            )
-                        },
-                    )
-                    .when(!self.picker_in_settings(), |d| {
-                        d.when_some(self.model_host.error.clone(), |d, error| {
-                            d.child(
-                                div()
-                                    .px_3()
-                                    .py_2()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(MUTED))
-                                    .child(format!(
-                                        "Execution host: {error} Use Refresh to try again."
-                                    )),
-                            )
-                        })
-                    })
-                    .child(
-                        column()
-                            .id("model-results")
-                            .track_scroll(&self.picker_scroll)
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .px(px(10.))
-                            .pb(px(10.))
-                            .gap(px(2.))
-                            .child(
-                                label(format!("{} MODELS", total))
-                                    .px_2()
-                                    .py_2()
-                                    .text_size(px(10.))
-                                    .text_color(rgb(FAINT)),
-                            )
-                            .when(
-                                query.is_empty()
-                                    && self.picker_scope.is_none()
-                                    && !self.preferences.recent_models.is_empty(),
-                                |d| {
-                                    let recent = self
-                                        .preferences
-                                        .recent_models
-                                        .iter()
-                                        .filter_map(|choice| {
-                                            self.active_picker_catalog()
-                                                .providers
-                                                .get(&choice.provider)
-                                                .and_then(|c| {
-                                                    c.models.iter().find(|m| m.id == choice.model)
-                                                })
-                                                .map(|m| (choice, m))
-                                        })
-                                        .take(3)
-                                        .collect::<Vec<_>>();
-                                    d.when(!recent.is_empty(), |d| {
-                                        d.child(
-                                            label("RECENT")
-                                                .px_2()
-                                                .py_1()
-                                                .text_size(px(10.))
-                                                .text_color(rgb(FAINT)),
-                                        )
-                                        .children(
-                                            recent.into_iter().enumerate().map(
-                                                |(i, (choice, model))| {
-                                                    self.model_row(
-                                                        &choice.provider,
-                                                        model,
-                                                        10000 + i,
-                                                        cx,
-                                                    )
-                                                },
-                                            ),
-                                        )
-                                    })
-                                },
-                            )
-                            .children(
-                                self.picker_providers()
-                                    .iter()
-                                    .filter(|p| {
-                                        (p["installed"] != false && p["enabled"] != false)
-                                            || (!self.picker_in_settings()
-                                                && self.selected.is_some()
-                                                && p["id"] == current)
-                                    })
-                                    .filter(|p| {
-                                        self.picker_scope
-                                            .as_deref()
-                                            .is_none_or(|scope| p["id"] == scope)
-                                    })
-                                    .map(|p| {
-                                        let provider = p["id"].as_str().unwrap_or_default();
-                                        let name = p["name"].as_str().unwrap_or(provider);
-                                        let catalog =
-                                            self.active_picker_catalog().providers.get(provider);
-                                        let matches = catalog
-                                            .into_iter()
-                                            .flat_map(|c| c.models.iter())
-                                            .filter(|m| {
-                                                query.is_empty()
-                                                    || [
-                                                        m.label.as_str(),
-                                                        m.id.as_str(),
-                                                        name,
-                                                        m.description
-                                                            .as_deref()
-                                                            .unwrap_or_default(),
-                                                    ]
-                                                    .iter()
-                                                    .any(|s| s.to_lowercase().contains(&query))
-                                            })
-                                            .collect::<Vec<_>>();
-                                        let installed = p["installed"] != false;
-                                        let mut group =
-                                            column().flex_shrink_0().gap_1().pb_2().child(
-                                                row()
-                                                    .px_2()
-                                                    .pt_2()
-                                                    .pb_1()
-                                                    .gap_2()
-                                                    .child(
-                                                        icon(provider_icon(provider)).size(px(14.)),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_size(px(11.))
-                                                            .font_weight(FontWeight::MEDIUM)
-                                                            .child(name.to_owned()),
-                                                    )
-                                                    .when(current == provider, |d| {
-                                                        d.child(
-                                                            label("CURRENT")
-                                                                .text_size(px(8.))
-                                                                .px_1()
-                                                                .rounded_sm()
-                                                                .bg(rgb(0x343d22))
-                                                                .text_color(rgb(ACCENT)),
-                                                        )
-                                                    })
-                                                    .child(div().flex_1())
-                                                    .child(
-                                                        label(matches.len().to_string())
-                                                            .text_size(px(10.))
-                                                            .text_color(rgb(FAINT)),
-                                                    ),
-                                            );
-                                        if let Some(error) = catalog.and_then(|c| c.error.as_ref())
-                                        {
-                                            group = group.child(
-                                                column().px_2().py_2().gap_1().child(
-                                                    label(error.clone())
-                                                        .text_size(px(10.))
-                                                        .text_color(rgb(0xe9bb92)),
-                                                ),
-                                            );
-                                        }
-                                        if catalog.is_some_and(|c| c.request.is_some()) {
-                                            group = group.child(
-                                                label("Checking available models…")
-                                                    .px_2()
-                                                    .py_2()
-                                                    .text_size(px(11.)),
-                                            );
-                                        }
-                                        if installed
-                                            && !catalog.is_some_and(|c| {
-                                                c.models.iter().any(|m| m.id == "default")
-                                            })
-                                            && (query.is_empty()
-                                                || "agent default".contains(&query))
-                                        {
-                                            let provider = provider.to_owned();
-                                            group = group.child(
-                                                control(
-                                                    SharedString::from(format!(
-                                                        "default-model-{provider}"
-                                                    )),
-                                                    "Agent default",
-                                                )
-                                                .h(px(32.))
-                                                .flex_shrink_0()
-                                                .text_color(rgb(TEXT))
-                                                .when(
-                                                    current == provider && self.model.is_none(),
-                                                    |d| {
-                                                        d.bg(rgb(0x2c351d))
-                                                            .child(div().flex_1())
-                                                            .child(
-                                                                icon("check")
-                                                                    .size(px(12.))
-                                                                    .text_color(rgb(ACCENT)),
-                                                            )
-                                                    },
-                                                )
-                                                .on_click(cx.listener(
-                                                    move |this, _, window, cx| {
-                                                        this.choose_model(
-                                                            provider.clone(),
-                                                            None,
-                                                            cx,
-                                                        );
-                                                        window.focus(
-                                                            &this.input.focus_handle(cx),
-                                                            cx,
-                                                        );
-                                                    },
-                                                )),
-                                            );
-                                        }
-                                        if !installed {
-                                            group = group.child(
-                                                label("Not installed on this device")
-                                                    .px_2()
-                                                    .py_2()
-                                                    .text_size(px(10.)),
-                                            );
-                                        }
-                                        if matches.is_empty() && !query.is_empty() {
-                                            group = group.child(
-                                                label("No matching models")
-                                                    .px_2()
-                                                    .py_1()
-                                                    .text_size(px(10.)),
-                                            );
-                                        }
-                                        group
-                                            .children(
-                                                matches.into_iter().enumerate().map(|(i, m)| {
-                                                    self.model_row(provider, m, i, cx)
-                                                }),
-                                            )
-                                            .into_any_element()
-                                    }),
-                            ),
-                    )
-                    .when(
-                        !self.picker_in_settings()
-                            && self.selected_model().is_some_and(|m| {
-                                !m.reasoning_levels.is_empty() || !m.options.is_empty()
-                            }),
-                        |d| d.child(self.model_options_view(cx)),
-                    ),
-            )
-            .into_any_element()
-    }
     fn picker_matches(&self, cx: &App) -> Vec<ModelSelection> {
-        let query = self.model_search.read(cx).value(cx).to_lowercase();
-        let current = self.picker_current_provider();
-        let mut matches = Vec::new();
-        for provider in self.picker_providers() {
-            let id = provider["id"].as_str().unwrap_or_default();
-            if (provider["installed"] == false || provider["enabled"] == false)
-                && (self.picker_in_settings() || self.selected.is_none() || id != current)
-            {
-                continue;
-            }
-            if self
-                .picker_scope
-                .as_deref()
-                .is_some_and(|scope| scope != id)
-            {
-                continue;
-            }
-            if let Some(catalog) = self.active_picker_catalog().providers.get(id) {
-                for model in &catalog.models {
-                    if query.is_empty()
-                        || [
-                            model.id.as_str(),
-                            model.label.as_str(),
-                            provider["name"].as_str().unwrap_or_default(),
-                            model.description.as_deref().unwrap_or_default(),
-                        ]
-                        .iter()
-                        .any(|text| text.to_lowercase().contains(&query))
-                    {
-                        matches.push(ModelSelection {
-                            provider: id.to_owned(),
-                            model: model.id.clone(),
-                        });
-                    }
-                }
-            }
-        }
-        matches
+        self.picker_entries(cx)
+            .into_iter()
+            .map(|entry| ModelSelection {
+                provider: entry.provider,
+                model: entry.model.id,
+            })
+            .collect()
     }
     fn on_picker_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !self.model_picker {
@@ -835,7 +256,7 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
-        if self.reasoning_focus.is_focused(window) {
+        if self.reasoning_focus.is_focused(window) || self.picker_menu.control_focused(window) {
             return;
         }
         let modifiers = event.keystroke.modifiers;
@@ -871,12 +292,7 @@ impl WorkspaceView {
                 self.return_model_picker_focus(target, window, cx);
             }
         } else {
-            if let Some(anchor) = self
-                .picker_anchors
-                .get(&format!("{}:{}", choice.provider, choice.model))
-            {
-                anchor.scroll_to(window, cx);
-            }
+            self.scroll_picker_row(&choice, cx);
             self.picker_active = Some(choice);
             cx.notify();
         }

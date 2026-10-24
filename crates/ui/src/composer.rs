@@ -6578,9 +6578,13 @@ impl Composer {
         });
         let picker_focus = cx.subscribe(
             &pickers,
-            |this: &mut Self, _, _: &crate::pickers::ReturnComposerFocus, cx| {
-                this.focus_pending = true;
-                cx.notify();
+            |this: &mut Self, _, event: &crate::pickers::ReturnComposerFocus, cx| {
+                if event.pointer.is_none_or(|position| {
+                    this.surface_bounds.get().is_some_and(|bounds| bounds.contains(&position))
+                }) {
+                    this.focus_pending = true;
+                    cx.notify();
+                }
             },
         );
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.on_state_changed(cx));

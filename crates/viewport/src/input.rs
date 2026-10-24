@@ -186,6 +186,17 @@ impl TextInput {
         });
         cx.notify();
     }
+    pub fn set_placeholder(&mut self, value: String, cx: &mut Context<Self>) {
+        let Editor::Single(editor) = self.editor.clone() else {
+            return;
+        };
+        let window = self.window;
+        cx.defer(move |cx| {
+            let _ = cx.update_window(window, move |_, window, cx| {
+                editor.update(cx, |editor, cx| editor.set_placeholder(value, window, cx));
+            });
+        });
+    }
 }
 
 impl Focusable for TextInput {

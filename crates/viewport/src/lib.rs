@@ -36,6 +36,7 @@ mod managed_access;
 mod model_catalog;
 mod model_config;
 mod model_picker;
+pub mod model_picker_style;
 mod navigation;
 mod notifications;
 mod pairing;
@@ -269,8 +270,7 @@ pub struct WorkspaceView {
     picker_scope: Option<String>,
     model_search: Entity<input::TextInput>,
     picker_active: Option<zuse_protocol::presentation::ModelSelection>,
-    picker_scroll: ScrollHandle,
-    picker_anchors: HashMap<String, ScrollAnchor>,
+    picker_menu: model_picker::view::MenuState,
     reasoning: Option<zuse_protocol::ReasoningLevel>,
     reasoning_slider: Entity<gpui_base::slider::SliderState>,
     reasoning_focus: FocusHandle,
@@ -711,8 +711,7 @@ impl WorkspaceView {
             picker_scope: None,
             model_search,
             picker_active: None,
-            picker_scroll: ScrollHandle::new(),
-            picker_anchors: HashMap::new(),
+            picker_menu: Default::default(),
             reasoning: None,
             reasoning_slider,
             reasoning_focus,

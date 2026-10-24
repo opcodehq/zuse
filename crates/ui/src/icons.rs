@@ -178,6 +178,7 @@ icon_assets![
     (ZUSE_LOGO, "zuse-logo"),
     (CLAUDE_MARK, "claude-mark"),
     (OPENAI_MARK, "openai-mark"),
+    (CODEX_MARK, "codex-mark"),
     (CURSOR_MARK, "cursor-mark"),
     (DEVIN_MARK, "devin-mark"),
     (GROK_MARK, "grok-mark"),

@@ -59,7 +59,7 @@ pub(super) fn icon_button(
 pub(super) fn provider_icon(id: &str) -> &'static str {
     match id {
         "claude-code" => "claude-mark",
-        "codex" => "openai-mark",
+        "codex" => "codex-mark",
         "cursor" => "cursor-mark",
         "opencode" => "opencode-mark",
         "pi" => "pi-mark",
@@ -469,6 +469,8 @@ impl WorkspaceView {
                             .child(
                                 row()
                                     .id("model-picker")
+                                    .relative()
+                                    .child({let bounds=self.picker_menu.trigger.clone();canvas(move|b,_,_|bounds.set(Some(b)),|_,_,_,_|{}).absolute().size_full()})
                                     .role(Role::Button)
                                     .aria_label("Change model")
                                     .cursor_pointer()

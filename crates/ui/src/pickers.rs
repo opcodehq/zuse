@@ -14,6 +14,7 @@
 mod cloud;
 mod compact;
 mod workspace;
+mod model_menu;
 
 use crate::roll_text::{roll_text, rolling};
 use std::collections::{HashMap, HashSet};
@@ -623,6 +624,7 @@ enum ModelRail {
 struct ModelRowsKey {
     query: String,
     rail: ModelRail,
+    scope: Option<HarnessId>,
     effective: Option<HarnessId>,
     locked: bool,
     catalog_rev: u64,
@@ -677,7 +679,10 @@ pub enum PickerKind {
     Device,
 }
 
-pub(crate) struct ReturnComposerFocus;
+#[derive(Default)]
+pub(crate) struct ReturnComposerFocus {
+    pub pointer: Option<gpui::Point<gpui::Pixels>>,
+}
 
 impl gpui::EventEmitter<ReturnComposerFocus> for Pickers {}
 
@@ -817,6 +822,8 @@ pub struct Pickers {
     /// The harness/model picker's rail selection (favorites vs the effective
     /// harness's list). Re-primed on every open.
     model_rail: ModelRail,
+    model_scope: Option<HarnessId>,
+    model_menu: model_menu::MenuState,
     setting_menu: Option<ModelSetting>,
     setting_active: usize,
     setting_on_left: bool,
@@ -1104,6 +1111,8 @@ impl Pickers {
             draft_owner,
             open,
             model_rail: ModelRail::default(),
+            model_scope: None,
+            model_menu: Default::default(),
             setting_menu: None,
             setting_active: 0,
             setting_on_left: false,
@@ -1525,7 +1534,7 @@ impl Pickers {
     /// Begin the exit animation (shared by every close path).
     fn animate_close(&mut self, cx: &mut Context<Self>) {
         if self.is_open() {
-            cx.emit(ReturnComposerFocus);
+            cx.emit(ReturnComposerFocus::default());
         }
         self.dismiss(cx);
     }
@@ -1583,12 +1592,13 @@ impl Pickers {
         if self.open_kind() == Some(kind) || pressed_open {
             self.animate_close(cx);
             if pressed_open {
-                cx.emit(ReturnComposerFocus);
+                cx.emit(ReturnComposerFocus::default());
             }
             cx.notify();
             return;
         }
         if kind == PickerKind::HarnessModel {
+            self.model_scope = None;
             self.open_model_height = model_menu_height(self.tray_group_count(cx));
             self.compact_model_list = true;
             self.compact_strip_viewed = None;
@@ -1659,7 +1669,8 @@ impl Pickers {
             // scroll_to_item below may land anywhere; the first note of the
             // settled position is the fresh baseline, not scroll motion.
             popover::reset_menu_scroll(&self.model_scroll_base(), &mut self.menu_bar);
-            self.scroll_to_model_row(self.active, gpui::ScrollStrategy::Nearest, cx);
+            if self.compact_model_picker(cx) { self.reset_reference_scroll(); }
+            else { self.scroll_to_model_row(self.active, gpui::ScrollStrategy::Nearest, cx); }
         }
         // Searchable pickers focus the filter input (it sits inside the frame,
         // so the frame's key handler still sees arrows/Enter); the rest focus
@@ -2386,6 +2397,7 @@ impl Pickers {
         let key = ModelRowsKey {
             query: self.search.read(cx).text().trim().to_string(),
             rail: self.model_rail,
+            scope: self.model_scope,
             effective: self.effective_harness(cx),
             locked: self.harness_locked(cx),
             catalog_rev: self.catalog_rev,
@@ -2402,6 +2414,7 @@ impl Pickers {
     }
 
     fn visible_model_rows(&self, cx: &App) -> Vec<ModelRowData> {
+        if self.compact_model_picker(cx) { return self.reference_model_rows(cx); }
         let effective = self.effective_harness(cx);
         let descriptors = self.rail_descriptors(cx);
         // Favorite lookups are per-row; the Vec scan made the flatten
@@ -2529,7 +2542,8 @@ impl Pickers {
         self.pick_model(row.model.id, cx);
         if self.compact_model_picker(cx) {
             self.compact_model_list = true;
-            self.focus_on_mount = true;
+            self.focus_on_mount = false;
+            self.close(cx);
         }
     }
 
@@ -3138,7 +3152,7 @@ impl Pickers {
                 return;
             }
             if event.keystroke.key == "escape" {
-                self.show_compact_panel(cx);
+                self.close(cx);
                 cx.stop_propagation();
                 return;
             }
@@ -3247,7 +3261,7 @@ impl Pickers {
         let below = (self.title.is_some() || self.state.read(cx).selected_chat.is_none())
             && matches!(
                 kind,
-                PickerKind::HarnessModel | PickerKind::Branch | PickerKind::Space
+                PickerKind::Branch | PickerKind::Space
             );
         gpui::canvas(
             move |bounds, window, cx| {
@@ -3766,7 +3780,7 @@ impl Pickers {
                         let entity = cx.entity().downgrade();
                         window.defer(cx, move |window, cx| {
                             if window.focused(cx) == previous {
-                                let _ = entity.update(cx, |_, cx| cx.emit(ReturnComposerFocus));
+                                let _ = entity.update(cx, |_, cx| cx.emit(ReturnComposerFocus::default()));
                             }
                         });
                     } else if this.focus.contains_focused(window, cx) {
@@ -3816,10 +3830,22 @@ impl Pickers {
                     {
                         return;
                     }
+                    let previous = window.focused(cx);
                     this.dismiss(cx);
-                    if this.focus.contains_focused(window, cx) {
-                        window.blur();
-                    }
+                    cx.emit(ReturnComposerFocus { pointer: Some(event.position) });
+                    let entity = cx.entity().downgrade();
+                    let menu_focus = this.focus.clone();
+                    window.defer(cx, move |window, cx| {
+                        let empty = window.focused(cx).is_none();
+                        let unchanged = window.focused(cx) == previous;
+                        let retained = menu_focus.contains_focused(window, cx);
+                        // The search field and focusable rows can hand focus to
+                        // each other as the menu closes. Keep a clicked control's
+                        // focus, and return any focus left in the menu to the composer.
+                        if empty || unchanged || retained {
+                            let _ = entity.update(cx, |_, cx| cx.emit(ReturnComposerFocus::default()));
+                        }
+                    });
                 }),
             )
             .flex()
@@ -5858,7 +5884,7 @@ pub(crate) fn harness_brand_icon(harness: HarnessId) -> (&'static str, Option<gp
             crate::icons::CLAUDE_MARK,
             Some(crate::icons::claude_brand()),
         ),
-        HarnessId::Codex => (crate::icons::OPENAI_MARK, None),
+        HarnessId::Codex => (crate::icons::CODEX_MARK, None),
         HarnessId::Cursor => (crate::icons::CURSOR_MARK, None),
         // Cognition's mark (the Devin product icon), monochrome.
         HarnessId::Devin => (crate::icons::DEVIN_MARK, None),
@@ -6063,9 +6089,9 @@ fn attach_overlay_end(
         && let Some((_, element)) = overlay.take()
     {
         return chip.relative().child(if closing.1 {
-            popover::anchored_menu_below_end(id, element, closing.0)
+            popover::anchored_menu_below(id, element, closing.0)
         } else {
-            popover::anchored_menu_above_end(id, element, closing.0)
+            popover::anchored_menu_above(id, element, closing.0)
         });
     }
     chip
@@ -6797,7 +6823,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn new_thread_model_menu_prefers_below_but_retains_room_for_choices(
+    fn model_menu_prefers_above_when_it_has_room(
         cx: &mut gpui::TestAppContext,
     ) {
         struct Fixture(Entity<Pickers>, bool);
@@ -6844,7 +6870,7 @@ mod tests {
                 .read_with(cx, |fixture, cx| {
                     let picker = fixture.0.read(cx);
                     let geometry = picker.menu_geometry[&PickerKind::HarnessModel];
-                    assert_eq!(geometry.below, new_thread && !near_bottom);
+                    assert!(!geometry.below);
                     assert!(geometry.height > 180.0);
                     assert!(
                         model_menu_budgets(geometry.height.min(model_menu_height(2)), 2).0 >= 30.0
@@ -8492,140 +8518,48 @@ mod tests {
     }
 
     #[gpui::test]
-    fn compact_panel_shortcuts_drive_models_providers_and_effort(cx: &mut gpui::TestAppContext) {
+    fn model_menu_browsing_keeps_selection_and_activation_closes(cx: &mut gpui::TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
             cx.set_global(Theme::dark());
-            let mut settings = crate::settings::UiSettings::default();
-            settings.compact_model_picker = true;
-            crate::settings::init(settings, dir.path(), cx);
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
         });
-        let laddered = |id: &str, label: &str| {
-            let mut model = bare_model(id, label);
-            model.reasoning_levels = vec![ReasoningLevel::Low, ReasoningLevel::High];
-            model
-        };
         let handle = cx.add_window(|_, cx| {
             let state = cx.new(|_| AppState::new());
             let mut picker = Pickers::new(state, cx);
             picker.config.harness = Some(HarnessId::Codex);
             picker.harnesses = Loadable::Ready(vec![
-                descriptor(HarnessId::Codex, "Codex"),
-                descriptor(HarnessId::ClaudeCode, "Claude"),
+                descriptor(HarnessId::ClaudeCode, "Claude"), descriptor(HarnessId::Codex, "Codex"),
             ]);
-            picker.models.insert(
-                HarnessId::Codex,
-                Loadable::Ready(vec![
-                    laddered("model", "Model"),
-                    laddered("other", "Other model"),
-                    laddered("third", "Third model"),
-                ]),
-            );
-            picker.models.insert(
-                HarnessId::ClaudeCode,
-                Loadable::Ready(vec![laddered("claude", "Claude model")]),
-            );
+            picker.models.insert(HarnessId::Codex, Loadable::Ready(vec![
+                bare_model("balanced", "Balanced"), bare_model("deep", "Deep"),
+            ]));
+            let mut model = bare_model("opus", "Opus");
+            model.description = Some("Only in the description".into());
+            picker.models.insert(HarnessId::ClaudeCode, Loadable::Ready(vec![model]));
             picker
         });
-        handle
-            .update(cx, |picker, window, cx| picker.open_model_menu(window, cx))
-            .unwrap();
-        cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
-            .unwrap();
-        // Down opens the list on the model after the selected one; Enter
-        // picks it and lands back on the panel.
-        cx.simulate_keystrokes(handle.into(), "down");
-        handle
-            .read_with(cx, |picker, cx| {
-                assert!(picker.compact_model_list);
-                assert_eq!(picker.model_rows(cx)[picker.active].model.id, "other");
-            })
-            .unwrap();
-        cx.simulate_keystrokes(handle.into(), "enter");
-        handle
-            .read_with(cx, |picker, cx| {
-                assert!(!picker.compact_model_list);
-                assert_eq!(picker.selected_model(cx).unwrap().id, "other");
-            })
-            .unwrap();
-        // Up opens it on the model before; Escape steps back without a pick.
-        cx.simulate_keystrokes(handle.into(), "up");
-        handle
-            .read_with(cx, |picker, cx| {
-                assert!(picker.compact_model_list);
-                assert_eq!(picker.model_rows(cx)[picker.active].model.id, "model");
-            })
-            .unwrap();
+        handle.update(cx, |picker, window, cx| {
+            picker.open_model_menu(window, cx);
+            assert_eq!(picker.model_rows(cx)[0].harness, HarnessId::Codex);
+            picker.model_scope = Some(HarnessId::ClaudeCode);
+            assert_eq!(picker.model_rows_len(cx), 1);
+            assert_eq!(picker.resolved(cx).harness, Some(HarnessId::Codex));
+            picker.search.update(cx, |input, cx| input.set_text("description", cx));
+            assert_eq!(picker.model_rows_len(cx), 0);
+            picker.search.update(cx, |input, cx| input.set_text("  OPUS  ", cx));
+            assert_eq!(picker.model_rows_len(cx), 1);
+            picker.activate_model_index(0, cx);
+            assert_eq!(picker.resolved(cx).harness, Some(HarnessId::ClaudeCode));
+            assert_eq!(picker.resolved(cx).model.as_deref(), Some("opus"));
+            assert!(!picker.is_open());
+            picker.open_model_menu(window, cx);
+            assert!(picker.model_scope.is_none());
+            assert!(picker.search.read(cx).text().is_empty());
+        }).unwrap();
+        cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear()).unwrap();
         cx.simulate_keystrokes(handle.into(), "escape");
-        handle
-            .read_with(cx, |picker, cx| {
-                assert!(!picker.compact_model_list);
-                assert_eq!(picker.selected_model(cx).unwrap().id, "other");
-            })
-            .unwrap();
-        // In the list, ⌘⇧F stars the highlighted model without picking it,
-        // and the highlight follows that model through the re-sort.
-        cx.simulate_keystrokes(handle.into(), "down");
-        cx.simulate_keystrokes(handle.into(), "cmd-shift-f");
-        handle
-            .read_with(cx, |picker, cx| {
-                assert!(picker.defaults.is_favorite(HarnessId::Codex, "third"));
-                assert_eq!(picker.active, 0, "Favorite should move to the first row");
-                assert_eq!(picker.model_rows(cx)[picker.active].model.id, "third");
-                assert_eq!(picker.selected_model(cx).unwrap().id, "other");
-            })
-            .unwrap();
-        cx.simulate_keystrokes(handle.into(), "cmd-shift-f");
-        handle
-            .read_with(cx, |picker, cx| {
-                assert!(!picker.defaults.is_favorite(HarnessId::Codex, "third"));
-                assert_eq!(
-                    picker.active, 2,
-                    "Focus must follow the unstarred model back"
-                );
-                assert_eq!(picker.model_rows(cx)[picker.active].model.id, "third");
-            })
-            .unwrap();
-        // Tab cycles providers in place, each at its last-used model.
-        cx.simulate_keystrokes(handle.into(), "escape");
-        cx.simulate_keystrokes(handle.into(), "tab");
-        handle
-            .read_with(cx, |picker, cx| {
-                assert!(!picker.compact_model_list);
-                assert_eq!(picker.resolved(cx).harness, Some(HarnessId::ClaudeCode));
-            })
-            .unwrap();
-        cx.simulate_keystrokes(handle.into(), "tab");
-        handle
-            .read_with(cx, |picker, cx| {
-                assert_eq!(picker.resolved(cx).harness, Some(HarnessId::Codex));
-                assert_eq!(picker.selected_model(cx).unwrap().id, "other");
-            })
-            .unwrap();
-        cx.simulate_keystrokes(handle.into(), "shift-tab");
-        handle
-            .read_with(cx, |picker, cx| {
-                assert_eq!(picker.resolved(cx).harness, Some(HarnessId::ClaudeCode));
-            })
-            .unwrap();
-        // Left/Right and Home/End set the effort, one haptic per change
-        // and none at an unchanged endpoint.
-        let haptics_before = handle
-            .read_with(cx, |_, _| crate::haptics::step_count())
-            .unwrap();
-        cx.simulate_keystrokes(handle.into(), "home home");
-        handle
-            .read_with(cx, |picker, cx| {
-                assert_eq!(picker.effective_reasoning(cx), Some(ReasoningLevel::Low))
-            })
-            .unwrap();
-        cx.simulate_keystrokes(handle.into(), "right right left right");
-        handle
-            .read_with(cx, |picker, cx| {
-                assert_eq!(picker.effective_reasoning(cx), Some(ReasoningLevel::High));
-                assert_eq!(crate::haptics::step_count() - haptics_before, 4);
-            })
-            .unwrap();
+        handle.read_with(cx, |picker, _| assert!(!picker.is_open())).unwrap();
     }
 
     #[gpui::test]
@@ -8985,7 +8919,7 @@ mod tests {
         handle
             .update(cx, |picker, window, cx| {
                 picker.open_model_menu(window, cx);
-                assert!(!picker.compact_model_list);
+                assert!(picker.compact_model_list);
                 // Models from every offered provider are directly selectable.
                 picker.show_compact_models(cx);
                 assert_eq!(picker.model_rows_len(cx), 2);
@@ -8998,7 +8932,7 @@ mod tests {
                 assert_eq!(picker.model_rows_len(cx), 1);
                 assert_eq!(picker.model_rows(cx)[0].harness, HarnessId::ClaudeCode);
                 picker.activate_model_index(0, cx);
-                assert!(!picker.compact_model_list);
+                assert!(!picker.is_open());
                 assert_eq!(picker.resolved(cx).harness, Some(HarnessId::ClaudeCode));
                 assert_eq!(picker.resolved(cx).model.as_deref(), Some("claude-model"));
                 picker.pick_harness(HarnessId::Codex, cx);

@@ -92,7 +92,7 @@ impl WorkspaceView {
         };
         self.picker_scope = None;
         self.picker_active = None;
-        self.picker_anchors.clear();
+        self.picker_menu.invalidate();
     }
     pub(super) fn prefetch_model_catalogs(&mut self) {
         self.sync_catalog_target();
@@ -169,25 +169,10 @@ impl WorkspaceView {
             self.picker_in_settings() || self.model_host.target.is_none(),
             force,
         );
-        self.sync_picker_anchors();
+        self.invalidate_picker_menu();
     }
-    pub(super) fn sync_picker_anchors(&mut self) {
-        let keys = self
-            .active_picker_catalog()
-            .providers
-            .iter()
-            .flat_map(|(provider, catalog)| {
-                catalog
-                    .models
-                    .iter()
-                    .map(move |model| format!("{provider}:{}", model.id))
-            })
-            .collect::<Vec<_>>();
-        for key in keys {
-            self.picker_anchors
-                .entry(key)
-                .or_insert_with(|| ScrollAnchor::for_handle(self.picker_scroll.clone()));
-        }
+    pub(super) fn invalidate_picker_menu(&self) {
+        self.picker_menu.invalidate();
     }
     pub(super) fn receive_host_catalog(
         &mut self,
@@ -256,7 +241,7 @@ impl WorkspaceView {
                 self.model_host.error = Some(error);
             }
         }
-        self.sync_picker_anchors();
+        self.invalidate_picker_menu();
         self.configure_reasoning_slider(cx);
         cx.notify();
         true

@@ -303,8 +303,11 @@ impl Pickers {
 
     /// Scroll model row `row` into view by its rendered position.
     pub(super) fn scroll_to_model_row(&self, row: usize, strategy: gpui::ScrollStrategy, cx: &App) {
-        self.model_scroll
-            .scroll_to_item(self.model_item_index(row, cx), strategy);
+        if self.compact_model_picker(cx) {
+            self.scroll_reference_row(row, cx);
+        } else {
+            self.model_scroll.scroll_to_item(row, strategy);
+        }
     }
 
     /// A compact list entry that is not a model row.
@@ -378,21 +381,24 @@ impl Pickers {
 
     /// "Search N models": the count of everything the list can show.
     pub(super) fn compact_search_placeholder(&self, cx: &App) -> SharedString {
-        let descriptors = self.rail_descriptors(cx);
-        let harnesses: Vec<HarnessId> = match self.model_rail {
-            ModelRail::Harness => self.effective_harness(cx).into_iter().collect(),
-            _ => descriptors.iter().map(|d| d.id).collect(),
-        };
-        let count: usize = harnesses
+        if let Some(scope) = self.model_scope {
+            return format!(
+                "in {}…",
+                self.rail_descriptors(cx)
+                    .iter()
+                    .find(|p| p.id == scope)
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("this provider")
+            )
+            .into();
+        }
+        let count: usize = self
+            .rail_descriptors(cx)
             .iter()
-            .filter_map(|h| self.models.get(h).and_then(Loadable::ready))
+            .filter_map(|p| self.models.get(&p.id).and_then(Loadable::ready))
             .map(Vec::len)
             .sum();
-        match count {
-            0 => "Search models…".into(),
-            1 => "Search 1 model".into(),
-            n => format!("Search {n} models").into(),
-        }
+        format!("Search {count} models").into()
     }
 
     /// Keep the search's model count current as catalogs land while open.
@@ -644,13 +650,10 @@ impl Pickers {
 
     pub(super) fn render_compact_menu(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.compact_model_list = true;
-        self.compact_motion.frame_height = self.menu_geometry().height.min(self.open_model_height);
-        let content = self.render_harness_model_popover(cx);
-        self.popover_frame_flush(COMPACT_WIDTH, content, cx)
+        self.render_reference_menu(window, cx)
     }
 
     /// The "Advanced" footer: the fast-mode toggle (when the selected model

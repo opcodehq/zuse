@@ -46,6 +46,7 @@ assets!(
     "paperclip",
     "claude-mark",
     "openai-mark",
+    "codex-mark",
     "cursor-mark",
     "opencode-mark",
     "pi-mark",
