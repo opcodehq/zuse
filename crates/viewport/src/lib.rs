@@ -47,6 +47,8 @@ pub mod plugin_removal;
 mod plugin_views;
 mod previews;
 mod project_actions;
+pub mod project_archive;
+mod project_archive_host;
 mod provider_settings;
 mod provider_updates;
 mod pull_requests;
@@ -234,6 +236,7 @@ pub struct WorkspaceView {
     search_open: bool,
     session_search: Entity<input::TextInput>,
     archive_search: Entity<input::TextInput>,
+    project_archive: project_archive_host::ArchiveRoute,
     plugin_search: Entity<input::TextInput>,
     plugin_installed_search: Entity<input::TextInput>,
     plugins_browse: bool,
@@ -670,6 +673,7 @@ impl WorkspaceView {
             plugin_detail: None,
             plugin_detail_menu: Default::default(),
             archive_search,
+            project_archive: Default::default(),
             plugin_connected_only: false,
             plugin_catalog_page: 0,
             agent_picker: false,
@@ -856,6 +860,7 @@ impl WorkspaceView {
         if self.receive_cloud(&frame, cx) {
             return;
         }
+        if self.receive_project_archives(&frame,cx) {return;}
         if self.receive_cloud_archive(&frame, cx) {
             return;
         }
@@ -1405,6 +1410,7 @@ impl WorkspaceView {
         {
             return false;
         }
+        self.close_project_archives();
         self.close_plugins_browse();
         self.stash_draft(cx);
         self.composer_generation += 1;
@@ -1480,6 +1486,7 @@ impl WorkspaceView {
     }
 
     fn new_chat(&mut self, cx: &mut Context<Self>) -> bool {
+        self.close_project_archives();
         if !self.require_connection(cx) {
             return false;
         }
@@ -1521,6 +1528,7 @@ impl WorkspaceView {
     }
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.project_archive.project.is_some(){return;}
         if self.cloud.cached {
             if !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty() {
                 let _ = self.requests.unbounded_send(json!({"ui":"resumeCloud","send":true}));

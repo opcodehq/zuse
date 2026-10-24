@@ -7472,7 +7472,7 @@ impl Shell {
 
     // ---- space context menu / rename / delete overlays ----
 
-    fn close_space_menu(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_space_menu(&mut self, cx: &mut Context<Self>) {
         if self.space_menu.begin_close() {
             popover::reap_popup(cx, |shell: &mut Self| &mut shell.space_menu);
             cx.notify();
@@ -7541,8 +7541,9 @@ impl Shell {
             let closing = self.space_menu.closing_since();
             let rename_id = space_id.clone();
             let delete_id = space_id.clone();
+            let archive_id=space_id.clone();
             let menu = popover::popover_card(&theme)
-                .w(px(170.0))
+                .w(px(196.0))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.close_space_menu(cx);
                 }))
@@ -7557,6 +7558,10 @@ impl Shell {
                         .child(icon(icons::PEN).size(px(16.0)).text_color(theme.text_muted))
                         .child(SharedString::from("Rename…")),
                 )
+                .child(popover::menu_row(&theme,false,format!("space-menu-archives-{space_id}"))
+                    .id("space-menu-archives").role(gpui::Role::MenuItem).aria_label("Archived chats").tab_index(0)
+                    .child(icon("icons/project-archive.svg").size(px(14.)).text_color(theme.text_muted)).child("Archived chats")
+                    .on_click(cx.listener(move|this,_,window,cx|this.open_project_archives(archive_id.clone(),window,cx))))
                 .child(popover::menu_separator())
                 .child(
                     popover::menu_row(&theme, false, format!("space-menu-delete-{space_id}"))

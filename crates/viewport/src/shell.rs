@@ -1273,6 +1273,7 @@ impl Render for WorkspaceView {
                     if let Some(dialog)=this.plugin_detail_menu.removal.clone() {dialog.update(cx,|dialog,cx|dialog.cancel(window,cx));}
                     cx.notify();return;
                 }
+                if this.project_archive.menu.take().is_some() {cx.notify();return;}
                 if this.plugins_add_menu { this.plugins_add_menu=false; cx.notify(); return; }
                 if let Some(form) = this.plugin_setup.clone() {
                     form.update(cx,|form,cx|form.cancel(window,cx));
@@ -1305,6 +1306,7 @@ impl Render for WorkspaceView {
                     cx.notify();
                     return;
                 }
+                if this.project_archive.project.is_some() {this.project_archive_escape(window,cx);return;}
                 if this.queue_edit.is_some()
                     && this.input.focus_handle(cx).is_focused(window)
                     && !this.model_picker
@@ -1327,7 +1329,7 @@ impl Render for WorkspaceView {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
-                if this.thread_dialog.is_none() {
+                if this.thread_dialog.is_none() && this.project_archive.project.is_none() {
                     this.save_file(cx);
                 }
             }))
@@ -1346,12 +1348,13 @@ impl Render for WorkspaceView {
             })
             .child(self.workspace_main(window, cx))
             .when(
-                self.right_open && !self.settings && !self.project_picker,
+                self.right_open && !self.settings && !self.project_picker && self.project_archive.project.is_none(),
                 |d| d.child(self.workspace_panel(panel_width, cx)),
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {
                 d.child(self.preview_overlay(window, cx))
             })
+            .when_some(self.project_archive_menu_view(cx),|d,menu|d.child(menu))
             .when(self.thread_dialog.is_some(), |d| {
                 d.child(self.thread_dialog_view(cx))
             })

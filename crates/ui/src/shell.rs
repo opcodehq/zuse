@@ -95,6 +95,7 @@ mod workspace_layout;
 mod workspace_storage;
 mod sidebar_sections;
 pub(crate) mod spaces;
+mod archives;
 mod thread_search;
 use side_chats::SideChatTab;
 mod tabs;
@@ -712,6 +713,7 @@ pub enum Route {
     PullRequests,
     /// The plugin catalog, a main-area page beside the sidebar.
     Plugins,
+    Archives,
     Settings(SettingsSection),
 }
 
@@ -878,6 +880,7 @@ pub enum NavEntry {
     },
     Settings(SettingsSection),
     Plugins,
+    Archives(String),
 }
 
 /// Browser-style navigation history for the titlebar back/forward buttons
@@ -2165,6 +2168,9 @@ pub struct Shell {
     cloud_billing_page: Option<Entity<settings::cloud_billing::CloudBillingPage>>,
     devices_page: Option<Entity<DevicesPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
+    archive_project: Option<String>,
+    project_archives: std::collections::HashMap<String, Entity<crate::project_archive::ProjectArchive>>,
+    project_archive_events: std::collections::HashMap<String, Subscription>,
     appearance_page: Option<Entity<AppearancePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
     notifications_page: Option<Entity<NotificationsPage>>,
@@ -2601,6 +2607,7 @@ impl Shell {
             Route::Chat => NavEntry::Chat(String::new()),
             Route::PullRequests => NavEntry::PullRequests,
             Route::Plugins => NavEntry::Plugins,
+            Route::Archives => NavEntry::Archives(String::new()),
             Route::Settings(section) => NavEntry::Settings(section),
         });
         // Parent notifications carry presentation changes (session status,
@@ -2701,6 +2708,9 @@ impl Shell {
             cloud_billing_page: None,
             devices_page: None,
             archived_page: None,
+            archive_project: None,
+            project_archives: std::collections::HashMap::new(),
+            project_archive_events: std::collections::HashMap::new(),
             appearance_page: None,
             files_settings_page: None,
             notifications_page: None,
@@ -5129,6 +5139,9 @@ impl Shell {
                 page.update(cx, |page, _| page.on_hidden());
             }
         }
+        if matches!(self.route,Route::Archives) && !matches!(route,Route::Archives) {
+            if let Some(page)=self.archive_project.as_ref().and_then(|id|self.project_archives.get(id)).cloned(){page.update(cx,|page,cx|page.on_hidden(cx));}
+        }
         self.route = route;
         if !was_pull_requests && will_show_pull_requests {
             if let Some(page) = self.pull_requests_page.as_ref().cloned() {
@@ -5724,6 +5737,15 @@ impl Shell {
                 self.pending_pull_request = Some((url, device));
             }
             NavEntry::Plugins => self.set_route(Route::Plugins, cx),
+            NavEntry::Archives(project) => {
+                if self.archive_project.as_ref() != Some(&project) {
+                    if let Some(page) = self.archive_project.as_ref().and_then(|id| self.project_archives.get(id)).cloned() {
+                        page.update(cx, |page, cx| page.on_hidden(cx));
+                    }
+                }
+                self.archive_project=Some(project.clone());self.set_route(Route::Archives,cx);
+                if let Some(page)=self.project_archives.get(&project).cloned(){page.update(cx,|page,cx|page.on_visible(cx));}
+            },
             NavEntry::Settings(section) => {
                 if !matches!(self.route, Route::Settings(_)) {
                     self.settings_return_route = self.route;
@@ -7391,7 +7413,7 @@ impl Shell {
     /// the pull request pane's tabs.
     fn render_title_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // The Plugins page has no tabs: a bare strip that still drags.
-        if matches!(self.route, Route::Plugins) {
+        if matches!(self.route, Route::Plugins | Route::Archives) {
             return self
                 .titlebar_drag_region("plugins-titlebar", div().size_full(), cx)
                 .into_any_element();
@@ -8345,7 +8367,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // The Plugins page owns the main area, so no chat reads as current.
-        let selected = selected && !matches!(self.route, Route::Plugins);
+        let selected = selected && !matches!(self.route, Route::Plugins | Route::Archives);
         // Activity, not position (t3code Sidebar): status is a small colored
         // word + glyph in the row's top-right corner — Working animates the
         // composer-strip spinner, Done wears a check; Idle rows show the
@@ -11345,6 +11367,10 @@ impl Shell {
             cx.stop_propagation();
             return;
         }
+        if event.keystroke.key=="escape" && matches!(self.route,Route::Archives) {
+            if let Some(page)=self.archive_project.as_ref().and_then(|id|self.project_archives.get(id)).cloned(){page.update(cx,|page,cx|page.dismiss_on_escape(cx));}
+            cx.stop_propagation();return;
+        }
         if matches!(self.route, Route::Settings(_)) {
             return;
         }
@@ -11824,6 +11850,10 @@ impl Shell {
                 .into_any_element();
         }
 
+        if matches!(self.route,Route::Archives) {
+            return self.archive_project.as_ref().and_then(|id|self.project_archives.get(id)).map(|page|page.clone().into_any_element())
+                .unwrap_or_else(||zuse_viewport::project_archive::centered("Select a project to view archived chats.").into_any_element());
+        }
         if matches!(self.route, Route::Plugins) {
             let page = settings::plugins::PluginsPage::shared(self.state.clone(), cx);
             return div()
@@ -14281,6 +14311,7 @@ impl Render for Shell {
                 }
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
+                if matches!(this.route,Route::Archives){return;}
                 if matches!(this.route, Route::Chat) && this.right_pane_open(cx) {
                     let file = match this.resolved_right_active(cx) {
                         RightSurface::File(id) => this.file_surfaces.get(&id).cloned(),

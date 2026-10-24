@@ -4,7 +4,7 @@ use zuse_viewport::workspace_style as layout;
 
 impl Shell {
     pub(super) fn workspace_gutter(&self) -> f32 {
-        if matches!(self.route, Route::Chat | Route::Plugins) {
+        if matches!(self.route, Route::Chat | Route::Plugins | Route::Archives) {
             layout::GUTTER
         } else {
             0.
@@ -89,6 +89,7 @@ impl Shell {
 
     pub(super) fn workspace_native_actions(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if self.workspace_gutter() == 0.
+            || matches!(self.route, Route::Archives)
             || (matches!(self.route, Route::Chat) && self.state.read(cx).selected_chat.is_some())
         {
             return Empty.into_any_element();

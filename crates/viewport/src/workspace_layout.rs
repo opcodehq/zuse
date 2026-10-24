@@ -24,14 +24,19 @@ impl WorkspaceView {
             .when(!self.sidebar_open, |view| view.pl(px(layout::GUTTER)))
             .child(
                 layout::surface()
-                    .when(chrome && !self.plugins_browse, |view| {
-                        view.child(self.header(cx))
-                            .when(self.selected.is_some(), |view| {
-                                view.child(self.conversation_tabs(cx))
-                            })
-                    })
+                    .when(
+                        chrome && !self.plugins_browse && self.project_archive.project.is_none(),
+                        |view| {
+                            view.child(self.header(cx))
+                                .when(self.selected.is_some(), |view| {
+                                    view.child(self.conversation_tabs(cx))
+                                })
+                        },
+                    )
                     .child(if self.plugins_browse {
                         self.plugins_page_view(cx)
+                    } else if self.project_archive.project.is_some() {
+                        self.project_archives_view(window, cx)
                     } else if self.project_picker {
                         self.project_picker_view(cx)
                     } else {

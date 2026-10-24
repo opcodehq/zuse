@@ -15,6 +15,17 @@ pub(super) struct TranscriptState {
 }
 
 impl WorkspaceView {
+    pub(super) fn apply_archive_transcript(
+        &mut self,
+        update: TranscriptUpdate,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        apply_transcript_frame(&mut self.messages, update.frame).map_err(|e| e.to_string())?;
+        self.transcript_state.ready = true;
+        self.context_usage = update.context_usage;
+        cx.notify();
+        Ok(())
+    }
     pub(super) fn install_cached_history(&mut self, head: &zuse_model::cloud::Head) {
         let mut chat = head.chat.clone();
         chat.archived = true;

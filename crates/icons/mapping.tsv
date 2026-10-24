@@ -127,3 +127,5 @@ window-minimize	MinusSignIcon
 window-restore	Copy01Icon
 worktree	GitBranchIcon
 wrap-text	TextWrapIcon
+project-archive	ArchiveIcon
+project-unarchive	ArchiveArrowUpIcon

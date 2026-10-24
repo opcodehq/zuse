@@ -326,6 +326,8 @@ impl WorkspaceView {
                                         self.preferences.collapsed_projects.contains(&key);
                                     let toggle = key.clone();
                                     let create = path.clone();
+                                    let archive_space=self.spaces.iter().find(|s|zuse_protocol::view::project_key(s)==key).map(|s|s.id.clone());
+                                    let context_space=archive_space.clone();
                                     column()
                                         .flex_shrink_0()
                                         .gap_1()
@@ -341,6 +343,9 @@ impl WorkspaceView {
                                                 .gap_2()
                                                 .rounded_md()
                                                 .hover(|d| d.bg(rgb(0x222222)))
+                                                .on_mouse_down(MouseButton::Right,cx.listener(move|this,event:&MouseDownEvent,window,cx| {
+                                                    if let Some(id)=context_space.clone(){this.project_archive_menu(id,event.position,window,cx);cx.stop_propagation();}
+                                                }))
                                                 .child(
                                                     icon(if collapsed {
                                                         "alt-arrow-right"
@@ -369,6 +374,9 @@ impl WorkspaceView {
                                                         .text_size(px(10.))
                                                         .text_color(rgb(FAINT)),
                                                 )
+                                                .when_some(archive_space,|d,id|d.child(icon_button(SharedString::from(format!("project-menu-{id}")),"more-horizontal","Project actions").size(px(22.))
+                                                    .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())
+                                                    .on_click(cx.listener(move|this,event:&ClickEvent,window,cx| {cx.stop_propagation();this.project_archive_menu(id.clone(),event.position(),window,cx);}))))
                                                 .child(
                                                     icon_button(
                                                         SharedString::from(format!(
@@ -512,10 +520,11 @@ impl WorkspaceView {
         groups
     }
     fn session_row(&self, chat: &Value, nested: bool, cx: &mut Context<Self>) -> AnyElement {
-        let selected = self
-            .selected
-            .as_ref()
-            .is_some_and(|c| c["id"] == chat["id"]);
+        let selected = self.project_archive.project.is_none()
+            && self
+                .selected
+                .as_ref()
+                .is_some_and(|c| c["id"] == chat["id"]);
         let status = self
             .sessions
             .iter()
