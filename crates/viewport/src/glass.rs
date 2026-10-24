@@ -4,12 +4,17 @@ use gpui::{
     LayoutId, Pixels, Window, px,
 };
 pub fn menu(child: impl IntoElement) -> GlassMenu {
+    menu_with_radius(child, 10.)
+}
+pub fn menu_with_radius(child: impl IntoElement, radius: f32) -> GlassMenu {
     GlassMenu {
         child: child.into_any_element(),
+        radius,
     }
 }
 pub struct GlassMenu {
     child: AnyElement,
+    radius: f32,
 }
 
 impl Element for GlassMenu {
@@ -59,7 +64,7 @@ impl Element for GlassMenu {
         let blur = !crate::palette::is_light();
         if blur {
             window.paint_layer(bounds, |window| {
-                window.paint_backdrop_blur(bounds, Corners::all(px(10.)), px(20.));
+                window.paint_backdrop_blur(bounds, Corners::all(px(self.radius)), px(20.));
                 self.child.paint(window, cx);
             });
         } else {

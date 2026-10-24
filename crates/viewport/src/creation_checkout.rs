@@ -22,7 +22,7 @@ impl State {
 }
 
 impl WorkspaceView {
-    fn creation_workspace_key(&self) -> Option<String> {
+    pub(super) fn creation_workspace_key(&self) -> Option<String> {
         if self.cloud.mode || self.selected.is_some() {
             return None;
         }
@@ -48,6 +48,7 @@ impl WorkspaceView {
     }
 
     pub(super) fn creation_worktree(&self) -> Option<zuse_protocol::WorktreeSpec> {
+        if self.selected_creation_checkout().is_some() { return None; }
         self.creation_workspace_key()?;
         if self.creation_workspace_mode() != WorkspaceMode::Worktree {
             return None;

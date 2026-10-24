@@ -299,7 +299,7 @@ impl StagedAttachment {
         Self::new(name, AttachmentContent::Image(Arc::new(image)))
     }
 
-    fn from_file(name: &str, bytes: Vec<u8>) -> Self {
+    pub(crate) fn from_file(name: &str, bytes: Vec<u8>) -> Self {
         // Attachment refs ride the prompt one per line; a name must not add lines.
         let name = name.replace(['\r', '\n'], "_");
         Self::new(name, AttachmentContent::File(Arc::new(bytes)))

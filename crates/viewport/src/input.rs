@@ -25,6 +25,7 @@ pub struct TextInput {
     editor: Editor,
     window: AnyWindowHandle,
     light_style: bool,
+    single_line_metrics: (f32, f32),
     clipboard_error: Option<&'static str>,
     menu: Option<edit_menu::EditMenu>,
     _events: Subscription,
@@ -44,6 +45,7 @@ impl TextInput {
             editor: Editor::Single(editor),
             window: window.window_handle(),
             light_style: crate::palette::is_light(),
+            single_line_metrics: (12., 16.),
             clipboard_error: None,
             menu: None,
             _events: events,
@@ -72,6 +74,7 @@ impl TextInput {
             editor: Editor::Multi(editor),
             window: window.window_handle(),
             light_style: crate::palette::is_light(),
+            single_line_metrics: (12., 16.),
             clipboard_error: None,
             menu: None,
             _events: events,
@@ -94,10 +97,16 @@ impl TextInput {
             editor: Editor::Code(editor),
             window: window.window_handle(),
             light_style: crate::palette::is_light(),
+            single_line_metrics: (12., 16.),
             clipboard_error: None,
             menu: None,
             _events: events,
         }
+    }
+
+    pub fn with_single_line_metrics(mut self, size: f32, line_height: f32) -> Self {
+        self.single_line_metrics = (size, line_height);
+        self
     }
 
     pub fn set_readonly(&mut self, readonly: bool, cx: &mut Context<Self>) {
@@ -234,12 +243,12 @@ impl Render for TextInput {
                 |d| d.pb(px(18.)),
             )
             .text_size(px(match self.editor {
-                Editor::Single(_) => 12.,
+                Editor::Single(_) => self.single_line_metrics.0,
                 Editor::Multi(_) => crate::composer_style::TEXT_SIZE,
                 Editor::Code(_) => 13.,
             }))
             .line_height(px(match self.editor {
-                Editor::Single(_) => 16.,
+                Editor::Single(_) => self.single_line_metrics.1,
                 Editor::Multi(_) => crate::composer_style::LINE_HEIGHT,
                 Editor::Code(_) => 22.,
             }))

@@ -28,6 +28,9 @@ use crate::EngineError;
 use crate::WorkspaceSearch;
 use crate::workspace_search::{NameKinds, normalize_name_query};
 
+#[path = "repos_creation.rs"]
+mod creation;
+
 /// Existence probe timeout for user-chosen / remembered paths, which can point at
 /// dead network mounts where a bare `stat` hangs for minutes.
 const PATH_EXISTS_TIMEOUT: Duration = Duration::from_secs(2);

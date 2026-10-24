@@ -6587,6 +6587,12 @@ impl Composer {
                 }
             },
         );
+        cx.subscribe(&pickers, |this: &mut Self, _, event: &crate::pickers::CreationIssueTitle, cx| {
+            this.input.update(cx, |input,cx| {
+                let current = input.text().to_owned();
+                input.set_text(if current.is_empty() { event.0.clone() } else { format!("{current}\n{}",event.0) },cx);
+            });
+        }).detach();
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.on_state_changed(cx));
         let input_events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
             ComposerInputEvent::Submitted => this.on_submit(cx),
@@ -7616,7 +7622,7 @@ impl Composer {
                 "cwd": space.path,
             });
             if let crate::pickers::CheckoutPlan::ReuseWorktree { path, .. } =
-                self.pickers.read(cx).checkout_plan()
+                self.pickers.read(cx).checkout_plan(cx)
             {
                 params["path"] = path.into();
             }
@@ -9048,6 +9054,7 @@ impl Composer {
     /// is on), `Mutate createChat` with the `ChatConfig` + cwd, and the model /
     /// reasoning / options on the Run request itself (§1.7).
     fn send(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
+        if self.pickers.read(cx).preparing_source(cx) { return; }
         if self.send_cloud(text.clone(), cx) {
             return;
         }
@@ -9086,7 +9093,7 @@ impl Composer {
         // Where the new session runs (Current checkout / reuse an existing
         // worktree / fresh worktree off the picked base) — resolved NOW so
         // the async block needs no picker access.
-        let plan = self.pickers.read(cx).checkout_plan();
+        let plan = self.pickers.read(cx).checkout_plan(cx);
         // Fully-resolved model/reasoning/options — concrete values (chat config
         // or defaults), so the engine never has to guess a "default".
         let resolved = self.pickers.read(cx).resolved(cx);
@@ -9171,12 +9178,17 @@ impl Composer {
         // Snapshot-and-clear NOW (use-attachments.ts takeAttachments): the
         // strip empties the instant you hit send; a failure hands the files
         // back into the chat's stash.
-        let ordinary_staged = self
+        let mut ordinary_staged = self
             .attachments
             .remove(&self.current_key)
             .unwrap_or_default();
         self.attachment_drafts.remove(&self.current_key);
         let staged_appshots = self.appshots.remove(&self.current_key).unwrap_or_default();
+        if is_new {
+            if let Some((number,markdown)) = self.pickers.read(cx).source_issue(cx) {
+                ordinary_staged.push(StagedAttachment::from_file(&format!("issue-{number}.md"),markdown.into_bytes()));
+            }
+        }
         let mut staged = ordinary_staged.clone();
         staged.extend(
             staged_appshots

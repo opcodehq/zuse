@@ -51,6 +51,7 @@
 //! whose checkout always lives on the routed target device.
 
 mod archive_review;
+mod creation_sources;
 mod git_workspace;
 mod visuals;
 mod voice_chat;
@@ -270,6 +271,8 @@ struct CreateWorktreeParams {
     branch: String,
     #[serde(default)]
     space_id: Option<String>,
+    #[serde(default)]
+    source: Option<zuse_protocol::creation_source::CheckoutSource>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1598,6 +1601,7 @@ fn forward_deadline(method: &str) -> std::time::Duration {
         methods::APPLY_HARNESS_UPDATE => Duration::from_secs(20 * 60),
         methods::GIT_WORKSPACE_ACTION | methods::GET_GIT_WORKSPACE => Duration::from_secs(180),
         methods::CREATE_WORKTREE => Duration::from_secs(120),
+        zuse_protocol::creation_source::RESOLVE => Duration::from_secs(180),
         // Allow the adapter discovery budget plus relay and shutdown overhead.
         methods::LIST_MODELS | methods::LIST_COMMANDS => Duration::from_secs(100),
         _ => Duration::from_secs(30),
@@ -1625,6 +1629,7 @@ fn forwardable(method: &str) -> bool {
     matches!(
         method,
         zuse_protocol::usage::OVERVIEW | zuse_protocol::usage::SESSIONS
+            | zuse_protocol::creation_source::LIST | zuse_protocol::creation_source::RESOLVE
             | methods::OPEN_VISUAL | methods::CONTROL_VISUAL | methods::DRAW_VISUAL
             | methods::FORK_SIDE_CHAT
             | methods::CREATE_THREAD_SESSION
@@ -2350,6 +2355,9 @@ impl RpcService for EngineRpc {
             None
         };
         match method {
+            zuse_protocol::creation_source::LIST | zuse_protocol::creation_source::RESOLVE => {
+                self.creation_sources(method, params).await
+            }
             zuse_protocol::usage::OVERVIEW | zuse_protocol::usage::SESSIONS => {
                 let usage = self.usage.as_ref().ok_or_else(|| RpcError::Failed("Recorded usage is unavailable on this host.".into()))?;
                 let request: zuse_protocol::usage::Request = parse_params(params)?;
@@ -4582,17 +4590,19 @@ impl RpcService for EngineRpc {
                     }
                     None => None,
                 };
-                let worktree = self
-                    .repos
-                    .create_worktree(std::path::Path::new(&p.repo_path), &p.branch)
-                    .await
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let (worktree, created) = if let Some(source) = &p.source {
+                    self.repos.prepare_creation_source(std::path::Path::new(&p.repo_path), source, &self.github)
+                        .await.map_err(|e| RpcError::Failed(e.to_string()))?
+                } else {
+                    (self.repos.create_worktree(std::path::Path::new(&p.repo_path), &p.branch)
+                        .await.map_err(|e| RpcError::Failed(e.to_string()))?, true)
+                };
                 let mut outcome = CreateWorktreeOutcome {
                     worktree,
                     setup_action: None,
                     setup_error: None,
                 };
-                if let Some((space, project_root)) = setup_space {
+                if let Some((space, project_root)) = setup_space.filter(|_| created) {
                     match self
                         .project_actions
                         .setup_action(&space.id, std::path::Path::new(&space.path))

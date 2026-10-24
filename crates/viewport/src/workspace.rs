@@ -56,6 +56,7 @@ impl WorkspaceView {
     }
 
     pub(super) fn cwd(&self) -> String {
+        if let Some((path,_))=self.selected_creation_checkout(){return path.into();}
         self.selected
             .as_ref()
             .and_then(|c| c["cwd"].as_str())

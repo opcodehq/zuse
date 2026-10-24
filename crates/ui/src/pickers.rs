@@ -15,6 +15,8 @@ mod cloud;
 mod compact;
 mod workspace;
 mod model_menu;
+mod creation_sources;
+pub(crate) use creation_sources::CreationIssueTitle;
 
 use crate::roll_text::{roll_text, rolling};
 use std::collections::{HashMap, HashSet};
@@ -783,6 +785,8 @@ pub struct Pickers {
     cloud: cloud::Cloud,
     state: Entity<AppState>,
     config: DraftConfig,
+    source_picker: Entity<zuse_viewport::creation_sources::SourcePicker>,
+    source_tasks: HashMap<u64, Task<()>>,
     /// Thread-naming binding (Settings → General): the model picker reads and
     /// emits the local device's title settings instead of a composer draft.
     /// `config.harness` then only tracks the tab being browsed.
@@ -939,6 +943,7 @@ impl Pickers {
         title: Option<TitleSettings>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let source_picker = Self::new_creation_sources(cx);
         let search = cx.new(|cx| {
             ComposerInput::with_context("Search…", "PaletteSearch", cx)
                 .with_accessibility_role(gpui::Role::SearchInput)
@@ -1015,6 +1020,8 @@ impl Pickers {
                 this.refs = Loadable::Idle;
                 this.refs_space = None;
             }
+            let source_target = this.creation_source_target(cx);
+            this.source_picker.update(cx, |picker,cx| picker.set_target(source_target,cx));
             // Catalogs are per-DEVICE (fetched from the space's host), so a
             // project switch on the same device keeps them. A device switch
             // revalidates against the new host with the loaded rows still on
@@ -1104,6 +1111,8 @@ impl Pickers {
                 checkout,
                 ..Default::default()
             },
+            source_picker,
+            source_tasks: Default::default(),
             title,
             defaults,
             _settings_observe: settings_observe,
@@ -2636,7 +2645,12 @@ impl Pickers {
     }
 
     /// The resolved on-send checkout action for a new session.
-    pub fn checkout_plan(&self) -> CheckoutPlan {
+    pub fn checkout_plan(&self, cx: &App) -> CheckoutPlan {
+        if self.creation_source_target(cx).is_some() {
+            if let Some(zuse_protocol::creation_source::Resolution::Checkout { outcome, .. }) = self.source_picker.read(cx).selection() {
+                return CheckoutPlan::ReuseWorktree { path: outcome.worktree.path.clone(), branch: outcome.worktree.branch.clone() };
+            }
+        }
         match self.config.checkout {
             CheckoutKind::NewWorktree => CheckoutPlan::NewWorktree {
                 base: self.effective_ref_name(),
@@ -3686,8 +3700,7 @@ impl Pickers {
             .into_any_element()
     }
 
-    /// New-session Git controls. Checkout mode and branch form the original
-    /// chip-only cluster floating below the composer's leading edge.
+    /// Prepare a source checkout or issue context before the first send.
     pub fn render_new_thread_git_selectors(
         &mut self,
         cx: &mut Context<Self>,
@@ -3704,36 +3717,9 @@ impl Pickers {
             return None;
         }
         self.ensure_refs(false, cx);
-        let theme = Theme::of(cx).clone();
-        let closing = (self.open.closing_since(), self.menu_geometry().below);
-        let mut overlay: Option<(PickerKind, AnyElement)> = match self.mounted_kind() {
-            Some(PickerKind::Branch) => {
-                let content = self.render_branch_popover(cx);
-                Some((PickerKind::Branch, self.popover_frame(320.0, content, cx)))
-            }
-            _ => None,
-        };
-        let branch_chip = self.tray_chip(
-            PickerKind::Branch,
-            "picker-branch",
-            crate::icons::GIT_BRANCH,
-            self.ref_label(),
-            &theme,
-            cx,
-        );
-        Some(
-            workspace_footer_row()
-                .w_auto()
-                .flex_none()
-                .child(attach_overlay_below(
-                    branch_chip,
-                    &mut overlay,
-                    PickerKind::Branch,
-                    "branch-popover",
-                    closing,
-                ))
-                .into_any_element(),
-        )
+        let target = self.creation_source_target(cx);
+        self.source_picker.update(cx, |picker,cx| picker.set_target(target,cx));
+        Some(self.source_picker.clone().into_any_element())
     }
 
     fn popover_frame(&self, width: f32, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
@@ -7428,7 +7414,7 @@ mod tests {
             state
         });
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
-        pickers.update(cx, |pickers, _| {
+        pickers.update(cx, |pickers, cx| {
             pickers.config.checkout = CheckoutKind::Local;
             pickers.defaults.workspace_by_project.insert(
                 "b".into(),
@@ -7452,7 +7438,7 @@ mod tests {
             // ...but nothing that acts on refs sees a's rows.
             assert!(pickers.filtered_ref_rows(cx).is_empty());
             assert_eq!(
-                pickers.checkout_plan(),
+                pickers.checkout_plan(cx),
                 CheckoutPlan::CurrentCheckout { branch: None }
             );
             pickers.refs = Loadable::Ready(vec![repo_ref("trunk", true, None)]);

@@ -17,7 +17,9 @@ pub mod cloud_settings;
 mod composer_alerts;
 pub mod composer_style;
 pub mod creation_style;
+pub mod creation_sources;
 mod creation_checkout;
+mod creation_source_adapter;
 pub mod dither;
 mod glass;
 pub mod sidebar_controls;
@@ -214,6 +216,9 @@ pub struct WorkspaceView {
     draft_journal_error: Option<String>,
     creating: Option<(u64, Value, Value)>,
     creation_checkout: creation_checkout::State,
+    creation_source_picker: Entity<creation_sources::SourcePicker>,
+    creation_source_requests: HashMap<u64,u64>,
+    creation_source_checkout: Option<(String,String,String)>,
     queue: Vec<Value>,
     queue_watch: Option<u64>,
     queue_edit: Option<queue_edit::QueueEdit>,
@@ -369,6 +374,7 @@ impl WorkspaceView {
             cx.notify();
         })
         .detach();
+        let creation_source_picker=Self::new_creation_sources(cx);
         let repository_panel = cx.new(|cx| cloud_repositories::RepositoryPanel::new(window, cx));
         cx.observe(&repository_panel, |_,_,cx|cx.notify()).detach();
         cx.subscribe(
@@ -655,6 +661,9 @@ impl WorkspaceView {
             draft_journal_error: None,
             creating: None,
             creation_checkout: Default::default(),
+            creation_source_picker,
+            creation_source_requests: Default::default(),
+            creation_source_checkout: None,
             queue: vec![],
             queue_watch: None,
             queue_edit: None,
@@ -844,6 +853,7 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        if self.receive_creation_source(&frame,cx){return;}
         if frame["id"]
             .as_u64()
             .and_then(|id| self.pending.get(&id))
@@ -1437,6 +1447,8 @@ impl WorkspaceView {
         self.close_project_archives();
         self.close_plugins_browse();
         self.stash_draft(cx);
+        self.creation_source_picker.update(cx,|picker,cx|picker.set_target(None,cx));
+        self.creation_source_checkout=None;
         self.composer_generation += 1;
         self.attachments.clear();
         self.uploading = 0;
@@ -1525,6 +1537,8 @@ impl WorkspaceView {
         }
         self.close_plugins_browse();
         self.stash_draft(cx);
+        self.creation_source_picker.update(cx,|picker,cx|picker.set_target(None,cx));
+        self.creation_source_checkout=None;
         self.composer_generation += 1;
         self.attachments.clear();
         self.uploading = 0;
@@ -1642,6 +1656,7 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
+        if self.selected.is_none() && self.creation_source_picker.read(cx).is_preparing() { return; }
         if self.creating.is_some() || self.uploading > 0 {
             return;
         }
@@ -1667,6 +1682,7 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
+        self.stage_creation_issue(cx);
         let mut draft = Draft {
             text: text.clone(),
             attachments: self.attachments.clone(),
@@ -1713,8 +1729,8 @@ impl WorkspaceView {
         } else {
             // IDs are client-owned, allowing the durable send to refer to the same chat.
             let id = draft.chat_id.clone().unwrap();
-            let request = self.call(methods::MUTATE, json!({"op":"createChat","chatId":id,"deviceId":device,"cwd":self.project.as_ref().and_then(|p|p["path"].as_str()),"config":{"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"sandbox":self.sandbox}}));
-            let chat = json!({"id":id,"title":text.chars().take(70).collect::<String>(),"deviceId":device,"cwd":self.cwd(),"config":{"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"sandbox":self.sandbox}});
+            let request = self.call(methods::MUTATE, json!({"op":"createChat","chatId":id,"deviceId":device,"cwd":self.cwd(),"branch":self.selected_creation_checkout().map(|(_,branch)|branch),"spaceId":self.project.as_ref().and_then(|p|self.spaces.iter().find(|s|s.path==p["path"])).map(|s|&s.id),"config":{"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"sandbox":self.sandbox}}));
+            let chat = json!({"id":id,"title":text.chars().take(70).collect::<String>(),"deviceId":device,"cwd":self.cwd(),"branch":self.selected_creation_checkout().map(|(_,branch)|branch),"spaceId":self.project.as_ref().and_then(|p|self.spaces.iter().find(|s|s.path==p["path"])).map(|s|&s.id),"config":{"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"sandbox":self.sandbox}});
             self.creating = Some((request, chat, command));
             request
         };
