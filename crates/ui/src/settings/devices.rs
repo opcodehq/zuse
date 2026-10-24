@@ -76,6 +76,8 @@ pub struct DevicesPage {
     copy_task: Option<Task<()>>,
     _observe: Subscription,
     _managed: Subscription,
+    _managed_paint: Subscription,
+    _pairing_paint: Subscription,
     workspace_storage: Option<WorkspaceStorage>,
     storage_focus: gpui::FocusHandle,
 }
@@ -92,8 +94,12 @@ impl DevicesPage {
                 this.pairing.update(cx, |card, cx| card.refresh(cx));
             },
         );
+        let managed_paint = cx.observe(&managed, |_, _, cx| cx.notify());
+        let pairing_paint = cx.observe(&pairing, |_, _, cx| cx.notify());
         Self {
             _managed: managed_events,
+            _managed_paint: managed_paint,
+            _pairing_paint: pairing_paint,
             managed,
             pairing,
             state,
@@ -133,6 +139,15 @@ impl DevicesPage {
     /// Escape that reached Settings unclaimed closes the rename dialog first,
     /// so it never closes Settings under the dialog. Returns whether it did.
     pub(crate) fn dismiss_on_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if self
+            .pairing
+            .update(cx, |card, cx| card.dismiss_on_escape(cx))
+            || self
+                .managed
+                .update(cx, |card, cx| card.dismiss_on_escape(cx))
+        {
+            return true;
+        }
         if self.rename.take().is_none() {
             return false;
         }
@@ -294,6 +309,13 @@ impl Render for DevicesPage {
                 state.workspace_scope,
             )
         };
+        let pairing = self.pairing.update(cx, |card, cx| card.parts(cx));
+        let account_method = self.managed.update(cx, |card, cx| card.method(cx));
+        let computers = self
+            .managed
+            .update(cx, |card, cx| card.computers(pairing.add_computer, cx));
+        let account_devices = self.managed.update(cx, |card, cx| card.account_devices(cx));
+        let account_dialog = self.managed.update(cx, |card, cx| card.dialog(cx));
         let copied = self.copied.clone();
         let dialog = self.render_rename_dialog(window.viewport_size(), cx);
         // Split into this device and the rest; each renders as rows in one
@@ -442,20 +464,27 @@ impl Render for DevicesPage {
                                 .child(widgets::section_title(
                                     &theme,
                                     "Remote access",
-                                    devices_subtitle(workspace_scope),
+                                    "Use this computer from your phone, a browser, or another computer.",
                                 ))
                                 .child(
-                                    widgets::section_stack()
-                                        .children(self.render_workspace_storage(cx))
-                                        .child(self.managed.clone())
-                                        .child(self.pairing.clone())
-                                        .child(card),
+                                    div().mt(px(20.)).flex().flex_col().gap(px(10.)).p(px(12.))
+                                        .child(zuse_viewport::remote_access_style::frame("Remote access to this computer", "Choose how other Zuse apps and browsers can reach this computer.", None)
+                                            .child(zuse_viewport::settings_style::card().child(account_method).child(pairing.method)))
+                                        .child(pairing.connect)
+                                        .child(computers)
+                                        .child(pairing.devices)
+                                        .children(account_devices)
+                                        .children(pairing.advanced)
+                                        .child(card)
+                                        .children(self.render_workspace_storage(cx)),
                                 ),
                         ),
                 )
                 .fade_overflow_y(&self.scroll.scroll),
             )
             .children(scrollbar)
+            .children(pairing.dialog)
+            .children(account_dialog)
             .when_some(dialog, |el, dialog| el.child(dialog))
     }
 }

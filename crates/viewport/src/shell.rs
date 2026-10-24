@@ -1276,6 +1276,10 @@ impl Render for WorkspaceView {
                     else if this.plugin_detail.take().is_none() { this.close_plugins_browse(); this.settings=true; }
                     cx.notify(); return;
                 }
+                if this.remote_ui.dialog.is_some() {
+                    this.close_remote_dialog(window, cx);
+                    return;
+                }
                 if this.settings {
                     if this.model_picker && this.picker_in_settings() {
                         let target = this.picker_target;

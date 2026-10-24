@@ -434,7 +434,7 @@ impl WorkspaceView {
         let selected = self.preferences.appearance;
         let choices = row()
             .p(px(2.))
-            .rounded(px(10.))
+            .rounded(px(8.))
             .border_1()
             .border_color(rgb(BORDER).opacity(0.6))
             .bg(s::frame_bg())

@@ -38,6 +38,7 @@ pub mod git_controls;
 mod history;
 pub mod input;
 mod managed_access;
+pub mod remote_access_style;
 mod model_catalog;
 mod model_config;
 mod model_picker;
@@ -211,6 +212,7 @@ pub struct WorkspaceView {
     relay_origin: Entity<input::TextInput>,
     relay_credential: Entity<input::TextInput>,
     pairing_action: Option<u64>,
+    remote_ui: pairing::RemoteUi,
     provider_index: usize,
     send_draft: HashMap<u64, Draft>,
     drafts: HashMap<String, Draft>,
@@ -507,6 +509,7 @@ impl WorkspaceView {
         });
         let managed_name = cx.new(|cx| input::TextInput::new("Computer name", window, cx));
         let pairing_name = cx.new(|cx| input::TextInput::new("Device name", window, cx));
+        let remote_ui = pairing::RemoteUi::new(window, cx);
         let mut events = transport.events;
         let reader = cx.spawn(async move |this, cx| {
             while let Some(frame) = events.next().await {
@@ -658,6 +661,7 @@ impl WorkspaceView {
             relay_origin,
             relay_credential,
             pairing_action: None,
+            remote_ui,
             provider_index: 0,
             send_draft: HashMap::new(),
             drafts: HashMap::new(),

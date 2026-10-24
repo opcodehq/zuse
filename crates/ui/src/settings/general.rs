@@ -16,7 +16,7 @@ impl ShortcutsPage {
         let modes = div()
             .flex()
             .p(px(2.))
-            .rounded(px(10.))
+            .rounded(px(8.))
             .border_1()
             .border_color(theme.border.opacity(0.6))
             .bg(theme.settings_frame_bg())
@@ -41,7 +41,7 @@ impl ShortcutsPage {
                             .px(px(10.))
                             .flex()
                             .items_center()
-                            .rounded(px(7.))
+                            .rounded(px(6.))
                             .text_size(crate::typography::text_xs())
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(if mode == choice {

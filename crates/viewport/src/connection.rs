@@ -136,6 +136,7 @@ impl WorkspaceView {
         self.plugin_setup_events = None;
         self.interrupt_managed_access();
         self.pairing_fetch = None;
+        self.remote_ui.interrupted();
         self.relay_fetch = None;
         self.relay_action = None;
         self.relay_status = Value::Null;
