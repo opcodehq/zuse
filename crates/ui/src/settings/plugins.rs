@@ -58,6 +58,7 @@ pub struct PluginsCard {
     busy: bool,
     watch: Option<Task<()>>,
     action: Option<Task<()>>,
+    poll: Option<Task<()>>,
     setup: Option<Entity<PluginSetup>>,
     setup_events: Option<Subscription>,
     /// Review fixtures seed the account and snapshot without an engine.
@@ -122,6 +123,7 @@ impl PluginsCard {
             busy: false,
             watch: None,
             action: None,
+            poll: None,
             setup: None,
             setup_events: None,
             fixture: false,
@@ -221,7 +223,7 @@ impl PluginsCard {
         let colors = SetupColors {
             text: theme.text,
             muted: theme.text_muted,
-            background: theme.surface_dialog,
+            background: zuse_viewport::palette::rgb(0x191c1a).into(),
             border: theme.border,
             danger: theme.danger,
         };
@@ -358,10 +360,40 @@ impl PluginsCard {
                         }
                     }
                 }
+                card.schedule_poll(cx);
                 cx.notify();
             });
         }));
         cx.notify();
+    }
+    fn schedule_poll(&mut self, cx: &mut Context<Self>) {
+        self.poll = None;
+        if !self.plugins.active_attempt() || self.busy {
+            return;
+        }
+        let epoch = self.epoch;
+        let id = self.plugins.attempt["id"].clone();
+        let tenant = self.plugins.snapshot["tenantId"].clone();
+        self.poll = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1500))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.epoch == epoch
+                    && this.signed_in()
+                    && !this.busy
+                    && this.plugins.active_attempt()
+                    && this.plugins.attempt["id"] == id
+                    && this.plugins.snapshot["tenantId"] == tenant
+                {
+                    this.request(
+                        methods::PLUGINS,
+                        json!({"action":"poll","tenantId":tenant,"attemptId":id}),
+                        cx,
+                    );
+                }
+            });
+        }));
     }
 }
 
@@ -408,9 +440,16 @@ impl PluginsCard {
             return;
         }
         if definition.api_key_header.is_some() {
+            self.detail_menu
+                .connect_focus
+                .get_or_insert_with(|| cx.focus_handle());
+            self.browse_selected = Some(definition.id.clone());
             self.open_setup(SetupTarget::Catalog(definition), window, cx);
             if let Some(form) = &self.setup {
-                form.update(cx, |form, cx| form.set_connection_label(label, window, cx));
+                form.update(cx, |form, cx| {
+                    form.set_connection_label(label, window, cx);
+                    form.set_return_focus(self.detail_menu.connect_focus.clone());
+                });
             }
         } else {
             let tenant = self.plugins.snapshot["tenantId"].clone();
@@ -544,90 +583,35 @@ impl PluginsCard {
                     .into_any_element(),
             );
         }
-        if let Some(form) = self.setup.clone() {
+        if let Some(form) = self.setup.clone().filter(|form| !form.read(cx).is_inline()) {
             items.push(div().absolute().child(form).into_any_element());
         }
-        if let Some(confirmation) = self.plugins.confirmation.as_ref() {
-            items.push(
-                widgets::section_card(theme)
-                    .mt_0()
-                    .child(
-                        widgets::card_row(theme, true)
-                            .child(catalog_ui::title_block(
-                                theme,
-                                confirmation.title(),
-                                confirmation.label.clone(),
-                                crate::typography::TEXT_SM,
-                                crate::typography::TEXT_XS,
-                            ))
-                            .child(button("dismiss-plugin-removal", "Keep it").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.plugins.confirmation = None;
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(
-                                widgets::text_action(
-                                    theme,
-                                    widgets::ActionTone::Danger,
-                                    confirmation.button(),
-                                )
-                                .id("confirm-plugin-removal")
-                                .tab_index(0)
-                                .role(gpui::Role::Button)
-                                .on_click(cx.listener(|this, _, _, cx| this.confirm_removal(cx))),
-                            ),
+        if self.plugins.confirmation.is_some() {
+            if let Some(dialog) = &self.detail_menu.removal {
+                dialog.update(cx, |dialog, cx| {
+                    dialog.sync(
+                        self.busy,
+                        self.error.clone().or(self.plugins.notice.clone()),
+                        cx,
                     )
-                    .into_any_element(),
-            );
+                });
+                items.push(div().absolute().child(dialog.clone()).into_any_element());
+            }
         }
         if self.plugins.active_attempt() {
-            let url = self.plugins.attempt["authorizationUrl"]
+            let id = self.plugins.attempt["pluginId"]
                 .as_str()
-                .filter(|url| url.starts_with("https://"))
-                .map(str::to_owned);
-            let id = self.plugins.attempt["id"].clone();
-            let tenant = self.plugins.snapshot["tenantId"].clone();
-            items.push(
-                widgets::section_card(theme)
-                    .mt_0()
-                    .child(
-                        widgets::card_row(theme, true)
-                            .child(catalog_ui::title_block(
-                                theme,
-                                "Waiting for authorization",
-                                "Approve the connection in your browser, then check it here.",
-                                crate::typography::TEXT_SM,
-                                crate::typography::TEXT_XS,
-                            ))
-                            .when_some(url, |row, url| {
-                                row.child(
-                                    button("authorize-hosted-plugin", "Authorize")
-                                        .on_click(move |_, _, cx| cx.open_url(&url)),
-                                )
-                            })
-                            .child(button("poll-hosted-plugin", "Check connection").on_click(
-                                cx.listener(move |this, _, _, cx| {
-                                    this.request(
-                                        methods::PLUGINS,
-                                        json!({"action":"poll","tenantId":tenant,"attemptId":id}),
-                                        cx,
-                                    )
-                                }),
-                            ))
-                            .child(button("cancel-plugin-attempt", "Cancel").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.request(
-                                        methods::PLUGINS,
-                                        json!({"action":"cancel","tenantId":this.plugins.snapshot["tenantId"],"attemptId":this.plugins.attempt["id"]}),
-                                        cx,
-                                    )
-                                }),
-                            )),
-                    )
-                    .into_any_element(),
-            );
+                .unwrap_or_default();
+            let name = zuse_viewport::plugin_catalog::catalog(&self.plugins.snapshot, "", false)
+                .into_iter()
+                .find(|p| p.id == id)
+                .map(|p| p.name)
+                .unwrap_or_else(|| "plugin".into());
+            items.push(zuse_viewport::plugin_detail::pending(&name,self.plugins.attempt["authorizationUrl"].as_str(),self.busy,
+                SetupColors{text:theme.text,muted:theme.text_muted,background:theme.surface_card,border:theme.border,danger:theme.danger},cx,
+                |this,_,cx|this.request(methods::PLUGINS,json!({"action":"cancel","tenantId":this.plugins.snapshot["tenantId"],"attemptId":this.plugins.attempt["id"]}),cx)));
         }
+
         items
     }
 
@@ -758,11 +742,16 @@ impl PluginsCard {
         });
         match action {
             Action::Back => {
+                self.setup = None;
+                self.setup_events = None;
                 self.browse_selected = None;
                 self.detail_menu = Default::default();
             }
             Action::MenuToggle => self.detail_menu.toggle(),
             Action::MenuClose => self.detail_menu.close(),
+            Action::AccountMenu(id) => self.detail_menu.toggle_account(id,window,cx),
+            Action::AccountClose => self.detail_menu.close_account(true,window,cx),
+            Action::AccountDismiss => self.detail_menu.close_account(false,window,cx),
             Action::Connect => {
                 if let Some(definition) = selected {
                     self.connect(definition, window, cx);
@@ -770,7 +759,7 @@ impl PluginsCard {
             }
             Action::Toggle { id, enabled } => self.set_enabled(json!(id), enabled, cx),
             Action::Disconnect(id) => {
-                self.ask_removal(zuse_protocol::plugin_state::Removal::Connection, &id, cx)
+                self.request(methods::PLUGINS,json!({"action":"disconnect","tenantId":self.plugins.snapshot["tenantId"],"connectionId":id}),cx)
             }
             Action::RemoveServer => {
                 if let Some(definition) = selected {
@@ -779,6 +768,15 @@ impl PluginsCard {
                         &definition.id,
                         cx,
                     );
+                    if self.plugins.confirmation.is_some() {
+                        let theme=Theme::of(cx).for_settings_surface();
+                        let colors=SetupColors{text:theme.text,muted:theme.text_muted,background:zuse_viewport::palette::rgb(0x191c1a).into(),border:theme.border,danger:theme.danger};
+                        let dialog=cx.new(|cx|zuse_viewport::plugin_removal::ServerRemoval::new(definition.name,colors,window,cx));
+                        self.detail_menu.removal_events=Some(cx.subscribe(&dialog,|this,_,event,cx| {
+                            match event {zuse_viewport::plugin_removal::Event::Cancel=>this.plugins.confirmation=None,zuse_viewport::plugin_removal::Event::Remove=>this.confirm_removal(cx)}cx.notify();
+                        }));
+                        self.detail_menu.removal=Some(dialog);
+                    }
                 }
             }
         }
@@ -871,7 +869,8 @@ impl PluginsCard {
                             &definition,
                             &self.plugins.snapshot,
                             self.busy || self.plugins.active_attempt(),
-                            &self.detail_menu,
+                            &mut self.detail_menu,
+                            self.setup.clone().filter(|form| form.read(cx).is_inline()),
                             colors,
                             cx,
                             Self::detail_action,
@@ -1194,11 +1193,7 @@ impl PluginsCard {
                                 .role(gpui::Role::Button)
                                 .child("Disconnect")
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.ask_removal(
-                                        zuse_protocol::plugin_state::Removal::Connection,
-                                        &remove_id,
-                                        cx,
-                                    )
+                                    this.request(methods::PLUGINS,json!({"action":"disconnect","tenantId":this.plugins.snapshot["tenantId"],"connectionId":remove_id}),cx)
                                 })),
                         )
                         .child(

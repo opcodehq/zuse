@@ -28,7 +28,36 @@ impl WorkspaceView {
         if let Some(next) = next {
             self.plugin_action(next);
         }
+        self.schedule_plugin_poll(cx);
         cx.notify();
+    }
+    fn schedule_plugin_poll(&mut self, cx: &mut Context<Self>) {
+        self.plugin_poll = None;
+        if !self.plugin_state.active_attempt() || self.plugin_request.is_some() {
+            return;
+        }
+        let id = self.plugin_state.attempt["id"].clone();
+        let tenant = self.plugin_state.snapshot["tenantId"].clone();
+        let owner = self.cloud_account["user"]["id"].clone();
+        let epoch = self.connection_epoch;
+        self.plugin_poll = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(1500))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.connected
+                    && this.connection_epoch == epoch
+                    && this.cloud_account["user"]["id"] == owner
+                    && this.plugin_state.active_attempt()
+                    && this.plugin_state.attempt["id"] == id
+                    && this.plugin_state.snapshot["tenantId"] == tenant
+                    && this.plugin_request.is_none()
+                {
+                    this.plugin_action(json!({"action":"poll","tenantId":tenant,"attemptId":id}));
+                    cx.notify();
+                }
+            });
+        }));
     }
     pub(super) fn ask_plugin_removal(&mut self, kind: Removal, id: &str, cx: &mut Context<Self>) {
         if !self.connected {

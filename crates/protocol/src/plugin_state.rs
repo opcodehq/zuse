@@ -126,7 +126,9 @@ impl PluginState {
         {
             return Err("This plugin sign-in is no longer active. Refresh connections.");
         }
-        self.confirmation = None;
+        if !matches!(action.as_str(), "removeServer" | "list") {
+            self.confirmation = None;
+        }
         if action != "list" && action != "poll" {
             self.notice = None;
         }
@@ -162,6 +164,11 @@ impl PluginState {
                 }
                 self.selection_uncertain = false;
                 self.snapshot = response.clone();
+                if self.confirmation.as_ref().is_some_and(|c| {
+                    c.tenant != tenant_id.as_str() || self.removable(c.kind, &c.id).is_none()
+                }) {
+                    self.confirmation = None;
+                }
                 self.pending = None;
                 Ok(None)
             }
@@ -201,6 +208,9 @@ impl PluginState {
                     return Err(
                         "The plugin service did not confirm the requested action. Refresh connections.",
                     );
+                }
+                if pending.action == "removeServer" {
+                    self.confirmation = None;
                 }
                 let next = Self::list(pending.tenant.as_deref());
                 if matches!(pending.action.as_str(), "cancel" | "complete") {
@@ -302,7 +312,9 @@ impl PluginState {
                 json!({"action":"removeServer","tenantId":confirmed.tenant,"pluginId":confirmed.id})
             }
         };
-        self.confirmation = None;
+        if confirmed.kind != Removal::Server {
+            self.confirmation = None;
+        }
         Ok(request)
     }
 }
@@ -310,6 +322,29 @@ impl PluginState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn server_removal_stays_open_until_confirmed_and_reconciles_a_lost_reply() {
+        let mut state = loaded();
+        state.ask_removal(Removal::Server, "custom").unwrap();
+        let request = state.confirm_removal().unwrap();
+        state.begin(request.clone()).unwrap();
+        assert!(state.confirmation.is_some());
+        assert!(state.confirm_removal().is_err());
+        let refresh = state.failed().unwrap();
+        state.begin(refresh).unwrap();
+        state.apply(&snapshot("organization:team")).unwrap();
+        assert!(state.confirmation.is_some());
+        let retry = state.confirm_removal().unwrap();
+        state.begin(retry).unwrap();
+        let refresh = state.apply(&json!({"kind":"ok"})).unwrap().unwrap();
+        assert!(state.confirmation.is_none());
+        state.begin(refresh).unwrap();
+        let mut response = snapshot("organization:team");
+        response["catalog"] = json!([]);
+        response["connections"] = json!([]);
+        state.apply(&response).unwrap();
+        assert!(state.confirm_removal().is_err());
+    }
     fn snapshot(tenant: &str) -> Value {
         json!({"kind":"snapshot","canManage":true,"tenants":[{"id":tenant,"kind":"organization","name":"Team"}],"tenantId":tenant,"endpoint":"https://fixture.invalid","catalog":[{"id":"custom","name":"Custom tools","description":"Fixture","custom":true},{"id":"catalog","name":"Catalog tools","description":"Fixture"}],"connections":[{"id":"connection","pluginId":"custom","label":"Shared tools","owner":"owner","state":"connected","createdAt":0,"enabled":true}]})
     }

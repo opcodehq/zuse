@@ -1269,14 +1269,18 @@ impl Render for WorkspaceView {
                     cx.notify();
                     return;
                 }
+                if this.plugin_state.confirmation.is_some() {
+                    if let Some(dialog)=this.plugin_detail_menu.removal.clone() {dialog.update(cx,|dialog,cx|dialog.cancel(window,cx));}
+                    cx.notify();return;
+                }
                 if this.plugins_add_menu { this.plugins_add_menu=false; cx.notify(); return; }
-                if this.plugin_setup.take().is_some() {
-                    this.plugin_setup_events=None;
-                    window.focus(if this.settings {&this.settings_nav_focus}else{&this.workspace_focus},cx);
+                if let Some(form) = this.plugin_setup.clone() {
+                    form.update(cx,|form,cx|form.cancel(window,cx));
                     cx.notify();return;
                 }
                 if this.plugins_browse {
-                    if this.plugin_detail_menu.open {this.plugin_detail_menu.close();}
+                    if this.plugin_detail_menu.account.is_some() {this.plugin_detail_menu.close_account(true,window,cx);}
+                    else if this.plugin_detail_menu.open {this.plugin_detail_menu.close();}
                     else if this.plugin_detail.take().is_none() { this.close_plugins_browse(); this.settings=true; }
                     cx.notify(); return;
                 }

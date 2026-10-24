@@ -30,6 +30,7 @@ pub struct PluginSetup {
     return_to: PluginReturnTo,
     name: Entity<InputState>,
     dialog_focus: FocusHandle,
+    return_focus: Option<FocusHandle>,
     cancel_focus: FocusHandle,
     submit_focus: FocusHandle,
     auth_focus: [FocusHandle; 3],
@@ -83,7 +84,14 @@ impl PluginSetup {
         let name = field("Internal tools", false);
         let url = field("https://mcp.example.com/mcp", false);
         let header = field("X-API-Key", false);
-        let secret = field("API key", true);
+        let secret = field(
+            if matches!(target, SetupTarget::Catalog(_)) {
+                "Key for this account"
+            } else {
+                "API key"
+            },
+            true,
+        );
         let subscriptions = [&name, &url, &header, &secret]
             .into_iter()
             .map(|input| {
@@ -124,13 +132,20 @@ impl PluginSetup {
                 input.set_value(plugin.name.clone(), window, cx)
             });
         }
-        window.focus(&name.read(cx).focus_handle(cx), cx);
+        let return_focus = window.focused(cx);
+        let first = if matches!(target, SetupTarget::Catalog(_)) {
+            &secret
+        } else {
+            &name
+        };
+        window.focus(&first.read(cx).focus_handle(cx), cx);
         Self {
             tenant,
             target,
             return_to,
             name,
             dialog_focus: cx.focus_handle(),
+            return_focus,
             cancel_focus: cx.focus_handle().tab_stop(true),
             submit_focus: cx.focus_handle().tab_stop(true),
             auth_focus: std::array::from_fn(|_| cx.focus_handle()),
@@ -153,6 +168,165 @@ impl PluginSetup {
     ) {
         self.name
             .update(cx, |input, cx| input.set_value(label, window, cx));
+    }
+    pub fn is_inline(&self) -> bool {
+        matches!(self.target, SetupTarget::Catalog(_))
+    }
+    pub fn set_return_focus(&mut self, focus: Option<FocusHandle>) {
+        if focus.is_some() {
+            self.return_focus = focus;
+        }
+    }
+    pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        if let Some(focus) = self.return_focus.clone() {
+            window.on_next_frame(move |window, cx| window.focus(&focus, cx));
+        }
+        cx.emit(SetupEvent::Cancel);
+    }
+    fn inline(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let focus = self.secret.read(cx).focus_handle(cx);
+        let enabled = !self.busy && !self.secret.read(cx).value().trim().is_empty();
+        div()
+            .id("plugin-inline-key")
+            .flex()
+            .flex_col()
+            .track_focus(&self.dialog_focus)
+            .tab_group()
+            .tab_stop(false)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "escape" => this.cancel(window, cx),
+                    "tab" => {
+                        if event.keystroke.modifiers.shift {
+                            window.focus_prev(cx);
+                        } else {
+                            window.focus_next(cx);
+                        }
+                        if !this.dialog_focus.contains_focused(window, cx) {
+                            let focus = if event.keystroke.modifiers.shift {
+                                this.submit_focus.clone()
+                            } else {
+                                this.secret.read(cx).focus_handle(cx)
+                            };
+                            window.focus(&focus, cx);
+                        }
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .py(px(8.))
+                    .child(crate::plugin_detail::add_glyph(self.colors))
+                    .child(
+                        div()
+                            .id("API key")
+                            .debug_selector(|| "API key".into())
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(28.))
+                            .relative()
+                            .when(focus.is_focused(window), |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .inset(px(-2.))
+                                        .rounded(px(8.))
+                                        .border_2()
+                                        .border_color(crate::palette::rgb(0x89ca21).opacity(0.24)),
+                                )
+                            })
+                            .text_size(px(13.))
+                            .when(!self.secret.read(cx).value().is_empty(), |d| {
+                                d.font_family("Geist Mono")
+                            })
+                            .rounded(px(6.))
+                            .bg(crate::palette::rgb(crate::shell::BG).opacity(0.7))
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .cursor_text()
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                window.focus(&focus, cx)
+                            })
+                            .child(self.secret.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("cancel-plugin-setup")
+                            .role(Role::Button)
+                            .aria_label("Cancel")
+                            .track_focus(&self.cancel_focus)
+                            .tab_index(0)
+                            .h(px(28.))
+                            .px(px(15.))
+                            .border_1()
+                            .border_color(transparent_black())
+                            .rounded(px(7.))
+                            .flex()
+                            .items_center()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .cursor_pointer()
+                            .child("Cancel")
+                            .hover(|d| d.bg(self.colors.border.opacity(0.4)))
+                            .on_click(cx.listener(|this, _, window, cx| this.cancel(window, cx)))
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.cancel(window, cx);
+                                    cx.stop_propagation();
+                                }
+                            })),
+                    )
+                    .child(
+                        crate::styling::dither_action(
+                            "submit-plugin-setup",
+                            "Connect",
+                            enabled,
+                            true,
+                        )
+                        .px(px(15.))
+                        .text_size(px(12.))
+                        .track_focus(&self.submit_focus)
+                        .tab_index(0)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if enabled {
+                                this.submit(cx)
+                            }
+                        }))
+                        .on_key_down(cx.listener(
+                            move |this, event: &KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    if enabled {
+                                        this.submit(cx)
+                                    }
+                                    cx.stop_propagation();
+                                }
+                            },
+                        )),
+                    ),
+            )
+            .when_some(self.error, |d, error| {
+                d.child(
+                    div()
+                        .id("plugin-form-error")
+                        .role(Role::Alert)
+                        .text_color(self.colors.danger)
+                        .pb(px(8.))
+                        .child(error),
+                )
+            })
+            .when_some(self.menu.as_ref(), |d, menu| {
+                d.child(crate::input::edit_menu::render(menu, cx))
+            })
+            .into_any_element()
     }
     fn submit(&mut self, cx: &mut Context<Self>) {
         if self.busy {
@@ -202,6 +376,9 @@ impl PluginSetup {
 }
 impl Render for PluginSetup {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.is_inline() {
+            return self.inline(window, cx);
+        }
         let viewport = window.viewport_size();
         let server = matches!(self.target, SetupTarget::Server);
         let needs_key = match &self.target {
@@ -347,7 +524,7 @@ impl Render for PluginSetup {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "escape" => {
-                        cx.emit(SetupEvent::Cancel);
+                        this.cancel(window, cx);
                         cx.stop_propagation();
                     }
                     "tab" => {
@@ -430,10 +607,10 @@ impl Render for PluginSetup {
                         button("cancel-plugin-setup", "Cancel")
                             .track_focus(&self.cancel_focus)
                             .hover(|d| d.bg(self.colors.border.opacity(0.4)))
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(SetupEvent::Cancel)))
-                            .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
+                            .on_click(cx.listener(|this, _, window, cx| this.cancel(window, cx)))
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                    cx.emit(SetupEvent::Cancel);
+                                    this.cancel(window, cx);
                                     cx.stop_propagation();
                                 }
                             })),
@@ -485,7 +662,7 @@ impl Render for PluginSetup {
                             .size(px(14.))
                             .text_color(self.colors.muted),
                     )
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(SetupEvent::Cancel))),
+                    .on_click(cx.listener(|this, _, window, cx| this.cancel(window, cx))),
             );
         deferred(
             anchored()
@@ -504,9 +681,9 @@ impl Render for PluginSetup {
                         .bg(black().opacity(0.32))
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
+                            cx.listener(|this, _, window, cx| {
                                 if !this.busy {
-                                    cx.emit(SetupEvent::Cancel);
+                                    this.cancel(window, cx);
                                 }
                                 cx.stop_propagation();
                             }),
@@ -517,6 +694,7 @@ impl Render for PluginSetup {
                 ),
         )
         .priority(3)
+        .into_any_element()
     }
 }
 
@@ -677,6 +855,9 @@ mod tests {
             .unwrap();
         window.update(cx,|view,window,cx|{
             let plugin=serde_json::from_value(serde_json::json!({"id":"key-tools","name":"Key tools","description":"Fixture","apiKeyHeader":"Authorization"})).unwrap();
+            view.plugins_browse=true;
+            view.plugin_detail=Some("key-tools".into());
+            view.plugin_state.snapshot["catalog"]=serde_json::to_value([&plugin]).unwrap();
             view.open_plugin_setup(SetupTarget::Catalog(plugin),window,cx);
         }).unwrap();
         cx.update(|window, cx| window.draw(cx).clear());

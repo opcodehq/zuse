@@ -7,10 +7,48 @@ use zuse_protocol::plugins::PluginDefinition;
 #[derive(Default)]
 pub struct Menu {
     pub open: bool,
+    pub account: Option<String>,
+    pub removal: Option<Entity<crate::plugin_removal::ServerRemoval>>,
+    pub removal_events: Option<Subscription>,
+    pub connect_focus: Option<FocusHandle>,
+    account_focus: Option<[FocusHandle; 2]>,
+    triggers: std::collections::HashMap<String, FocusHandle>,
     closed: Option<web_time::Instant>,
+    account_closed: Option<(String, web_time::Instant)>,
 }
 impl Menu {
+    pub fn toggle_account(&mut self, id: String, window: &mut Window, cx: &mut App) {
+        self.open = false;
+        if self.account_closed.as_ref().is_some_and(|(closed, time)| {
+            closed == &id && time.elapsed() < std::time::Duration::from_millis(300)
+        }) {
+            self.account_closed = None;
+            return;
+        }
+        self.account = if self.account.as_ref() == Some(&id) {
+            None
+        } else {
+            Some(id)
+        };
+        if self.account.is_some() {
+            if let Some(handles) = &self.account_focus {
+                window.focus(&handles[0], cx);
+            }
+        }
+    }
+    pub fn close_account(&mut self, restore: bool, window: &mut Window, _cx: &mut App) {
+        if let Some(id) = self.account.take() {
+            self.account_closed = Some((id.clone(), web_time::Instant::now()));
+            if !restore {
+                return;
+            }
+            if let Some(focus) = self.triggers.get(&id).cloned() {
+                window.on_next_frame(move |window, cx| window.focus(&focus, cx));
+            }
+        }
+    }
     pub fn toggle(&mut self) {
+        self.account = None;
         self.open = !self.open
             && !self
                 .closed
@@ -18,6 +56,7 @@ impl Menu {
         self.closed = None;
     }
     pub fn close(&mut self) {
+        self.account = None;
         self.open = false;
         self.closed = Some(web_time::Instant::now());
     }
@@ -26,6 +65,9 @@ pub enum Action {
     Back,
     MenuToggle,
     MenuClose,
+    AccountMenu(String),
+    AccountClose,
+    AccountDismiss,
     Connect,
     Toggle { id: String, enabled: bool },
     Disconnect(String),
@@ -36,11 +78,21 @@ pub fn render<T: 'static>(
     definition: &PluginDefinition,
     snapshot: &Value,
     busy: bool,
-    menu: &Menu,
+    menu: &mut Menu,
+    inline: Option<Entity<crate::plugin_setup::PluginSetup>>,
     colors: SetupColors,
     cx: &mut Context<T>,
     action: impl Fn(&mut T, Action, &mut Window, &mut Context<T>) + Copy + 'static,
 ) -> AnyElement {
+    let connect_focus = menu
+        .connect_focus
+        .get_or_insert_with(|| cx.focus_handle())
+        .clone();
+    let account_focus = menu
+        .account_focus
+        .get_or_insert_with(|| std::array::from_fn(|_| cx.focus_handle()))
+        .clone();
+    let asking_key = inline.is_some();
     let can_manage = snapshot["canManage"] != false;
     let available = can_manage && !busy;
     let connections: Vec<_> = snapshot["connections"]
@@ -92,7 +144,12 @@ pub fn render<T: 'static>(
         .px(px(12.));
     for (index, connection) in connections.iter().enumerate() {
         let id = connection["id"].as_str().unwrap_or_default().to_owned();
-        let remove = id.clone();
+        let menu_id = id.clone();
+        let trigger = menu
+            .triggers
+            .entry(id.clone())
+            .or_insert_with(|| cx.focus_handle())
+            .clone();
         let enabled = connection["enabled"] != false;
         let state = connection["state"].as_str().unwrap_or("connected");
         let label = connection["label"]
@@ -199,33 +256,64 @@ pub fn render<T: 'static>(
                         }
                     })),
                 )
-                .child(
-                    div()
-                        .id(("plugin-detail-disconnect", index))
-                        .role(Role::Button)
-                        .aria_label("Disconnect account")
-                        .tab_index(0)
-                        .cursor_pointer()
-                        .size(px(28.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(7.))
-                        .hover(|d| d.bg(colors.border.opacity(0.4)))
-                        .when(!available, |d| d.opacity(0.5))
-                        .child(icon("link-broken").size(px(14.)).text_color(colors.muted))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if available {
-                                action(this, Action::Disconnect(remove.clone()), window, cx);
-                            }
-                        })),
-                ),
+                .when(can_manage,|row|row.child(div().relative()
+                    .child(div().id(("plugin-account-actions",index)).role(Role::Button)
+                        .aria_label(format!("Account actions: {}",connection["label"].as_str().unwrap_or(&definition.name)))
+                        .track_focus(&trigger).tab_index(0).cursor_pointer().size(px(28.)).mr(px(-4.))
+                        .flex().items_center().justify_center().rounded(px(7.))
+                        .hover(|d|d.bg(colors.border.opacity(0.4)))
+                        .when(!available,|d|d.opacity(0.5))
+                        .child(icon("more-horizontal").size(px(16.)).text_color(colors.muted))
+                        .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())
+                        .on_click(cx.listener({let id=menu_id.clone();move|this,_,window,cx|if available {action(this,Action::AccountMenu(id.clone()),window,cx)}}))
+                        .on_key_down(cx.listener({let id=menu_id.clone();move|this,event:&KeyDownEvent,window,cx| {
+                            if matches!(event.keystroke.key.as_str(),"enter"|"space"|"down") {if available {action(this,Action::AccountMenu(id.clone()),window,cx)}cx.stop_propagation();}
+                        }})))
+                    .when(menu.account.as_ref()==Some(&menu_id),|d|d.child(deferred(
+                        div().id("plugin-account-menu").role(Role::Menu).absolute().top_full().right_0().mt(px(4.))
+                            .w(px(192.)).p(px(4.)).rounded(px(10.)).border_1().border_color(colors.border)
+                            .bg(crate::palette::rgb(crate::shell::RAISED)).shadow_lg().occlude()
+                            .on_mouse_down_out(cx.listener(move|this,_,window,cx|action(this,Action::AccountDismiss,window,cx)))
+                            .on_key_down(cx.listener({let handles=account_focus.clone();move|this,event:&KeyDownEvent,window,cx| {
+                                let index=match event.keystroke.key.as_str() {
+                                    "escape"=>{action(this,Action::AccountClose,window,cx);cx.stop_propagation();return;},
+                                    "home"=>0,"end"=>1,"up"|"down"=>if handles[0].is_focused(window) {1}else{0},_=>return,
+                                }; window.focus(&handles[index],cx);cx.stop_propagation();
+                            }}))
+                            .children([(false,if enabled {"Turn off"}else{"Turn on"}),(true,"Disconnect")].into_iter().enumerate().map(|(i,(remove,title))| {
+                                let id=menu_id.clone();let handles=account_focus.clone();
+                                button(if remove {"plugin-account-disconnect"} else {"plugin-account-toggle"},title)
+                                    .role(Role::MenuItem).track_focus(&handles[i]).w_full().justify_start()
+                                    .when(remove,|d|d.text_color(colors.danger).child(icon("link-broken").size(px(14.))))
+                                    .child(title)
+                                    .on_click(cx.listener({let id=id.clone();move|this,_,window,cx| {
+                                        action(this,Action::AccountClose,window,cx);
+                                        if available {action(this,if remove {Action::Disconnect(id.clone())}else{Action::Toggle{id:id.clone(),enabled:!enabled}},window,cx)}
+                                    }}))
+                                    .on_key_down(cx.listener(move|this,event:&KeyDownEvent,window,cx| {
+                                        if matches!(event.keystroke.key.as_str(),"enter"|"space") {
+                                            action(this,Action::AccountClose,window,cx);
+                                            if available {action(this,if remove {Action::Disconnect(id.clone())}else{Action::Toggle{id:id.clone(),enabled:!enabled}},window,cx)}
+                                            cx.stop_propagation();
+                                        }
+                                    }))
+                            }))
+                    ).priority(2))))),
         )
     }
-    if can_manage && !definition.id.starts_with("local-") {
+    if let Some(form) = inline {
+        accounts = accounts.child(
+            div()
+                .when(!connections.is_empty(), |d| {
+                    d.border_t_1().border_color(colors.border.opacity(0.5))
+                })
+                .child(form),
+        );
+    } else if can_manage && !definition.id.starts_with("local-") {
         accounts = accounts.child(
             div()
                 .id("plugin-detail-connect-another")
+                .track_focus(&connect_focus)
                 .role(Role::Button)
                 .aria_label("Connect another account")
                 .tab_index(0)
@@ -239,20 +327,16 @@ pub fn render<T: 'static>(
                 })
                 .hover(|d| d.bg(colors.border.opacity(0.3)))
                 .when(busy, |d| d.opacity(0.6))
-                .child(
-                    div()
-                        .size(px(24.))
-                        .flex_none()
-                        .rounded_full()
-                        .border_1()
-                        .border_color(colors.border.opacity(0.6))
-                        .bg(crate::palette::rgb(crate::shell::BG))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(icon("plus").size(px(12.)).text_color(colors.muted)),
-                )
+                .child(add_glyph(colors))
                 .child("Connect another account")
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        if available {
+                            action(this, Action::Connect, window, cx);
+                        }
+                        cx.stop_propagation();
+                    }
+                }))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if available {
                         action(this, Action::Connect, window, cx);
@@ -276,7 +360,19 @@ pub fn render<T: 'static>(
         .unwrap_or(&definition.domain)
         .to_owned();
     let website = format!("https://{}", definition.domain);
-    let mut actions = div().flex().items_center().gap(px(4.));
+    let mut actions = div().flex().items_center().gap(px(4.)).when(busy, |d| {
+        d.child(
+            div()
+                .h(px(28.))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .text_color(colors.muted)
+                .child(icon("refresh").size(px(14.)))
+                .child("Waiting…"),
+        )
+    });
     if !definition.custom || can_manage {
         let custom = definition.custom;
         actions = actions.child(
@@ -373,19 +469,24 @@ pub fn render<T: 'static>(
             );
         }
     }
-    if connections.is_empty() && can_manage {
+    if connections.is_empty() && can_manage && !asking_key {
         actions = actions.child(
-            crate::styling::dither_action(
-                "plugin-detail-connect",
-                if busy { "Connecting…" } else { "Connect" },
-                available,
-                true,
-            )
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if available {
-                    action(this, Action::Connect, window, cx);
-                }
-            })),
+            crate::styling::dither_action("plugin-detail-connect", "Connect", available, true)
+                .track_focus(&connect_focus)
+                .tab_index(0)
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        if available {
+                            action(this, Action::Connect, window, cx);
+                        }
+                        cx.stop_propagation();
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if available {
+                        action(this, Action::Connect, window, cx);
+                    }
+                })),
         );
     }
     let mut view = div()
@@ -430,7 +531,7 @@ pub fn render<T: 'static>(
                                 &definition.domain,
                                 &definition.name,
                                 48.,
-                                colors.border.opacity(0.4),
+                                crate::settings_style::frame_bg(),
                                 colors.muted,
                             )
                             .rounded(px(14.)),
@@ -478,7 +579,11 @@ pub fn render<T: 'static>(
                                         )
                                         .child(actions),
                                 )
-                                .child(div().truncate().text_color(colors.muted).child(subtitle)),
+                                .when(!subtitle.is_empty(), |d| {
+                                    d.child(
+                                        div().truncate().text_color(colors.muted).child(subtitle),
+                                    )
+                                }),
                         ),
                 ),
         )
@@ -505,7 +610,7 @@ pub fn render<T: 'static>(
                     }),
             )
         })
-        .when(!connections.is_empty(), |d| {
+        .when(!connections.is_empty() || asking_key, |d| {
             d.child(section("Connected accounts", accounts.into_any_element()))
         });
     let info_row = |label: &'static str, value: AnyElement| {
@@ -609,4 +714,98 @@ fn avatar_color(hue: f32, enabled: bool) -> Rgba {
         b: gamma(-0.0041960863 * l - 0.7034186 * m + 1.7076147 * s),
         a: 1.,
     }
+}
+
+pub fn add_glyph(colors: SetupColors) -> Div {
+    div()
+        .size(px(24.))
+        .flex_none()
+        .rounded_full()
+        .border_1()
+        .border_color(colors.border.opacity(0.6))
+        .bg(crate::palette::rgb(crate::shell::BG))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon("plus").size(px(12.)).text_color(colors.muted))
+}
+
+pub fn pending<T: 'static>(
+    name: &str,
+    url: Option<&str>,
+    busy: bool,
+    colors: SetupColors,
+    cx: &mut Context<T>,
+    cancel: impl Fn(&mut T, &mut Window, &mut Context<T>) + Copy + 'static,
+) -> AnyElement {
+    let url = url
+        .filter(|url| url.starts_with("https://"))
+        .map(str::to_owned);
+    let button = |id, title| {
+        div()
+            .id(id)
+            .role(Role::Button)
+            .aria_label(title)
+            .tab_index(0)
+            .h(px(28.))
+            .px(px(10.))
+            .rounded(px(7.))
+            .flex()
+            .items_center()
+            .text_size(px(12.))
+            .cursor_pointer()
+            .child(title)
+            .hover(|d| d.bg(colors.border.opacity(0.4)))
+    };
+    div()
+        .id("plugin-pending")
+        .role(Role::Status)
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(8.))
+        .rounded(px(8.))
+        .bg(crate::settings_style::frame_bg().opacity(0.5))
+        .py(px(6.))
+        .pl(px(12.))
+        .pr(px(6.))
+        .text_size(px(13.))
+        .text_color(colors.muted)
+        .child(icon("refresh").size(px(14.)))
+        .child(div().flex_1().min_w_0().child(format!(
+            "Finish signing in to {name} in your browser. Zuse picks it up automatically."
+        )))
+        .when_some(url, |d, url| {
+            d.child(
+                button("authorize-hosted-plugin", "Reopen browser")
+                    .on_click({
+                        let url = url.clone();
+                        move |_, _, cx| cx.open_url(&url)
+                    })
+                    .on_key_down(move |event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            cx.open_url(&url);
+                            cx.stop_propagation();
+                        }
+                    }),
+            )
+        })
+        .child(
+            button("cancel-plugin-attempt", "Cancel")
+                .when(busy, |d| d.opacity(0.5))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if !busy {
+                        cancel(this, window, cx)
+                    }
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        if !busy {
+                            cancel(this, window, cx)
+                        }
+                        cx.stop_propagation();
+                    }
+                })),
+        )
+        .into_any_element()
 }

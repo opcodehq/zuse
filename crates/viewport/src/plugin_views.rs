@@ -9,6 +9,8 @@ use zuse_protocol::plugins::PluginDefinition;
 
 impl WorkspaceView {
     pub(super) fn close_plugins_browse(&mut self) {
+        self.plugin_setup = None;
+        self.plugin_setup_events = None;
         self.plugins_browse = false;
         self.plugins_add_menu = false;
         self.plugin_detail = None;
@@ -51,13 +53,20 @@ impl WorkspaceView {
         }
         let name = catalog::next_label(&self.plugin_state.snapshot, &definition);
         if definition.api_key_header.is_some() {
+            self.plugin_detail_menu
+                .connect_focus
+                .get_or_insert_with(|| cx.focus_handle());
+            self.plugin_detail = Some(definition.id.clone());
             self.open_plugin_setup(
                 crate::plugin_setup::SetupTarget::Catalog(definition),
                 window,
                 cx,
             );
             if let Some(form) = &self.plugin_setup {
-                form.update(cx, |form, cx| form.set_connection_label(name, window, cx));
+                form.update(cx, |form, cx| {
+                    form.set_connection_label(name, window, cx);
+                    form.set_return_focus(self.plugin_detail_menu.connect_focus.clone());
+                });
             }
         } else {
             self.plugin_action(json!({"action":"connect","tenantId":self.plugin_state.snapshot["tenantId"],"pluginId":definition.id,"label":name,"requestId":uuid::Uuid::new_v4().to_string(),"returnTo":if self.browser_local {json!({"kind":"desktop","port":0})}else{json!({"kind":"web"})}}));
@@ -77,18 +86,33 @@ impl WorkspaceView {
                 .find(|p| &p.id == id)
         });
         match action {
-            Action::Back=>{self.plugin_detail=None;self.plugin_detail_menu=Default::default();},
+            Action::Back=>{self.plugin_setup=None;self.plugin_setup_events=None;self.plugin_detail=None;self.plugin_detail_menu=Default::default();},
             Action::MenuToggle=>self.plugin_detail_menu.toggle(),
             Action::MenuClose=>self.plugin_detail_menu.close(),
+            Action::AccountMenu(id)=>self.plugin_detail_menu.toggle_account(id,window,cx),
+            Action::AccountClose=>self.plugin_detail_menu.close_account(true,window,cx),
+            Action::AccountDismiss => self.plugin_detail_menu.close_account(false,window,cx),
             Action::Connect=>if let Some(definition)=definition {self.connect_plugin(definition,window,cx);},
             Action::Toggle{id,enabled}=>self.plugin_action(json!({"action":"setEnabled","tenantId":self.plugin_state.snapshot["tenantId"],"connectionId":id,"enabled":enabled})),
-            Action::Disconnect(id)=>self.ask_plugin_removal(zuse_protocol::plugin_state::Removal::Connection,&id,cx),
-            Action::RemoveServer=>if let Some(definition)=definition {self.ask_plugin_removal(zuse_protocol::plugin_state::Removal::Server,&definition.id,cx);},
+            Action::Disconnect(id)=>self.plugin_action(json!({"action":"disconnect","tenantId":self.plugin_state.snapshot["tenantId"],"connectionId":id})),
+            Action::RemoveServer=>if let Some(definition)=definition {
+                self.ask_plugin_removal(zuse_protocol::plugin_state::Removal::Server,&definition.id,cx);
+                if self.plugin_state.confirmation.is_some() {
+                    let colors=crate::plugin_setup::SetupColors{text:rgb(TEXT).into(),muted:rgb(MUTED).into(),background:rgb(crate::shell::RAISED).into(),border:rgb(BORDER).into(),danger:rgb(0xf87171).into()};
+                    let dialog=cx.new(|cx|crate::plugin_removal::ServerRemoval::new(definition.name,colors,window,cx));
+                    self.plugin_detail_menu.removal_events=Some(cx.subscribe(&dialog,|this,_,event,cx| {
+                        match event {crate::plugin_removal::Event::Cancel=>this.plugin_state.confirmation=None,crate::plugin_removal::Event::Remove=>this.confirm_plugin_removal(cx)}cx.notify();
+                    }));
+                    self.plugin_detail_menu.removal=Some(dialog);
+                }
+            },
         }
         cx.notify();
     }
-    fn plugin_has_status(&self) -> bool {
-        self.plugin_setup.is_some()
+    fn plugin_has_status(&self, cx: &App) -> bool {
+        self.plugin_setup
+            .as_ref()
+            .is_some_and(|form| !form.read(cx).is_inline())
             || self.plugin_state.notice.is_some()
             || self.cloud_account["error"].is_string()
             || self.cloud_account["login"]["url"].is_string()
@@ -96,14 +120,21 @@ impl WorkspaceView {
             || self.plugin_state.active_attempt()
     }
     fn plugin_status(&self, cx: &mut Context<Self>) -> Div {
-        let only_setup = self.plugin_setup.is_some()
+        let only_overlay = (self
+            .plugin_setup
+            .as_ref()
+            .is_some_and(|form| !form.read(cx).is_inline())
+            || self.plugin_state.confirmation.is_some())
             && self.plugin_state.notice.is_none()
             && !self.cloud_account["error"].is_string()
             && !self.cloud_account["login"]["url"].is_string()
-            && self.plugin_state.confirmation.is_none()
             && !self.plugin_state.active_attempt();
-        let mut view = column().gap_3().when(only_setup, |view| view.absolute());
-        if let Some(form) = &self.plugin_setup {
+        let mut view = column().gap_3().when(only_overlay, |view| view.absolute());
+        if let Some(form) = self
+            .plugin_setup
+            .as_ref()
+            .filter(|form| !form.read(cx).is_inline())
+        {
             view = view.child(div().absolute().child(form.clone()));
         }
         if let Some(notice) = &self.plugin_state.notice {
@@ -137,54 +168,32 @@ impl WorkspaceView {
                     ),
             );
         }
-        if let Some(confirmation) = &self.plugin_state.confirmation {
-            view = view.child(
-                s::card()
-                    .p_3()
-                    .gap_3()
-                    .child(s::title_text(confirmation.title()))
-                    .child(s::description_text(confirmation.label.clone()))
-                    .child(
-                        row()
-                            .justify_end()
-                            .gap_2()
-                            .child(s::button("dismiss-plugin-removal", "Keep it").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.plugin_state.confirmation = None;
-                                    cx.notify();
-                                }),
-                            ))
-                            .child(
-                                s::button("confirm-plugin-removal", confirmation.button())
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_plugin_removal(cx)
-                                    })),
-                            ),
-                    ),
-            );
+        if self.plugin_state.confirmation.is_some() {
+            if let Some(dialog) = &self.plugin_detail_menu.removal {
+                dialog.update(cx, |dialog, cx| {
+                    dialog.sync(
+                        self.plugin_request.is_some(),
+                        self.plugin_state.notice.clone(),
+                        cx,
+                    )
+                });
+                view = view.child(div().absolute().child(dialog.clone()));
+            }
         }
         if self.plugin_state.active_attempt() {
-            let mut actions = row().gap_2();
-            if let Some(url) = self.plugin_state.attempt["authorizationUrl"]
+            let id = self.plugin_state.attempt["pluginId"]
                 .as_str()
-                .filter(|url| url.starts_with("https://"))
-                .map(str::to_owned)
-            {
-                actions = actions.child(
-                    s::button("authorize-hosted-plugin", "Continue in browser")
-                        .on_click(move |_, _, cx| cx.open_url(&url)),
-                );
-            }
-            actions=actions.child(s::button("poll-plugin","Check connection").on_click(cx.listener(|this,_,_,cx|{this.plugin_action(json!({"action":"poll","tenantId":this.plugin_state.snapshot["tenantId"],"attemptId":this.plugin_state.attempt["id"]}));cx.notify();})))
-                .child(s::button("cancel-plugin-attempt","Cancel sign-in").on_click(cx.listener(|this,_,_,cx|{this.plugin_action(json!({"action":"cancel","tenantId":this.plugin_state.snapshot["tenantId"],"attemptId":this.plugin_state.attempt["id"]}));cx.notify();})));
-            view = view.child(
-                s::card()
-                    .p_3()
-                    .gap_2()
-                    .child(s::title_text("Connecting plugin…"))
-                    .child(actions),
-            );
+                .unwrap_or_default();
+            let name = catalog::catalog(&self.plugin_state.snapshot, "", false)
+                .into_iter()
+                .find(|p| p.id == id)
+                .map(|p| p.name)
+                .unwrap_or_else(|| "plugin".into());
+            view=view.child(crate::plugin_detail::pending(&name,self.plugin_state.attempt["authorizationUrl"].as_str(),self.plugin_request.is_some(),
+                crate::plugin_setup::SetupColors{text:rgb(TEXT).into(),muted:rgb(MUTED).into(),background:s::card_bg(),border:rgb(BORDER).into(),danger:rgb(0xf87171).into()},cx,
+                |this,_,cx| {this.plugin_action(json!({"action":"cancel","tenantId":this.plugin_state.snapshot["tenantId"],"attemptId":this.plugin_state.attempt["id"]}));cx.notify();}));
         }
+
         view
     }
     fn plugin_add(&self, cx: &mut Context<Self>) -> Div {
@@ -320,7 +329,7 @@ impl WorkspaceView {
                             .child(self.plugin_add(cx)),
                     ),
             )
-            .when(self.plugin_has_status(), |view| {
+            .when(self.plugin_has_status(cx), |view| {
                 view.child(self.plugin_status(cx))
             });
         if connections.is_empty() {
@@ -384,7 +393,7 @@ impl WorkspaceView {
                     .child(catalog::logo(definition.map(|p|p.domain.as_str()).unwrap_or_default(),&name,32.,s::frame_bg(),rgb(MUTED).into()))
                     .child(column().flex_1().min_w_0().gap(px(2.)).child(s::title_text(name).text_size(px(13.)).truncate()).child(s::description_text(description).text_size(px(12.)).truncate()))
                     .child(icon_button(("disconnect-plugin",index),"link-broken","Disconnect plugin")
-                        .when(!can_manage,|view|view.opacity(0.5)).on_click(cx.listener(move|this,_,_,cx|if can_manage{this.ask_plugin_removal(zuse_protocol::plugin_state::Removal::Connection,&remove,cx);})))
+                        .when(!can_manage,|view|view.opacity(0.5)).on_click(cx.listener(move|this,_,_,cx|if can_manage{this.plugin_action(json!({"action":"disconnect","tenantId":this.plugin_state.snapshot["tenantId"],"connectionId":remove}));cx.notify();})))
                     .child(s::toggle(("toggle-plugin",index),enabled,"Enable plugin").tab_index(0)
                         .when(!can_manage,|view|view.opacity(0.5)).on_click(cx.listener(move|this,_,_,cx|if can_manage{this.plugin_action(json!({"action":"setEnabled","tenantId":this.plugin_state.snapshot["tenantId"],"connectionId":id,"enabled":!enabled}));cx.notify();}))));
             }
@@ -493,7 +502,7 @@ impl WorkspaceView {
             ))
             .into_any_element()
     }
-    pub(super) fn plugins_page_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn plugins_page_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let items = catalog::catalog(
             &self.plugin_state.snapshot,
             &self.plugin_search.read(cx).value(cx),
@@ -512,7 +521,7 @@ impl WorkspaceView {
             .px(px(if self.content_width < 800. { 16. } else { 32. }))
             .py(px(32.))
             .gap_5()
-            .when(self.plugin_has_status(), |view| {
+            .when(self.plugin_has_status(cx), |view| {
                 view.child(self.plugin_status(cx))
             });
         if let Some(definition) = detail {
@@ -520,7 +529,10 @@ impl WorkspaceView {
                 &definition,
                 &self.plugin_state.snapshot,
                 self.plugin_request.is_some() || self.plugin_state.active_attempt(),
-                &self.plugin_detail_menu,
+                &mut self.plugin_detail_menu,
+                self.plugin_setup
+                    .clone()
+                    .filter(|form| form.read(cx).is_inline()),
                 crate::plugin_setup::SetupColors {
                     text: rgb(TEXT).into(),
                     muted: rgb(MUTED).into(),

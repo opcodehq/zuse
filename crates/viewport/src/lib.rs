@@ -43,6 +43,7 @@ pub mod plugin_catalog;
 pub mod plugin_detail;
 mod plugin_management;
 pub mod plugin_setup;
+pub mod plugin_removal;
 mod plugin_views;
 mod previews;
 mod project_actions;
@@ -307,6 +308,7 @@ pub struct WorkspaceView {
     browser_local: bool,
     plugin_state: zuse_protocol::plugin_state::PluginState,
     plugin_request: Option<u64>,
+    plugin_poll: Option<Task<()>>,
     plugin_setup: Option<Entity<plugin_setup::PluginSetup>>,
     plugin_setup_events: Option<Subscription>,
     model: Option<String>,
@@ -734,6 +736,7 @@ impl WorkspaceView {
             browser_local: false,
             plugin_state: Default::default(),
             plugin_request: None,
+            plugin_poll: None,
             plugin_setup: None,
             plugin_setup_events: None,
             model: None,

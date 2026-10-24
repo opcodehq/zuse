@@ -38,22 +38,23 @@ try {
   page.screenshot('plugin-parity-pending.png');
   // Catalog coordinates follow the framed main pane at 1280×1000.
   // They exercise the canvas controls rather than mutating application state from JavaScript.
-  await click(622,123);
+  await until(p=>p.events.some(e=>e.action==='poll'),'Automatically poll pending connection');
+  await fetch(url+'/__fixture',{method:'POST',body:JSON.stringify({approve:true})});
   await until(p=>p.snapshot.connections.some(c=>c.label==='Figma 2'),'Complete additional connection');
   page.screenshot('plugin-parity-multiple.png');
-  await click(1081,400);page.screenshot('plugin-parity-disconnect-confirm.png');
-  const confirmation=fs.readFileSync('.context/plugin-parity-disconnect-confirm.png').toString('base64');
-  assert.ok(page.evaluate(`(async()=>{const i=new Image();i.src='data:image/png;base64,${confirmation}';await i.decode();const c=document.createElement('canvas');c.width=i.width;c.height=i.height;const x=c.getContext('2d');x.drawImage(i,0,0);return x.getImageData(756,90,1,1).data[0]>=18;})()`),'Disconnect confirmation must be painted before confirming');
-  assert.equal((await proof()).events.filter(e=>e.action==='disconnect').length,0,'Disconnect must require confirmation');
-  await click(1049,155);
+  await click(1081,400);page.screenshot('plugin-parity-account-menu.png');
+  assert.equal((await proof()).events.filter(e=>e.action==='disconnect').length,0,'Opening the account menu must not disconnect');
+  press('End');press('Enter');
   await until(p=>!p.snapshot.connections.some(c=>c.label==='Figma 2'),'Disconnect only the selected account');
   assert.equal((await proof()).snapshot.connections.find(c=>c.id==='figma-one').enabled,false);
   await click(431,84);await click(1074,499);
-  page.screenshot('plugin-parity-api-key-modal.png');
-  press('Tab');type('fixture-plugin-key');press('Enter');
+  page.screenshot('plugin-parity-api-key-inline.png');
+  type('fixture-plugin-key');page.screenshot('plugin-parity-api-key-masked.png');press('Escape');await sleep(800);page.screenshot('plugin-parity-api-key-cancelled.png');
+  assert.equal((await proof()).events.filter(e=>e.action==='connect'&&e.pluginId==='metrics').length,0,'Escape discards the inline secret');
+  press('Enter');await sleep(800);page.screenshot('plugin-parity-api-key-reopened.png');await click(600,332);type('fixture-plugin-key');press('Enter');
   await until(p=>p.snapshot.connections.some(c=>c.pluginId==='metrics'),'API key connection');
   assert.equal((await proof()).events.filter(e=>e.action==='connect'&&e.pluginId==='metrics').length,1,'Enter submits once');
-  await click(692,150);page.screenshot('plugin-parity-mcp-modal.png');
+  await click(431,84);await click(692,150);page.screenshot('plugin-parity-mcp-modal.png');
   const png=fs.readFileSync('.context/plugin-parity-mcp-modal.png').toString('base64');
   const labels=page.evaluate(`(async()=>{
     const image=new Image();image.src='data:image/png;base64,${png}';await image.decode();
@@ -74,7 +75,7 @@ try {
   const added=(await proof()).events.filter(e=>e.action==='addServer');
   assert.equal(added.length,1);assert.equal(added[0].name,'Parity tools');
   assert.equal(added[0].url,'https://parity.example.test/mcp');assert.equal(added[0].apiKeyHeader,'X-Parity-Key');
-  await click(622,123);
+  await fetch(url+'/__fixture',{method:'POST',body:JSON.stringify({approve:true})});
   await until(p=>p.snapshot.connections.some(c=>c.label==='Parity tools'),'Complete custom server connection');
   page.screenshot('plugin-parity-server-added.png');
   // Open an ephemeral credential form, then replace its owning account.
@@ -93,17 +94,18 @@ try {
   const result=await proof();assert.equal(result.events.filter(e=>e.blocked).length,0);
   const methods=page.evaluate('window.__uiParity.methods');
   assert.equal(methods.filter(m=>['QueueMessage','QueueCommand','CloudCreate','CloudBillingCheckout','CloudBillingPortal','CloudPrepaidCheckout'].includes(m)).length,0);
+  assert.equal(page.run(['errors']).errors.length,0,'No browser runtime errors');
   artifact('plugin-parity-acceptance.json',{
     compiledGpui:true,disposableRealEngine:true,pluginProtocolFixture:true,liveAccountAcceptance:false,
     referenceCommit:'43e14c1',installedFilter:true,selectedToggle:true,separateCatalog:true,
-    additionalAccountLabel:'Figma 2',connectPollReconciliation:true,confirmedSelectedDisconnect:true,
-    apiKeyEnterSubmitsOnce:true,modalEscapeCancels:true,modalTabWrap:true,authenticationTabLabelsVisible:true,
+    additionalAccountLabel:'Figma 2',connectPollReconciliation:true,accountMenuKeyboard:true,selectedDisconnect:true,automaticPolling:true,inlineKeyEscapeRestoresTrigger:true,inlineReopenTextEntryUsesFieldClick:true,
+    inlineApiKey:true,apiKeyEnterSubmitsOnce:true,modalEscapeCancels:true,modalTabWrap:true,authenticationTabLabelsVisible:true,
     authenticationEndKey:true,customServerAdded:true,accountChangeDiscardsForm:true,readOnlyBlocksWrites:true,
     agentWrites:0,pluginActions:result.events.filter(e=>e.action!=='list'),
   });
-  console.log('Plugin UI acceptance passed: settings/catalog/details, toggle, additional account, confirmed disconnect, API key, keyboard MCP setup, account change and read-only controls; zero provider turns.');
+  console.log('Plugin UI acceptance passed: settings/catalog/details, toggle, additional account, keyboard account menu, inline API key, keyboard MCP setup, account change and read-only controls; zero provider turns.');
 } catch(error) {
-  try {page?.screenshot('plugin-parity-failure.png');}catch{}
+  try {artifact('plugin-inline-browser-failure-proof.json',await proof());page?.screenshot('plugin-parity-failure.png');}catch{}
   console.error('Plugin UI acceptance failed: '+error.message);process.exitCode=1;
 } finally {
   page?.close();

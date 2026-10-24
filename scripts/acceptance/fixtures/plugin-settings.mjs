@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 const [ipc, ready, assets] = process.argv.slice(2);
 const clients = new Set(), events = [];
-let account = 'plugin-ui-owner', canManage = true, sequence = 1, attempt = null;
+let account = 'plugin-ui-owner', canManage = true, sequence = 1, attempt = null, approved = false;
+let removalMode='ok', removalRelease;
 let catalog = [
   {id:'figma',name:'Figma',description:'Bring designs and components into your agent workflow.',domain:'figma.com',featured:true,custom:false},
   {id:'workspace-tools',name:'Workspace tools',description:'Tools from your custom MCP server.',domain:'',custom:true,url:'https://tools.example.test/mcp'},
@@ -28,11 +29,13 @@ const server = Bun.serve({hostname:'127.0.0.1',port:0,
           for(const client of clients)for(const [id,method]of client.data.handled)if(method==='CloudAccountStatus')emit(client,{id,item:accountValue()});
         }
         if(Object.hasOwn(value,'canManage'))canManage=value.canManage;
+        if(Object.hasOwn(value,'approve'))approved=value.approve;
+        if(Object.hasOwn(value,'removalMode')){removalMode=value.removalMode;if(removalMode!=='hold'){removalRelease?.();removalRelease=null;}}
       }
       return Response.json({events,snapshot:snapshot(),attempt},{headers});
     }
     if(url.pathname==='/api/session/check'||url.pathname==='/api/session')return Response.json({ok:true},{headers});
-    if(url.pathname==='/api/rpc') {
+    if(url.pathname==='/api/rpc'||(url.pathname==='/'&&request.headers.get('upgrade')?.toLowerCase()==='websocket')) {
       if(server.upgrade(request,{data:{handled:new Map(),waiting:[],upstream:null,ready:false}}))return;
       return new Response('WebSocket required',{status:400});
     }
@@ -49,7 +52,7 @@ const server = Bun.serve({hostname:'127.0.0.1',port:0,
       upstream.onmessage=event=>{try{emit(client,JSON.parse(event.data));}catch{}};
       upstream.onclose=()=>client.close();
     },
-    message(client, message) {
+    async message(client, message) {
       const text=message.toString(),frame=JSON.parse(text),p=frame.params??{};
       if(frame.cancel&&client.data.handled.delete(frame.id))return;
       if(frame.method==='CloudAccountStatus') {
@@ -66,8 +69,12 @@ const server = Bun.serve({hostname:'127.0.0.1',port:0,
         if(p.action==='list')response=snapshot();
         else if(p.action==='setEnabled') {connections=connections.map(c=>c.id===p.connectionId?{...c,enabled:p.enabled}:c);response={kind:'ok'};}
         else if(p.action==='disconnect') {connections=connections.filter(c=>c.id!==p.connectionId);response={kind:'ok'};}
-        else if(p.action==='removeServer') {catalog=catalog.filter(c=>c.id!==p.pluginId);connections=connections.filter(c=>c.pluginId!==p.pluginId);response={kind:'ok'};}
+        else if(p.action==='removeServer') {
+          if(removalMode==='hold')await new Promise(resolve=>{removalRelease=resolve;});
+          if(removalMode==='fail'){emit(client,{id:frame.id,err:'The fixture server could not be removed',done:true});return;}
+          catalog=catalog.filter(c=>c.id!==p.pluginId);connections=connections.filter(c=>c.pluginId!==p.pluginId);response={kind:'ok'};}
         else if(p.action==='connect') {
+          approved=false;
           if(p.pluginId==='metrics') {
             if(p.apiKey!=='fixture-plugin-key') {emit(client,{id:frame.id,err:'Expected the fixture API key',done:true});return;}
             connections.push({id:'metrics-'+(++sequence),pluginId:p.pluginId,label:p.label,owner:account,state:'connected',createdAt:Date.UTC(2026,9,20)+0.5,enabled:true});response={kind:'attempt',id:'attempt-'+sequence,connectionId:'metrics-'+sequence,pluginId:p.pluginId,state:'connected',authorizationUrl:null,expiresAt:Date.now()+60000};
@@ -76,12 +83,14 @@ const server = Bun.serve({hostname:'127.0.0.1',port:0,
             response={kind:'attempt',...attempt,authorizationUrl:'https://auth.example.test/connect',expiresAt:Date.now()+60000};
           }
         } else if(p.action==='addServer') {
+          approved=false;
           if(p.apiKey?.header!=='X-Parity-Key'||p.apiKey?.value!=='fixture-plugin-key') {emit(client,{id:frame.id,err:'Expected the fixture server key',done:true});return;}
           const id='custom-'+(++sequence);
           catalog.push({id,name:p.name,url:p.url,description:'Custom server added in UI acceptance.',domain:'',custom:true,apiKeyHeader:p.apiKey.header});
           attempt={id:'attempt-'+sequence,connectionId:'connection-'+sequence,pluginId:id,label:p.name,state:'pending'};
           response={kind:'attempt',...attempt,authorizationUrl:'https://auth.example.test/connect',expiresAt:Date.now()+60000};
         } else if(p.action==='poll'&&attempt) {
+          if(!approved){emit(client,{id:frame.id,ok:{kind:'attempt',...attempt,authorizationUrl:'https://auth.example.test/connect',expiresAt:Date.now()+60000}});return;}
           connections.push({id:attempt.connectionId,pluginId:attempt.pluginId,label:attempt.label,owner:account,state:'connected',createdAt:Date.UTC(2026,9,20)+0.5,enabled:true});
           response={kind:'attempt',...attempt,state:'connected',authorizationUrl:null,expiresAt:Date.now()+60000};attempt=null;
         } else if(p.action==='cancel') {attempt=null;response={kind:'ok'};}
