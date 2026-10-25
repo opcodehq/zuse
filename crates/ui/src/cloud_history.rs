@@ -17,6 +17,7 @@ pub enum Event {
 }
 pub struct CloudHistory {
     root: EngineHandle,
+    owner: String,
     workspace: Workspace,
     view: Entity<Transcript>,
     composer: Entity<crate::composer::Composer>,
@@ -35,6 +36,7 @@ impl CloudHistory {
         root: EngineHandle,
         workspace: Workspace,
         head: Head,
+        owner: String,
         cx: &mut Context<Self>,
     ) -> Self {
         let (state, view) = Self::frozen(&head, workspace.archived(), cx);
@@ -47,6 +49,7 @@ impl CloudHistory {
         });
         Self {
             root,
+            owner,
             workspace,
             view,
             composer,
@@ -99,19 +102,20 @@ impl CloudHistory {
         self.reading = true;
         self.error = None;
         let root = self.root.clone();
+        let owner = self.owner.clone();
         let workspace = self.workspace.workspace_id.clone();
         self.session_task = Some(cx.spawn(async move |this, cx| {
             let result = root
                 .client()
                 .call_scoped(
                     zuse_protocol::methods::CLOUD_HISTORY,
-                    serde_json::json!({"workspaceId":workspace,"sessionId":id}),
+                    serde_json::json!({"workspaceId":workspace,"sessionId":id,"expectedAccountId":owner,"expectedOrganizationId":null}),
                 )
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.reading = false;
                 match result {
-                    Ok(value) => match serde_json::from_value::<Head>(value["head"].clone()) {
+                    Ok(value) if value["accountId"].as_str()==Some(owner.as_str()) => match serde_json::from_value::<Head>(value["head"].clone()) {
                         Ok(head) if head.workspace_id == workspace && head.session_id == id => {
                             let archived = this.workspace.archived();
                             this._state.update(cx, |state, cx| {
@@ -128,6 +132,7 @@ impl CloudHistory {
                                 Some("Saved conversation is unavailable for this workspace.".into())
                         }
                     },
+                    Ok(_) => this.error = Some("Your account changed. Reopen this history.".into()),
                     Err(error) => this.error = Some(error.to_string()),
                 }
                 cx.notify();
@@ -142,6 +147,7 @@ impl CloudHistory {
         self.busy = true;
         self.error = None;
         let engine = self.root.clone();
+        let owner = self.owner.clone();
         let id = self.workspace.workspace_id.clone();
         let command = self.command.clone();
         self.task = Some(cx.spawn(async move |this, cx| {
@@ -149,13 +155,14 @@ impl CloudHistory {
                 .client()
                 .call(
                     zuse_engine::cloud::UNARCHIVE,
-                    serde_json::json!({"workspaceId":id,"commandId":command}),
+                    serde_json::json!({"workspaceId":id,"commandId":command,"expectedAccountId":owner,"expectedOrganizationId":null}),
                 )
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.busy = false;
                 match result {
-                    Ok(_) => cx.emit(Event::Restored(id)),
+                    Ok(value) if value["accountId"].as_str()==Some(owner.as_str()) && value["workspace"]["workspaceId"]==id => cx.emit(Event::Restored(id)),
+                    Ok(_) => this.error=Some("This restore could not be verified. Refresh to check its state.".into()),
                     Err(error) => this.error = Some(error.to_string()),
                 };
                 cx.notify();
@@ -167,6 +174,7 @@ impl CloudHistory {
 impl Render for CloudHistory {
     fn render(&mut self, _: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        zuse_viewport::palette::set_light(theme.appearance.is_light());
         let title = self
             ._state
             .read(cx)
@@ -174,13 +182,13 @@ impl Render for CloudHistory {
             .and_then(|c| c.title.clone())
             .unwrap_or_else(|| self.workspace.branch.clone());
         let content = div()
-            .size_full()
+            .size_full().bg(theme.bg).text_color(theme.text)
             .flex()
             .flex_col()
             .min_h_0()
             .child(
                 div()
-                    .h(px(48.))
+                    .h(px(40.))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -197,9 +205,10 @@ impl Render for CloudHistory {
                             .justify_center()
                             .cursor_pointer()
                             .role(gpui::Role::Button)
-                            .aria_label("Back")
+                            .aria_label("Back").tab_index(0).text_color(theme.text_muted)
+                            .hover(|view|view.bg(theme.element_hover))
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Back)))
-                            .child(icons::icon(icons::ALT_ARROW_LEFT).size(px(16.))),
+                            .child(icons::icon(icons::ALT_ARROW_LEFT).size(px(16.)).text_color(theme.text_muted)),
                     )
                     .child(div().flex_1().text_size(px(13.)).child(title))
                     .child(
@@ -209,55 +218,14 @@ impl Render for CloudHistory {
                             .child("Cloud"),
                     ),
             )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .gap(px(6.))
-                    .px(px(16.))
-                    .py(px(8.))
-                    .id("saved-cloud-conversations")
-                    .overflow_x_scroll()
-                    .children(
-                        self._state
-                            .read(cx)
-                            .chats
-                            .clone()
-                            .into_iter()
-                            .filter(|chat| {
-                                chat.thread_id.is_some()
-                                    || self._state.read(cx).selected_chat.as_deref()
-                                        == Some(&chat.id)
-                            })
-                            .enumerate()
-                            .map(|(index, chat)| {
-                                let selected =
-                                    self._state.read(cx).selected_chat.as_deref() == Some(&chat.id);
-                                let title = chat
-                                    .title
-                                    .clone()
-                                    .unwrap_or_else(|| format!("Conversation {}", index + 1));
-                                div()
-                                    .id(("saved-cloud-conversation", index))
-                                    .flex_none()
-                                    .px(px(10.))
-                                    .py(px(5.))
-                                    .rounded(px(6.))
-                                    .text_size(px(12.))
-                                    .bg(if selected {
-                                        theme.element_hover
-                                    } else {
-                                        gpui::transparent_black()
-                                    })
-                                    .cursor_pointer()
-                                    .child(title)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.select_session(chat.id.clone(), cx)
-                                    }))
-                            }),
-                    ),
-            )
-            .child(div().flex_1().min_h_0().child(self.view.clone()));
+            .child(zuse_viewport::cloud_archive_cards::sessions(
+                &self._state.read(cx).chats, &self.selected_session(cx), self.busy || self.reading,
+                |this,id,_,cx|this.select_session(id,cx), cx,
+            ))
+            .child(div().flex_1().min_h_0().child(if self.reading {
+                div().size_full().flex().items_center().justify_center().text_color(theme.text_muted)
+                    .child("Loading saved conversation…").into_any_element()
+            } else {self.view.clone().into_any_element()}));
         if !self.workspace.archived() {
             return content.child(self.composer.clone()).into_any_element();
         }
@@ -347,9 +315,9 @@ impl Render for CloudHistory {
                                         |v| v.cursor_pointer(),
                                     )
                                     .child(if self.busy {
-                                        "Unarchiving…"
+                                        "Restoring…"
                                     } else if self.workspace.archived() {
-                                        "Unarchive"
+                                        "Restore chat"
                                     } else if self.workspace.state == "paused" {
                                         "Resume"
                                     } else {

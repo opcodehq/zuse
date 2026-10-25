@@ -217,7 +217,7 @@ impl ArchivedCloud {
     pub fn needs_poll(&self) -> bool {
         self.rows
             .iter()
-            .any(|r| r.deleting() || r.cleanup_pending())
+            .any(|r| r.state == "archiving" || r.deleting() || r.cleanup_pending())
     }
     pub fn back(&mut self) {
         self.selected = None;

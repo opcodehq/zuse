@@ -62,7 +62,7 @@ async function main(){
   };
   const result=await scenario({
    click,key,type,shot,checkError,
-   search:[600,214],restore:[1025,290],next:[1090,807],previous:[400,421],
+   search:[600,214],restore:[1025,290],next:[1090,836],previous:[400,421],
    dismissError:async()=>{await click(1240,950);},
    menuDismiss:async()=>{await click(1100,278);shot('menu');await key('Escape');},
    wheel:dy=>canvasWheel(page,url,dy),

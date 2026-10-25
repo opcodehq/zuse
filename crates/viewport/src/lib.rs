@@ -66,6 +66,7 @@ mod provider_settings;
 pub mod provider_accounts;
 pub mod provider_options;
 pub mod archive_cards;
+pub mod cloud_archive_cards;
 pub mod provider_signin;
 mod provider_updates;
 mod pull_requests;
@@ -387,7 +388,7 @@ impl WorkspaceView {
         let project_input =
             cx.new(|cx| input::TextInput::new("Absolute project path on this machine", window, cx));
         let archive_search =
-            cx.new(|cx| input::TextInput::new("Search titles, previews, projects or computers…", window, cx));
+            cx.new(|cx| input::TextInput::new("Search saved chats or Cloud archives…", window, cx));
         cx.observe(&archive_search, |_, _, cx| cx.notify()).detach();
         let plugin_installed_search = cx.new(|cx| input::TextInput::new("Search", window, cx));
         cx.observe(&plugin_installed_search, |_, _, cx| cx.notify())

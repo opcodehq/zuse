@@ -73,7 +73,7 @@ impl Saved {
                 let _=this.update(cx,|this,cx|this.revoked(cx));return;
             }
             let controller=target.controller.client();
-            let read=controller.call_scoped(methods::CLOUD_HISTORY,json!({"workspaceId":target.workspace,"sessionId":target.initial_session}));
+            let read=controller.call_scoped(methods::CLOUD_HISTORY,json!({"workspaceId":target.workspace,"sessionId":target.initial_session,"expectedAccountId":target.subject,"expectedOrganizationId":null}));
             tokio::pin!(read);
             let result=loop {
                 tokio::select! { biased;
@@ -92,7 +92,7 @@ impl Saved {
                         let head=serde_json::from_value::<Head>(value["head"].clone());
                         match (row,head) {
                             (Ok(row),Ok(head)) if row.workspace_id==target.workspace && head.workspace_id==target.workspace && head.session_id==target.initial_session => {
-                                let history=cx.new(|cx|CloudHistory::new(target.controller.clone(),row,head,cx));
+                                let history=cx.new(|cx|CloudHistory::new(target.controller.clone(),row,head,target.subject.clone(),cx));
                                 this.subscription=Some(cx.subscribe(&history,|this,_,event:&Event,cx|match event {
                                     Event::Back=>this.close(cx),
                                     Event::Connect(session)=>this.connect(session.clone(),cx),
