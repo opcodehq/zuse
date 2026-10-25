@@ -24,6 +24,31 @@ impl Thread {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "Untitled chat".into())
     }
+    pub fn summary(&self) -> String {
+        self.chat
+            .last_message_preview
+            .as_deref()
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|text| !text.is_empty())
+            .or_else(|| {
+                self.chat
+                    .branch
+                    .as_ref()
+                    .map(|branch| format!("Branch {branch}"))
+            })
+            .unwrap_or_else(|| "Saved conversation".into())
+    }
+    pub fn activity_label(&self) -> String {
+        format!(
+            "{} {}",
+            if self.chat.last_message_at.is_some() {
+                "Last active"
+            } else {
+                "Created"
+            },
+            date_label(self.date)
+        )
+    }
 }
 #[derive(Clone)]
 pub enum Action {
@@ -49,12 +74,23 @@ pub fn rows(chats: &[Chat], project: &str, query: &str) -> Vec<Thread> {
     let mut rows: Vec<_> = chats
         .iter()
         .filter(|c| c.archived && c.thread_id.is_none() && c.space_id.as_deref() == Some(project))
+        .filter(|c| c.is_top_level())
         .filter(|c| {
             c.title
                 .as_deref()
                 .unwrap_or("Untitled chat")
                 .to_lowercase()
                 .contains(&needle)
+                || c.last_message_preview
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .contains(&needle)
+                || c.branch
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .contains(&needle)
         })
         .cloned()
         .map(Thread::from_chat)
@@ -188,7 +224,7 @@ pub fn list<T: 'static>(
         .id("project-archive-rows")
         .flex()
         .flex_col()
-        .gap(px(4.));
+        .gap(px(8.));
     let mut previous = None;
     for (i, row) in rows.iter().enumerate() {
         let date = date_label(row.date);
@@ -217,7 +253,11 @@ pub fn list<T: 'static>(
                 .items_center()
                 .gap(px(12.))
                 .px(px(8.))
-                .rounded(px(6.))
+                .py(px(8.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(crate::settings_style::card_border())
+                .bg(crate::settings_style::card_bg())
                 .hover(|d| d.bg(crate::settings_style::frame_bg().opacity(0.45)))
                 .child(
                     div()
@@ -236,26 +276,46 @@ pub fn list<T: 'static>(
                         .cursor_pointer()
                         .focus_visible(|d| d.bg(crate::settings_style::frame_bg().opacity(0.45)))
                         .child(
-                            icon("project-archive")
-                                .size(px(14.))
+                            div()
+                                .size(px(32.))
                                 .flex_none()
-                                .text_color(rgb(MUTED)),
+                                .rounded(px(8.))
+                                .bg(crate::settings_style::frame_bg())
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(rgb(MUTED))
+                                .child(icon("project-archive").size(px(16.))),
                         )
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .truncate()
-                                .text_size(px(14.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(title.clone()),
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.))
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(14.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(title.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(12.))
+                                        .line_height(px(18.))
+                                        .text_color(rgb(MUTED))
+                                        .child(row.summary()),
+                                ),
                         )
                         .child(
                             div()
                                 .flex_none()
                                 .text_size(px(11.))
                                 .text_color(rgb(MUTED))
-                                .child(format!("Archived {date}")),
+                                .child(row.activity_label()),
                         )
                         .on_key_down(activate(Action::Open(id.clone()), run, cx))
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -273,18 +333,18 @@ pub fn list<T: 'static>(
                             button(
                                 ("project-archive-restore", i),
                                 if working {
-                                    "Unarchiving…"
+                                    "Restoring…"
                                 } else {
-                                    "Unarchive"
+                                    "Restore chat"
                                 },
                             )
-                            .aria_label(format!("Unarchive {title}"))
+                            .aria_label(format!("Restore chat {title}"))
                             .when(busy.is_some(), |d| d.opacity(0.64))
                             .child(restore_icon(working, 0.))
                             .child(if working {
-                                "Unarchiving…"
+                                "Restoring…"
                             } else {
-                                "Unarchive"
+                                "Restore chat"
                             })
                             .on_key_down(cx.listener({
                                 let id = restore.clone();
@@ -368,7 +428,10 @@ pub fn list<T: 'static>(
                                         .text_color(rgb(MUTED))
                                         .child(project_name.to_owned()),
                                 ),
-                        ),
+                        )
+                        .child(div().flex_1())
+                        .child(div().flex_none().rounded_full().px(px(9.)).py(px(2.)).bg(crate::settings_style::frame_bg())
+                            .text_size(px(11.)).text_color(rgb(MUTED)).child(format!("{} {}",rows.len(),if query.trim().is_empty(){if rows.len()==1{"chat"}else{"chats"}}else{if rows.len()==1{"match"}else{"matches"}}))),
                 )
                 .child(
                     div()
@@ -403,11 +466,10 @@ pub fn list<T: 'static>(
                 .py(px(20.))
                 .when(has_rows, |d| d.child(entries))
                 .when(!has_rows, |d| {
-                    d.child(centered(if query.trim().is_empty() {
-                        format!("No archived chats in {project_name}.")
-                    } else {
-                        "No archived chats match that filter.".into()
-                    }))
+                    d.child(centered("").flex_col().gap(px(10.))
+                        .child(icon("project-archive").size(px(28.)).text_color(rgb(MUTED)))
+                        .child(div().text_color(rgb(TEXT)).font_weight(FontWeight::MEDIUM).child(if query.trim().is_empty(){"No archived chats yet"}else{"No matching chats"}))
+                        .child(div().max_w(px(400.)).text_size(px(12.)).child(if query.trim().is_empty(){format!("Archived chats from {project_name} will appear here. Preview them before restoring.")}else{"Try another title, preview, or branch.".into()})))
                 }),
         )
         .into_any_element()
@@ -532,7 +594,7 @@ pub fn preview<T: 'static>(
                                 .text_size(px(11.))
                                 .line_height(px(16.))
                                 .text_color(rgb(MUTED))
-                                .child(format!("Archived {}", date_label(thread.date))),
+                                .child(thread.activity_label()),
                         ),
                 ),
         )
@@ -575,7 +637,7 @@ pub fn preview<T: 'static>(
                                 .text_size(px(12.))
                                 .line_height(px(16.))
                                 .text_color(rgb(MUTED))
-                                .child("This chat is archived.")
+                                .child("Read-only preview. Restore this chat to continue working.")
                                 .when_some(error, |d, error| {
                                     d.child(
                                         div()
@@ -591,11 +653,11 @@ pub fn preview<T: 'static>(
                             button(
                                 "project-archive-preview-restore",
                                 if busy {
-                                    "Unarchiving…"
+                                    "Restoring…"
                                 } else if error.is_some() {
                                     "Retry"
                                 } else {
-                                    "Unarchive"
+                                    "Restore chat"
                                 },
                             )
                             .h(px(28.))
@@ -608,11 +670,11 @@ pub fn preview<T: 'static>(
                             .when(busy, |d| d.opacity(0.64))
                             .child(restore_icon(busy, -2.))
                             .child(if busy {
-                                "Unarchiving…"
+                                "Restoring…"
                             } else if error.is_some() {
                                 "Retry"
                             } else {
-                                "Unarchive"
+                                "Restore chat"
                             })
                             .on_key_down(cx.listener({
                                 let id = restore.clone();

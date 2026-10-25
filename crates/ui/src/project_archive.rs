@@ -35,7 +35,7 @@ impl ProjectArchive {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| TextInput::new("Filter archived chats…", window, cx));
+        let search = cx.new(|cx| TextInput::new("Search titles, previews or branches…", window, cx));
         let search_sub = cx.observe(&search, |_, _, cx| cx.notify());
         let frozen = cx.new(|_| AppState::new());
         let transcript = cx.new(|cx| Transcript::new(frozen.clone(), cx));

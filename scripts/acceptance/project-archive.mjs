@@ -10,8 +10,8 @@ const pause=()=>sleep(400);
 const click=async(x,y)=>{page.click(x,y);await pause();};
 const key=k=>page.run(['press',k]);
 const shot=name=>page.screenshot('project-archive-'+name+'.png');
-const configure=async patch=>{await fetch(url+'/__fixture',{method:'POST',body:JSON.stringify(patch)});};
-const proof=()=>fetch(url+'/__fixture').then(r=>r.json());
+const configure=async patch=>{await fetch(url+'/__fixture',{method:'POST',headers:{Connection:'close'},body:JSON.stringify(patch)});};
+const proof=()=>fetch(url+'/__fixture',{headers:{Connection:'close'}}).then(r=>r.json());
 const reads=async()=> (await proof()).events.filter(e=>e.method==='WatchDocMessages');
 const restores=async()=> (await proof()).events.filter(e=>e.method==='Mutate'&&e.op==='setChatArchived');
 const crop=name=>execFileSync('convert',['.context/project-archive-'+name+'.png','-crop','840x500+336+110','-depth','8','rgb:-'],{maxBuffer:2*1024*1024});
@@ -23,6 +23,9 @@ try{
  await click(95,184);await click(600,912);page.run(['keyboard','type','Preserve this live draft.']);await pause();await click(900,500);shot('draft-before');
  const draftBefore=execFileSync('convert',['.context/project-archive-draft-before.png','-crop','600x38+324+890','-depth','8','rgb:-']);
  await click(175,145);shot('project-menu');await click(258,162);shot('list');
+ await click(500,102);page.run(['keyboard','type','MIGRATION']);await pause();shot('preview-search');await click(400,203);assert.equal((await reads()).at(-1)?.chatId,'arc-release','Search matches saved message previews');key('Escape');await pause();
+ await click(500,102);key('Control+a');page.run(['keyboard','type','DESIGN/SETTINGS']);await pause();shot('branch-search');await click(400,203);assert.equal((await reads()).at(-1)?.chatId,'arc-design','Search matches saved branches');key('Escape');await pause();
+ await click(500,102);key('Control+a');key('Backspace');
  await click(500,102);page.run(['keyboard','type','design']);await pause();shot('filtered');await click(400,203);
  assert.equal((await reads()).at(-1)?.chatId,'arc-design','Filtered row opens the matching root in this project');
  key('Escape');await pause();await click(500,102);key('Control+a');page.run(['keyboard','type','not found']);await pause();shot('no-results');
@@ -39,5 +42,5 @@ try{
  await configure({restoreMode:'fail'});await sleep(600);shot('restore-error');assert.equal((await host.call('WatchChats')).find(c=>c.id==='arc-release').archived,true,'Failed restore retains archive');
  await configure({restoreMode:'ok'});await click(1150,974);await sleep(700);shot('restored');const chats=await host.call('WatchChats');assert.equal(chats.find(c=>c.id==='arc-release').archived,false);assert.equal(chats.find(c=>c.id==='arc-release-tab').archived,false);assert.equal(chats.find(c=>c.id==='arc-design').archived,true);assert.equal(chats.find(c=>c.id==='arc-other').archived,true);
  const final=await proof();assert.equal(final.events.filter(e=>e.blocked).length,0);assert.ok(final.events.filter(e=>e.method==='WatchDocMessages').every(e=>e.targetDeviceId===data.deviceId),'Reads target owning computer');
- artifact('project-archive-acceptance.json',{realEngine:true,compiledBrowser:true,keyboardBackToList:true,filteredProjectList:true,separateReadOnlyPreview:true,sessionSwitch:true,lateReadIgnored:true,liveDraftPreserved:true,restoreFailureRetainsArchive:true,duplicateRestoreGuard:true,restoresOnlyChosenThread:true,providerWrites:0,fixture:final,chats,errors:page.run(['errors'])});console.log('Project archive acceptance passed.');
+ artifact('project-archive-acceptance.json',{realEngine:true,compiledBrowser:true,previewAndBranchMetadataFixture:true,previewSearch:true,branchSearch:true,keyboardBackToList:true,filteredProjectList:true,separateReadOnlyPreview:true,sessionSwitch:true,lateReadIgnored:true,liveDraftPreserved:true,restoreFailureRetainsArchive:true,duplicateRestoreGuard:true,restoresOnlyChosenThread:true,providerWrites:0,fixture:final,chats,errors:page.run(['errors'])});console.log('Project archive acceptance passed.');
 }catch(error){console.error('Project archive acceptance failed: '+error.message);try{shot('failure');}catch{}process.exitCode=1;}finally{page?.close();proxy?.kill('SIGTERM');await host?.close();}

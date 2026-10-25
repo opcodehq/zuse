@@ -62,7 +62,7 @@ impl WorkspaceView {
         self.close_plugins_browse();
         self.close_project_archives();
         if self.project_archive.search.is_none() {
-            let search = cx.new(|cx| input::TextInput::new("Filter archived chats…", window, cx));
+            let search = cx.new(|cx| input::TextInput::new("Search titles, previews or branches…", window, cx));
             cx.observe(&search, |_, _, cx| cx.notify()).detach();
             self.project_archive.search = Some(search);
         }

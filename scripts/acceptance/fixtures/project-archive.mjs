@@ -1,6 +1,6 @@
 // Real archive metadata and restoration; isolated saved-transcript and failure responses.
 import fs from 'node:fs';import path from 'node:path';
-import {archiveDates,archiveMessages} from './project-archive-data.mjs';
+import {archiveDates,archiveMessages,archiveMetadata} from './project-archive-data.mjs';
 const [ipc,ready,assets]=process.argv.slice(2),clients=new Set(),events=[];
 let restoreMode='ok',releaseRestore,failDoc=null,holdDocs=new Set();const delayed=[];
 const emit=(c,f)=>{try{c.send(JSON.stringify(f));}catch{}};
@@ -30,7 +30,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(request,server){
  open(c){clients.add(c);const up=new WebSocket('ws://127.0.0.1:'+ipc);c.data.upstream=up;
   up.onopen=()=>{c.data.ready=true;for(const f of c.data.waiting)up.send(f);c.data.waiting=[];};
   up.onmessage=event=>{try{const f=JSON.parse(event.data);if(c.data.forwarded.get(f.id)==='WatchChats'){
-   const key=Object.hasOwn(f,'item')?'item':'ok';if(Array.isArray(f[key]))f[key]=f[key].map(chat=>archiveDates[chat.id]?{...chat,lastMessageAt:archiveDates[chat.id]}:chat);
+   const key=Object.hasOwn(f,'item')?'item':'ok';if(Array.isArray(f[key]))f[key]=f[key].map(chat=>archiveDates[chat.id]?{...chat,...archiveMetadata[chat.id],lastMessageAt:archiveDates[chat.id]}:chat);
   }emit(c,f);}catch{}};up.onclose=()=>c.close();
  },
  async message(c,raw){const text=raw.toString(),f=JSON.parse(text),p=f.params??{};
