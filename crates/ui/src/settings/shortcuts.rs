@@ -62,6 +62,7 @@ pub enum ShortcutsEvent {
 pub struct ShortcutsPage {
     appshots_page: bool,
     general_page: bool,
+    general_more: bool,
     general_account: Entity<crate::settings::plugins::PluginsCard>,
     general_updates_focus: FocusHandle,
     completion_preset_select: widgets::SelectState,
@@ -111,6 +112,7 @@ impl ShortcutsPage {
         Self {
             appshots_page: false,
             general_page: false,
+            general_more: false,
             general_updates_focus: cx.focus_handle().tab_stop(true),
             completion_preset_select: Default::default(),
             appshots_focus_pending: false,
@@ -956,7 +958,12 @@ impl Render for ShortcutsPage {
                                         widgets::section_stack()
                                             .child(self.general_account.clone())
                                             .child(self.general_preferences(&theme, cx))
-                                            .child(
+                                            .child(div().flex().flex_col().gap(px(16.))
+                                                .child(zuse_viewport::settings_style::disclosure(
+                                                    "general-more-preferences", "More preferences",
+                                                    "Composer, links, thread names and worktree storage.", self.general_more)
+                                                    .on_click(cx.listener(|this, _, _, cx| {this.general_more=!this.general_more;cx.notify();})))
+                                                .when(self.general_more, |view| view.child(
                                                 widgets::group(&theme, "Composer", "").child(
                                                     widgets::section_card(&theme)
                                                         .mt_0()
@@ -974,7 +981,7 @@ impl Render for ShortcutsPage {
                                                     .child(pull_request_destination_row),
                                             ))
                                             .child(self.thread_naming.clone())
-                                            .child(self.worktrees.clone())
+                                            .child(self.worktrees.clone())))
                                             .when(!cfg!(target_os = "macos"), |stack| stack.child(self.general_app_updates(&theme, cx))),
                                     ),
                             ),

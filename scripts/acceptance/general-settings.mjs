@@ -58,10 +58,11 @@ try{
  await click(1095,488);assert.equal(prefs().providerUpdateNotifications,true);press('Space');await sleep(100);assert.equal(prefs().providerUpdateNotifications,false);press('Space');await sleep(100);assert.equal(prefs().providerUpdateNotifications,true);
  await click(1095,542);assert.equal(prefs().completionSound.enabled,false);
  await click(480,584);assert.equal(prefs().completionSound.enabled,false);assert.equal(prefs().completionSound.preset,'chime','Disabled sound selector does not change the preset');page.screenshot('general-parity-sound-disabled.png');
- press('Tab');press('Tab');press('Space');waitPrefs("p.reduceMotion==='on'");assert.equal(prefs().completionSound.enabled,false,'Tab skips the disabled selector and Preview');
+ press('Tab');press('Space');press('Tab');press('Tab');press('Space');waitPrefs("p.reduceMotion==='on'");assert.equal(prefs().completionSound.enabled,false,'Tab skips disabled sound controls and opens More preferences before Motion');
  await click(1095,542);waitPrefs('p.completionSound.enabled===true');await sleep(250);await click(480,584);page.screenshot('general-parity-sound-menu.png');press('End');press('Enter');waitPrefs("p.completionSound.preset==='bloom'");assert.equal(prefs().completionSound.preset,'bloom');
- await click(480,584);await click(750,650);await sleep(100);page.screenshot('general-parity-menu-dismissed.png');assert.ok(pixelSamples('general-parity-menu-dismissed.png',[[480,650]])[0][0]>=30,'Outside click dismisses the sound popup');
- await click(1052,706);assert.equal(prefs().reduceMotion,'on');await click(1095,758);assert.equal(prefs().pauseAnimationsInBackground,true);
+ page.screenshot('general-parity-before-sound-menu.png');const belowSound=pixelSamples('general-parity-before-sound-menu.png',[[480,650],[480,720],[480,740]]);
+ await click(480,584);await click(750,620);await sleep(100);page.screenshot('general-parity-menu-dismissed.png');assert.deepEqual(pixelSamples('general-parity-menu-dismissed.png',[[480,650],[480,720],[480,740]]),belowSound,'Outside click restores the underlying preferences');
+ await click(1035,780);assert.equal(prefs().reduceMotion,'on');await click(1095,840);assert.equal(prefs().pauseAnimationsInBackground,true);
  const beforeReload=prefs();page.open(url,fixture('general-settings-observer.js'));page.wait('window.__generalParity.methods.includes("CloudAccountStatus")');await openSettings();assert.deepEqual(prefs(),beforeReload,'Actual local preferences survive reload');
  page.screenshot('general-parity-preferences-restored.png');
  // An account replacement retires the in-progress name editor without saving it.

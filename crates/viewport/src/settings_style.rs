@@ -190,6 +190,31 @@ pub fn button(id: impl Into<ElementId>, name: impl Into<SharedString>) -> Statef
         .hover(|button| button.bg(frame_bg()))
         .child(name)
 }
+pub fn disclosure(
+    id: impl Into<ElementId>,
+    title: &'static str,
+    description: &'static str,
+    expanded: bool,
+) -> Stateful<Div> {
+    button(id, "")
+        .aria_label(title)
+        .aria_expanded(expanded)
+        .tab_index(0)
+        .w_full()
+        .h_auto()
+        .min_h(px(56.))
+        .px(px(12.))
+        .py(px(10.))
+        .gap(px(10.))
+        .justify_start()
+        .border_color(card_border())
+        .focus_visible(|view| view.border_color(rgb(MUTED)))
+        .child(crate::assets::icon(if expanded { "alt-arrow-down" } else { "alt-arrow-right" })
+            .size(px(14.)).flex_none().text_color(rgb(MUTED)))
+        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+            .child(title_text(title))
+            .child(description_text(description)))
+}
 pub fn field() -> Div {
     div()
         .flex_1()
