@@ -6,6 +6,8 @@ export function providerSettingsFixture(events) {
   let modelErrors = {};
   let loginMode='paste-code',loginSequence=0,pollsBeforeDone=null,loginError=null,codeError=null,holdStart=false;
   const logins=new Map(),startWaiting=[];
+  let holdAccountActions=false,accountActionError=null;
+  const accountWaiting=[];
   const accountFor=harness=>({id:'signed-'+harness,harness,email:'sam@example.test',planLabel:'Pro',active:true,usageWindows:[],switchable:true});
   const descriptors = [
     ['claude-code', 'Claude Code', true, true],
@@ -21,14 +23,25 @@ export function providerSettingsFixture(events) {
   const reply = (send,client,frame) => hold ? waiting.push([send,client,frame]) : send(client,frame);
   return {
     snapshot,
-    configure(value) { if(Object.hasOwn(value,'loginMode'))loginMode=value.loginMode;if(Object.hasOwn(value,'pollsBeforeDone'))pollsBeforeDone=value.pollsBeforeDone;if(Object.hasOwn(value,'loginError'))loginError=value.loginError;if(Object.hasOwn(value,'codeError'))codeError=value.codeError;if(Object.hasOwn(value,'holdStart'))holdStart=value.holdStart;if(!holdStart)for(const[send,client,frame]of startWaiting.splice(0))send(client,frame); if(value.models)Object.assign(models,value.models); if(value.modelErrors)modelErrors=value.modelErrors; enabled=true; hold=value.hold??false; if(value.accounts)accounts=value.accounts; if(Object.hasOwn(value,'usageError'))usageError=value.usageError; if(Object.hasOwn(value,'holdUsage'))holdUsage=value.holdUsage; if(!holdUsage)for(const [send,client,frame]of usageWaiting.splice(0))send(client,frame); if(!hold)for(const [send,client,frame] of waiting.splice(0))send(client,frame); },
+    configure(value) { if(Object.hasOwn(value,'accountActionError'))accountActionError=value.accountActionError;if(Object.hasOwn(value,'holdAccountActions'))holdAccountActions=value.holdAccountActions;if(!holdAccountActions)for(const action of accountWaiting.splice(0))action(); if(Object.hasOwn(value,'loginMode'))loginMode=value.loginMode;if(Object.hasOwn(value,'pollsBeforeDone'))pollsBeforeDone=value.pollsBeforeDone;if(Object.hasOwn(value,'loginError'))loginError=value.loginError;if(Object.hasOwn(value,'codeError'))codeError=value.codeError;if(Object.hasOwn(value,'holdStart'))holdStart=value.holdStart;if(!holdStart)for(const[send,client,frame]of startWaiting.splice(0))send(client,frame); if(value.models)Object.assign(models,value.models); if(value.modelErrors)modelErrors=value.modelErrors; enabled=true; hold=value.hold??false; if(value.accounts)accounts=value.accounts; if(Object.hasOwn(value,'usageError'))usageError=value.usageError; if(Object.hasOwn(value,'holdUsage'))holdUsage=value.holdUsage; if(!holdUsage)for(const [send,client,frame]of usageWaiting.splice(0))send(client,frame); if(!hold)for(const [send,client,frame] of waiting.splice(0))send(client,frame); },
     handle(client,frame,send) {
       if(frame.cancel && watches.get(client)?.delete(frame.id))return true;
       if(!enabled)return false;
       const {method,params:p={}}=frame;
-      if(!['ListHarnesses','SetHarnessEnabled','ListModels','ListAgentAccounts','WatchHarnessUpdates','CheckHarnessUpdates','StartAgentLogin','PollAgentLogin','CompleteAgentLogin','CancelAgentLogin'].includes(method))return false;
+      if(!['ListHarnesses','SetHarnessEnabled','ListModels','ListAgentAccounts','ActivateAgentAccount','ForgetAgentAccount','WatchHarnessUpdates','CheckHarnessUpdates','StartAgentLogin','PollAgentLogin','CompleteAgentLogin','CancelAgentLogin'].includes(method))return false;
       events.push({method,params:p});
       let data;
+      if(method==='ActivateAgentAccount'||method==='ForgetAgentAccount'){
+        const action=()=>{
+          const account=accounts.find(a=>a.id===p.accountId&&a.harness===p.harness);
+          const error=accountActionError??(!account?.switchable?'This account cannot be changed.':null);
+          if(error){reply(send,client,{id:frame.id,err:error,done:true});return;}
+          if(method==='ForgetAgentAccount')accounts=accounts.filter(a=>a.id!==account.id);
+          else for(const row of accounts)if(row.harness===account.harness&&row.provider===account.provider)row.active=row.id===account.id;
+          reply(send,client,{id:frame.id,ok:{accounts:structuredClone(accounts),warnings:[]}});
+        };
+        if(holdAccountActions)accountWaiting.push(action);else action();return true;
+      }
       if(method==='ListHarnesses')data=descriptors;
       if(method==='ListModels'){
         if(modelErrors[p.harness]){reply(send,client,{id:frame.id,err:modelErrors[p.harness],done:true});return true;}

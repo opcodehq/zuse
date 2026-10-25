@@ -250,11 +250,7 @@ impl WorkspaceView {
                 .child(self.thread_naming_settings_card(cx))
                 .into_any_element(),
             Section::Defaults => self.default_model_settings(cx),
-            Section::Providers => column()
-                .gap_5()
-                .child(self.providers_settings(cx))
-                .child(self.usage_settings(cx))
-                .into_any_element(),
+            Section::Providers => self.providers_settings(cx),
             Section::Cloud => self.billing_settings(cx),
             Section::Devices => self.pairing_settings(cx),
             Section::Plugins => self.cloud_settings(cx),

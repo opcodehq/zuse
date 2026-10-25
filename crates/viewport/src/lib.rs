@@ -63,6 +63,7 @@ pub mod usage_dashboard;
 mod project_archive_host;
 mod usage_host;
 mod provider_settings;
+pub mod provider_accounts;
 pub mod provider_signin;
 mod provider_updates;
 mod pull_requests;
@@ -195,6 +196,8 @@ pub struct WorkspaceView {
     provider_codes: HashMap<String, Entity<input::TextInput>>,
     provider_code_events: HashMap<String, Subscription>,
     provider_login_tasks: HashMap<String, Task<()>>,
+    provider_account_rows: HashMap<String, Entity<provider_accounts::AccountRows>>,
+    provider_account_events: HashMap<String, Subscription>,
     provider_error: Option<String>,
     settings_section: settings_view::Section,
     settings_nav_focus: FocusHandle,
@@ -644,6 +647,8 @@ impl WorkspaceView {
             provider_codes: HashMap::new(),
             provider_code_events: HashMap::new(),
             provider_login_tasks: HashMap::new(),
+            provider_account_rows: HashMap::new(),
+            provider_account_events: HashMap::new(),
             provider_error: None,
             settings_section: settings_view::Section::General,
             settings_nav_focus: cx.focus_handle().tab_stop(true),
