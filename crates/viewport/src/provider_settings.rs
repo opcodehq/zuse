@@ -55,6 +55,7 @@ impl WorkspaceView {
         }
         self.provider_account_events.clear();
         self.provider_account_rows.clear();
+        self.provider_options.clear();
     }
     fn start_provider_login(
         &mut self,
@@ -553,7 +554,7 @@ impl WorkspaceView {
                             let login_pending=!cancelled&&login.is_some_and(|login|matches!(login["status"].as_str(),Some("starting"|"pending")));
                             if let Some(rows)=self.provider_account_rows.get(&id){
                                 rows.update(cx,|rows,cx|rows.sync(crate::provider_accounts::Data{scope:self.connection_epoch.to_string(),accounts,blocked:busy||login_pending||!self.connected},cx));
-                                details=details.child(rows.clone());
+                                if !empty {details=details.child(rows.clone());}
                             }
                             let phase=if cancelled{Phase::Idle}else{match login.and_then(|login|login["status"].as_str()){
                                 Some("starting"|"pending")=>Phase::Waiting{message:login.and_then(|login|login["message"].as_str()).map(str::to_owned)},
@@ -574,7 +575,16 @@ impl WorkspaceView {
                                 details=details.child(add);
                             }
                         }
-                        details = details.child(self.provider_update_details(&id,index,cx));
+                        let options_open=self.provider_options.contains(&id);
+                        let phase=self.provider_updates.iter().find(|status|String::from(status.harness)==id).map(|status|status.phase);
+                        let options_id=id.clone();
+                        details=details.child(column().gap(px(8.))
+                            .child(crate::provider_options::header(("provider-options",index),options_open,phase,false)
+                                .on_click(cx.listener(move|this,_,_,cx| {
+                                    if !this.provider_options.insert(options_id.clone()){this.provider_options.remove(&options_id);}
+                                    cx.notify();
+                                })))
+                            .when(options_open,|view|view.child(div().pl(px(30.)).child(self.provider_update_details(&id,index,cx)))));
                         card = card.child(details);
                     }
                     card

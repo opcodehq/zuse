@@ -230,6 +230,7 @@ pub struct HarnessesPage {
     install_task: Option<Task<()>>,
 
     expanded_harness: Option<HarnessId>,
+    open_options: std::collections::HashSet<HarnessId>,
     /// Active account section; each computer/provider retains its own login owner.
     accounts_page: Option<Entity<AccountsPage>>,
     account_pages: std::collections::HashMap<(Option<String>, HarnessId), Entity<AccountsPage>>,
@@ -248,6 +249,7 @@ impl HarnessesPage {
                 super::custom_acp::Changed::Reload => this.load(cx),
                 super::custom_acp::Changed::Advanced(id) => {
                     this.expanded_harness = Some(*id);
+                    this.open_options.insert(*id);
                     cx.notify();
                 }
             },
@@ -269,6 +271,7 @@ impl HarnessesPage {
             install_task: None,
 
             expanded_harness: None,
+            open_options: Default::default(),
             accounts_page: None,
             account_pages: Default::default(),
             update_task: None,
@@ -351,9 +354,23 @@ impl HarnessesPage {
             .px(px(12.))
             .pt(px(4.))
             .pb(px(16.))
-            .child(self.render_completion_for(harness, theme, cx))
-            .children(self.render_updates_for(harness, theme, cx))
-            .when_some(accounts, |details, accounts| details.child(accounts));
+            .when_some(accounts, |details, accounts| details.child(accounts))
+            .child({
+                let expanded=self.open_options.contains(&harness);
+                let phase=self.updates.ready().and_then(|rows|rows.iter().find(|row|row.harness==harness)).map(|row|row.phase);
+                div().flex().flex_col().gap(px(8.))
+                    .child(zuse_viewport::provider_options::header(format!("provider-options-{harness:?}"),expanded,phase,true)
+                        .on_click(cx.listener(move|this,_,_,cx| {
+                            if !this.open_options.insert(harness) {
+                                this.open_options.remove(&harness);
+                                this.policy_selects.remove(&harness);
+                            }
+                            cx.notify();
+                        })))
+                    .when(expanded,|v|v.child(div().pl(px(30.)).flex().flex_col().gap(px(16.))
+                        .child(self.render_completion_for(harness,theme,cx))
+                        .children(self.render_updates_for(harness,theme,cx))))
+            });
         if motion::reduced_motion(cx) {
             content.into_any_element()
         } else {
@@ -475,6 +492,7 @@ impl HarnessesPage {
         self.installing = None;
         self.install_task = None;
         self.policy_selects.clear();
+        self.open_options.clear();
         self.target_device = target;
         self.custom_acp.update(cx, |card, cx| {
             card.set_target(self.target_device.clone(), cx)

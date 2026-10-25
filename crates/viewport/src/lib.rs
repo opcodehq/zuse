@@ -64,6 +64,7 @@ mod project_archive_host;
 mod usage_host;
 mod provider_settings;
 pub mod provider_accounts;
+pub mod provider_options;
 pub mod provider_signin;
 mod provider_updates;
 mod pull_requests;
@@ -190,6 +191,7 @@ pub struct WorkspaceView {
     worktree_settings: worktree_settings::WorktreeSettingsView,
     title_settings: title_settings::TitleSettingsView,
     provider_expanded: Option<String>,
+    provider_options: std::collections::HashSet<String>,
     custom_acp: custom_acp::Settings,
     provider_actions: HashMap<u64, String>,
     provider_logins: HashMap<String, Value>,
@@ -641,6 +643,7 @@ impl WorkspaceView {
             worktree_settings,
             title_settings: title_settings::TitleSettingsView::new(window, cx),
             provider_expanded: None,
+            provider_options: Default::default(),
             custom_acp: custom_acp::Settings::new(window, cx),
             provider_actions: HashMap::new(),
             provider_logins: HashMap::new(),
