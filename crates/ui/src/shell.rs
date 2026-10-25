@@ -5148,6 +5148,9 @@ impl Shell {
     // ---- routes / settings ----
 
     fn set_route(&mut self, route: Route, cx: &mut Context<Self>) {
+        if matches!(self.route,Route::Settings(SettingsSection::Archived)) && !matches!(route,Route::Settings(SettingsSection::Archived)) {
+            if let Some(page)=self.archived_page.clone() {page.update(cx,|page,cx|page.on_hidden(cx));}
+        }
         self.command_palette = None;
         let was_pull_requests = matches!(self.route, Route::PullRequests);
         let will_show_pull_requests = matches!(route, Route::PullRequests);

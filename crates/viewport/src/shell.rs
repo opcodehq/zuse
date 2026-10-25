@@ -1278,6 +1278,7 @@ impl Render for WorkspaceView {
                 }
                 if this.dismiss_custom_acp(cx) { return; }
                 if this.settings && this.settings_section==crate::settings_view::Section::Providers && this.dismiss_provider_login(cx) {return;}
+                if this.project_archive.global {this.project_archive_escape(window,cx);return;}
                 if this.remote_ui.dialog.is_some() {
                     this.close_remote_dialog(window, cx);
                     return;

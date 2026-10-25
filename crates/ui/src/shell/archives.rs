@@ -27,7 +27,7 @@ impl Shell {
                 cx.new(|cx| crate::project_archive::ProjectArchive::new(state, id, window, cx));
             let scope = project.clone();
             let subscription = cx.subscribe(&page, move |this, _, event, cx| {
-                let crate::project_archive::Event::Restored(id) = event;
+                let crate::project_archive::Event::Restored(id) = event else {return;};
                 if matches!(this.route, Route::Archives)
                     && this.archive_project.as_ref() == Some(&scope)
                 {

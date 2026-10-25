@@ -7,10 +7,12 @@ use zuse_viewport::{input::TextInput, project_archive as ui};
 
 pub enum Event {
     Restored(String),
+    Back,
 }
 pub struct ProjectArchive {
     state: Entity<AppState>,
-    project: String,
+    focus: FocusHandle,
+    project: Option<String>,
     search: Entity<TextInput>,
     selected: Option<String>,
     session: Option<String>,
@@ -24,17 +26,25 @@ pub struct ProjectArchive {
     revision: u64,
     read: Option<Task<()>>,
     restore: Option<Task<()>>,
+    files: ui::Files,
+    files_request: Option<Task<()>>,
+    files_poll: Option<Task<()>>,
+    files_epoch: u64,
     _state: Subscription,
     _search: Subscription,
 }
 impl EventEmitter<Event> for ProjectArchive {}
 impl ProjectArchive {
-    pub fn new(
-        state: Entity<AppState>,
-        project: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(state: Entity<AppState>, project: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_scoped(state,Some(project),window,cx)
+    }
+    pub fn global(state: Entity<AppState>, id: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut page=Self::new_scoped(state,None,window,cx);
+        page.open(id,cx);
+        window.focus(&page.focus,cx);
+        page
+    }
+    fn new_scoped(state: Entity<AppState>, project: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| TextInput::new("Search titles, previews or branches…", window, cx));
         let search_sub = cx.observe(&search, |_, _, cx| cx.notify());
         let frozen = cx.new(|_| AppState::new());
@@ -42,7 +52,7 @@ impl ProjectArchive {
         let observe = cx.observe(&state, |this: &mut Self, _, cx| {
             if this.selected.as_ref().is_some_and(|id| {
                 !this.state.read(cx).chats.iter().any(|c| {
-                    &c.id == id && c.space_id.as_deref() == Some(&this.project) && c.archived
+                    &c.id == id && this.project.as_deref().is_none_or(|project| c.space_id.as_deref() == Some(project)) && c.archived
                 })
             }) && this.busy.is_none()
             {
@@ -52,6 +62,7 @@ impl ProjectArchive {
         });
         Self {
             state,
+            focus: cx.focus_handle(),
             project,
             search,
             selected: None,
@@ -66,11 +77,13 @@ impl ProjectArchive {
             revision: 0,
             read: None,
             restore: None,
+            files: Default::default(), files_request:None, files_poll:None, files_epoch:0,
             _state: observe,
             _search: search_sub,
         }
     }
     pub fn on_hidden(&mut self, cx: &mut Context<Self>) {
+        self.clear_files();
         self.revision = self.revision.wrapping_add(1);
         self.read = None;
         self.reading = false;
@@ -79,6 +92,7 @@ impl ProjectArchive {
     pub fn on_visible(&mut self, cx: &mut Context<Self>) {
         if let Some(id) = self.session.clone() {
             self.select_session(id, cx);
+            self.load_files(cx);
         }
     }
     pub fn dismiss_on_escape(&mut self, cx: &mut Context<Self>) -> bool {
@@ -89,12 +103,48 @@ impl ProjectArchive {
         true
     }
     fn back(&mut self, cx: &mut Context<Self>) {
+        self.clear_files();
         self.revision = self.revision.wrapping_add(1);
         self.read = None;
         self.selected = None;
         self.session = None;
         self.reading = false;
         self.read_error = None;
+        if self.project.is_none() {cx.emit(Event::Back);}
+        cx.notify();
+    }
+    fn clear_files(&mut self) {
+        self.files_request=None;self.files_poll=None;
+        self.files_epoch=self.files_epoch.wrapping_add(1);
+        self.files=Default::default();
+    }
+    fn load_files(&mut self,cx:&mut Context<Self>) {
+        if self.files.loading {return;}
+        let Some(chat)=self.state.read(cx).chats.iter().find(|chat|Some(chat.id.as_str())==self.selected.as_deref()).cloned() else {return;};
+        let Some(engine)=self.state.read(cx).engine().cloned() else {self.files.error=Some("Computer unavailable".into());cx.notify();return;};
+        self.files_poll=None;self.files_epoch=self.files_epoch.wrapping_add(1);
+        let epoch=self.files_epoch;self.files.loading=true;
+        self.files_request=Some(cx.spawn(async move|this,cx| {
+            let result=engine.client().call_scoped(methods::GET_CHAT_ARCHIVE_STATUS,json!({"chatId":chat.id,"targetDeviceId":chat.device_id})).await;
+            let _=this.update(cx,|this,cx| {
+                if this.files_epoch!=epoch || this.selected.as_deref()!=Some(chat.id.as_str()) {return;}
+                this.files.loading=false;
+                match result {
+                    Ok(value)=>match serde_json::from_value::<ui::FileArchiveStatus>(value) {
+                        Ok(status) if status.chat_id==chat.id => {this.files.value=Some(status);this.files.error=None;}
+                        _=>this.files.error=Some("File archive response is unavailable.".into()),
+                    },
+                    Err(error)=>this.files.error=Some(error.to_string()),
+                }
+                if this.files.error.is_none() && this.files.value.as_ref().is_some_and(ui::FileArchiveStatus::progressing) {
+                    this.files_poll=Some(cx.spawn(async move|this,cx| {
+                        cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+                        let _=this.update(cx,|this,cx|{this.files_poll=None;this.load_files(cx);});
+                    }));
+                }
+                cx.notify();
+            });
+        }));
         cx.notify();
     }
     fn sessions(&self, cx: &App) -> Vec<Chat> {
@@ -106,7 +156,7 @@ impl ProjectArchive {
             .read(cx)
             .chats
             .iter()
-            .filter(|c| c.thread_id() == thread && c.space_id.as_deref() == Some(&self.project))
+            .filter(|c| c.thread_id() == thread && self.project.as_deref().is_none_or(|project| c.space_id.as_deref() == Some(project)))
             .cloned()
             .collect();
         rows.sort_by_key(|c| c.created_at);
@@ -228,7 +278,7 @@ impl ProjectArchive {
                 c.id == id
                     && c.archived
                     && c.thread_id.is_none()
-                    && c.space_id.as_deref() == Some(&self.project)
+                    && self.project.as_deref().is_none_or(|project| c.space_id.as_deref() == Some(project))
             })
             .cloned()
         else {
@@ -254,21 +304,20 @@ impl ProjectArchive {
         }));
         cx.notify();
     }
-    fn action(&mut self, action: ui::Action, _: &mut Window, cx: &mut Context<Self>) {
+    fn open(&mut self, id: String, cx: &mut Context<Self>) {
+        if !self.state.read(cx).chats.iter().any(|chat|chat.id==id && chat.archived && chat.thread_id.is_none()
+            && self.project.as_deref().is_none_or(|project|chat.space_id.as_deref()==Some(project))) {return;}
+        self.clear_files();self.selected=Some(id.clone());self.restore_error=None;
+        let first=self.sessions(cx).first().map(|chat|chat.id.clone()).unwrap_or(id);
+        self.select_session(first,cx);self.load_files(cx);
+    }
+    fn action(&mut self, action: ui::Action, window: &mut Window, cx: &mut Context<Self>) {
         match action {
-            ui::Action::Open(id) => {
-                self.selected = Some(id.clone());
-                self.restore_error = None;
-                let first = self
-                    .sessions(cx)
-                    .first()
-                    .map(|c| c.id.clone())
-                    .unwrap_or(id);
-                self.select_session(first, cx);
-            }
+            ui::Action::Open(id) => {self.open(id,cx);window.focus(&self.focus,cx);},
             ui::Action::Session(id) => self.select_session(id, cx),
             ui::Action::Restore(id) => self.restore(id, cx),
             ui::Action::Back => self.back(cx),
+            ui::Action::RetryFiles => self.load_files(cx),
             ui::Action::Retry => {
                 if let Some(id) = self.session.clone() {
                     self.select_session(id, cx)
@@ -300,7 +349,7 @@ impl Render for ProjectArchive {
             } else {
                 self.transcript.clone().into_any_element()
             };
-            return ui::preview(
+            let preview=ui::preview(
                 &thread,
                 &self.sessions(cx),
                 self.session.as_deref().unwrap_or_default(),
@@ -310,16 +359,21 @@ impl Render for ProjectArchive {
                     .as_deref()
                     .filter(|_| self.restore_target.as_deref() == Some(thread.chat.id.as_str())),
                 self.busy.is_some(),
+                &self.files,
                 cx,
                 Self::action,
             );
+            return div().size_full().track_focus(&self.focus).child(preview).into_any_element();
         }
         let query = self.search.read(cx).value(cx);
         let state = self.state.read(cx);
-        let Some(project) = state.spaces.iter().find(|s| s.id == self.project) else {
+        let Some(project_id) = self.project.as_deref() else {
+            return ui::centered("Choose an archived chat to preview.").into_any_element();
+        };
+        let Some(project) = state.spaces.iter().find(|s| s.id == project_id) else {
             return ui::centered("Select a project to view archived chats.").into_any_element();
         };
-        let rows = ui::rows(&state.chats, &self.project, &query);
+        let rows = ui::rows(&state.chats, project_id, &query);
         let name = project.display_name().to_owned();
         ui::list(
             &name,

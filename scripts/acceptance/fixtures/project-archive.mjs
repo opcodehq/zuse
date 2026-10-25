@@ -3,6 +3,7 @@ import fs from 'node:fs';import path from 'node:path';
 import {archiveDates,archiveMessages,archiveMetadata} from './project-archive-data.mjs';
 const [ipc,ready,assets]=process.argv.slice(2),clients=new Set(),events=[];
 let restoreMode='ok',releaseRestore,failDoc=null,holdDocs=new Set();const delayed=[];
+let fileStatuses={},fileStatusMode='ok',holdStatuses=new Set();const delayedStatuses=[];
 const emit=(c,f)=>{try{c.send(JSON.stringify(f));}catch{}};
 const saved=(c,id,chat)=>emit(c,{id,item:{reset:archiveMessages(chat)}});
 const headers={'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp','Cache-Control':'no-store'};
@@ -14,9 +15,13 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(request,server){
    if(Object.hasOwn(p,'restoreMode')){restoreMode=p.restoreMode;if(restoreMode!=='hold'){releaseRestore?.();releaseRestore=null;}}
    if(Object.hasOwn(p,'failDoc'))failDoc=p.failDoc;
    if(Object.hasOwn(p,'holdDocs'))holdDocs=new Set(p.holdDocs);
+   if(p.fileStatuses)fileStatuses={...fileStatuses,...p.fileStatuses};
+   if(Object.hasOwn(p,'fileStatusMode'))fileStatusMode=p.fileStatusMode;
+   if(p.holdStatuses)holdStatuses=new Set(p.holdStatuses);
+   if(p.releaseStatuses)for(const [c,id,status]of delayedStatuses.splice(0)){emit(c,{id,ok:status});events.push({lateStatus:status.chatId});}
    if(p.releaseDocs)for(const [c,id,chat]of delayed.splice(0)){saved(c,id,chat);events.push({lateReply:chat});}
   }
-  return Response.json({events,restoreMode,failDoc,holdDocs:[...holdDocs]},{headers});
+  return Response.json({events,restoreMode,failDoc,holdDocs:[...holdDocs],fileStatuses,fileStatusMode},{headers});
  }
  if(url.pathname==='/api/session/check'||url.pathname==='/api/session')return Response.json({ok:true},{headers});
  if(url.pathname==='/api/rpc'||(url.pathname==='/'&&request.headers.get('upgrade')?.toLowerCase()==='websocket')){
@@ -37,6 +42,13 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(request,server){
   if(f.cancel){events.push({cancel:f.id});if(c.data.handled.delete(f.id))return;}
   if(f.method)events.push({method:f.method,chatId:p.chatId,targetDeviceId:p.targetDeviceId,op:p.op,archived:p.archived});
   if(['QueueMessage','QueueCommand','CloudCreate','WriteWorkspaceFile','RunProjectAction'].includes(f.method)){events.push({blocked:f.method});emit(c,{id:f.id,err:'Execution is disabled in this fixture',done:true});return;}
+  if(f.method==='GetChatArchiveStatus'&&(fileStatuses[p.chatId]||fileStatusMode==='fail')){
+   c.data.handled.set(f.id,f.method);
+   if(fileStatusMode==='fail'){emit(c,{id:f.id,err:'File status is temporarily unavailable. Retry.',done:true});return;}
+   const status=structuredClone(fileStatuses[p.chatId]);
+   if(holdStatuses.has(p.chatId)){delayedStatuses.push([c,f.id,status]);return;}
+   emit(c,{id:f.id,ok:status});return;
+  }
   if(f.method==='WatchDocMessages'){
    c.data.handled.set(f.id,f.method);
    if(failDoc===p.chatId){emit(c,{id:f.id,err:'Saved transcript is unavailable. Retry to load it again.',done:true});return;}

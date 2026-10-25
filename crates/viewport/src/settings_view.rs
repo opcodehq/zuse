@@ -75,6 +75,7 @@ impl Section {
 impl WorkspaceView {
     pub(super) fn select_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.settings_scroll.set_offset(point(px(0.), px(0.)));
+        if section != Section::Archived && self.project_archive.global {self.close_project_archives();}
         self.close_plugins_browse();
         self.plugins_add_menu = false;
         self.settings_section = section;
@@ -260,7 +261,9 @@ impl WorkspaceView {
             Section::Archived => self.archive_list(window, cx),
         };
         let content_panel =
-            if section == Section::Archived && self.cloud_archive.state.head.is_some() {
+            if section == Section::Archived && self.project_archive.global {
+                self.project_archives_view(window,cx)
+            } else if section == Section::Archived && self.cloud_archive.state.head.is_some() {
                 self.cloud_archive_history(window, cx)
             } else {
                 column()
@@ -356,6 +359,7 @@ impl WorkspaceView {
                             .child(icon("alt-arrow-left").size(px(14.)).text_color(rgb(MUTED)))
                             .child("Back to app")
                             .on_click(cx.listener(|this, _, window, cx| {
+                                if this.project_archive.global {this.close_project_archives();}
                                 this.settings = false;
                                 this.completion_preset_menu = false;
                                 this.default_permission_menu = false;

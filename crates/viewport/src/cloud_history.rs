@@ -437,7 +437,7 @@ impl WorkspaceView {
         };
         match action {
             Action::Open(_) => {
-                self.select(chat, cx);
+                self.open_global_archive(chat,window,cx);
             }
             Action::Restore(_) => self.change_thread(
                 chat,

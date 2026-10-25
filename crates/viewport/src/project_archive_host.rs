@@ -4,11 +4,15 @@ use crate::project_archive as ui;
 #[derive(Default)]
 pub(super) struct ArchiveRoute {
     pub project: Option<String>,
+    pub global: bool,
     selected: Option<String>,
     session: Option<String>,
     search: Option<Entity<input::TextInput>>,
     read: Option<u64>,
-    action: Option<(u64, Value, String, Option<String>)>,
+    files: ui::Files,
+    files_request: Option<u64>,
+    files_poll: Option<Task<()>>,
+    action: Option<(u64, Value, Option<String>, Option<String>)>,
     view: Option<Entity<WorkspaceView>>,
     loading: bool,
     read_error: Option<String>,
@@ -20,10 +24,12 @@ pub(super) struct ArchiveRoute {
 }
 impl WorkspaceView {
     pub(super) fn close_project_archives(&mut self) {
+        self.clear_archive_files();
         if let Some(id) = self.project_archive.read.take() {
             self.cancel(id);
         }
         self.project_archive.project = None;
+        self.project_archive.global = false;
         self.project_archive.selected = None;
         self.project_archive.session = None;
         self.project_archive.view = None;
@@ -83,6 +89,33 @@ impl WorkspaceView {
         window.focus(&self.workspace_focus, cx);
         cx.notify();
     }
+    pub(super) fn open_global_archive(&mut self, chat: Value, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id)=chat["id"].as_str().map(str::to_owned) else {return;};
+        self.close_project_archives();
+        self.archive_error=None;
+        self.project_archive.global=true;
+        self.project_archive.selected=Some(id.clone());
+        self.project_archive.restore_error=None;
+        let first=self.archive_sessions().first().map(|chat|chat.id.clone()).unwrap_or(id);
+        self.read_archive_session(first,window,cx);self.load_archive_files(cx);
+        window.focus(&self.workspace_focus,cx);
+        cx.notify();
+    }
+    fn clear_archive_files(&mut self) {
+        if let Some(id)=self.project_archive.files_request.take() {self.cancel(id);}
+        self.project_archive.files_poll=None;self.project_archive.files=Default::default();
+    }
+    fn load_archive_files(&mut self,cx:&mut Context<Self>) {
+        if self.project_archive.files_request.is_some() {return;}
+        let Some(chat)=self.chats.iter().find(|chat|chat["id"].as_str()==self.project_archive.selected.as_deref()).cloned() else {return;};
+        self.project_archive.files_poll=None;
+        if !self.connected {
+            self.project_archive.files.error=Some("Computer unavailable".into());cx.notify();return;
+        }
+        self.project_archive.files.loading=true;
+        let request=self.call(methods::GET_CHAT_ARCHIVE_STATUS,zuse_protocol::presentation::chat_request(&chat,json!({})));
+        self.project_archive.files_request=Some(request);cx.notify();
+    }
     fn archive_sessions(&self) -> Vec<zuse_protocol::Chat> {
         let Some(thread) = self.project_archive.selected.as_deref() else {
             return vec![];
@@ -93,7 +126,7 @@ impl WorkspaceView {
             .filter_map(|c| serde_json::from_value(c.clone()).ok())
             .filter(|c: &zuse_protocol::Chat| {
                 c.thread_id() == thread
-                    && c.space_id.as_deref() == self.project_archive.project.as_deref()
+                    && (self.project_archive.global || c.space_id.as_deref() == self.project_archive.project.as_deref())
             })
             .collect();
         rows.sort_by_key(|c| c.created_at);
@@ -139,8 +172,9 @@ impl WorkspaceView {
                 if self.chats.iter().any(|c| {
                     c["id"] == id
                         && c["archived"] == true
-                        && c["spaceId"].as_str() == self.project_archive.project.as_deref()
+                        && (self.project_archive.global || c["spaceId"].as_str() == self.project_archive.project.as_deref())
                 }) {
+                    self.clear_archive_files();
                     self.project_archive.selected = Some(id.clone());
                     self.project_archive.restore_error = None;
                     let first = self
@@ -148,19 +182,22 @@ impl WorkspaceView {
                         .first()
                         .map(|c| c.id.clone())
                         .unwrap_or(id);
-                    self.read_archive_session(first, window, cx);
+                    self.read_archive_session(first, window, cx);self.load_archive_files(cx);
                 }
             }
             ui::Action::Session(id) => self.read_archive_session(id, window, cx),
             ui::Action::Back => {
+                self.clear_archive_files();
                 if let Some(id) = self.project_archive.read.take() {
                     self.cancel(id);
                 }
                 self.project_archive.selected = None;
+                self.project_archive.global = false;
                 self.project_archive.session = None;
                 self.project_archive.view = None;
                 self.project_archive.read_error = None;
             }
+            ui::Action::RetryFiles => self.load_archive_files(cx),
             ui::Action::Retry => {
                 if let Some(id) = self.project_archive.session.clone() {
                     self.read_archive_session(id, window, cx)
@@ -177,7 +214,7 @@ impl WorkspaceView {
                         c["id"] == id
                             && c["archived"] == true
                             && c["threadId"].is_null()
-                            && c["spaceId"].as_str() == self.project_archive.project.as_deref()
+                            && (self.project_archive.global || c["spaceId"].as_str() == self.project_archive.project.as_deref())
                     })
                     .cloned()
                 else {
@@ -190,7 +227,7 @@ impl WorkspaceView {
                     cx.notify();
                     return;
                 }
-                let project = self.project_archive.project.clone().unwrap();
+                let project = self.project_archive.project.clone();
                 self.project_archive.restore_error = None;
                 let request = self.call(
                     methods::MUTATE,
@@ -220,6 +257,24 @@ impl WorkspaceView {
         let Some(id) = frame["id"].as_u64() else {
             return false;
         };
+        if self.project_archive.files_request==Some(id) {
+            self.project_archive.files_request=None;
+            self.project_archive.files.loading=false;self.pending.remove(&id);
+            let status=frame.get("ok").cloned().and_then(|value|serde_json::from_value::<ui::FileArchiveStatus>(value).ok());
+            match status {
+                Some(status) if Some(status.chat_id.as_str())==self.project_archive.selected.as_deref() => {
+                    self.project_archive.files.value=Some(status);self.project_archive.files.error=None;
+                }
+                _ => self.project_archive.files.error=Some("File archive status is unavailable.".into()),
+            }
+            if self.project_archive.files.error.is_none() && self.project_archive.files.value.as_ref().is_some_and(ui::FileArchiveStatus::progressing) {
+                self.project_archive.files_poll=Some(cx.spawn(async move|this,cx| {
+                    cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+                    let _=this.update(cx,|this,cx|{this.project_archive.files_poll=None;this.load_archive_files(cx);});
+                }));
+            }
+            cx.notify();return true;
+        }
         if self.project_archive.read == Some(id) {
             if let Some(value) = frame.get("item").or_else(|| frame.get("ok")) {
                 if let (Some(view), Ok(update)) = (
@@ -260,12 +315,12 @@ impl WorkspaceView {
                             current["archived"] = json!(false);
                         }
                     }
-                    if self.project_archive.project.as_ref() == Some(&project)
-                        && self.project_archive.selected == selection
-                        && !self.settings
-                        && !self.plugins_browse
-                    {
-                        self.select(chat, cx);
+                    if self.project_archive.project == project && self.project_archive.selected == selection {
+                        if self.project_archive.global {
+                            self.close_project_archives();
+                        } else if !self.settings && !self.plugins_browse {
+                            self.select(chat,cx);
+                        }
                     }
                 } else {
                     self.project_archive.restore_error = Some(
@@ -286,9 +341,12 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(project) = self.project_archive.project.clone() else {
-            return ui::centered("Select a project to view archived chats.").into_any_element();
-        };
+        let project = self.project_archive.project.clone();
+        if self.project_archive.global && self.project_archive.action.is_none()
+            && !self.chats.iter().any(|chat|chat["id"].as_str()==self.project_archive.selected.as_deref() && chat["archived"]==true) {
+            self.close_project_archives();
+            return self.archive_list(window,cx);
+        }
         let chats: Vec<zuse_protocol::Chat> = self
             .chats
             .iter()
@@ -301,7 +359,7 @@ impl WorkspaceView {
             .and_then(|id| {
                 chats
                     .iter()
-                    .find(|c| &c.id == id && c.archived && c.space_id.as_deref() == Some(&project))
+                    .find(|c| &c.id == id && c.archived && (self.project_archive.global || c.space_id.as_deref() == project.as_deref()))
             })
             .cloned()
             .map(ui::Thread::from_chat)
@@ -327,10 +385,12 @@ impl WorkspaceView {
                     self.project_archive.restore_target.as_deref() == Some(thread.chat.id.as_str())
                 }),
                 self.project_archive.action.is_some(),
+                &self.project_archive.files,
                 cx,
                 Self::archive_action,
             );
         }
+        let Some(project)=project else {return ui::centered("Choose an archived chat to preview.").into_any_element();};
         let Some(space) = self.spaces.iter().find(|s| s.id == project) else {
             return ui::centered("Select a project to view archived chats.").into_any_element();
         };

@@ -50,6 +50,27 @@ impl Thread {
         )
     }
 }
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileArchiveStatus {
+    pub chat_id: String,
+    pub phase: Option<String>,
+    #[serde(default)]
+    pub storage_reclaimed: bool,
+    #[serde(default)]
+    pub changed_paths: Vec<String>,
+}
+impl FileArchiveStatus {
+    pub fn progressing(&self) -> bool {
+        matches!(self.phase.as_deref(), Some("prepared" | "restoring"))
+    }
+}
+#[derive(Clone, Default)]
+pub struct Files {
+    pub value: Option<FileArchiveStatus>,
+    pub loading: bool,
+    pub error: Option<String>,
+}
 #[derive(Clone)]
 pub enum Action {
     Open(String),
@@ -57,6 +78,7 @@ pub enum Action {
     Session(String),
     Back,
     Retry,
+    RetryFiles,
 }
 
 pub fn date_label(date: chrono::DateTime<chrono::Utc>) -> String {
@@ -474,6 +496,119 @@ pub fn list<T: 'static>(
         )
         .into_any_element()
 }
+fn files_banner<T: 'static>(
+    files: &Files,
+    cx: &mut Context<T>,
+    run: impl Fn(&mut T, Action, &mut Window, &mut Context<T>) + Copy + 'static,
+) -> Option<AnyElement> {
+    let (title, mut description) = if files.loading && files.error.is_some() {
+        (
+            "Checking local files…",
+            "Saved history remains available.".to_owned(),
+        )
+    } else if files.error.is_some() {
+        (
+            "File status unavailable",
+            "Saved history is still available. Retry to check the owning computer.".to_owned(),
+        )
+    } else if let Some(value) = &files.value {
+        match value.phase.as_deref() {
+            Some("prepared") => (
+                "Preparing local file archive",
+                "Saving the checkout before local storage is reclaimed.".to_owned(),
+            ),
+            Some("restoring") => (
+                "Restoring local files",
+                "Recreating the checkout from its saved archive.".to_owned(),
+            ),
+            Some("removed") if value.storage_reclaimed => (
+                "Local files archived",
+                "Restore this chat to recreate its checkout.".to_owned(),
+            ),
+            Some("restored") => (
+                "Checkout archive restored",
+                "The saved checkout was restored on its owning computer.".to_owned(),
+            ),
+            _ if value.storage_reclaimed => (
+                "Local files archived",
+                "Restore this chat to recreate its checkout.".to_owned(),
+            ),
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
+    if let Some(value) = &files.value {
+        if !value.changed_paths.is_empty() {
+            description.push_str(&format!(
+                " {} changed paths saved.",
+                value.changed_paths.len()
+            ));
+        }
+    }
+    let enabled = !files.loading;
+    Some(
+        div()
+            .id("archive-files-status")
+            .role(if files.error.is_some() {
+                Role::Alert
+            } else {
+                Role::Status
+            })
+            .flex_none()
+            .mx(px(12.))
+            .my(px(8.))
+            .p(px(12.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(crate::settings_style::card_border())
+            .bg(crate::settings_style::frame_bg())
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .child(
+                icon("archive-minimalistic")
+                    .size(px(16.))
+                    .text_color(rgb(MUTED)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(rgb(MUTED))
+                            .child(description),
+                    ),
+            )
+            .child(
+                button("archive-files-refresh", "Refresh file status")
+                    .child(if files.loading {
+                        "Checking…"
+                    } else {
+                        "Refresh status"
+                    })
+                    .when(!enabled, |view| view.opacity(0.5))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if enabled {
+                            run(this, Action::RetryFiles, window, cx);
+                        }
+                    })),
+            )
+            .into_any_element(),
+    )
+}
 pub fn preview<T: 'static>(
     thread: &Thread,
     sessions: &[Chat],
@@ -482,6 +617,7 @@ pub fn preview<T: 'static>(
     loading: bool,
     error: Option<&str>,
     busy: bool,
+    files: &Files,
     cx: &mut Context<T>,
     run: impl Fn(&mut T, Action, &mut Window, &mut Context<T>) + Copy + 'static,
 ) -> AnyElement {
@@ -599,6 +735,7 @@ pub fn preview<T: 'static>(
                 ),
         )
         .child(tabs)
+        .children(files_banner(files, cx, run))
         .child(
             div().flex_1().min_h_0().px(px(12.)).child(
                 div()

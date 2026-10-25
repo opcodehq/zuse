@@ -14784,6 +14784,7 @@ dependencies = [
  "gpui",
  "gpui-base",
  "image",
+ "serde",
  "serde_json",
  "similar",
  "unicode-segmentation",

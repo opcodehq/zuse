@@ -60,6 +60,8 @@ pub struct ArchivedPage {
     _search: Option<Subscription>,
     task: Option<Task<()>>,
     _observe: Subscription,
+    preview: Option<Entity<crate::project_archive::ProjectArchive>>,
+    preview_events: Option<Subscription>,
     cloud: zuse_model::cloud::ArchivedCloud,
     cloud_loaded: bool,
     cloud_task: Option<Task<()>>,
@@ -110,6 +112,8 @@ impl ArchivedPage {
             _search: None,
             task: None,
             _observe: observe,
+            preview: None,
+            preview_events: None,
             cloud: Default::default(),
             cloud_loaded: false,
             cloud_task: None,
@@ -539,10 +543,23 @@ impl ArchivedPage {
     fn archive_card_action(
         &mut self,
         action: zuse_viewport::archive_cards::Action,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match action {
+            zuse_viewport::archive_cards::Action::Open(id) => {
+                if self.busy.is_some() || self.delete_all_task.is_some() {return;}
+                if self.cloud.loading && self.cloud.selected.is_some() && !self.cloud.busy {
+                    self.cloud_task=None;self.cloud.back();
+                }
+                self.error=None;
+                let state=self.state.clone();
+                let preview=cx.new(|cx|crate::project_archive::ProjectArchive::global(state,id,window,cx));
+                self.preview_events=Some(cx.subscribe(&preview,|this,_,_: &crate::project_archive::Event,cx| {
+                    this.preview=None;this.preview_events=None;cx.notify();
+                }));
+                self.preview=Some(preview);cx.notify();
+            }
             zuse_viewport::archive_cards::Action::Restore(id) => self.unarchive(id, cx),
             zuse_viewport::archive_cards::Action::Page(page) => {
                 self.page = page;
@@ -566,10 +583,18 @@ impl ArchivedPage {
         }
     }
 
+    pub(crate) fn on_hidden(&mut self,cx:&mut Context<Self>) {
+        if let Some(preview)=self.preview.take() {preview.update(cx,|preview,cx|preview.on_hidden(cx));}
+        self.preview_events=None;cx.notify();
+    }
     /// Escape that reached Settings unclaimed closes the Delete all dialog
     /// first, so it never closes Settings under the dialog (this page
     /// outlives Settings, and the dialog would reopen with it).
     pub(crate) fn dismiss_on_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(preview)=self.preview.take() {
+            preview.update(cx,|preview,cx|preview.on_hidden(cx));
+            self.preview_events=None;cx.notify();return true;
+        }
         if self.cloud_delete_confirm.take().is_some() {
             cx.notify();
             return true;
@@ -685,6 +710,7 @@ impl popover::ScrollRailHost for ArchivedPage {
 impl Render for ArchivedPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.load_cloud(cx);
+        if let Some(preview)=&self.preview {return preview.clone().into_any_element();}
         if let Some(history) = &self.cloud_history {
             return history.clone().into_any_element();
         }
@@ -717,7 +743,7 @@ impl Render for ArchivedPage {
         let blocked=self.busy.is_some()||self.delete_all_task.is_some()||self.state.read(cx).engine().is_none();
         let items=rows.into_iter().enumerate().map(|(index,entry)| {
             let restoring=self.busy.as_deref()==Some(entry.chat.id.as_str());
-            cards::card(entry,index,cards::State{preview:false,menu:false,restoring,blocked},Self::archive_card_action,cx)
+            cards::card(entry,index,cards::State{preview:true,menu:false,restoring,blocked},Self::archive_card_action,cx)
         }).collect::<Vec<_>>();
         let body:AnyElement=if items.is_empty(){
             div().py(px(32.)).flex().flex_col().items_center().gap(px(8.)).text_color(theme.text_muted)
