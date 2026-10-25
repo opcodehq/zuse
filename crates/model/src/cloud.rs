@@ -72,8 +72,22 @@ pub struct Workspace {
     pub rpc_protocol: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_mirror_cleanup: Option<LocalMirrorCleanup>,
+    #[serde(default, deserialize_with = "read_archive_status", skip_serializing_if = "Option::is_none")]
+    pub archive_status: Option<zuse_protocol::cloud::CloudArchiveStatus>,
+}
+fn read_archive_status<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<zuse_protocol::cloud::CloudArchiveStatus>, D::Error> {
+    let value=serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 impl Workspace {
+    pub fn archive_status(&self) -> Option<&zuse_protocol::cloud::CloudArchiveStatus> {
+        self.archive_status.as_ref().filter(|status|status.workspace_id==self.workspace_id && status.archived && self.archived() && !self.deleting())
+    }
+    pub fn recovery_pending(&self) -> bool {
+        use zuse_protocol::cloud::ArchivePhase;
+        self.archive_status().is_some_and(|status|status.error_code.is_none() && matches!(status.phase,
+            Some(ArchivePhase::Uploading | ArchivePhase::Verifying | ArchivePhase::Retiring | ArchivePhase::Restoring)))
+    }
     pub fn archived(&self) -> bool {
         matches!(self.state.as_str(), "archiving" | "archived") || self.desired_state == "archived"
     }
@@ -217,7 +231,7 @@ impl ArchivedCloud {
     pub fn needs_poll(&self) -> bool {
         self.rows
             .iter()
-            .any(|r| r.state == "archiving" || r.deleting() || r.cleanup_pending())
+            .any(|r| r.state == "archiving" || r.deleting() || r.cleanup_pending() || r.recovery_pending())
     }
     pub fn back(&mut self) {
         self.selected = None;
@@ -249,7 +263,39 @@ mod tests {
             title: None,
             rpc_protocol: Some("zuse-rpc-v1".into()),
             local_mirror_cleanup: None,
+            archive_status: None,
         }
+    }
+    fn recovery(id: &str, phase: &str) -> zuse_protocol::cloud::CloudArchiveStatus {
+        serde_json::from_value(serde_json::json!({"workspaceId":id,"archived":true,"machineRetained":true,
+            "backupVerified":false,"computeRetired":false,"verifiedChunks":1,"totalChunks":2,"phase":phase})).unwrap()
+    }
+    #[test]
+    fn optional_recovery_metadata_round_trips_and_keeps_old_catalogs_readable() {
+        let mut row=workspace("one");
+        row.archive_status=Some(recovery("one","verifying"));
+        let mut wire=serde_json::to_value(&row).unwrap();
+        let read:Workspace=serde_json::from_value(wire.clone()).unwrap();
+        assert!(read.recovery_pending());
+        assert_eq!(read.archive_status().unwrap().verified_chunks,1);
+        wire["archiveStatus"]["phase"]=serde_json::json!("future-phase");
+        let read:Workspace=serde_json::from_value(wire.clone()).unwrap();
+        assert!(read.archive_status().is_none());
+        wire.as_object_mut().unwrap().remove("archiveStatus");
+        assert!(serde_json::from_value::<Workspace>(wire).unwrap().archive_status().is_none());
+    }
+    #[test]
+    fn recovery_polling_stops_for_complete_failed_or_unrelated_metadata() {
+        let mut row=workspace("one");row.archive_status=Some(recovery("one","verifying"));
+        let mut state=ArchivedCloud::default();state.list("owner".into(),vec![row.clone()]);assert!(state.needs_poll());
+        row.archive_status.as_mut().unwrap().phase=Some(zuse_protocol::cloud::ArchivePhase::Retired);
+        state.list("owner".into(),vec![row.clone()]);assert!(!state.needs_poll());
+        row.archive_status.as_mut().unwrap().phase=Some(zuse_protocol::cloud::ArchivePhase::Verifying);
+        row.archive_status.as_mut().unwrap().error_code=Some("archive-failed".into());
+        state.list("owner".into(),vec![row.clone()]);assert!(!state.needs_poll());
+        row.archive_status=Some(recovery("different","verifying"));
+        assert!(row.archive_status().is_none());
+        state.list("owner".into(),vec![row]);assert!(!state.needs_poll());
     }
     #[test]
     fn account_changes_and_navigation_invalidate_pending_history() {

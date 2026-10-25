@@ -200,6 +200,9 @@ impl Workspace {
             out["deletion"] = json!({"operationId":operation["id"],"phase":operation["phase"]});
         }
         out["title"] = json!(row["title"].as_str().or_else(|| config["title"].as_str()));
+        if matches!(row["state"].as_str(), Some("archiving" | "archived")) || row["desired_state"] == "archived" {
+            out["archiveStatus"] = json!(crate::archive::status(row));
+        }
         out["imageGeneration"] = row["build_id"].clone();
         out["rpcProtocol"] = json!(match config["runtimeRpcProtocol"].as_str() {
             Some(zuse_protocol::cloud_gateway::RUST_RPC) => zuse_protocol::cloud_gateway::RUST_RPC,
@@ -285,5 +288,44 @@ impl Store {
     pub fn with_github_authority(mut self, github: crate::github::LegacyGithub) -> Self {
         self.github = Some(std::sync::Arc::new(github));
         self
+    }
+}
+
+#[cfg(test)]
+mod archive_projection_tests {
+    use super::*;
+
+    #[test]
+    fn archive_summary_keeps_recovery_facts_without_private_material() {
+        let mut row=json!({"workspace_id":"workspace","chat_id":"chat","initial_session_id":"session",
+            "state":"archived","desired_state":"archived","status_code":"archived-retained",
+            "provider_sandbox_id":"PRIVATE-MACHINE","archive_requested_at":100,
+            "request_config":{"private":"PRIVATE-CONFIG"}});
+        let public=Workspace{row:row.clone()}.public();
+        assert_eq!(public["archiveStatus"]["machineRetained"],true);
+        assert_eq!(public["archiveStatus"]["backupVerified"],false);
+        assert_eq!(public["archiveStatus"]["computeRetired"],false);
+        assert_eq!(public["archiveStatus"]["retentionDeadline"],100+10*86400000_i64);
+        row["request_config"]["recoveryArchive"]=json!({"version":1,"id":"operation","sourceSandboxId":"PRIVATE-SOURCE",
+            "archivedAtMs":100,"expiresAtMs":200,"phase":"retired","verifiedChunks":1,
+            "manifest":{"version":1,"operationId":"operation","workspaceId":"workspace","chatId":"chat","sessionId":"session",
+                "chunks":["a".repeat(64)],"archiveSha256":"b".repeat(64)}});
+        let public=Workspace{row:row.clone()}.public();
+        assert_eq!(public["archiveStatus"]["backupVerified"],true);
+        assert_eq!(public["archiveStatus"]["computeRetired"],true);
+        assert_eq!(public["archiveStatus"]["verifiedChunks"],1);
+        assert!(!public.to_string().contains("PRIVATE"));
+        assert!(!public.to_string().contains("manifest"));
+        row["request_config"]["recoveryArchive"]["manifest"]["workspaceId"]=json!("different-workspace");
+        let public=Workspace{row}.public();
+        assert_eq!(public["archiveStatus"]["backupVerified"],false);
+        assert_eq!(public["archiveStatus"]["computeRetired"],false);
+        assert_eq!(public["archiveStatus"]["errorCode"],"archive-metadata-invalid");
+    }
+
+    #[test]
+    fn active_workspaces_do_not_receive_an_archive_summary() {
+        let public=Workspace{row:json!({"state":"running","desired_state":"running"})}.public();
+        assert!(public.get("archiveStatus").is_none());
     }
 }

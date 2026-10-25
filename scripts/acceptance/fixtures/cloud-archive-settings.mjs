@@ -65,7 +65,7 @@ const server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(request,server){
     if(owner===scope&&account===scope)rows=rows.map(item=>item.workspaceId===row.workspaceId?next:item);
     value={accountId:owner,workspace:next};
    }
-   event.reply={accountId:owner,rows:value.workspaces?.map(w=>({workspaceId:w.workspaceId,state:w.state})),workspaceId:value.workspace?.workspaceId,state:value.workspace?.state,sessionId:value.head?.sessionId};
+   event.reply={accountId:owner,rows:value.workspaces?.map(w=>({workspaceId:w.workspaceId,state:w.state,archiveStatus:w.archiveStatus})),workspaceId:value.workspace?.workspaceId,state:value.workspace?.state,sessionId:value.head?.sessionId};
    emit(c,{id:f.id,ok:value});return;
   }
   if(c.data.ready)c.data.upstream.send(text);else c.data.waiting.push(text);
