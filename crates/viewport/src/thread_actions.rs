@@ -30,6 +30,11 @@ pub(super) struct PendingThreadAction {
     change: ThreadChange,
 }
 impl WorkspaceView {
+    pub(super) fn restoring_archived_chat(&self)->Option<&str> {
+        self.thread_action.as_ref().filter(|action|matches!(&action.change,ThreadChange::Archive(false)))
+            .and_then(|action|action.chat["id"].as_str())
+    }
+
     pub(super) fn open_thread_actions(
         &mut self,
         chat: Value,
@@ -74,6 +79,8 @@ impl WorkspaceView {
     fn thread_error(&mut self, error: &str, cx: &mut Context<Self>) {
         if let Some(dialog) = &mut self.thread_dialog {
             dialog.error = Some(error.into());
+        } else if self.settings && self.settings_section == settings_view::Section::Archived {
+            self.archive_error = Some(error.into());
         } else {
             self.error = Some(error.into());
         }
@@ -135,7 +142,7 @@ impl WorkspaceView {
             }
             return;
         }
-        let params = match &change {
+        let mut params = match &change {
             ThreadChange::Rename(title) => {
                 let title = title.trim();
                 if title.is_empty() {
@@ -149,9 +156,11 @@ impl WorkspaceView {
             }
             ThreadChange::Delete => json!({"op":"deleteChat","chatId":current["id"]}),
         };
+        params["targetDeviceId"] = current["deviceId"].clone();
         if let Some(dialog) = &mut self.thread_dialog {
             dialog.error = None;
         }
+        self.archive_error = None;
         let id = self.call(methods::MUTATE, params);
         self.thread_action = Some(PendingThreadAction {
             id,
@@ -278,6 +287,8 @@ impl WorkspaceView {
             let message = "Connection interrupted. The change may have completed. Check the thread list after reconnecting before trying again.";
             if let Some(dialog) = &mut self.thread_dialog {
                 dialog.error = Some(message.into());
+            } else if self.settings && self.settings_section == settings_view::Section::Archived {
+                self.archive_error = Some(message.into());
             } else {
                 self.connection_notice = Some(message.into());
             }

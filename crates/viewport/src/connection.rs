@@ -105,6 +105,7 @@ impl WorkspaceView {
         self.creating = None;
         self.interrupt_custom_acp();
         self.interrupt_provider_logins(cx);
+        self.archive_devices.clear();
         self.interrupt_model_catalogs();
         if !self.provider_actions.is_empty() {
             self.provider_error=Some("Connection interrupted. Refresh provider status and check linked accounts before trying the action again.".into());
@@ -197,6 +198,7 @@ impl WorkspaceView {
             methods::WATCH_CHATS,
             methods::WATCH_SESSIONS,
             methods::WATCH_SPACES,
+            methods::WATCH_DEVICES,
             methods::LIST_REPOS,
         ] {
             self.call(method, json!({}));

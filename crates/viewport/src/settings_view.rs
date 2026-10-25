@@ -74,6 +74,7 @@ impl Section {
 }
 impl WorkspaceView {
     pub(super) fn select_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.settings_scroll.set_offset(point(px(0.), px(0.)));
         self.close_plugins_browse();
         self.plugins_add_menu = false;
         self.settings_section = section;
@@ -268,6 +269,7 @@ impl WorkspaceView {
                     .min_w_0()
                     .h_full()
                     .overflow_y_scroll()
+                    .track_scroll(&self.settings_scroll)
                     .p(px(if compact { 16. } else { 24. }))
                     .child(
                         column()
@@ -308,6 +310,7 @@ impl WorkspaceView {
             };
         column()
             .id("workspace-settings")
+            .relative()
             .tab_group()
             .tab_stop(false)
             .on_key_down(|event: &KeyDownEvent, window, cx| {
@@ -393,6 +396,19 @@ impl WorkspaceView {
                     .child(navigation)
                     .child(content_panel),
             )
+            .when_some((section == Section::Archived).then(|| self.archive_error.clone()).flatten(), |view, error| {
+                view.child(row().id("archive-error-notice").role(Role::Alert)
+                    .absolute().bottom(px(16.)).right(px(16.)).w(px(360.))
+                    .items_start().gap(px(8.)).p(px(12.)).rounded(px(10.))
+                    .border_1().border_color(s::destructive_text().opacity(0.35))
+                    .bg(s::card_bg()).shadow_lg().occlude()
+                    .child(div().flex_1().min_w_0().text_size(px(12.)).line_height(px(16.))
+                        .text_color(s::destructive_text()).child(error))
+                    .child(s::button("archive-error-dismiss", "").size(px(24.)).px_0()
+                        .tab_index(0).aria_label("Dismiss archive error")
+                        .child(icon("close").size(px(12.)))
+                        .on_click(cx.listener(|this, _, _, cx| {this.archive_error = None; cx.notify();}))))
+            })
             .into_any_element()
     }
     fn account_settings(&self, cx: &mut Context<Self>) -> AnyElement {

@@ -65,6 +65,7 @@ mod usage_host;
 mod provider_settings;
 pub mod provider_accounts;
 pub mod provider_options;
+pub mod archive_cards;
 pub mod provider_signin;
 mod provider_updates;
 mod pull_requests;
@@ -264,6 +265,11 @@ pub struct WorkspaceView {
     search_open: bool,
     session_search: Entity<input::TextInput>,
     archive_search: Entity<input::TextInput>,
+    archive_devices: Vec<zuse_protocol::Device>,
+    archive_page: usize,
+    archive_query: String,
+    archive_error: Option<String>,
+    settings_scroll: ScrollHandle,
     project_archive: project_archive_host::ArchiveRoute,
     usage_dashboard: Option<Entity<usage_dashboard::UsageDashboard>>,
     usage_open: bool,
@@ -381,7 +387,7 @@ impl WorkspaceView {
         let project_input =
             cx.new(|cx| input::TextInput::new("Absolute project path on this machine", window, cx));
         let archive_search =
-            cx.new(|cx| input::TextInput::new("Filter archived chats", window, cx));
+            cx.new(|cx| input::TextInput::new("Search titles, previews, projects or computers…", window, cx));
         cx.observe(&archive_search, |_, _, cx| cx.notify()).detach();
         let plugin_installed_search = cx.new(|cx| input::TextInput::new("Search", window, cx));
         cx.observe(&plugin_installed_search, |_, _, cx| cx.notify())
@@ -726,6 +732,11 @@ impl WorkspaceView {
             plugin_detail: None,
             plugin_detail_menu: Default::default(),
             archive_search,
+            archive_devices: Vec::new(),
+            archive_page: 0,
+            archive_query: String::new(),
+            archive_error: None,
+            settings_scroll: ScrollHandle::new(),
             project_archive: Default::default(),
             usage_dashboard: None,
             usage_open: false,
@@ -1335,6 +1346,9 @@ impl WorkspaceView {
                     self.sessions = value.as_array().cloned().unwrap_or_default()
                 }
                 methods::LIST_REPOS => self.repos = value.as_array().cloned().unwrap_or_default(),
+                methods::WATCH_DEVICES => {
+                    self.archive_devices=serde_json::from_value(value.clone()).unwrap_or_default();
+                }
                 methods::WATCH_SPACES => {
                     self.spaces = serde_json::from_value(value.clone()).unwrap_or_default()
                 }

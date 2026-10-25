@@ -41,6 +41,9 @@ pub struct ArchivedPage {
     /// In-flight Delete all; held so repeat clicks can't start a second run.
     delete_all_task: Option<Task<()>>,
     page: usize,
+    search: Option<Entity<zuse_viewport::input::TextInput>>,
+    query: String,
+    _search: Option<Subscription>,
     task: Option<Task<()>>,
     _observe: Subscription,
     cloud: zuse_model::cloud::ArchivedCloud,
@@ -80,6 +83,9 @@ impl ArchivedPage {
             delete_all_confirm: None,
             delete_all_task: None,
             page: 0,
+            search: None,
+            query: String::new(),
+            _search: None,
             task: None,
             _observe: observe,
             cloud: Default::default(),
@@ -554,6 +560,19 @@ impl ArchivedPage {
         )
     }
     fn unarchive(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        if self.busy.is_some() || self.delete_all_task.is_some() {
+            return;
+        }
+        let Some(owner) = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == chat_id && chat.archived)
+            .map(|chat| chat.device_id.clone())
+        else {
+            return;
+        };
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -562,6 +581,7 @@ impl ArchivedPage {
         let params = serde_json::json!({
             "op": "setChatArchived",
             "chatId": chat_id,
+            "targetDeviceId": owner,
             "archived": false,
         });
         self.task = Some(cx.spawn(async move |this, cx| {
@@ -578,8 +598,24 @@ impl ArchivedPage {
         cx.notify();
     }
 
+    fn archive_card_action(
+        &mut self,
+        action: zuse_viewport::archive_cards::Action,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            zuse_viewport::archive_cards::Action::Restore(id) => self.unarchive(id, cx),
+            zuse_viewport::archive_cards::Action::Page(page) => {
+                self.page = page;
+                self.scroll.reset();
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
     fn request_delete_all(&mut self, cx: &mut Context<Self>) {
-        if self.delete_all_task.is_some() {
+        if self.delete_all_task.is_some() || self.busy.is_some() {
             return;
         }
         let ids: Vec<String> = archived_chats(&self.state.read(cx).chats)
@@ -628,19 +664,10 @@ impl ArchivedPage {
             for chat_id in ids {
                 // Unarchived since the confirmation (here, or on another
                 // device): no longer part of what the user agreed to delete.
-                let still_archived = this
-                    .update(cx, |page, cx| {
-                        page.state
-                            .read(cx)
-                            .chats
-                            .iter()
-                            .any(|chat| chat.id == chat_id && chat.archived)
-                    })
-                    .unwrap_or(false);
-                if !still_archived {
-                    continue;
-                }
-                let params = serde_json::json!({ "op": "deleteChat", "chatId": chat_id });
+                let owner = this.update(cx, |page,cx| page.state.read(cx).chats.iter()
+                    .find(|chat|chat.id==chat_id&&chat.archived).map(|chat|chat.device_id.clone())).ok().flatten();
+                let Some(owner)=owner else{continue;};
+                let params = serde_json::json!({ "op": "deleteChat", "chatId": chat_id,"targetDeviceId":owner });
                 if engine.client().call(methods::MUTATE, params).await.is_err() {
                     failed += 1;
                 }
@@ -728,270 +755,50 @@ impl Render for ArchivedPage {
             .render_cloud_delete_dialog(window.viewport_size(), cx)
             .or_else(|| self.render_delete_all_dialog(window.viewport_size(), cx));
         let theme = Theme::of(cx).for_settings_surface();
-        let now = chrono::Utc::now();
-        let (rows, device_names, count): (
-            Vec<Chat>,
-            std::collections::HashMap<String, String>,
-            usize,
-        ) = {
-            let state = self.state.read(cx);
-            let archived = archived_chats(&state.chats);
-            let count = archived.len();
-            let page = archive_page(count, self.page);
-            if self.page != page {
-                self.page = page;
-                self.scroll.reset();
-            }
-            let rows = archived
-                .into_iter()
-                .skip(self.page * 40)
-                .take(40)
-                .cloned()
-                .collect();
-            let names = state
-                .devices
-                .iter()
-                .map(|d| (d.id.clone(), d.name.clone()))
-                .collect();
-            (rows, names, count)
+        use zuse_viewport::archive_cards as cards;
+        if self.search.is_none() {
+            let search=cx.new(|cx|zuse_viewport::input::TextInput::new("Search titles, previews, projects or computers…",window,cx));
+            self._search=Some(cx.observe(&search,|_,_,cx|cx.notify()));self.search=Some(search);
+        }
+        let search=self.search.as_ref().unwrap().clone();
+        let query=search.read(cx).value(cx).trim().to_lowercase();
+        if self.query!=query {self.query=query.clone();self.page=0;self.scroll.reset();}
+        let (rows,count,total)={
+            let state=self.state.read(cx);let all=archived_chats(&state.chats);let total=all.len();
+            let mut entries=all.into_iter().map(|chat| {
+                let project=state.spaces.iter().find(|space|Some(space.id.as_str())==chat.space_id.as_deref())
+                    .map(|space|space.display_name().to_string())
+                    .or_else(||chat.cwd.as_deref().and_then(|p|p.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next()).map(str::to_owned))
+                    .filter(|s|!s.is_empty()).unwrap_or_else(||"Unassigned project".into());
+                cards::Entry{chat:chat.clone(),project,computer:state.devices.iter().find(|device|device.id==chat.device_id).map(|device|device.name.clone())}
+            }).filter(|entry|entry.matches(&query)).collect::<Vec<_>>();
+            entries.sort_by(|a,b|b.date().cmp(&a.date()).then_with(||a.chat.id.cmp(&b.chat.id)));
+            let count=entries.len();let current=archive_page(count,self.page);if current!=self.page{self.page=current;self.scroll.reset();}
+            (entries.into_iter().skip(self.page*ARCHIVE_PAGE_SIZE).take(ARCHIVE_PAGE_SIZE).collect::<Vec<_>>(),count,total)
         };
-        let busy = self.busy.clone();
-        let page = self.page;
-        let items: Vec<AnyElement> = rows
-            .into_iter()
-            .enumerate()
-            .map(|(ix, chat)| {
-                let title: SharedString = chat
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| "Untitled session".into())
-                    .into();
-                // Unknown device → no fragment at all (zuse renders the
-                // device span only when the name resolves).
-                let device: Option<SharedString> =
-                    device_names.get(&chat.device_id).cloned().map(Into::into);
-                let time_ago: SharedString = crate::state::format_time_ago(
-                    chat.last_message_at.unwrap_or(chat.created_at),
-                    now,
-                )
-                .into();
-                let location: Option<SharedString> =
-                    crate::state::chat_location(&chat).map(Into::into);
-                let is_busy = busy.as_deref() == Some(chat.id.as_str());
-                let chat_id = chat.id.clone();
-                // zuse settings.archived.tsx row: archive tile, medium title
-                // + tabular time, quiet device · location meta, Unarchive.
-                widgets::card_row(&theme, ix == 0)
-                    .id(("archived-row", ix))
-                    .flex_nowrap()
-                    .child(
-                        div()
-                            .flex_none()
-                            .size(px(28.0))
-                            .rounded(px(7.0))
-                            .border_1()
-                            .border_color(theme.border)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                crate::icons::icon(crate::icons::ARCHIVE_MINIMALISTIC)
-                                    .size(px(16.0))
-                                    .text_color(theme.text_muted.opacity(0.6)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(crate::typography::ui_rems(
-                                                widgets::ROW_TITLE_SIZE,
-                                            ))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(theme.text_strong)
-                                            .child(title),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .text_size(crate::typography::text_xs())
-                                            .text_color(theme.text_muted)
-                                            .child(time_ago),
-                                    ),
-                            )
-                            .child({
-                                // device · location, separator at the line's
-                                // own tone (zuse: a plain span inheriting
-                                // `text-muted-foreground/55`).
-                                let mut meta = div()
-                                    .mt(px(2.0))
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .text_size(crate::typography::text_xs())
-                                    .text_color(theme.text_muted);
-                                let both = device.is_some() && location.is_some();
-                                if let Some(device) = device {
-                                    meta = meta.child(device);
-                                }
-                                if both {
-                                    meta = meta.child(SharedString::from("·"));
-                                }
-                                if let Some(location) = location {
-                                    meta = meta.child(div().min_w_0().truncate().child(location));
-                                }
-                                meta
-                            }),
-                    )
-                    .child(
-                        // Keep the action visible without list-wide hover invalidation.
-                        div()
-                            .id(("unarchive", ix))
-                            .flex_none()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(6.0))
-                            .h(px(28.0))
-                            .px(px(10.0))
-                            .rounded(px(7.0))
-                            .border_1()
-                            .border_color(theme.border)
-                            .text_size(crate::typography::text_xs())
-                            .text_color(theme.text_muted)
-                            .opacity(0.8)
-                            .when(is_busy, |el| el.opacity(0.4))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.surface_raised).text_color(theme.text))
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.unarchive(chat_id.clone(), cx);
-                            }))
-                            .child(
-                                crate::icons::icon(crate::icons::ARCHIVE_UP_MINIMALISTIC)
-                                    .size(px(14.0))
-                                    .text_color(theme.text_muted),
-                            )
-                            .child(SharedString::from(if is_busy {
-                                "Unarchiving…"
-                            } else {
-                                "Unarchive"
-                            })),
-                    )
-                    .into_any_element()
-            })
-            .collect();
-
-        let body: AnyElement = if items.is_empty() {
-            // Centered empty state (zuse settings.archived.tsx).
-            div()
-                .py(px(40.0))
-                .flex()
-                .flex_col()
-                .items_center()
-                .text_center()
-                .text_color(theme.text_muted)
-                .child(
-                    // `opacity-40` on top of the inherited muted/50 — an
-                    // effectively ~20% glyph (zuse settings.archived.tsx).
-                    crate::icons::icon(crate::icons::ARCHIVE_MINIMALISTIC)
-                        .size(px(28.0))
-                        .text_color(theme.text_muted.opacity(0.2)),
-                )
-                .child(
-                    div()
-                        .mt(px(12.0))
-                        .text_size(crate::typography::text_sm())
-                        .child(SharedString::from("Nothing archived")),
-                )
-                .child(
-                    div()
-                        .mt(px(4.0))
-                        .text_size(crate::typography::text_xs())
-                        .text_color(theme.text_muted)
-                        .child(SharedString::from(
-                            "Right-click a session in the sidebar to archive it.",
-                        )),
-                )
-                .into_any_element()
-        } else {
-            div().flex().flex_col().children(items).into_any_element()
-        };
-
-        let pagination = (count > ARCHIVE_PAGE_SIZE).then(|| {
-            div()
-                .px(px(12.0))
-                .py(px(8.0))
-                .border_t_1()
-                .border_color(widgets::row_divider(&theme))
-                .flex()
-                .items_center()
-                .justify_between()
-                .text_size(crate::typography::text_xs())
-                .text_color(theme.text_muted)
-                .child(
-                    widgets::ghost_action(&theme)
-                        .id("archived-previous")
-                        .role(gpui::Role::Button)
-                        .aria_label("Previous archived sessions")
-                        .tab_index(0)
-                        .opacity(if page > 0 { 1.0 } else { 0.4 })
-                        .focus_visible(|s| s.border_2().border_color(theme.accent))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.page = this.page.saturating_sub(1);
-                            this.scroll.reset();
-                            cx.notify();
-                        }))
-                        .child("Previous"),
-                )
-                .child(format!(
-                    "{}–{} of {}",
-                    page * ARCHIVE_PAGE_SIZE + 1,
-                    ((page + 1) * ARCHIVE_PAGE_SIZE).min(count),
-                    count
-                ))
-                .child(
-                    widgets::ghost_action(&theme)
-                        .id("archived-next")
-                        .role(gpui::Role::Button)
-                        .aria_label("Next archived sessions")
-                        .tab_index(0)
-                        .opacity(if (page + 1) * ARCHIVE_PAGE_SIZE < count {
-                            1.0
-                        } else {
-                            0.4
-                        })
-                        .focus_visible(|s| s.border_2().border_color(theme.accent))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.page = archive_page(count, this.page + 1);
-                            this.scroll.reset();
-                            cx.notify();
-                        }))
-                        .child("Next"),
-                )
-        });
+        let blocked=self.busy.is_some()||self.delete_all_task.is_some()||self.state.read(cx).engine().is_none();
+        let items=rows.into_iter().enumerate().map(|(index,entry)| {
+            let restoring=self.busy.as_deref()==Some(entry.chat.id.as_str());
+            cards::card(entry,index,cards::State{preview:false,menu:false,restoring,blocked},Self::archive_card_action,cx)
+        }).collect::<Vec<_>>();
+        let body:AnyElement=if items.is_empty(){
+            div().py(px(32.)).flex().flex_col().items_center().gap(px(8.)).text_color(theme.text_muted)
+                .child(crate::icons::icon(crate::icons::ARCHIVE_MINIMALISTIC).size(px(28.)))
+                .child(if query.is_empty(){"No saved chats"}else{"No matching saved chats"})
+                .child(div().text_size(px(11.)).child(if query.is_empty(){"Archived chats will appear here."}else{"Try another title, project, branch or computer."})).into_any_element()
+        }else{div().flex().flex_col().gap(px(8.)).children(items).into_any_element()};
+        let pagination=cards::pagination(count,self.page,Self::archive_card_action,cx);
+        let search_bar=div().w_full().h(px(32.)).max_w(px(576.)).mb(px(12.)).px(px(10.)).flex().items_center().gap(px(8.))
+            .rounded(px(7.)).border_1().border_color(theme.border).bg(zuse_viewport::settings_style::card_bg())
+            .child(crate::icons::icon(crate::icons::MAGNIFER).size(px(16.)).text_color(theme.text_muted))
+            .child(search);
         let deleting = self.delete_all_task.is_some();
-        let delete_all = (count > 0).then(|| {
+        let delete_all = (total > 0).then(|| {
             widgets::action_button(&theme, widgets::ActionTone::Quiet)
                 .text_color(theme.danger)
                 .id("archived-delete-all")
                 .flex_none()
-                .when(deleting, |el| el.opacity(0.5).cursor_default())
+                .when(deleting || self.busy.is_some(), |el| el.opacity(0.5).cursor_default())
                 .tab_index(0)
                 .role(gpui::Role::Button)
                 .focus_visible(|s| s.border_2().border_color(theme.accent))
@@ -1004,7 +811,7 @@ impl Render for ArchivedPage {
                 .child(SharedString::from(if deleting {
                     "Deleting…"
                 } else {
-                    "Delete all"
+                    "Delete all saved chats"
                 }))
         });
         let scrollbar = popover::rail(self, "archived-page-scrollbar", &theme, cx);
@@ -1027,22 +834,23 @@ impl Render for ArchivedPage {
                             widgets::settings_page_column(window)
                                 .child(widgets::section_title_with_action(
                                     &theme,
-                                    "Archived sessions",
+                                    "Archived chats",
                                     (count > 0).then_some(count),
-                                    "Hidden from the sidebar until restored.",
+                                    "Saved conversations across your projects and computers.",
                                     None,
                                 ))
                                 .child(
                                     widgets::section_stack().child(
                                         widgets::group_with_action(
                                             &theme,
-                                            "Sessions",
-                                            "",
+                                            "Saved chats",
+                                            "Search by title, preview, branch, project or computer.",
                                             delete_all.map(IntoElement::into_any_element),
                                         )
                                         .child(
                                             widgets::section_card(&theme)
                                                 .mt_0()
+                                                .child(search_bar)
                                                 .child(body)
                                                 .children(pagination),
                                         ),
