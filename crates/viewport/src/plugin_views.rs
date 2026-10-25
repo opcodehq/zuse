@@ -114,6 +114,7 @@ impl WorkspaceView {
         self.plugin_setup
             .as_ref()
             .is_some_and(|form| !form.read(cx).is_inline())
+            || (self.cloud_account["user"].is_object() && self.plugin_state.snapshot["canManage"] == false)
             || self.plugin_state.notice.is_some()
             || self.cloud_account["error"].is_string()
             || self.cloud_account["login"]["url"].is_string()
@@ -409,32 +410,13 @@ impl WorkspaceView {
         items: Vec<PluginDefinition>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        column()
-            .gap_1()
-            .child(
-                div()
-                    .px_2()
-                    .pb_1()
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(title),
-            )
-            .child(row().flex_wrap().gap_x(px(16.)).gap_y(px(2.)).children(
-                items.into_iter().enumerate().map(|(index, definition)| {
+        let rows = items.into_iter().enumerate().map(|(index, definition)| {
                     let id = definition.id.clone();
                     let connect = definition.clone();
                     let connected = catalog::connected(&self.plugin_state.snapshot, &id);
                     row()
                         .id((key, index))
-                        .w(relative(
-                            if self.content_width + if self.sidebar_open { 296. } else { 0. }
-                                < 1024.
-                            {
-                                1.
-                            } else {
-                                0.48
-                            },
-                        ))
+                        .flex_1()
                         .min_w_0()
                         .gap_2()
                         .p_2()
@@ -457,24 +439,7 @@ impl WorkspaceView {
                                     s::frame_bg(),
                                     rgb(MUTED).into(),
                                 ))
-                                .child(
-                                    column()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .gap(px(3.))
-                                        .child(
-                                            div()
-                                                .text_size(px(13.))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .truncate()
-                                                .child(definition.name),
-                                        )
-                                        .child(
-                                            s::description_text(definition.description)
-                                                .text_size(px(12.))
-                                                .truncate(),
-                                        ),
-                                )
+                                .child(catalog::title(&definition, rgb(TEXT).into(), rgb(MUTED).into(), s::frame_bg()))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.plugin_detail = Some(id.clone());
                                     this.plugin_detail_menu = Default::default();
@@ -491,24 +456,33 @@ impl WorkspaceView {
                                     "Connect plugin"
                                 },
                             )
+                            .when(!connected && (self.plugin_request.is_some() || self.plugin_state.active_attempt() || self.plugin_state.snapshot["canManage"] == false), |v|v.opacity(0.5).cursor_default())
                             .on_click(cx.listener(
                                 move |this, _, window, cx| {
-                                    if !connected {
-                                        this.connect_plugin(connect.clone(), window, cx);
-                                    }
+                                    if connected {
+                                        this.plugin_detail = Some(connect.id.clone());
+                                        this.plugin_detail_menu = Default::default();
+                                        cx.notify();
+                                    } else { this.connect_plugin(connect.clone(), window, cx); }
                                 },
                             )),
                         )
-                }),
-            ))
-            .into_any_element()
+        }).collect::<Vec<_>>();
+        let mut entries = rows.into_iter();
+        let mut grid = column().gap(px(2.));
+        while let Some(left) = entries.next() {
+            if self.viewport_width < 1024. { grid = grid.child(left); }
+            else { grid = grid.child(row().gap(px(16.)).child(div().flex_1().min_w_0().child(left))
+                .child(div().flex_1().min_w_0().children(entries.next()))); }
+        }
+        column().gap(px(4.))
+            .child(div().px(px(8.)).pb(px(4.)).text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(title))
+            .child(grid).into_any_element()
     }
     pub(super) fn plugins_page_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let items = catalog::catalog(
-            &self.plugin_state.snapshot,
-            &self.plugin_search.read(cx).value(cx),
-            self.plugin_connected_only,
-        );
+        let listing = catalog::browse(&self.plugin_state.snapshot,
+            &self.plugin_search.read(cx).value(cx), self.plugin_connected_only, self.plugin_catalog_page);
+        let connected_count = catalog::connected_count(&self.plugin_state.snapshot);
         let query = self.plugin_search.read(cx).value(cx);
         let detail = self.plugin_detail.as_ref().and_then(|id| {
             catalog::catalog(&self.plugin_state.snapshot, "", false)
@@ -516,17 +490,17 @@ impl WorkspaceView {
                 .find(|p| &p.id == id)
         });
         let mut content = column()
+            .flex_none()
+            .text_size(px(12.)).line_height(px(16.))
             .w_full()
             .max_w(px(768.))
             .mx_auto()
             .px(px(if self.content_width < 800. { 16. } else { 32. }))
             .py(px(32.))
-            .gap_5()
-            .when(self.plugin_has_status(cx), |view| {
-                view.child(self.plugin_status(cx))
-            });
+            .gap_5();
+        let status = self.plugin_has_status(cx).then(|| self.plugin_status(cx));
         if let Some(definition) = detail {
-            content = content.child(crate::plugin_detail::render(
+            content = content.children(status).child(crate::plugin_detail::render(
                 &definition,
                 &self.plugin_state.snapshot,
                 self.plugin_request.is_some() || self.plugin_state.active_attempt(),
@@ -545,117 +519,39 @@ impl WorkspaceView {
                 Self::plugin_detail_action,
             ));
         } else {
-            content=content.child(row().flex_wrap().items_start().justify_between().gap_4()
+            content=content.child(column().items_start().gap_4()
                 .child(column().min_w_0().gap_1().child(div().text_size(px(20.)).line_height(px(28.)).font_weight(FontWeight::MEDIUM).child("Plugins")).child(s::description_text("Connect your tools so agents can work across them in any chat.").text_size(px(12.))))
                 .child(row().gap(px(6.)).child(row().w(px(224.)).h(px(28.)).px(px(10.)).gap_2().rounded(px(7.)).bg(s::frame_bg().opacity(0.55)).child(icon("magnifer").size(px(14.)).text_color(rgb(MUTED))).child(self.plugin_search.clone()))
                     .when(self.cloud_account["user"].is_object(),|view|view.child(s::button("browse-add-server","Add MCP server").on_click(cx.listener(|this,_,window,cx|this.open_plugin_setup(crate::plugin_setup::SetupTarget::Server,window,cx)))))
                     .child(icon_button("refresh-plugins","refresh","Refresh plugins").on_click(cx.listener(|this,_,_,cx|{this.plugin_action(this.plugin_state.refresh());cx.notify();})))))
                 .child(row().h(px(28.)).p(px(2.)).rounded(px(7.)).bg(s::frame_bg().opacity(0.55)).self_start()
                     .children([(false,"Browse"),(true,"Connected")].map(|(connected,title)|control(if connected{"plugin-tab-connected"}else{"plugin-tab-browse"},title).h(px(24.)).rounded(px(5.))
+                        .when(connected && connected_count > 0, |view|view.gap(px(6.)).child(div().text_color(rgb(MUTED)).child(connected_count.to_string())))
                         .when(self.plugin_connected_only==connected,|view|view.bg(rgb(BG)))
                         .on_click(cx.listener(move|this,_,_,cx|{this.plugin_connected_only=connected;this.plugin_catalog_page=0;cx.notify();})))));
+            content = content.children(status);
             if !self.cloud_account["user"].is_object() {
-                content = content.child(
-                    column()
-                        .py(px(32.))
-                        .gap_3()
-                        .child(
-                            s::description_text(
-                                "Sign in to connect your tools and use them across your agents.",
-                            )
-                            .text_size(px(12.)),
-                        )
-                        .child(
-                            s::button("browse-plugin-sign-in", "Sign in")
-                                .self_start()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.call(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}));
-                                    cx.notify();
-                                })),
-                        ),
-                );
-            } else if items.is_empty() {
-                content = content.child(
-                    div()
-                        .py(px(48.))
-                        .text_center()
-                        .text_color(rgb(MUTED))
-                        .child(if query.trim().is_empty() {
-                            "No plugins connected yet"
-                        } else {
-                            "No plugins match your search"
-                        }),
-                );
-            } else if self.plugin_connected_only || !query.trim().is_empty() {
-                content = content.child(
-                    self.catalog_rows(
-                        if self.plugin_connected_only {
-                            "Connected"
-                        } else {
-                            "Results"
-                        },
-                        "plugin-results",
-                        items
-                            .into_iter()
-                            .take((self.plugin_catalog_page + 1) * 40)
-                            .collect(),
-                        cx,
-                    ),
-                );
+                let busy = self.cloud_account.is_null() || self.cloud_account["login"].is_object()
+                    || self.pending.values().any(|method|method == methods::CLOUD_ACCOUNT_SIGN_IN);
+                content = content.child(catalog::signed_out(busy, |this,_,cx| {
+                    if this.cloud_account["user"].is_object() || this.cloud_account["login"].is_object()
+                        || this.pending.values().any(|method|method == methods::CLOUD_ACCOUNT_SIGN_IN) { return; }
+                    this.call(methods::CLOUD_ACCOUNT_SIGN_IN, json!({})); cx.notify();
+                }, cx));
+            } else if !self.plugin_state.snapshot["catalog"].is_array() {
+                content = content.child(div().py(px(32.)).text_color(rgb(MUTED))
+                    .child(if self.plugin_request.is_some() {"Loading plugins…"} else {"Plugins are unavailable. Refresh to try again."}));
+            } else if listing.sections.is_empty() {
+                content = content.child(div().py(px(48.)).text_center().text_color(rgb(MUTED))
+                    .child(if query.trim().is_empty() {"No plugins connected yet"} else {"No plugins match your search"}));
             } else {
-                let custom = items
-                    .iter()
-                    .filter(|p| p.custom)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let featured = items
-                    .iter()
-                    .filter(|p| !p.custom && p.featured)
-                    .take(12)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if !custom.is_empty() {
-                    content = content.child(self.catalog_rows(
-                        "Custom servers",
-                        "plugin-custom",
-                        custom,
-                        cx,
-                    ));
+                for section in listing.sections {
+                    content = content.child(self.catalog_rows(section.title, section.key, section.items, cx));
                 }
-                if !featured.is_empty() {
-                    content = content.child(self.catalog_rows(
-                        "Featured",
-                        "plugin-featured",
-                        featured,
-                        cx,
-                    ));
+                if listing.more {
+                    content = content.child(s::button("plugins-show-more", "Show more").self_start()
+                        .on_click(cx.listener(|this,_,_,cx|{this.plugin_catalog_page += 1; cx.notify();})));
                 }
-                content = content.child(
-                    self.catalog_rows(
-                        "All plugins",
-                        "plugin-all",
-                        items
-                            .into_iter()
-                            .filter(|p| !p.custom)
-                            .take((self.plugin_catalog_page + 1) * 40)
-                            .collect(),
-                        cx,
-                    ),
-                );
-            }
-            let total = catalog::catalog(
-                &self.plugin_state.snapshot,
-                &query,
-                self.plugin_connected_only,
-            )
-            .len();
-            if total > (self.plugin_catalog_page + 1) * 40 {
-                content = content.child(s::button("plugins-show-more", "Show more").on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.plugin_catalog_page += 1;
-                        cx.notify();
-                    }),
-                ));
             }
         }
         column()

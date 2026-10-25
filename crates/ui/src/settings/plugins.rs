@@ -25,8 +25,6 @@ gpui::actions!(
     ]
 );
 
-/// How many featured plugins the browse page lists before "All plugins".
-const FEATURED_LIMIT: usize = 12;
 /// The plugin Workspace (Personal / organization) picker. Organization
 /// features are hidden for now; the selection logic stays for their return.
 const SHOW_PLUGIN_WORKSPACES: bool = false;
@@ -40,6 +38,8 @@ pub struct PluginsCard {
     installed_search: Entity<ComposerInput>,
     /// The browse page shows only connected plugins ("Connected" tab).
     connected_only: bool,
+    browse_page: usize,
+    browse_query: String,
     browse_selected: Option<String>,
     detail_menu: zuse_viewport::plugin_detail::Menu,
     add_menu_open: bool,
@@ -109,6 +109,8 @@ impl PluginsCard {
             search,
             installed_search,
             connected_only: false,
+            browse_page: 0,
+            browse_query: String::new(),
             browse_selected: None,
             detail_menu: Default::default(),
             add_menu_open: false,
@@ -175,6 +177,7 @@ impl PluginsCard {
                                 if changed {
                                     card.error = None;
                                     card.browse_selected = None;
+                                    card.browse_page = 0;
                                     card.detail_menu = Default::default();
                                     card.setup = None;
                                     card.setup_events = None;
@@ -425,6 +428,7 @@ impl PluginsCard {
     }
 
     fn sign_in(&mut self, cx: &mut Context<Self>) {
+        if self.signed_in() || self.busy || self.account.login.is_some() { return; }
         self.request(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}), cx);
     }
 
@@ -529,10 +533,7 @@ impl PluginsCard {
     }
 
     fn connected_count(&self) -> usize {
-        self.connections()
-            .iter()
-            .filter(|connection| connection.state == "connected")
-            .count()
+        zuse_viewport::plugin_catalog::connected_count(&self.plugins.snapshot)
     }
 
     /// Progress, notices and prompts both views show above their lists: the
@@ -628,38 +629,10 @@ impl PluginsCard {
     }
 
     /// The signed-out explanation shared by both views.
-    fn render_sign_in_card(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
-        widgets::section_card(theme).mt_0().child(
-            widgets::card_row(theme, true)
-                .gap(px(12.))
-                .child(
-                    div()
-                        .size(px(32.))
-                        .flex_none()
-                        .rounded(px(10.))
-                        .bg(theme.settings_frame_bg())
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            crate::icons::icon(crate::icons::SETTINGS_PLUGINS)
-                                .size(px(16.))
-                                .text_color(theme.text_muted),
-                        ),
-                )
-                .child(catalog_ui::title_block(
-                    theme,
-                    "Sign in to connect plugins",
-                    "Hosted plugins run through your Zuse account. Local agents keep working without one.",
-                    crate::typography::TEXT_SM,
-                    crate::typography::TEXT_XS,
-                ))
-                .child(
-                    catalog_ui::primary_button(theme, "cloud-account-sign-in")
-                        .when(self.busy, |el| el.opacity(0.6))
-                        .child("Sign in")
-                        .on_click(cx.listener(|this, _, _, cx| this.sign_in(cx))),
-                ),
+    fn render_sign_in_card(&self, _theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        zuse_viewport::plugin_catalog::signed_out(
+            self.busy || !self.account_loaded || self.account.login.is_some(),
+            |this, _, cx| this.sign_in(cx), cx,
         )
     }
 
@@ -703,13 +676,7 @@ impl PluginsCard {
                         &definition.name,
                         36.,
                     ))
-                    .child(catalog_ui::title_block(
-                        theme,
-                        definition.name.clone(),
-                        definition.description.clone(),
-                        13.,
-                        12.,
-                    ))
+                    .child(zuse_viewport::plugin_catalog::title(&definition, theme.text, theme.text_muted, theme.settings_frame_bg()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.browse_selected = Some(selected.clone());
                         this.detail_menu = Default::default();
@@ -731,10 +698,13 @@ impl PluginsCard {
                         "Connect plugin"
                     },
                 )
+                .when(!connected && (self.busy || self.plugins.active_attempt() || self.plugins.snapshot["canManage"] == false), |v|v.opacity(0.5).cursor_default())
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    if !connected {
-                        this.connect(definition.clone(), window, cx);
-                    }
+                    if connected {
+                        this.browse_selected = Some(definition.id.clone());
+                        this.detail_menu = Default::default();
+                        cx.notify();
+                    } else { this.connect(definition.clone(), window, cx); }
                 })),
             )
             .into_any_element()
@@ -816,19 +786,19 @@ impl PluginsCard {
                 grid = grid.child(left);
                 continue;
             }
-            let right = rows
-                .next()
-                .unwrap_or_else(|| div().flex_1().min_w_0().into_any_element());
-            grid = grid.child(div().flex().gap(px(16.)).child(left).child(right));
+            grid = grid.child(div().flex().gap(px(16.))
+                .child(div().flex_1().min_w_0().child(left))
+                .child(div().flex_1().min_w_0().children(rows.next())));
         }
         div()
             .flex()
             .flex_col()
-            .gap(px(6.))
+            .gap(px(4.))
             .child(
                 div()
                     .px(px(8.))
-                    .text_size(crate::typography::text_sm())
+                    .pb(px(4.))
+                    .text_size(px(13.))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text_strong)
                     .child(title),
@@ -847,6 +817,9 @@ impl PluginsCard {
     ) -> AnyElement {
         use zuse_viewport::plugin_catalog as catalog;
         let theme = Theme::of(cx).clone();
+        let prefs = crate::settings::current(cx);
+        let sidebar = if prefs.sidebar_collapsed { 0. } else { prefs.sidebar_width };
+        let padding = if f32::from(window.viewport_size().width) - sidebar < 800. { 16. } else { 32. };
         zuse_viewport::palette::set_light(theme.appearance.is_light());
         if let Some(definition) = self.browse_selected.as_ref().and_then(|id| {
             catalog::catalog(&self.plugins.snapshot, "", false)
@@ -871,7 +844,7 @@ impl PluginsCard {
                         .w_full()
                         .max_w(px(768.))
                         .mx_auto()
-                        .px(px(32.))
+                        .px(px(padding))
                         .py(px(32.))
                         .flex()
                         .flex_col()
@@ -890,71 +863,38 @@ impl PluginsCard {
                 )
                 .into_any_element();
         }
-        let query = self.search.read(cx).text().trim().to_owned();
-        let items = catalog::catalog(&self.plugins.snapshot, &query, self.connected_only);
+        let query = self.search.read(cx).text().trim().to_lowercase();
+        if query != self.browse_query { self.browse_query = query.clone(); self.browse_page = 0; }
+        let listing = catalog::browse(&self.plugins.snapshot, &query, self.connected_only, self.browse_page);
         let connected = self.connected_count();
         let mut sections: Vec<AnyElement> = Vec::new();
-        if items.is_empty() {
-            sections.push(
-                div()
-                    .px(px(8.))
-                    .py(px(24.))
-                    .text_size(crate::typography::text_xs())
-                    .text_color(theme.text_muted)
-                    .child(if self.connected_only && query.is_empty() {
-                        "No connected plugins yet. Connect one from Browse."
-                    } else {
-                        "No plugins match your search."
-                    })
-                    .into_any_element(),
-            );
-        } else if self.connected_only {
-            sections.push(self.render_browse_section(
-                &theme,
-                "Connected",
-                "plugin-connected",
-                items,
-                window.viewport_size().width >= px(1024.),
-                cx,
-            ));
+        if !self.signed_in() {
+            sections.push(self.render_sign_in_card(&theme, cx).into_any_element());
+        } else if !self.plugins.snapshot["catalog"].is_array() {
+            sections.push(div().py(px(32.)).text_color(theme.text_muted)
+                .child(if self.busy { "Loading plugins…" } else { "Plugins are unavailable. Refresh to try again." }).into_any_element());
+        } else if listing.sections.is_empty() {
+            sections.push(div().px(px(8.)).py(px(24.)).text_size(px(12.)).text_color(theme.text_muted)
+                .child(if self.connected_only && query.is_empty() {"No plugins connected yet"} else {"No plugins match your search"}).into_any_element());
         } else {
-            if query.is_empty() {
-                let featured: Vec<_> = items
-                    .iter()
-                    .filter(|item| item.featured)
-                    .take(FEATURED_LIMIT)
-                    .cloned()
-                    .collect();
-                if !featured.is_empty() {
-                    sections.push(self.render_browse_section(
-                        &theme,
-                        "Featured",
-                        "plugin-featured",
-                        featured,
-                        window.viewport_size().width >= px(1024.),
-                        cx,
-                    ));
-                }
+            for section in listing.sections {
+                sections.push(self.render_browse_section(&theme, section.title, section.key, section.items,
+                    window.viewport_size().width >= px(1024.), cx));
             }
-            let mut all = items;
-            all.sort_by_key(|item| item.name.to_lowercase());
-            sections.push(self.render_browse_section(
-                &theme,
-                "All plugins",
-                "plugin-all",
-                all,
-                window.viewport_size().width >= px(1024.),
-                cx,
-            ));
+            if listing.more {
+                sections.push(catalog_ui::secondary_button(&theme, "plugins-show-more").self_start().child("Show more")
+                    .on_click(cx.listener(|this,_,_,cx| { this.browse_page += 1; cx.notify(); })).into_any_element());
+            }
         }
         let tabs = catalog_ui::segmented_tabs(
             &theme,
             "plugins-tab",
-            &[("Browse", None), ("Connected", Some(connected))],
+            &[("Browse", None), ("Connected", (connected > 0).then_some(connected))],
             usize::from(self.connected_only),
             |index, tab| {
                 tab.on_click(cx.listener(move |this, _, _, cx| {
                     this.connected_only = index == 1;
+                    this.browse_page = 0;
                     cx.notify();
                 }))
             },
@@ -968,11 +908,12 @@ impl PluginsCard {
                 Some(224.),
                 self.search.clone().into_any_element(),
             ))
-            .child(
+            .when(self.signed_in(), |view| view.child(
                 catalog_ui::secondary_button(&theme, "add-hosted-server")
                     .child("Add MCP server")
+                    .when(self.plugins.snapshot["canManage"] == false || self.busy, |v|v.opacity(0.5))
                     .on_click(cx.listener(|this, _, window, cx| this.add_server(window, cx))),
-            )
+            ))
             .child(
                 catalog_ui::icon_button(
                     &theme,
@@ -984,7 +925,6 @@ impl PluginsCard {
                 .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             );
         let status = self.render_status(&theme, cx);
-        let sign_in = (!self.signed_in()).then(|| self.render_sign_in_card(&theme, cx));
         div()
             .id("plugins-page")
             .size_full()
@@ -996,18 +936,18 @@ impl PluginsCard {
                     .w_full()
                     .max_w(px(768.))
                     .mx_auto()
-                    .px(px(32.))
+                    .px(px(padding))
                     .pt(px(32.))
                     .pb(px(32.))
                     .flex()
                     .flex_col()
                     .gap(px(20.))
-                    .text_size(crate::typography::text_xs())
+                    .text_size(crate::typography::text_xs()).line_height(px(16.))
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .gap(px(4.))
+                            .flex_col().items_start().gap(px(16.))
+                            .child(div().min_w_0().flex().flex_col().gap(px(4.))
                             .child(
                                 div()
                                     .text_size(crate::typography::ui_rems(20.))
@@ -1017,14 +957,13 @@ impl PluginsCard {
                             )
                             .child(
                                 div()
-                                    .text_size(crate::typography::text_sm())
+                                    .text_size(px(12.))
                                     .text_color(theme.text_muted)
                                     .child("Connect your tools so agents can work across them in any chat."),
-                            ),
+                            ))
+                            .child(toolbar),
                     )
-                    .child(toolbar)
                     .child(div().flex().child(tabs))
-                    .children(sign_in)
                     .children(status)
                     .children(sections),
             )

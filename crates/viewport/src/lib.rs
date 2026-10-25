@@ -393,11 +393,11 @@ impl WorkspaceView {
         cx.observe(&plugin_installed_search, |_, _, cx| cx.notify())
             .detach();
         let plugin_search = cx.new(|cx| input::TextInput::new("Search plugins", window, cx));
-        cx.observe(&plugin_search, |this: &mut Self, _, cx| {
+        cx.observe(&plugin_search, |_: &mut Self, _, cx| cx.notify()).detach();
+        cx.subscribe(&plugin_search, |this: &mut Self, _, _: &input::Changed, cx| {
             this.plugin_catalog_page = 0;
             cx.notify();
-        })
-        .detach();
+        }).detach();
         let creation_source_picker=Self::new_creation_sources(cx);
         let import_picker=Self::new_import_menu(cx);
         let repository_panel = cx.new(|cx| cloud_repositories::RepositoryPanel::new(window, cx));

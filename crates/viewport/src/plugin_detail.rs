@@ -329,14 +329,6 @@ pub fn render<T: 'static>(
                 .when(busy, |d| d.opacity(0.6))
                 .child(add_glyph(colors))
                 .child("Connect another account")
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                        if available {
-                            action(this, Action::Connect, window, cx);
-                        }
-                        cx.stop_propagation();
-                    }
-                }))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if available {
                         action(this, Action::Connect, window, cx);
@@ -474,14 +466,6 @@ pub fn render<T: 'static>(
             crate::styling::dither_action("plugin-detail-connect", "Connect", available, true)
                 .track_focus(&connect_focus)
                 .tab_index(0)
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                        if available {
-                            action(this, Action::Connect, window, cx);
-                        }
-                        cx.stop_propagation();
-                    }
-                }))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if available {
                         action(this, Action::Connect, window, cx);

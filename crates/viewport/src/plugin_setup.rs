@@ -31,6 +31,8 @@ pub struct PluginSetup {
     name: Entity<InputState>,
     dialog_focus: FocusHandle,
     return_focus: Option<FocusHandle>,
+    focus_on_mount: bool,
+    focus_at_open: Option<FocusHandle>,
     cancel_focus: FocusHandle,
     submit_focus: FocusHandle,
     auth_focus: [FocusHandle; 3],
@@ -133,19 +135,15 @@ impl PluginSetup {
             });
         }
         let return_focus = window.focused(cx);
-        let first = if matches!(target, SetupTarget::Catalog(_)) {
-            &secret
-        } else {
-            &name
-        };
-        window.focus(&first.read(cx).focus_handle(cx), cx);
         Self {
             tenant,
             target,
             return_to,
             name,
             dialog_focus: cx.focus_handle(),
+            focus_at_open: return_focus.clone(),
             return_focus,
+            focus_on_mount: true,
             cancel_focus: cx.focus_handle().tab_stop(true),
             submit_focus: cx.focus_handle().tab_stop(true),
             auth_focus: std::array::from_fn(|_| cx.focus_handle()),
@@ -376,6 +374,15 @@ impl PluginSetup {
 }
 impl Render for PluginSetup {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.focus_on_mount {
+            self.focus_on_mount = false;
+            let current = window.focused(cx);
+            if !self.busy && (current.is_none() || current == self.focus_at_open) {
+                let field = if self.is_inline() { &self.secret } else { &self.name };
+                window.focus(&field.read(cx).focus_handle(cx), cx);
+                field.update(cx, |_, cx| cx.notify());
+            }
+        }
         if self.is_inline() {
             return self.inline(window, cx);
         }

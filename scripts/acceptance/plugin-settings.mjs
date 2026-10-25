@@ -6,7 +6,7 @@ import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {engine,browser,fixture,artifact,sleep} from './harness.mjs';
 let host,page,child,url;
-async function proof(){return fetch(url+'/__fixture').then(r=>r.json());}
+async function proof(){return fetch(url+'/__fixture',{headers:{Connection:'close'}}).then(r=>r.json());}
 async function until(check,label){for(let n=0;n<50;n++){const value=await proof();if(check(value))return value;await sleep(100);}throw Error(label);}
 const click=async(x,y)=>{page.click(x,y);await sleep(150);};
 const press=key=>page.run(['press',key]);
@@ -47,11 +47,11 @@ try {
   press('End');press('Enter');
   await until(p=>!p.snapshot.connections.some(c=>c.label==='Figma 2'),'Disconnect only the selected account');
   assert.equal((await proof()).snapshot.connections.find(c=>c.id==='figma-one').enabled,false);
-  await click(431,84);await click(1074,499);
+  await click(431,84);await click(1086,475);
   page.screenshot('plugin-parity-api-key-inline.png');
   type('fixture-plugin-key');page.screenshot('plugin-parity-api-key-masked.png');press('Escape');await sleep(800);page.screenshot('plugin-parity-api-key-cancelled.png');
   assert.equal((await proof()).events.filter(e=>e.action==='connect'&&e.pluginId==='metrics').length,0,'Escape discards the inline secret');
-  press('Enter');await sleep(800);page.screenshot('plugin-parity-api-key-reopened.png');await click(600,332);type('fixture-plugin-key');press('Enter');
+  press('Enter');await sleep(800);page.screenshot('plugin-parity-api-key-reopened.png');type('fixture-plugin-key');press('Enter');
   await until(p=>p.snapshot.connections.some(c=>c.pluginId==='metrics'),'API key connection');
   assert.equal((await proof()).events.filter(e=>e.action==='connect'&&e.pluginId==='metrics').length,1,'Enter submits once');
   await click(431,84);await click(692,150);page.screenshot('plugin-parity-mcp-modal.png');
@@ -85,7 +85,7 @@ try {
   await fetch(url+'/__fixture',{method:'POST',body:JSON.stringify({account:'other-plugin-owner',canManage:false})});
   await sleep(250);press('Enter');await sleep(100);
   await until(p=>p.events.filter(e=>e.action==='list').length>listsBefore,'Refresh the new account');
-  await click(1074,499);await sleep(100);
+  await click(1086,475);await sleep(100);
   assert.equal((await proof()).events.filter(e=>e.action!=='list').length,before,'Account change discards the form; read-only catalog cannot connect');
   assert.equal((await proof()).snapshot.connections.length,0,'Prior account connections are cleared');
   page.screenshot('plugin-parity-read-only.png');
@@ -98,7 +98,7 @@ try {
   artifact('plugin-parity-acceptance.json',{
     compiledGpui:true,disposableRealEngine:true,pluginProtocolFixture:true,liveAccountAcceptance:false,
     referenceCommit:'43e14c1',installedFilter:true,selectedToggle:true,separateCatalog:true,
-    additionalAccountLabel:'Figma 2',connectPollReconciliation:true,accountMenuKeyboard:true,selectedDisconnect:true,automaticPolling:true,inlineKeyEscapeRestoresTrigger:true,inlineReopenTextEntryUsesFieldClick:true,
+    additionalAccountLabel:'Figma 2',connectPollReconciliation:true,accountMenuKeyboard:true,selectedDisconnect:true,automaticPolling:true,inlineKeyEscapeRestoresTrigger:true,inlineReopenTextEntryWithoutFieldClick:true,
     inlineApiKey:true,apiKeyEnterSubmitsOnce:true,modalEscapeCancels:true,modalTabWrap:true,authenticationTabLabelsVisible:true,
     authenticationEndKey:true,customServerAdded:true,accountChangeDiscardsForm:true,readOnlyBlocksWrites:true,
     agentWrites:0,pluginActions:result.events.filter(e=>e.action!=='list'),

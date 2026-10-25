@@ -5,6 +5,7 @@ const [ipc, ready, assets] = process.argv.slice(2);
 const clients = new Set(), events = [];
 let account = 'plugin-ui-owner', canManage = true, sequence = 1, attempt = null, approved = false;
 let removalMode='ok', removalRelease;
+let listMode='ok', releaseList, signInMode='forward', releaseSignIn;
 let catalog = [
   {id:'figma',name:'Figma',description:'Bring designs and components into your agent workflow.',domain:'figma.com',featured:true,custom:false},
   {id:'workspace-tools',name:'Workspace tools',description:'Tools from your custom MCP server.',domain:'',custom:true,url:'https://tools.example.test/mcp'},
@@ -29,6 +30,10 @@ const server = Bun.serve({hostname:'127.0.0.1',port:0,
           for(const client of clients)for(const [id,method]of client.data.handled)if(method==='CloudAccountStatus')emit(client,{id,item:accountValue()});
         }
         if(Object.hasOwn(value,'canManage'))canManage=value.canManage;
+        if(Array.isArray(value.catalog))catalog=value.catalog;
+        if(Array.isArray(value.connections))connections=value.connections;
+        if(Object.hasOwn(value,'listMode')){listMode=value.listMode;if(listMode!=='hold'){releaseList?.();releaseList=null;}}
+        if(Object.hasOwn(value,'signInMode')){signInMode=value.signInMode;if(signInMode!=='hold'){releaseSignIn?.();releaseSignIn=null;}}
         if(Object.hasOwn(value,'approve'))approved=value.approve;
         if(Object.hasOwn(value,'removalMode')){removalMode=value.removalMode;if(removalMode!=='hold'){removalRelease?.();removalRelease=null;}}
       }
@@ -61,12 +66,21 @@ const server = Bun.serve({hostname:'127.0.0.1',port:0,
       if(['QueueMessage','QueueCommand','CloudCreate'].includes(frame.method)) {
         events.push({blocked:frame.method});emit(client,{id:frame.id,err:'Provider execution is disabled in this fixture',done:true});return;
       }
+      if(frame.method==='CloudAccountSignIn'&&signInMode!=='forward') {
+        events.push({action:'signIn'});client.data.handled.set(frame.id,frame.method);
+        if(signInMode==='hold')await new Promise(resolve=>{releaseSignIn=resolve;});
+        emit(client,{id:frame.id,ok:accountValue()});return;
+      }
       if(frame.method==='Plugins') {
-        events.push({action:p.action,tenantId:p.tenantId,pluginId:p.pluginId,connectionId:p.connectionId,enabled:p.enabled,label:p.label,name:p.name,url:p.url,apiKeyHeader:typeof p.apiKey==='object'?p.apiKey?.header:undefined,apiKeySubmitted:!!p.apiKey});
+        events.push({action:p.action,tenantId:p.tenantId,pluginId:p.pluginId,connectionId:p.connectionId,enabled:p.enabled,label:p.label,name:p.name,url:p.url,apiKeyHeader:typeof p.apiKey==='object'?p.apiKey?.header:undefined,apiKeySubmitted:!!p.apiKey,apiKeyLength:typeof p.apiKey==='string'?p.apiKey.length:undefined,apiKeyMatchesFixture:typeof p.apiKey==='string'?p.apiKey==='fixture-plugin-key':undefined});
         let response;
         if(!account) {emit(client,{id:frame.id,err:'Sign in first',done:true});return;}
         if(p.action!=='list'&&!canManage) {emit(client,{id:frame.id,err:'Read-only workspace',done:true});return;}
-        if(p.action==='list')response=snapshot();
+        if(p.action==='list'){
+          if(listMode==='hold')await new Promise(resolve=>{releaseList=resolve;});
+          if(listMode==='fail'){emit(client,{id:frame.id,err:'Plugin catalogue is unavailable. Refresh to try again.',done:true});return;}
+          response=snapshot();
+        }
         else if(p.action==='setEnabled') {connections=connections.map(c=>c.id===p.connectionId?{...c,enabled:p.enabled}:c);response={kind:'ok'};}
         else if(p.action==='disconnect') {connections=connections.filter(c=>c.id!==p.connectionId);response={kind:'ok'};}
         else if(p.action==='removeServer') {
@@ -75,9 +89,9 @@ const server = Bun.serve({hostname:'127.0.0.1',port:0,
           catalog=catalog.filter(c=>c.id!==p.pluginId);connections=connections.filter(c=>c.pluginId!==p.pluginId);response={kind:'ok'};}
         else if(p.action==='connect') {
           approved=false;
-          if(p.pluginId==='metrics') {
+          if(catalog.find(plugin=>plugin.id===p.pluginId)?.apiKeyHeader) {
             if(p.apiKey!=='fixture-plugin-key') {emit(client,{id:frame.id,err:'Expected the fixture API key',done:true});return;}
-            connections.push({id:'metrics-'+(++sequence),pluginId:p.pluginId,label:p.label,owner:account,state:'connected',createdAt:Date.UTC(2026,9,20)+0.5,enabled:true});response={kind:'attempt',id:'attempt-'+sequence,connectionId:'metrics-'+sequence,pluginId:p.pluginId,state:'connected',authorizationUrl:null,expiresAt:Date.now()+60000};
+            connections.push({id:p.pluginId+'-'+(++sequence),pluginId:p.pluginId,label:p.label,owner:account,state:'connected',createdAt:Date.UTC(2026,9,20)+0.5,enabled:true});response={kind:'attempt',id:'attempt-'+sequence,connectionId:p.pluginId+'-'+sequence,pluginId:p.pluginId,state:'connected',authorizationUrl:null,expiresAt:Date.now()+60000};
           } else {
             attempt={id:'attempt-'+(++sequence),connectionId:'connection-'+sequence,pluginId:p.pluginId,label:p.label,state:'pending'};
             response={kind:'attempt',...attempt,authorizationUrl:'https://auth.example.test/connect',expiresAt:Date.now()+60000};
