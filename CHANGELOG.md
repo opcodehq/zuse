@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.25.1 Preview 5 - 2026-10-26
+
+### Fixed
+
+- Use the existing Codex ChatGPT sign-in for composer dictation, matching Electron’s recording upload and transcription flow.
+- Remove the speaker control, spoken-response settings, and local speech-model download/runtime.
+- Keep microphone capture in memory, cancel uploads when dictation is cancelled, and preserve drafts on transcription failures.
+
 ## 0.25.1 Preview 4 - 2026-10-26
 
 ### Fixed

@@ -10315,6 +10315,7 @@ impl Composer {
         {
             return;
         }
+        let engine = self.state.read(cx).engine().map(|engine| engine.controller());
         self.input
             .update(cx, |input, cx| match input.dictation.phase {
                 Phase::Requesting => {
@@ -10334,7 +10335,7 @@ impl Composer {
                     cx.emit(DictationInputEvent::Changed);
                 }
                 _ => {
-                    if let Some(service) = crate::dictation::start(cx) {
+                    if let Some(service) = crate::dictation::start(engine.clone(), cx) {
                         input.begin_dictation(service, cx);
                     }
                 }
@@ -10425,23 +10426,6 @@ impl Composer {
     /// Microphone at rest; the one Stop control while dictating. `t` morphs
     /// the mic glyph out and the accent glass plate, stop square or spinner
     /// in; the glow follows the live voice level.
-    fn render_speech_button(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        if !crate::speech::available() { return None; }
-        let state = self.state.read(cx);
-        let chat = state.selected_chat.clone()?;
-        let response = state.transcript.iter().rev().find(|entry| entry.role == MessageRole::Assistant)?;
-        let text = response.parts.iter().filter_map(|part| match part { MessagePart::Text { text, .. } => Some(text.as_str()), _ => None }).collect::<Vec<_>>().join("\n");
-        if text.trim().is_empty() { return None; }
-        let speaking = crate::speech::speaking(cx);
-        let theme = Theme::of(cx);
-        Some(div().id("composer-read-aloud").debug_selector(|| "composer-read-aloud".into())
-            .role(gpui::Role::Button).aria_label(if speaking { "Stop reading" } else { "Read latest response" })
-            .size(px(28.)).flex_none().flex().items_center().justify_center().rounded(px(6.)).cursor_pointer()
-            .tooltip(crate::settings::widgets::text_tooltip(if speaking { "Stop reading" } else { "Read latest response" }))
-            .child(crate::icons::icon(if speaking { crate::icons::STOP } else { crate::icons::VOLUME_LOUD }).size(px(15.)).text_color(theme.text_muted))
-            .on_click(move |_, _, cx| crate::speech::toggle(chat.clone(), text.clone(), cx)).into_any_element())
-    }
-
     fn render_dictation_button(
         &self,
         t: f32,
@@ -11590,7 +11574,6 @@ impl Render for Composer {
                             .flex_row()
                             .items_center()
                             .pl(px(ACTION_PRIMARY_GAP))
-                            .children(self.render_speech_button(cx))
                             .children(microphone)
                             .child(model_picker),
                     )

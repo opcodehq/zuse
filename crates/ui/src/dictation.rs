@@ -1,5 +1,5 @@
-//! Viewport-local dictation. Only transcript strings cross this boundary; audio
-//! never enters the engine, a document, an attachment, or the RPC transport.
+//! Microphone capture belongs to this viewport. Recordings go to the local
+//! engine for Codex-authenticated transcription and never enter chat documents.
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -10,7 +10,7 @@ pub(crate) mod waveform;
 pub(crate) use meter::{Bar, FLOOR, Meter};
 pub(crate) use model::{card, enabled, init};
 
-pub(crate) const FINALIZE_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const FINALIZE_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(tag = "kind", content = "text", rename_all = "snake_case")]
@@ -68,7 +68,7 @@ fn origin_window() -> usize {
 struct Native {
     pending: Option<Event>,
     origin_window: usize,
-    dir: std::path::PathBuf,
+    engine: Option<crate::state::EngineHandle>,
     device: Option<String>,
     session: Option<zuse_voice::Session>,
     finished: bool,
@@ -98,7 +98,7 @@ impl Transcriber for Native {
                     self.finished = true;
                     return Some(Event::Cancelled);
                 }
-                _ => match zuse_voice::Session::start(self.dir.clone(), self.device.clone()) {
+                _ => match remote_session(self.engine.clone(), self.device.clone()) {
                     Ok(s) => self.session = Some(s),
                     Err(e) => {
                         self.finished = true;
@@ -126,7 +126,10 @@ impl Transcriber for Native {
         }
     }
 }
-pub(crate) fn start(cx: &gpui::App) -> Option<Box<dyn Transcriber>> {
+pub(crate) fn start(
+    engine: Option<crate::state::EngineHandle>,
+    cx: &gpui::App,
+) -> Option<Box<dyn Transcriber>> {
     if !enabled(cx) {
         return None;
     }
@@ -140,11 +143,37 @@ pub(crate) fn start(cx: &gpui::App) -> Option<Box<dyn Transcriber>> {
     Some(Box::new(Native {
         pending: None,
         origin_window,
-        dir: model::directory(cx),
+        engine,
         device: crate::settings::current(cx).dictation_input.clone(),
         session: None,
         finished: false,
     }))
+}
+
+fn remote_session(
+    engine: Option<crate::state::EngineHandle>,
+    device: Option<String>,
+) -> anyhow::Result<zuse_voice::Session> {
+    let engine =
+        engine.ok_or_else(|| anyhow::anyhow!("Connect to this computer to use dictation."))?;
+    zuse_voice::Session::start_remote(device, move |audio, cancel| {
+        use base64::Engine as _;
+        use std::sync::atomic::Ordering;
+        tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+            let request = engine.client().call_scoped("TranscribeDictation", serde_json::json!({
+                "audio": base64::engine::general_purpose::STANDARD.encode(audio),
+            }));
+            tokio::select! {
+                result = request => {
+                    let result = result.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    result["text"].as_str().map(str::to_owned).ok_or_else(|| anyhow::anyhow!("Transcription returned no text."))
+                }
+                _ = async { while !cancel.load(Ordering::Acquire) { tokio::time::sleep(Duration::from_millis(20)).await; } } => {
+                    anyhow::bail!("Dictation cancelled")
+                }
+            }
+        })
+    })
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -286,7 +315,7 @@ mod tests {
         let mut native = Native {
             pending: None,
             origin_window: 0,
-            dir: std::path::PathBuf::new(),
+            engine: None,
             device: None,
             session: None,
             finished: false,

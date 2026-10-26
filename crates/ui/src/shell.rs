@@ -2901,8 +2901,6 @@ impl Shell {
     // ---- splash ----
 
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
-        let speech_chat = state.read(cx).selected_chat.clone();
-        crate::speech::retain_chat(speech_chat.as_deref(), cx);
         // Voice is an orchestrator over every thread: navigation keeps it,
         // only losing the engine that hosts it ends the session.
         if self.voice.read(cx).chat_id.is_some()
@@ -5118,7 +5116,6 @@ impl Shell {
     // ---- routes / settings ----
 
     fn set_route(&mut self, route: Route, cx: &mut Context<Self>) {
-        if !matches!(route, Route::Chat) { crate::speech::stop(cx); }
         if matches!(self.route,Route::Settings(SettingsSection::Archived)) && !matches!(route,Route::Settings(SettingsSection::Archived)) {
             if let Some(page)=self.archived_page.clone() {page.update(cx,|page,cx|page.on_hidden(cx));}
         }
@@ -5953,34 +5950,6 @@ impl Shell {
             }
             SettingsSection::Voice => {
                 let card = crate::dictation::card(cx);
-                let state = self.state.read(cx);
-                let mut hosts = vec![(None, "This device".to_owned(), true, "Local".to_owned())];
-                for device in &state.devices {
-                    if state.local_device_id.as_deref() == Some(&device.id) {
-                        continue;
-                    }
-                    let online = state.device_online(&device.id, chrono::Utc::now());
-                    let compatible = device.supports(zuse_protocol::voice::remote::CAPABILITY);
-                    let detail = if !online {
-                        "Offline"
-                    } else if !compatible {
-                        "Update Zuse to use remote voice"
-                    } else {
-                        "Available"
-                    };
-                    hosts.push((
-                        Some(device.id.clone()),
-                        device.name.clone(),
-                        online && compatible,
-                        detail.into(),
-                    ));
-                }
-                let live = self.voice.read(cx).is_live();
-                card.update(cx, |card, cx| card.set_hosts(hosts, live, cx));
-                if let Some(snapshot) = &self.voice.read(cx).snapshot {
-                    let voices = snapshot.voices.clone();
-                    card.update(cx, |card, cx| card.set_voices(&voices, cx));
-                }
                 card.into_any_element()
             }
             SettingsSection::Shortcuts | SettingsSection::General | SettingsSection::Appshots => {

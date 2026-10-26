@@ -135,6 +135,47 @@ pub fn login_command(codex_home: &std::path::Path) -> Result<Command, HarnessErr
     Ok(cmd)
 }
 
+/// Let Codex refresh its own ChatGPT login, using the same home as the
+/// account manager. Credentials never cross the app-server or UI boundary.
+pub async fn refresh_dictation_account(home: &std::path::Path) -> Result<(), HarnessError> {
+    refresh_dictation_account_using(&CodexHarness::new(), home).await
+}
+
+async fn refresh_dictation_account_using(harness: &CodexHarness, home: &std::path::Path) -> Result<(), HarnessError> {
+    let exe = harness.resolve_executable()?;
+    let mut cmd = Command::new(&exe);
+    crate::compose_child_path(&mut cmd, &exe);
+    cmd.arg("app-server").env("CODEX_HOME", home)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    let mut child = cmd.spawn()?;
+    let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        return Err(HarnessError::Protocol("Codex account service unavailable".into()));
+    };
+    let (client, mut incoming) = RpcClient::new(stdin, stdout);
+    let refresh = async {
+        client.request("initialize", json!({"clientInfo":{"name":"zuse-native","version":env!("CARGO_PKG_VERSION")}})).await?;
+        client.notify("initialized", None);
+        let account = client.request("account/read", json!({"refreshToken":true})).await?;
+        if account["account"]["type"] != "chatgpt" {
+            return Err(HarnessError::Protocol("Sign in to Codex with your ChatGPT account to dictate.".into()));
+        }
+        Ok(())
+    };
+    tokio::pin!(refresh);
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            tokio::select! {
+                result = &mut refresh => return result,
+                Some(event) = incoming.recv() => {
+                    if let Incoming::Request { id, .. } = event { client.respond(&id, Value::Null); }
+                }
+            }
+        }
+    }).await;
+    shutdown_child(&mut child, Duration::from_secs(1)).await;
+    result.unwrap_or_else(|_| Err(HarnessError::Protocol("Codex account refresh timed out".into())))
+}
+
 /// The Codex harness. Construct with [`CodexHarness::new`]; tests point it at a
 /// fake app server with [`CodexHarness::with_executable`].
 pub struct CodexHarness {
@@ -2247,6 +2288,31 @@ use crate::{Signal, send_signal, shutdown_child};
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dictation_refreshes_existing_codex_login_without_starting_a_thread() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("codex");
+        std::fs::write(&script, r#"#!/usr/bin/env python3
+import json,os,pathlib,sys
+for line in sys.stdin:
+    request=json.loads(line)
+    method=request.get('method')
+    if method=='initialize':
+        print(json.dumps({'id':request['id'],'result':{}}),flush=True)
+    elif method=='initialized': pass
+    elif method=='account/read':
+        assert request['params']['refreshToken'] is True
+        pathlib.Path(os.environ['CODEX_HOME'],'refreshed').write_text('yes')
+        print(json.dumps({'id':request['id'],'result':{'account':{'type':'chatgpt'}}}),flush=True)
+    else: raise Exception('Unexpected method')
+"#).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        refresh_dictation_account_using(&CodexHarness::new().with_executable(script), dir.path()).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.path().join("refreshed")).unwrap(), "yes");
+    }
 
     #[test]
     fn current_schema_and_legacy_visibility_are_compatible() {

@@ -53,6 +53,7 @@
 mod archive_review;
 mod creation_sources;
 mod desktop_import;
+mod dictation;
 mod external_chats;
 mod git_workspace;
 mod visuals;
@@ -2346,6 +2347,9 @@ impl RpcService for EngineRpc {
                 | methods::FORGET_AGENT_ACCOUNT
         ) {
             self.voice.retire();
+        }
+        if method == "TranscribeDictation" {
+            return self.transcribe_dictation(params).await;
         }
         if voice_remote::handles(method) {
             return self.voice_remote(method, params).await;

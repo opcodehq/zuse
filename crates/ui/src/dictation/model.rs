@@ -6,75 +6,34 @@ use crate::{
 use gpui::{App, Context, Entity, Global, Task, Window, div, prelude::*, px};
 use std::{
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
     time::{Duration, Instant},
 };
 struct VoiceGlobal {
     card: Entity<VoiceCard>,
-    directory: PathBuf,
 }
 impl Global for VoiceGlobal {}
-pub(crate) fn init(root: PathBuf, cx: &mut App) {
-    let directory = root.join("models/parakeet-tdt-0.6b-v3-int8");
+pub(crate) fn init(_root: PathBuf, cx: &mut App) {
     let card = cx.new(|_| VoiceCard {
         scroll: widgets::PageScroll::default(),
-        ready: zuse_voice::installed(&directory),
-        cache_present: directory.exists(),
-        directory: directory.clone(),
-        cancel: None,
-        task: None,
-        progress: 0,
-        error: None,
         inputs: Inputs::default(),
         input_select: widgets::SelectState::default(),
-        voice_select: widgets::SelectState::default(),
-        host_select: widgets::SelectState::default(),
-        hosts: Vec::new(),
-        call_live: false,
-        voices: zuse_protocol::voice::DEFAULT_VOICES
-            .iter()
-            .map(|voice| (*voice).to_owned())
-            .collect(),
         shortcut: None,
     });
-    cx.set_global(VoiceGlobal { card, directory });
-}
-pub(crate) fn directory(cx: &App) -> PathBuf {
-    cx.global::<VoiceGlobal>().directory.clone()
+    cx.set_global(VoiceGlobal { card });
 }
 pub(crate) fn enabled(cx: &App) -> bool {
     settings::current(cx).dictation_enabled
-        && cx
-            .try_global::<VoiceGlobal>()
-            .is_some_and(|g| g.card.read(cx).ready)
 }
 pub(crate) fn card(cx: &mut App) -> Entity<VoiceCard> {
     if !cx.has_global::<VoiceGlobal>() {
-        init(std::env::temp_dir().join("zuse-voice-test"), cx);
+        init(PathBuf::new(), cx);
     }
     cx.global::<VoiceGlobal>().card.clone()
 }
 pub(crate) struct VoiceCard {
     scroll: widgets::PageScroll,
-    directory: PathBuf,
-    ready: bool,
-    cache_present: bool,
-    cancel: Option<Arc<AtomicBool>>,
-    task: Option<Task<()>>,
-    progress: u64,
-    error: Option<String>,
     inputs: Inputs,
     input_select: widgets::SelectState,
-    voice_select: widgets::SelectState,
-    host_select: widgets::SelectState,
-    hosts: Vec<(Option<String>, String, bool, String)>,
-    call_live: bool,
-    /// Native voice styles, refreshed with the live session's reported catalog.
-    voices: Vec<String>,
-    /// Created on first render (it needs this card's context).
     shortcut: Option<Entity<settings::shortcuts::ShortcutField>>,
 }
 /// Microphones as last enumerated, refreshed off the UI thread while the page
@@ -88,133 +47,11 @@ struct Inputs {
 }
 const INPUT_REFRESH: Duration = Duration::from_secs(3);
 impl VoiceCard {
-    pub(crate) fn set_hosts(
-        &mut self,
-        hosts: Vec<(Option<String>, String, bool, String)>,
-        live: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if self.hosts != hosts || self.call_live != live {
-            self.hosts = hosts;
-            self.call_live = live;
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn set_voices(&mut self, voices: &[String], cx: &mut Context<Self>) {
-        if !voices.is_empty() && self.voices != voices {
-            self.voices = voices.to_vec();
-            cx.notify();
-        }
-    }
-
-    fn set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+    fn primary(&mut self, cx: &mut Context<Self>) {
         settings::update(settings::SavePolicy::Immediate, cx, |s| {
-            s.dictation_enabled = enabled
+            s.dictation_enabled = !s.dictation_enabled
         });
         cx.refresh_windows();
-        cx.notify();
-    }
-    fn primary(&mut self, cx: &mut Context<Self>) {
-        if let Some(cancel) = &self.cancel {
-            cancel.store(true, Ordering::Release);
-        } else if self.ready {
-            self.set_enabled(!settings::current(cx).dictation_enabled, cx);
-        } else {
-            self.download(cx);
-        }
-        cx.notify();
-    }
-    fn download(&mut self, cx: &mut Context<Self>) {
-        if self.cancel.is_some() {
-            return;
-        }
-        self.error = None;
-        self.progress = 0;
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.cancel = Some(cancel.clone());
-        let progress = Arc::new(AtomicU64::new(0));
-        let counter = progress.clone();
-        let dir = self.directory.clone();
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        std::thread::spawn(move || {
-            let r = zuse_voice::download(&dir, &cancel, |n| counter.store(n, Ordering::Relaxed))
-                .map_err(|_| {
-                if cancel.load(Ordering::Acquire) { "Download cancelled.".to_owned() }
-                else { "Couldn’t download or verify the model. Check your connection and free storage, then retry.".to_owned() }
-            });
-            let _ = tx.send(r);
-        });
-        self.task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(100))
-                    .await;
-                let result = rx.try_recv();
-                let done = !matches!(result, Err(std::sync::mpsc::TryRecvError::Empty));
-                if this
-                    .update(cx, |this, cx| {
-                        this.progress = progress.load(Ordering::Relaxed);
-                        if done {
-                            this.cache_present = this.directory.exists();
-                        }
-                        match result {
-                            Ok(Ok(())) => {
-                                this.ready = true;
-                                let cancelled = this
-                                    .cancel
-                                    .as_ref()
-                                    .is_some_and(|c| c.load(Ordering::Acquire));
-                                this.cancel = None;
-                                this.set_enabled(!cancelled, cx);
-                            }
-                            Ok(Err(e)) => {
-                                this.cancel = None;
-                                this.error = Some(e);
-                            }
-                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                this.cancel = None;
-                                this.error = Some("Download interrupted. Try again.".into());
-                            }
-                            _ => {}
-                        }
-                        cx.notify();
-                    })
-                    .is_err()
-                    || done
-                {
-                    break;
-                }
-            }
-        }));
-        cx.notify();
-    }
-    fn remove(&mut self, cx: &mut Context<Self>) {
-        if zuse_voice::busy() {
-            self.error = Some("Stop dictation before removing the model.".into());
-            cx.notify();
-            return;
-        }
-        self.set_enabled(false, cx);
-        zuse_voice::unload();
-        match std::fs::remove_dir_all(&self.directory) {
-            Ok(()) => {
-                self.cache_present = false;
-                self.ready = false;
-                self.progress = 0;
-                self.error = None
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                self.cache_present = false;
-                self.ready = false;
-                self.progress = 0;
-                self.error = None;
-            }
-            Err(_) => {
-                self.error =
-                    Some("Could not remove the model. Check folder permissions and retry.".into())
-            }
-        }
         cx.notify();
     }
 }
@@ -305,19 +142,7 @@ impl Render for VoiceCard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
         let enabled = settings::current(cx).dictation_enabled;
-        let downloading = self.cancel.is_some();
-        let on = downloading || (enabled && self.ready);
-        let size_mb = zuse_voice::download_size() as f64 / 1e6;
-        let meta = if downloading {
-            Some(format!(
-                "Downloading · {:.0} of {size_mb:.0} MB",
-                self.progress as f64 / 1e6
-            ))
-        } else if !self.ready {
-            Some(format!("{size_mb:.0} MB download"))
-        } else {
-            None
-        };
+        let on = enabled;
         let weak = cx.entity().downgrade();
         let switch = widgets::toggle_switch(&theme, on, "voice-dictation")
             .id("voice-enable")
@@ -341,24 +166,6 @@ impl Render for VoiceCard {
             .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
                 weak.update(cx, |this, cx| this.primary(cx)).ok();
             });
-        let progress = downloading.then(|| {
-            div()
-                .mt(px(8.0))
-                .w_full()
-                .h(px(3.0))
-                .rounded_full()
-                .bg(theme.border)
-                .child(
-                    div()
-                        .h_full()
-                        .rounded_full()
-                        .w(gpui::relative(
-                            (self.progress as f32 / zuse_voice::download_size() as f32)
-                                .clamp(0.0, 1.0),
-                        ))
-                        .bg(theme.accent),
-                )
-        });
         let dictation_row = widgets::card_row(&theme, true)
             .child(
                 div()
@@ -367,17 +174,13 @@ impl Render for VoiceCard {
                     .flex()
                     .flex_col()
                     .child(widgets::row_title(&theme, "Dictation"))
-                    .children(meta.map(|meta| {
-                        div()
-                            .id("voice-status")
-                            .role(gpui::Role::Status)
-                            .aria_label(meta.clone())
-                            .child(widgets::meta_line(&theme, vec![meta.into_any_element()]))
-                    }))
-                    .children(progress),
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec!["Uses your Codex sign-in".into_any_element()],
+                    )),
             )
             .child(switch);
-        let microphone_row = (enabled && self.ready).then(|| {
+        let microphone_row = enabled.then(|| {
             self.refresh_inputs(cx);
             let saved = settings::current(cx).dictation_input.clone();
             let (options, selected) = self.input_options(saved.as_deref());
@@ -410,8 +213,7 @@ impl Render for VoiceCard {
                 )
                 .child(control)
         });
-        // Always visible, so ⌘D can be rebound (and freed) before the model
-        // is downloaded.
+        // Always visible so the hold shortcut can be rebound.
         let shortcut_row = {
             let field = self
                 .shortcut
@@ -439,47 +241,6 @@ impl Render for VoiceCard {
                 )
                 .child(field)
         };
-        let model_card = (self.cache_present && !downloading).then(|| {
-            let remove_weak = cx.entity().downgrade();
-            widgets::section_card(&theme).mt_0().child(
-                widgets::card_row(&theme, true)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(160.0))
-                            .flex()
-                            .flex_col()
-                            .child(widgets::row_title(&theme, "Speech model"))
-                            .child(widgets::meta_line(
-                                &theme,
-                                vec![
-                                    "Parakeet v3".into_any_element(),
-                                    format!("{size_mb:.0} MB").into_any_element(),
-                                ],
-                            )),
-                    )
-                    .child(
-                        widgets::action_button(&theme, widgets::ActionTone::Quiet)
-                            .id("voice-remove")
-                            .role(gpui::Role::Button)
-                            .aria_label("Remove speech model")
-                            .tab_index(0)
-                            .child("Remove")
-                            .focus_visible(|s| s.border_2().border_color(theme.accent))
-                            .on_click(cx.listener(|this, _, _, cx| this.remove(cx)))
-                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                    cx.stop_propagation();
-                                    this.remove(cx);
-                                }
-                            }))
-                            .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
-                                remove_weak.update(cx, |this, cx| this.remove(cx)).ok();
-                            }),
-                    ),
-            )
-        });
-        crate::toast::take_error(&mut self.error, cx);
         let scrollbar = popover::rail(self, "voice-page-scrollbar", &theme, cx);
         div()
             .id("voice-page-host")
@@ -505,14 +266,13 @@ impl Render for VoiceCard {
                                 .child(widgets::section_title(
                                     &theme,
                                     "Voice",
-                                    "Dictate prompts and listen to responses.",
+                                    "Dictate prompts using your Codex account.",
                                 ))
                                 .child(
                                     widgets::section_stack()
-                                        .child(widgets::group(&theme, "Spoken responses", "Use the speaker beside the composer model to read the latest response. Press it again to stop. Playback uses this computer's system voice."))
 
                                         .child(
-                                            widgets::group(&theme, "Dictation", "").child(
+                                            widgets::group(&theme, "Dictation", "Hold the microphone beside the model to record. Release to transcribe into your draft. Audio is sent to ChatGPT using your Codex sign-in; no API key or model download is needed.").child(
                                                 widgets::section_card(&theme)
                                                     .mt_0()
                                                     .child(dictation_row)
@@ -520,9 +280,7 @@ impl Render for VoiceCard {
                                                     .child(shortcut_row),
                                             ),
                                         )
-                                        .children(model_card.map(|card| {
-                                            widgets::group(&theme, "Speech model", "").child(card)
-                                        })),
+
                                 ),
                         ),
                 )
@@ -535,24 +293,6 @@ impl Render for VoiceCard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[gpui::test]
-    fn dictation_partial_cache_is_removable_after_restart(cx: &mut gpui::TestAppContext) {
-        let root = tempfile::tempdir().unwrap();
-        let cache = root.path().join("models/parakeet-tdt-0.6b-v3-int8");
-        std::fs::create_dir_all(&cache).unwrap();
-        std::fs::write(cache.join("encoder-model.int8.onnx.part"), b"partial").unwrap();
-        cx.update(|cx| settings::init(settings::UiSettings::default(), root.path(), cx));
-        let card = cx.update(card);
-        card.update(cx, |card, cx| {
-            assert!(!card.ready);
-            assert_eq!(card.progress, 0);
-            assert!(card.cache_present);
-            card.remove(cx);
-            assert!(!card.cache_present);
-            assert!(!card.ready);
-        });
-        assert!(!cache.exists());
-    }
     #[gpui::test]
     fn microphone_choice_survives_disconnection(cx: &mut gpui::TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
@@ -577,20 +317,18 @@ mod tests {
         });
     }
     #[gpui::test]
-    fn dictation_is_opt_in_and_disabling_preserves_download(cx: &mut gpui::TestAppContext) {
+    fn dictation_toggle_needs_no_model_download(cx: &mut gpui::TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| settings::init(settings::UiSettings::default(), dir.path(), cx));
         cx.update(|cx| assert!(!enabled(cx)));
         let card = cx.update(card);
         card.update(cx, |card, cx| {
-            card.ready = true;
             assert!(!settings::current(cx).dictation_enabled);
             card.primary(cx);
         });
         cx.update(|cx| assert!(enabled(cx)));
         card.update(cx, |card, cx| {
             card.primary(cx);
-            assert!(card.ready);
         });
         cx.update(|cx| assert!(!enabled(cx)));
     }
