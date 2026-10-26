@@ -892,7 +892,7 @@ mod tests {
             assert_eq!(
                 cx.key_bindings()
                     .borrow()
-                    .bindings_for_action(&NewTab)
+                    .bindings_for_action(&Back)
                     .count(),
                 1
             );
