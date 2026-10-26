@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.25.1 - 2026-10-26
+
+### Changed
+
+- Refine the shared desktop and browser composer, navigation, project selection, and local and Cloud conversation creation flows.
+- Clean up General, account, provider, model, plugin, and Remote access settings while preserving drafts and pending operations.
+- Improve saved conversation and Cloud archives with search, paging, read-only previews, restore feedback, local file status, and backup recovery details.
+
+### Added
+
+- Shared recorded usage dashboards, cached model pricing, and provider history imports.
+- Account-bound Cloud source preparation, model configuration, queued prompt feedback, and synchronized notification preferences.
+- Local terminal selection for synchronized Cloud checkouts, with account ownership checks and archive/sign-out cleanup. The complete local-terminal UI lifecycle still requires acceptance testing.
+
+
 ## 0.25.0 - 2026-10-17
 
 ### Added
