@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.25.1 Preview 4 - 2026-10-26
+
+### Fixed
+
+- Match the Electron composer’s skill suggestions with original monospace names, the stacked skill icon, compact single-line descriptions, and mouse selection.
+- Keep advertised skill names in inserted chips while preserving their source identity and undo history.
+- Search skill descriptions and abbreviated names, with bounded filtered results.
+
 ## 0.25.1 Preview 3 - 2026-10-26
 
 ### Changed

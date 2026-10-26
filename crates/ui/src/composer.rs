@@ -9,6 +9,7 @@
 
 mod archive;
 mod permissions;
+mod skill_completion;
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -1283,11 +1284,7 @@ impl TextProjection {
                 .into_iter()
                 .map(|(range, invocation)| FileMentionLink {
                     range,
-                    basename: if compact && invocation.prefix() == '$' {
-                        skill_display_name(invocation.name())
-                    } else {
-                        invocation.name().to_string()
-                    },
+                    basename: invocation.name().to_string(),
                     path: invocation.detail(),
                     kind: if invocation.prefix() == '/' {
                         ChipKind::Command
@@ -5923,22 +5920,6 @@ fn completion_trigger(
     (token, skill, include_skills, commands_allowed)
 }
 
-/// Human-readable presentation only; invocation names and paths stay canonical.
-fn skill_display_name(name: &str) -> String {
-    name.rsplit(':')
-        .next()
-        .unwrap_or(name)
-        .split(|c: char| c == '-' || c == '_' || c.is_whitespace())
-        .filter(|word| !word.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            let first = chars.next().unwrap();
-            first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// Commands implemented by Zuse, independently of the provider protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceCommand {
@@ -6169,11 +6150,7 @@ fn invocation_candidates(
                     workspace_command: None,
                     input_hint: None,
                     name: s.name.clone(),
-                    description: if zuse_protocol::invocation::native_skill_identity(&s.path) {
-                        s.description.clone()
-                    } else {
-                        format!("{} — {}", s.description, s.path)
-                    },
+                    description: s.description,
                     invocation: zuse_protocol::invocation::Invocation::Skill {
                         name: s.name,
                         path: s.path,
@@ -8422,8 +8399,7 @@ impl Composer {
             .get(&self.slash.context)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
-        self.slash.filtered = crate::popover::filter_indices(&query, &names);
+        self.slash.filtered = skill_completion::filter(&query, commands);
         self.slash.active = (!self.slash.filtered.is_empty()).then_some(0);
         // A fresh query/reopen restarts the row stack at the top.
         crate::popover::reset_menu_scroll(&self.slash_scroll, &mut self.popup_bar);
@@ -8519,7 +8495,7 @@ impl Composer {
             .unwrap_or_default();
         // Full pill width at the mention card's height budget — both composer
         // completions share the same surface shape.
-        let mut card = crate::popover::completion_card(theme)
+        let mut card = crate::popover::completion_card(theme).p(px(6.)).gap_0()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -8587,42 +8563,16 @@ impl Composer {
                     continue;
                 };
                 let selected = self.slash.active == Some(row_ix);
-                let name: SharedString = if command.invocation.prefix() == '$' {
-                    skill_display_name(&command.name)
-                } else {
-                    format!("/{}", command.name)
-                }
-                .into();
-                let mut description = command.description.clone();
-                if let Some(hint) = &command.input_hint {
-                    if description.is_empty() {
-                        description = format!("<{hint}>");
-                    } else {
-                        description = format!("{description} · <{hint}>");
-                    }
-                }
-                let description: SharedString = description.into();
                 rows.push(
-                    crate::popover::menu_row(theme, selected, format!("slash-result-{row_ix}"))
-                        .id(("slash-result", row_ix))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.slash.active = Some(row_ix);
-                            this.accept_slash(cx);
+                    skill_completion::row(theme,command,selected,row_ix)
+                        .on_mouse_move(cx.listener(move|this,_,_,cx|{
+                            if this.slash.active!=Some(row_ix) {
+                                this.slash.active=Some(row_ix);cx.notify();
+                            }
                         }))
-                        .child(crate::popover::completion_row_content(
-                            theme,
-                            crate::icons::icon(if command.invocation.prefix() == '$' {
-                                crate::icons::MAGIC_STICK_3
-                            } else {
-                                crate::icons::COMMAND
-                            })
-                            .size(px(16.0))
-                            .text_color(theme.text_muted)
-                            .into_any_element(),
-                            name,
-                            description,
-                        ))
-                        .into_any_element(),
+                        .on_click(cx.listener(move|this,_,_,cx|{
+                            this.slash.active=Some(row_ix);this.accept_slash(cx);
+                        })).into_any_element(),
                 );
             }
             // Overflowing rows wheel-scroll inside a bounded viewport; the
@@ -8630,11 +8580,9 @@ impl Composer {
             card = card.child(
                 crate::popover::menu_scroll_host("slash-scroll-host")
                     .on_hover(cx.listener(Self::on_popup_list_hover))
-                    .child(crate::popover::completion_list(
-                        "slash-list",
-                        &self.slash_scroll,
-                        rows,
-                    ))
+                    .child(crate::popover::faded_menu_list(&self.slash_scroll,
+                        crate::popover::menu_scroll_list("slash-list",&self.slash_scroll)
+                            .max_h(px(306.)).flex().flex_col().children(rows)))
                     .children(crate::popover::rail(self, "slash-scrollbar", theme, cx)),
             );
         }
@@ -13809,7 +13757,7 @@ mod tests {
         let active = raw.rfind('\n').unwrap() + 1..raw.len();
         let projection = TextProjection::rich(&raw, Some(active), None);
         assert!(projection.display.starts_with("café"));
-        assert!(projection.display.contains("Bla\u{00A0}Bla"));
+        assert!(projection.display.contains("bla-bla:bla-bla"));
         assert!(!projection.display.contains('$'));
         assert_eq!(projection.mentions.len(), 1);
         let (link, display) = &projection.mentions[0];
