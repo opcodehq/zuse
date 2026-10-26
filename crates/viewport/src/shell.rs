@@ -67,7 +67,8 @@ pub(super) fn provider_icon(id: &str) -> &'static str {
         "grok" => "grok-mark",
         "hermes" => "hermes-mark",
         "antigravity" => "antigravity-mark",
-        "gemini" | "kiro" => "globe",
+        "gemini" | "acp-gemini" => "gemini-mark",
+        "kiro" => "kiro-mark",
         _ => "zuse-logo",
     }
 }

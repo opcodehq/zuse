@@ -111,6 +111,7 @@ impl Pickers {
             self.cloud.harnesses = Loadable::Idle;
             self.cloud.catalog = None;
             self.cloud.model_error = None;
+            self.cloud.error = None;
             self.catalog_rev += 1;
         }
         if self.cloud.loaded || self.cloud.task.is_some() {
@@ -177,6 +178,9 @@ impl Pickers {
                                     .into()
                             }
                         };
+                        let error = if error.contains("Sign in to access cloud workspaces") {
+                            "Cloud could not connect to your signed-in account. Restart GPUI or reconnect in Settings → General.".to_owned()
+                        } else { error };
                         this.cloud.error = Some(error.clone());
                         this.cloud.model_error = Some(error.clone());
                         if this.cloud.catalog.is_none() {

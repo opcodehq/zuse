@@ -106,7 +106,6 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(2.))
-            .children(self.render_voice_trigger(&theme, cx))
             .child(self.render_pull_requests_button(&theme, cx))
             .into_any_element()
     }

@@ -64,6 +64,12 @@ cargo run -p zuse-cli -- --listen 0.0.0.0:27656 --ipc-port 0 \
 
 Direct HTTPS uses Secure browser cookies and WSS for agent RPC. See [development setup](internal-docs/development.md) for reverse-proxy configuration and platform requirements. Packaging and full cross-device runtime acceptance remain in progress.
 
+## Voice
+
+Use the microphone beside the composer model selector for dictation. Its setup opens **Settings → Voice**, where you can download the local speech model and choose a microphone. Hold to talk, then release to transcribe into the draft.
+
+On macOS, use the speaker beside the model selector to read the latest response with the system voice. Press it again to stop; changing chats also stops playback. Voice input and response playback do not require a Codex realtime session.
+
 ## Import from Electron
 
 The native GPUI app offers an import when it first finds an Electron profile on a fresh workspace. You can also open **Settings → General → Import from Electron** at any time. Review the detected profile, choose whether to bring over supported settings, and select **Import**. **Start fresh** skips migration.

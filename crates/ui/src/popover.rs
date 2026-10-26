@@ -486,29 +486,12 @@ fn exit_progress(since: std::time::Instant) -> f32 {
 /// hold full strength through the fade and pop off at unmount.
 fn frosted_menu(exit: Option<f32>, content: AnyElement) -> AnyElement {
     let blur = crate::frost::MENU_BLUR * (1.0 - exit.unwrap_or(0.0));
-    // Outside-dismiss listeners run during capture. Consume that same press
-    // during bubble, after dismissal, so content behind the menu cannot act
-    // on it too. The following click can reach that content normally.
-    let guard = gpui::canvas(
-        |_, _, _| (),
-        |bounds, _, window, _| {
-            window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, _, cx| {
-                if phase == gpui::DispatchPhase::Bubble && !bounds.contains(&event.position) {
-                    cx.stop_propagation();
-                }
-            });
-        },
-    )
-    .absolute()
-    .inset_0();
+    // Only the card occludes input. Outside presses must reach other
+    // triggers, including while an informational notice remains open.
     crate::frost::floating_glass(
         CARD_RADIUS,
         blur,
-        div()
-            .relative()
-            .child(guard)
-            .child(content)
-            .into_any_element(),
+        div().relative().child(content).into_any_element(),
     )
     .into_any_element()
 }
@@ -2673,5 +2656,67 @@ mod adaptive_menu_tests {
             }
         );
         assert_eq!(menu_geometry(900.0, 920.0, 1000.0).height, 640.0);
+    }
+}
+
+#[cfg(test)]
+mod interaction_regressions {
+    use super::*;
+    struct Notices {
+        second_open: bool,
+    }
+    impl gpui::Render for Notices {
+        fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .items_start()
+                .child(
+                    div()
+                        .w(px(80.))
+                        .h(px(30.))
+                        .relative()
+                        .child("Notice")
+                        .child(anchored_menu_below(
+                            "persistent-notice",
+                            div()
+                                .w(px(120.))
+                                .h(px(60.))
+                                .child("Voice unavailable")
+                                .into_any_element(),
+                            None,
+                        )),
+                )
+                .child(
+                    div()
+                        .id("second-popover-trigger")
+                        .debug_selector(|| "second-popover-trigger".into())
+                        .ml(px(200.))
+                        .w(px(100.))
+                        .h(px(30.))
+                        .child("Settings")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.second_open = true;
+                            cx.notify();
+                        })),
+                )
+        }
+    }
+    #[gpui::test]
+    fn a_persistent_notice_does_not_swallow_another_controls_click(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+        });
+        let (view, cx) = cx.add_window_view(|_, _| Notices { second_open: false });
+        cx.update(|window, cx| window.draw(cx).clear());
+        let trigger = cx.debug_bounds("second-popover-trigger").unwrap().center();
+        cx.simulate_click(trigger, gpui::Modifiers::default());
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.second_open,
+                "A floating notice must not block a different control"
+            )
+        });
     }
 }

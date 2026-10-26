@@ -632,12 +632,8 @@ impl Render for SidebarControls {
             "Account unavailable"
         } else if signing_in {
             "Signing in"
-        } else if !signed_in {
-            "Sign in"
-        } else if self.subscribed == Some(false) {
-            "Upgrade"
         } else {
-            "Cloud"
+            account_plan_label(signed_in, self.subscribed, self.plan_error.is_some())
         };
         let upgrade = signed_in && self.subscribed == Some(false) && self.plan_error.is_none();
         let tip = self
@@ -668,10 +664,8 @@ impl Render for SidebarControls {
                     .text_size(px(11.))
             })
             .when(!signed_in, |v| v.child(icon("login").size(px(16.))))
-            .when(signed_in && !upgrade, |v| {
-                v.child(icon("cloud-dither").size(px(14.)))
-            })
-            .when(signed_in, |v| v.child(div().relative().child(label)))
+            .when(label == "Cloud", |v| v.child(icon("cloud-dither").size(px(14.))))
+            .child(div().relative().child(label))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 if matches!(e.keystroke.key.as_str(), "enter" | "space") {
                     this.account_action(cx);
@@ -882,4 +876,23 @@ fn menu_surface(width: f32) -> Div {
                     ),
             )
         })
+}
+
+fn account_plan_label(signed_in: bool, subscribed: Option<bool>, failed: bool) -> &'static str {
+    if !signed_in { "Sign in" }
+    else if failed { "Account" }
+    else { match subscribed { Some(true) => "Cloud", Some(false) => "Upgrade", None => "Checking plan" } }
+}
+#[cfg(test)]
+mod account_label_tests {
+    use super::account_plan_label;
+    #[test]
+    fn cloud_badge_requires_a_current_account_and_verified_entitlement() {
+        assert_eq!(account_plan_label(false, Some(true), false), "Sign in");
+        assert_eq!(account_plan_label(true, None, false), "Checking plan");
+        assert_eq!(account_plan_label(true, None, true), "Account");
+        assert_eq!(account_plan_label(true, Some(true), true), "Account");
+        assert_eq!(account_plan_label(true, Some(false), false), "Upgrade");
+        assert_eq!(account_plan_label(true, Some(true), false), "Cloud");
+    }
 }

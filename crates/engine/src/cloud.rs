@@ -308,7 +308,7 @@ impl CloudApi {
                 status.is_success(),
                 "{}",
                 match status.as_u16() {
-                    401 => "Sign in to access cloud workspaces.",
+                    401 => "Cloud could not verify your session. Reconnect in Settings → General.",
                     403 => "You do not have access to this workspace.",
                     409 => "The workspace is busy. Wait for its current operation to finish.",
                     _ => "Cloud service is unavailable. Try again.",
@@ -342,7 +342,7 @@ impl CloudApi {
         let token = auth
             .access_token()
             .await
-            .map_err(|_| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
+            .map_err(|_| anyhow::anyhow!("Could not refresh your Cloud session. Check your connection or reconnect in Settings → General."))?;
         ensure!(auth.user_id().as_deref() == Some(account.as_str())
             && auth.state().org_id() == organization.as_deref(),
             "Your account changed. Reopen this view.");

@@ -4429,7 +4429,7 @@ impl Pickers {
         } else {
             match effective_models {
                 Some(Loadable::Error(message)) => {
-                    let message = message.clone();
+                    let message = model_catalog_notice(message);
                     vec![self.retry_row(
                         "model-retry",
                         &message,
@@ -4455,7 +4455,7 @@ impl Pickers {
             .map(|message| {
                 self.retry_row(
                     "model-refresh-retry",
-                    &message,
+                    &model_catalog_notice(&message),
                     PickerKind::HarnessModel,
                     &theme,
                     cx,
@@ -5960,9 +5960,11 @@ pub(crate) fn normalize_model_rows(harness: HarnessId, models: Vec<Model>) -> Ve
 
 pub(crate) fn harness_brand_icon(harness: HarnessId) -> (&'static str, Option<gpui::Hsla>) {
     match harness {
-        HarnessId::Zuse | HarnessId::Gemini | HarnessId::Kiro | HarnessId::CustomAcp(_) => {
-            (crate::icons::BOT, None)
-        }
+        HarnessId::Zuse => (crate::icons::ZUSE_LOGO, None),
+        HarnessId::Gemini => (crate::icons::GEMINI_MARK, None),
+        HarnessId::Kiro => (crate::icons::KIRO_MARK, None),
+        HarnessId::CustomAcp(id) if id.as_str() == "acp-gemini" => (crate::icons::GEMINI_MARK, None),
+        HarnessId::CustomAcp(_) => (crate::icons::TERMINAL, None),
         HarnessId::ClaudeCode | HarnessId::Mock => (
             crate::icons::CLAUDE_MARK,
             Some(crate::icons::claude_brand()),
@@ -9914,5 +9916,14 @@ impl Pickers {
             Loadable::Ready(vec![model("gpt-5-codex", "GPT-5 Codex")]),
             cx,
         );
+    }
+}
+
+fn model_catalog_notice(error: &str) -> String {
+    let error = error.to_ascii_lowercase();
+    if error.contains("auth_required") || error.contains("api key") || error.contains("unauthorized") {
+        "This agent needs sign-in. Open Settings → Providers, then retry.".into()
+    } else {
+        "Could not load this agent’s models. Retry or check Settings → Providers.".into()
     }
 }

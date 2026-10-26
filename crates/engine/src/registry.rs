@@ -757,11 +757,6 @@ pub fn default_registry() -> HarnessRegistry {
     );
     for (id, name, build) in [
         (
-            HarnessId::Gemini,
-            "Gemini CLI",
-            zuse_providers::AcpHarness::gemini as fn() -> zuse_providers::AcpHarness,
-        ),
-        (
             HarnessId::Kiro,
             "Kiro CLI",
             zuse_providers::AcpHarness::kiro as fn() -> zuse_providers::AcpHarness,
@@ -865,7 +860,6 @@ mod tests {
                 HarnessId::Pi,
                 HarnessId::Opencode,
                 HarnessId::Antigravity,
-                HarnessId::Gemini,
                 HarnessId::Kiro,
             ]
         );

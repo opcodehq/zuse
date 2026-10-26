@@ -452,3 +452,7 @@ The selected Boxd protobuf field definitions in `crates/cloud/src/providers/boxd
 are adapted from the MIT-licensed `@boxd-sh/sdk` version 0.2.14, copyright 2026 Azin.
 The full notice is retained in `crates/cloud/src/providers/LICENSE.boxd`.
 Source: https://registry.npmjs.org/@boxd-sh/sdk/0.2.14.
+
+## Archive icons
+
+Archive, archive and restore action artwork comes from `@hugeicons/core-free-icons` 4.2.1, under the [MIT license](https://hugeicons.com/license-agreement). The copyright and permission notice is retained in [crates/icons/LICENSE-HUGEICONS](crates/icons/LICENSE-HUGEICONS).

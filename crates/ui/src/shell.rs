@@ -2965,6 +2965,8 @@ impl Shell {
     // ---- splash ----
 
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
+        let speech_chat = state.read(cx).selected_chat.clone();
+        crate::speech::retain_chat(speech_chat.as_deref(), cx);
         // Voice is an orchestrator over every thread: navigation keeps it,
         // only losing the engine that hosts it ends the session.
         if self.voice.read(cx).chat_id.is_some()
@@ -5180,6 +5182,7 @@ impl Shell {
     // ---- routes / settings ----
 
     fn set_route(&mut self, route: Route, cx: &mut Context<Self>) {
+        if !matches!(route, Route::Chat) { crate::speech::stop(cx); }
         if matches!(self.route,Route::Settings(SettingsSection::Archived)) && !matches!(route,Route::Settings(SettingsSection::Archived)) {
             if let Some(page)=self.archived_page.clone() {page.update(cx,|page,cx|page.on_hidden(cx));}
         }
@@ -10631,7 +10634,6 @@ impl Shell {
     /// Pull requests and Settings actions.
     fn render_sidebar_footer(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         self.update_sidebar_controls(cx);
-        let voice_trigger = (self.workspace_gutter() == 0.).then(|| self.render_voice_trigger(theme, cx)).flatten();
         let pull_requests = self.render_pull_requests_button(theme, cx);
         let settings = self.render_settings_trigger(theme, cx);
         div()
@@ -10645,7 +10647,6 @@ impl Shell {
                     .min_w_0()
                     .child(self.sidebar_controls.clone()),
             )
-            .children(voice_trigger)
             .when(self.workspace_gutter() == 0., |view| view.child(pull_requests))
             .child(settings)
             .into_any_element()
@@ -14393,6 +14394,7 @@ impl Render for Shell {
             // no-ops (zuse __root.tsx gates the hotkey on `!isSettings`, and
             // the terminal panel is only mounted on session routes). The
             // sidebar toggle stays live everywhere, as in the original.
+            .on_action(cx.listener(|this, _: &crate::composer::SetupDictation, _, cx| this.open_settings(SettingsSection::Voice, cx)))
             .on_action(cx.listener(
                 |this, _: &crate::desktop_import::OpenDesktopImport, window, cx| {
                     this.desktop_import

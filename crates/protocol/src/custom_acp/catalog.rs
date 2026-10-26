@@ -100,11 +100,10 @@ pub enum Offer {
 }
 
 /// Registry entries that are Zuse's own built-in providers.
-const BUILT_IN: [(&str, HarnessId, &str); 9] = [
+const BUILT_IN: [(&str, HarnessId, &str); 8] = [
     ("claude-acp", HarnessId::ClaudeCode, "Claude Code"),
     ("codex-acp", HarnessId::Codex, "Codex"),
     ("cursor", HarnessId::Cursor, "Cursor"),
-    ("gemini", HarnessId::Gemini, "Gemini CLI"),
     ("devin", HarnessId::Devin, "Devin"),
     ("grok-build", HarnessId::Grok, "Grok"),
     ("opencode", HarnessId::Opencode, "OpenCode"),

@@ -7,8 +7,16 @@
 - Native GPUI onboarding and Settings import from Electron, with profile review, optional settings, local backups, progress, and resumable imports.
 - Import reports for unavailable attachments and preferences or local plugins that GPUI cannot yet apply; hosted plugins remain available through the same Zuse account.
 
+### Changed
+
+- Keep simple dictation beside the composer model selector, add system response playback, and remove live Codex orchestration controls from the desktop UI.
+- Use provider marks instead of generic robot icons, keep missing CLIs out of the picker, and offer Gemini through the ACP adapter catalogue.
+- Align review chrome with the main workspace, add file review markers and patch copy, and use the reference archive artwork.
+
 ### Fixed
 
+- Floating notices no longer consume clicks on unrelated controls.
+- Signed-out accounts show a Sign in label; the Cloud badge requires verified entitlement, and Cloud session failures no longer masquerade as a signed-out General account.
 - Imported main chats now appear in project lists, with conversation tabs and archived threads grouped correctly.
 
 ## 0.25.1 - 2026-10-26

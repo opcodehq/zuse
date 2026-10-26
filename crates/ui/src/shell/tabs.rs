@@ -1257,8 +1257,7 @@ impl Shell {
                     .children(open_in)
                     .children(session_info_toggle)
                     .when(self.workspace_gutter() > 0. && !on_canvas && !takeover, |view| {
-                        view.children(self.render_voice_trigger(&theme, cx))
-                            .child(self.render_pull_requests_button(&theme, cx))
+                        view.child(self.render_pull_requests_button(&theme, cx))
                     })
                     .children(terminal_toggle),
             )

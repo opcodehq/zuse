@@ -1635,6 +1635,7 @@ struct CommentDraft {
 /// The Changes pane entity. Lazy: no RPC until [`Changes::ensure_watch`] runs
 /// (the shell calls it when the pane first opens).
 pub struct Changes {
+    pub(crate) review_mode: bool,
     git_controls: Entity<crate::git_controls::GitPanel>,
     state: Entity<AppState>,
     diffs: Vec<CheckoutDiff>,
@@ -1650,6 +1651,8 @@ pub struct Changes {
     parsed: Option<ParsedDiff>,
     parse_task: Option<Task<()>>,
     folds: HashMap<String, FileFold>,
+    reviewed: std::collections::HashSet<(String, u64)>,
+    review_fingerprints: Vec<u64>,
     highlights: HashMap<String, HighlightSlot>,
     /// The flattened row model the list virtualizes over (line granularity;
     /// collapsed bodies excluded) + each file's row span within it.
@@ -1748,6 +1751,7 @@ impl Changes {
         let settings = crate::settings::current(cx);
         let mode = DiffMode::from_split(settings.diff_split);
         Self {
+            review_mode: false,
             git_controls,
             state,
             mode,
@@ -1761,6 +1765,8 @@ impl Changes {
             parsed: None,
             parse_task: None,
             folds: HashMap::new(),
+            reviewed: Default::default(),
+            review_fingerprints: Vec::new(),
             highlights: HashMap::new(),
             rows: Vec::new(),
             row_ranges: Vec::new(),
@@ -2357,10 +2363,24 @@ impl Changes {
         let additions = diff.additions;
         let deletions = diff.deletions;
         let file_count = diff.files.len();
+        let checkout = diff.checkout_id.clone();
         self.parse_task = Some(cx.spawn(async move |this, cx| {
-            let files = cx
+            let (files, fingerprints) = cx
                 .background_executor()
-                .spawn(async move { parse_patch(&patch) })
+                .spawn(async move {
+                    use std::hash::{Hash, Hasher};
+                    let files = parse_patch(&patch);
+                    let fingerprints = files
+                        .iter()
+                        .map(|file| {
+                            let mut hash = std::collections::hash_map::DefaultHasher::new();
+                            checkout.hash(&mut hash);
+                            format!("{file:?}").hash(&mut hash);
+                            hash.finish()
+                        })
+                        .collect::<Vec<_>>();
+                    (files, fingerprints)
+                })
                 .await;
             this.update(cx, |changes, cx| {
                 // Late results for a superseded diff are re-checked by key.
@@ -2376,6 +2396,7 @@ impl Changes {
                 let horizontal = files.iter().map(FileHorizontalState::new).collect();
                 changes.folds.clear();
                 changes.highlights.clear();
+                changes.review_fingerprints = fingerprints;
                 let staged = changes.staged_comments(cx);
                 let draft = changes.draft_anchor();
                 let (rows, ranges) = flatten_rows(
@@ -3532,6 +3553,54 @@ impl Changes {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let collapsed = fold.collapsed;
+        let review_key = (
+            file.path.clone(),
+            self.review_fingerprints.get(ix).copied().unwrap_or(0),
+        );
+        let reviewed = self.reviewed.contains(&review_key);
+        let viewed_control = div()
+            .id(("diff-file-reviewed", ix))
+            .role(gpui::Role::CheckBox)
+            .aria_label(format!("Mark {} as reviewed", file.path))
+            .aria_toggled(if reviewed {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
+            .h(px(24.))
+            .px(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .rounded(px(5.))
+            .cursor_pointer()
+            .text_size(px(11.))
+            .text_color(theme.text_muted)
+            .child(
+                div()
+                    .size(px(14.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(theme.text_muted)
+                    .when(reviewed, |v| {
+                        v.child(crate::icons::icon(crate::icons::CHECK).size(px(12.)))
+                    }),
+            )
+            .child("Viewed")
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                if !this.reviewed.remove(&review_key) {
+                    this.reviewed.insert(review_key.clone());
+                }
+                if let Some(range) = this.row_ranges.get(ix) {
+                    this.list.remeasure_items(range.start..range.start + 1);
+                }
+                cx.notify();
+            }));
         let path = file.path.clone();
         let adds = file.additions;
         let dels = file.deletions;
@@ -3655,6 +3724,7 @@ impl Changes {
                         .child(SharedString::from(format!("−{dels}"))),
                 )
             })
+            .child(viewed_control)
             .child(
                 div()
                     .id(("diff-open-file", ix))
@@ -4014,29 +4084,26 @@ impl Changes {
                 )
                 .into_any_element()
         } else {
-            let discard = self.discard_request(cx);
-            let discard_enabled = discard.is_some();
-            let discard_button = Self::header_button(
-                "changes-discard-working-tree",
-                crate::icons::TRASH_BIN_MINIMALISTIC,
-                "Discard changes",
+            let patch = self
+                .active_diff(cx)
+                .map(|diff| diff.patch)
+                .unwrap_or_default();
+            let copy = Self::header_button(
+                "changes-copy-patch",
+                crate::icons::COPY,
+                "Copy all patches",
                 &theme,
             )
-            .when(!discard_enabled, |button| button.opacity(0.35))
-            .when_some(discard, |button, request| {
-                button.on_click(cx.listener(move |_, _, _, cx| {
-                    cx.stop_propagation();
-                    cx.emit(ChangesEvent::DiscardWorkingTree(request.clone()));
-                }))
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(patch.clone()));
             });
             div()
                 .flex_none()
                 .flex()
                 .items_center()
                 .gap(px(crate::surface_chrome::CONTROL_GAP))
-                .when(scope == DiffScope::WorkingTree, |element| {
-                    element.child(discard_button)
-                })
+                .child(copy)
                 .child(self.split_toggle(&theme, cx))
                 .child(self.wrap_toggle(&theme, cx))
                 .child(
@@ -4061,6 +4128,44 @@ impl Changes {
             .items_center()
             .gap(px(crate::surface_chrome::CONTROL_GAP))
             .child(trigger)
+            .when(scope != DiffScope::History, |element| {
+                let Some(parsed) = self.parsed.as_ref() else {
+                    return element;
+                };
+                let reviewed = parsed
+                    .files
+                    .iter()
+                    .enumerate()
+                    .filter(|(ix, file)| {
+                        self.reviewed.contains(&(
+                            file.path.clone(),
+                            self.review_fingerprints.get(*ix).copied().unwrap_or(0),
+                        ))
+                    })
+                    .count();
+                element.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .text_size(px(11.))
+                        .child(
+                            div()
+                                .text_color(add_color(&theme))
+                                .child(format!("+{}", parsed.additions)),
+                        )
+                        .child(
+                            div()
+                                .text_color(del_color(&theme))
+                                .child(format!("−{}", parsed.deletions)),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme.text_muted)
+                                .child(format!("{reviewed}/{} reviewed", parsed.file_count)),
+                        ),
+                )
+            })
             .when_some(history_count, |element, count| {
                 element.child(
                     div()
@@ -4321,60 +4426,19 @@ impl Changes {
     }
 
     fn render_header_strip(&self, theme: &Theme) -> Option<AnyElement> {
-        let parsed = self.parsed.as_ref()?;
-        Some(
-            div()
-                .flex_none()
-                .h(px(crate::surface_chrome::HEADER_HEIGHT))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(10.0))
-                .px(px(Theme::SPACE_LG))
-                .border_b_1()
-                .border_color(crate::theme::hairline(0.06))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(12.0))
-                        .text_color(theme.text_muted)
-                        .child(SharedString::from(scope_label(
-                            self.scope,
-                            parsed.file_count,
-                            self.base_ref.as_deref(),
-                        ))),
-                )
-                .child(
-                    div()
-                        .font_family(theme.font_mono.clone())
-                        .text_size(px(11.0))
-                        .text_color(add_color(theme))
-                        .child(SharedString::from(format!("+{}", parsed.additions))),
-                )
-                .child(
-                    div()
-                        .font_family(theme.font_mono.clone())
-                        .text_size(px(11.0))
-                        .text_color(del_color(theme))
-                        .child(SharedString::from(format!("−{}", parsed.deletions))),
-                )
-                .child(div().flex_1())
-                .when(parsed.truncated, |el| {
-                    el.child(
-                        div()
-                            .flex_none()
-                            .text_size(px(10.0))
-                            .px(px(6.0))
-                            .py(px(2.0))
-                            .rounded(px(4.0))
-                            .bg(theme.warning.opacity(0.08))
-                            .text_color(theme.warning.opacity(0.75))
-                            .child(SharedString::from("Partial snapshot")),
-                    )
-                })
-                .into_any_element(),
-        )
+        self.parsed
+            .as_ref()
+            .filter(|parsed| parsed.truncated)
+            .map(|_| {
+                div()
+                    .flex_none()
+                    .px(px(16.))
+                    .py(px(6.))
+                    .text_size(px(11.))
+                    .text_color(theme.warning)
+                    .child("Partial snapshot — some changes could not be loaded.")
+                    .into_any_element()
+            })
     }
 }
 
@@ -5248,7 +5312,7 @@ impl Render for Changes {
                         .child(message),
                 )
             })
-            .when(self.commit.is_none(), |d| {
+            .when(self.commit.is_none() && !self.review_mode, |d| {
                 d.child(self.git_controls.clone())
             })
             .child(content)
