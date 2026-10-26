@@ -122,7 +122,7 @@ impl Artifacts {
         }
         Ok(self.directory.join(format!("{}.json", reference.sha256)))
     }
-    fn verify(&self, reference: &Reference) -> Result<std::fs::File, Error> {
+    fn verify(&self, reference: &Reference) -> Result<Vec<u8>, Error> {
         let path = self.path(reference)?;
         let metadata = std::fs::symlink_metadata(&path).map_err(|_| Error::InvalidCheckpoint)?;
         if !metadata.is_file() || metadata.len() != reference.bytes {
@@ -135,24 +135,20 @@ impl Artifacts {
             use std::os::unix::fs::OpenOptionsExt;
             options.custom_flags(libc::O_NOFOLLOW);
         }
-        let mut file = options.open(&path).map_err(|_| Error::InvalidCheckpoint)?;
-        let mut hash = Sha256::new();
-        let mut bytes = [0; 16384];
-        loop {
-            let count = file
-                .read(&mut bytes)
-                .map_err(|_| Error::InvalidCheckpoint)?;
-            if count == 0 {
-                break;
-            }
-            hash.update(&bytes[..count]);
-        }
-        if format!("{:x}", hash.finalize()) != reference.sha256 {
+        let file = options.open(&path).map_err(|_| Error::InvalidCheckpoint)?;
+        // Slice parsing allocates strings to their actual length. Reader parsing
+        // grows large strings geometrically and can retain that excess capacity
+        // in every recovered root. One bounded buffer also avoids a second read.
+        let mut bytes = Vec::with_capacity(reference.bytes as usize);
+        file.take(reference.bytes + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| Error::InvalidCheckpoint)?;
+        if bytes.len() as u64 != reference.bytes
+            || format!("{:x}", Sha256::digest(&bytes)) != reference.sha256
+        {
             return Err(Error::InvalidCheckpoint);
         }
-        use std::io::Seek;
-        file.rewind().map_err(|_| Error::Storage)?;
-        Ok(file)
+        Ok(bytes)
     }
     pub fn restore(&self, value: ArchivedValue) -> Result<Value, Error> {
         match value {
@@ -169,10 +165,8 @@ impl Artifacts {
                     .map(|v| self.restore(v))
                     .collect::<Result<_, _>>()?,
             )),
-            ArchivedValue::Artifact(reference) => {
-                serde_json::from_reader(std::io::BufReader::new(self.verify(&reference)?))
-                    .map_err(|_| Error::InvalidCheckpoint)
-            }
+            ArchivedValue::Artifact(reference) => serde_json::from_slice(&self.verify(&reference)?)
+                .map_err(|_| Error::InvalidCheckpoint),
         }
     }
     /// Called only after the replacement snapshot is durable. Live state and
@@ -245,7 +239,15 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(artifacts.restore(archived).unwrap(), value);
+        let restored = artifacts.restore(archived).unwrap();
+        let Value::String(payload) = &restored["a"] else {
+            panic!("expected payload")
+        };
+        assert!(
+            payload.capacity() <= payload.len() + 1024,
+            "recovery retained an oversized string buffer"
+        );
+        assert_eq!(restored, value);
         let archived = artifacts.archive(value).unwrap();
         let path = std::fs::read_dir(directory.path().join("payloads"))
             .unwrap()

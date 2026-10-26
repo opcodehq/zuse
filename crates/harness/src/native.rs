@@ -11,6 +11,14 @@ use std::{
     sync::Mutex,
 };
 
+/// Bound transient artifact/snapshot buffers across roots, not just per root.
+fn storage_admission() -> Arc<tokio::sync::Semaphore> {
+    static ADMISSION: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    ADMISSION
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
+        .clone()
+}
+
 pub struct RootStore {
     directory: PathBuf,
     root_id: String,
@@ -97,8 +105,13 @@ impl Host for NativeHost {
     async fn load(&self) -> Result<Option<Checkpoint>, Error> {
         let root = self.storage().as_ref().ok_or(Error::Storage)?.clone();
         let guard = root.gate.clone().lock_owned().await;
+        let permit = storage_admission()
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::Interrupted)?;
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
+            let _permit = permit;
             root.load()
         })
         .await
@@ -107,6 +120,10 @@ impl Host for NativeHost {
     async fn save(&self, state: &Checkpoint) -> Result<(), Error> {
         let root = self.storage().as_ref().ok_or(Error::Storage)?.clone();
         let guard = root.gate.clone().lock_owned().await;
+        let permit = storage_admission()
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::Interrupted)?;
         if state.root_id != root.root_id {
             return Err(Error::InvalidCheckpoint);
         }
@@ -116,6 +133,7 @@ impl Host for NativeHost {
         // The worker owns both lease and admission guard if its caller drops.
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
+            let _permit = permit;
             root.store.commit(prepared)
         })
         .await
