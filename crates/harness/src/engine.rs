@@ -46,7 +46,6 @@ struct Runner {
     done: watch::Receiver<bool>,
 }
 struct Inner {
-    host: Arc<dyn Host>,
     state: AsyncMutex<Checkpoint>,
     options: Mutex<Options>,
     tools: Arc<Tools>,
@@ -55,6 +54,9 @@ struct Inner {
     stopping: AtomicBool,
     active: AtomicBool,
     closed: AtomicBool,
+    // Drop history and runners before the native host's allocator cleanup. Rust
+    // drops fields in declaration order; keep the host last.
+    host: Arc<dyn Host>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendOutcome {

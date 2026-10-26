@@ -92,6 +92,21 @@ struct NativeHost {
     inner: Arc<dyn Host>,
     store: Mutex<Option<Arc<RootStore>>>,
 }
+impl Drop for NativeHost {
+    fn drop(&mut self) {
+        // Large roots can leave free pages in glibc's worker arenas after their
+        // histories are dropped. Reclaim only at final host destruction, never
+        // per request or checkpoint. Other allocators/platforms retain their
+        // normal policy. This changes neither allocator configuration nor data.
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        // SAFETY: malloc_trim has no pointer arguments and is thread-safe. It
+        // releases only free pages; concurrent live allocations remain valid.
+        unsafe {
+            libc::malloc_trim(0);
+        }
+    }
+}
+
 impl NativeHost {
     fn storage(&self) -> std::sync::MutexGuard<'_, Option<Arc<RootStore>>> {
         self.store.lock().unwrap_or_else(|error| error.into_inner())
