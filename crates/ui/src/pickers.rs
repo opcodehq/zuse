@@ -1190,7 +1190,7 @@ impl Pickers {
 
     /// Re-read the shared memory: the composer and the thread-naming picker
     /// each hold a copy, and both write favorites.
-    fn reload_defaults(&mut self) {
+    pub(crate) fn reload_defaults(&mut self) {
         if let Some(dir) = self.data_dir.as_deref() {
             self.defaults = ComposerDefaults::load(dir);
             self.catalog_rev += 1;

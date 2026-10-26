@@ -24,6 +24,7 @@ mod change_request_store;
 pub mod change_requests;
 pub mod chat2_host;
 mod chat_persistence;
+pub mod desktop_import;
 pub mod diff_sync;
 pub mod doc_host;
 mod fs_watch;
@@ -181,6 +182,7 @@ pub struct EngineCore {
     /// Local→synced profile import (account-scoped runtimes only).
     pub local_import: Option<local_import::LocalImporter>,
     workspace_scope: WorkspaceScope,
+    desktop_import_profile: PathBuf,
     /// Auth service (attached by [`Engine::run`]; a lazy dev-mode instance otherwise).
     auth: std::sync::Mutex<Option<Auth>>,
     /// Peer link cache for `targetDeviceId` routing (attached when edge+auth are ready).
@@ -435,6 +437,7 @@ impl EngineCore {
             device_id,
             local_import,
             workspace_scope: profile.scope(),
+            desktop_import_profile: profile.store_root().to_path_buf(),
             auth: std::sync::Mutex::new(None),
             links: std::sync::Mutex::new(None),
             updater: std::sync::Mutex::new(None),
@@ -579,6 +582,7 @@ impl EngineCore {
             self.workspace_scope,
         )
         .with_usage(self.usage.clone())
+        .with_desktop_import(self.desktop_import_profile.clone())
         .with_visuals(self.visuals.clone())
         .with_pairings(self.pairings.clone())
         .with_browser_access(self.browser_access.control())

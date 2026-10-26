@@ -2033,6 +2033,7 @@ enum PendingExit {
 
 pub struct Shell {
     state: Entity<AppState>,
+    desktop_import: Entity<crate::desktop_import::Onboarding>,
     sidebar_pane: Entity<SidebarPane>,
     sidebar_controls: Entity<zuse_viewport::sidebar_controls::SidebarControls>,
     workspace_sidebar_focus: FocusHandle,
@@ -2459,6 +2460,36 @@ pub struct Shell {
 
 impl Shell {
     pub fn new(state: Entity<AppState>, boot: EngineBootConfig, cx: &mut Context<Self>) -> Self {
+        let desktop_import = cx.new(|cx| crate::desktop_import::Onboarding::new(state.clone(), cx));
+        cx.subscribe(
+            &desktop_import,
+            |this: &mut Self, _, event: &crate::desktop_import::Applied, cx| {
+                if let Some(id) = &event.open_chat {
+                    this.state.update(cx, |state, cx| {
+                        if let Some(chat) = state.chats.iter().find(|chat| &chat.id == id).cloned()
+                        {
+                            state.select_space(chat.space_id.clone(), cx);
+                            state.select_chat(Some(chat.id), cx);
+                        }
+                    });
+                }
+                this.pull_settings(cx);
+                if event.show_chats {
+                    if event.open_chat.is_some() {
+                        this.set_route(Route::Chat, cx);
+                    } else {
+                        this.open_settings(SettingsSection::Archived, cx);
+                    }
+                }
+                let pickers = this.composer.read(cx).pickers().clone();
+                pickers.update(cx, |pickers, cx| {
+                    pickers.reload_defaults();
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
+
         let observation = cx.observe(&state, |this: &mut Shell, state, cx| {
             this.on_state_changed(&state, cx);
             cx.notify();
@@ -2634,6 +2665,7 @@ impl Shell {
         let sidebar_controls = Self::create_sidebar_controls(state.clone(), cx);
         Self {
             state: state.clone(),
+            desktop_import,
             sidebar_pane,
             sidebar_controls,
             workspace_sidebar_focus: cx.focus_handle().tab_stop(true),
@@ -11504,6 +11536,7 @@ impl Shell {
     ) -> Vec<AnyElement> {
         let theme = Theme::of(cx).for_popup();
         let mut overlays: Vec<AnyElement> = Vec::new();
+        overlays.push(self.desktop_import.clone().into_any_element());
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;
@@ -14360,6 +14393,12 @@ impl Render for Shell {
             // no-ops (zuse __root.tsx gates the hotkey on `!isSettings`, and
             // the terminal panel is only mounted on session routes). The
             // sidebar toggle stays live everywhere, as in the original.
+            .on_action(cx.listener(
+                |this, _: &crate::desktop_import::OpenDesktopImport, window, cx| {
+                    this.desktop_import
+                        .update(cx, |import, cx| import.open(window, cx));
+                },
+            ))
             .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
                 if matches!(this.route, Route::Chat) {
                     this.toggle_terminal(window, cx)

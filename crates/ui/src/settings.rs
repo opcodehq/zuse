@@ -826,6 +826,9 @@ pub const SKILL_COMPLETION_HARNESSES: [(zuse_protocol::HarnessId, &str); 9] = [
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiSettings {
+    pub desktop_import_dismissed: bool,
+    pub desktop_import_pending: Option<serde_json::Value>,
+    pub desktop_import_applied: Vec<String>,
     pub display_name: String,
     pub dictation_enabled: bool,
     /// Dictation microphone as a `zuse_voice::InputDevice` id; `None`
@@ -1045,6 +1048,9 @@ impl Default for UiSettings {
     fn default() -> Self {
         Self {
             display_name: String::new(),
+            desktop_import_dismissed: false,
+            desktop_import_pending: None,
+            desktop_import_applied: Vec::new(),
             dictation_enabled: false,
             dictation_input: None,
             window_geometry: None,
@@ -1698,6 +1704,9 @@ impl UiSettings {
             }};
         }
         merge!(
+            desktop_import_dismissed,
+            desktop_import_pending,
+            desktop_import_applied,
             display_name,
             dictation_enabled,
             dictation_input,
@@ -2740,6 +2749,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings = UiSettings {
             display_name: "Avery Parker".into(),
+            desktop_import_dismissed: false,
+            desktop_import_pending: None,
+            desktop_import_applied: Vec::new(),
             default_model: Some(zuse_protocol::presentation::DefaultModelSelection {
                 provider: zuse_protocol::HarnessId::Codex,
                 model: "catalog-model".into(),

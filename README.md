@@ -64,6 +64,14 @@ cargo run -p zuse-cli -- --listen 0.0.0.0:27656 --ipc-port 0 \
 
 Direct HTTPS uses Secure browser cookies and WSS for agent RPC. See [development setup](internal-docs/development.md) for reverse-proxy configuration and platform requirements. Packaging and full cross-device runtime acceptance remain in progress.
 
+## Import from Electron
+
+The native GPUI app offers an import when it first finds an Electron profile on a fresh workspace. You can also open **Settings → General → Import from Electron** at any time. Review the detected profile, choose whether to bring over supported settings, and select **Import**. **Start fresh** skips migration.
+
+The import preserves projects, active and archived chats, conversation tabs, message history, available attachments, and compatible preferences. It creates local backups before writing GPUI data and supports resuming an interrupted import without duplicating chats. The original Electron profile stays in place. Existing GPUI conversations and later edits to already imported chats are preserved.
+
+Sign in with the same Zuse account to access your hosted plugins. Electron-only preferences and local plugin definitions are retained in the private backup; command-based Electron plugins are not yet supported in GPUI. The review and completion screens report unavailable attachments and settings that could not be applied.
+
 ## Paired access
 
 In the browser workspace, open **Settings → Devices**, name the device and create an invitation. Share its private link with that device. Opening it imports paired access and clears the secret from the address bar. The tab retains access across reloads; revoke it from the host's pairing list to disconnect it. Paired chat, settings and file uploads use encrypted RPC.

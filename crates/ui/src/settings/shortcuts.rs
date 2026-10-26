@@ -957,6 +957,11 @@ impl Render for ShortcutsPage {
                                     .child(
                                         widgets::section_stack()
                                             .child(self.general_account.clone())
+                                            .child(div().mt_3().mb_3().flex().items_center().justify_between()
+                                                .child(div().text_color(theme.text_muted).child("Move chats and settings from Electron"))
+                                                .child(crate::popover::btn_ghost(&theme,"Import from Electron","settings-desktop-import")
+                                                    .id("settings-desktop-import")
+                                                    .on_click(|_,window,cx|window.dispatch_action(Box::new(crate::desktop_import::OpenDesktopImport),cx))))
                                             .child(self.general_preferences(&theme, cx))
                                             .child(div().flex().flex_col().gap(px(16.))
                                                 .child(zuse_viewport::settings_style::disclosure(

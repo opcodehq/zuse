@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.25.1 Preview 2 - 2026-10-26
+
+### Added
+
+- Native GPUI onboarding and Settings import from Electron, with profile review, optional settings, local backups, progress, and resumable imports.
+- Import reports for unavailable attachments and preferences or local plugins that GPUI cannot yet apply; hosted plugins remain available through the same Zuse account.
+
+### Fixed
+
+- Imported main chats now appear in project lists, with conversation tabs and archived threads grouped correctly.
+
 ## 0.25.1 - 2026-10-26
 
 ### Changed

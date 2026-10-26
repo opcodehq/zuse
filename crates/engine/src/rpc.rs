@@ -52,6 +52,7 @@
 
 mod archive_review;
 mod creation_sources;
+mod desktop_import;
 mod external_chats;
 mod git_workspace;
 mod visuals;
@@ -739,6 +740,7 @@ pub struct EngineRpc {
     harness_updates: Option<crate::harness_updates::HarnessUpdateCoordinator>,
     local_import: Option<crate::local_import::LocalImporter>,
     engine_info: EngineInfo,
+    desktop_import_profile: Option<std::path::PathBuf>,
 }
 
 impl EngineRpc {
@@ -799,11 +801,17 @@ impl EngineRpc {
             harness_updates: None,
             local_import: None,
             engine_info,
+            desktop_import_profile: None,
         }
     }
 
     pub fn with_usage(mut self, usage: crate::usage::Usage) -> Self {
         self.usage = Some(usage);
+        self
+    }
+
+    pub fn with_desktop_import(mut self, profile: std::path::PathBuf) -> Self {
+        self.desktop_import_profile = Some(profile);
         self
     }
 
@@ -2387,6 +2395,9 @@ impl RpcService for EngineRpc {
         match method {
             zuse_protocol::external_chat::LIST | zuse_protocol::external_chat::IMPORT => {
                 self.external_chats(method, params).await
+            }
+            crate::desktop_import::onboarding::DISCOVER | crate::desktop_import::onboarding::IMPORT => {
+                self.desktop_migration(method, params).await
             }
             zuse_protocol::creation_source::LIST | zuse_protocol::creation_source::RESOLVE => {
                 self.creation_sources(method, params).await
