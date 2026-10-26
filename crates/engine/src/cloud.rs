@@ -18,6 +18,8 @@ use std::{
 };
 use zuse_model::cloud::{Head, Workspace};
 
+pub const DEFAULT_API_URL: &str = crate::account::API_URL;
+
 pub const LIST: &str = zuse_protocol::methods::CLOUD_WORKSPACES;
 pub const READ: &str = zuse_protocol::methods::CLOUD_HISTORY;
 pub const CLEANUP_MIRROR: &str = zuse_protocol::methods::CLOUD_CLEANUP_MIRROR;
@@ -110,7 +112,7 @@ impl CloudApi {
         API.get_or_init(|| {
             Self::new(
                 &std::env::var("ZUSE_CLOUD_API_URL")
-                    .unwrap_or_else(|_| "https://api-rust.zuse.sh".into()),
+                    .unwrap_or_else(|_| DEFAULT_API_URL.into()),
             )
             .map(Arc::new)
             .map_err(|_| "Cloud service configuration is invalid.".into())
@@ -715,6 +717,12 @@ pub async fn handle(auth: &Auth, method: &str, params: Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cloud_uses_the_account_api_origin() {
+        assert_eq!(DEFAULT_API_URL,"https://api.zuse.sh");
+        let api=CloudApi::new(DEFAULT_API_URL).unwrap();
+        assert_eq!(api.origin.as_str(),"https://api.zuse.sh/");
+    }
     #[test]
     fn credentials_require_a_valid_secure_cloud_origin() {
         for origin in [
