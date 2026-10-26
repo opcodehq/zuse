@@ -65,18 +65,27 @@ fn snapshot(source: &Path, target: &Path) -> Result<()> {
 }
 fn preferences(directory: &Path) -> Result<(Value, Vec<String>)> {
     let path = directory.join("settings.json");
-    if !path.exists() {
-        return Ok((json!({}), Vec::new()));
-    }
-    let value: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+    let value:Value=if path.exists(){serde_json::from_slice(&std::fs::read(path)?)?}else{json!({})};
     let obj = value
         .as_object()
         .context("Electron settings are not a JSON object")?;
-    let safe = obj
+    let mut safe = obj
         .iter()
         .filter(|(key, _)| SETTINGS.contains(&key.as_str()))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<serde_json::Map<_, _>>();
+    let keybindings=directory.join("keybindings.json");
+    if keybindings.is_file() {
+        let value:Value=serde_json::from_slice(&std::fs::read(keybindings)?)?;
+        // Validate the complete file before publishing any imported chats. The
+        // viewport receives only the public rule fields, never arbitrary data.
+        let _=zuse_protocol::keybindings::import(&value).map_err(anyhow::Error::msg)?;
+        let rules=value["rules"].as_array().unwrap().iter().map(|rule| {
+            let mut safe=json!({"key":rule["key"],"command":rule["command"]});
+            if let Some(when)=rule.get("when"){safe["when"]=when.clone();} safe
+        }).collect::<Vec<_>>();
+        safe.insert("keybindings".into(),json!({"schemaVersion":1,"rules":rules}));
+    }
     let retained = obj
         .keys()
         .filter(|key| {
@@ -261,9 +270,9 @@ pub fn run(
             private_json(&to, &data)?;
         }
     }
+    let (prefs, retained) = preferences(&directory)?;
     let importer = DesktopImport::open(&source, &directory.join("source.sqlite3"))?;
     let mut report=importer.apply_to(&destination,false,|index,total|{let _=events.send(json!({"kind":"progress","phase":"chats","completed":index,"total":total,"message":"Importing chats and attachments…"}));})?;
-    let (prefs, retained) = preferences(&directory)?;
     report.settings_mapped = if include_settings {
         prefs.as_object().unwrap().keys().cloned().collect()
     } else {
@@ -419,5 +428,22 @@ mod tests {
         drop(recovered);
         drop(client);
         core.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    use super::*;
+    #[test]
+    fn keyboard_import_is_independent_of_general_settings_and_strips_unknown_fields() {
+        let dir=tempfile::tempdir().unwrap();
+        let file=json!({"schemaVersion":1,"secret":"must-stay-local","rules":[{"key":"mod+shift+k","command":"open-chat-switcher","secret":"must-stay-local"}]});
+        private_json(&dir.path().join("keybindings.json"),&file).unwrap();
+        let (prefs,retained)=preferences(dir.path()).unwrap();
+        assert!(retained.is_empty());
+        assert_eq!(prefs["keybindings"]["rules"][0]["key"],"mod+shift+k");
+        assert!(!prefs.to_string().contains("must-stay-local"));
+        let parsed=zuse_protocol::keybindings::import(&prefs["keybindings"]).unwrap();
+        assert_eq!(parsed[0].key,"mod-shift-k");
     }
 }

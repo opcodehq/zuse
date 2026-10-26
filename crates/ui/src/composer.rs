@@ -1762,6 +1762,9 @@ fn input_bindings(context: &'static str) -> Vec<KeyBinding> {
 
 /// Bind the composer keymap. Call once at app boot.
 pub fn init(cx: &mut App, send_behavior: ComposerSendBehavior) {
+    init_with_keymap(cx, send_behavior, &crate::settings::current(cx).keymap);
+}
+pub fn init_with_keymap(cx: &mut App, send_behavior: ComposerSendBehavior, keymap: &crate::settings::KeymapConfig) {
     let mut generic_bindings = input_bindings(GENERIC_COMPOSER_CONTEXT);
     generic_bindings.push(KeyBinding::new(
         "enter",
@@ -1770,7 +1773,16 @@ pub fn init(cx: &mut App, send_behavior: ComposerSendBehavior) {
     ));
 
     let mut message_bindings = input_bindings(MESSAGE_COMPOSER_CONTEXT);
+    use crate::settings::keybindings::Command as Desktop;
+    let overridden = |command| keymap.desktop.contains_key(&command) || keymap.desktop_rules.iter().any(|rule|rule.command==command);
+    message_bindings.retain(|binding| {
+        let key = binding.keystrokes().first().map(|key|key.unparse()).unwrap_or_default();
+        !((key=="shift-enter" && overridden(Desktop::ComposerNewline)) || key=="shift-tab")
+    });
     for binding in message_enter_bindings(send_behavior, &platform_combo("mod-enter")) {
+        if overridden(Desktop::ComposerSubmit) && matches!(binding.action, MessageEnterBindingAction::Submit) {continue;}
+        if overridden(Desktop::ComposerForceSubmit) && matches!(binding.action, MessageEnterBindingAction::ModifiedSubmit) {continue;}
+
         match binding.action {
             MessageEnterBindingAction::Submit => message_bindings.push(KeyBinding::new(
                 &binding.keystroke,

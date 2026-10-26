@@ -788,6 +788,7 @@ pub struct Pickers {
     cloud: cloud::Cloud,
     state: Entity<AppState>,
     config: DraftConfig,
+    plan_previous_sandbox: HashMap<String, SandboxLevel>,
     source_picker: Entity<zuse_viewport::creation_sources::SourcePicker>,
     import_picker: Entity<zuse_viewport::import_chat::ImportMenu>,
     import_tasks: HashMap<u64, Task<()>>,
@@ -1115,6 +1116,7 @@ impl Pickers {
             compact_motion: compact::CompactMotion::default(),
             compact_keyboard: false,
             effort_bounds: None,
+            plan_previous_sandbox: HashMap::new(),
             config: DraftConfig {
                 checkout,
                 ..Default::default()
@@ -1203,6 +1205,20 @@ impl Pickers {
         {
             tracing::warn!(error = %err, "composer-defaults save failed");
         }
+    }
+
+    pub fn toggle_plan_mode(&mut self, cx: &mut Context<Self>) {
+        if self.cloud_launch_frozen() || self.resolved(cx).harness == Some(HarnessId::Pi) { return; }
+        let key=self.state.read(cx).selected_chat.clone().unwrap_or_else(|| "new-chat".into());
+        let current=self.resolved(cx).sandbox;
+        let sandbox=if current==SandboxLevel::ReadOnly {
+            self.plan_previous_sandbox.remove(&key).unwrap_or_else(||crate::settings::default_permission_mode(cx).sandbox())
+        } else {
+            self.plan_previous_sandbox.insert(key,current);
+            SandboxLevel::ReadOnly
+        };
+        if self.state.read(cx).selected_chat.is_none() {self.set_draft_sandbox(sandbox,cx);}
+        else {self.update_chat_config(cx,|config|config.sandbox=sandbox);}
     }
 
     pub fn set_draft_sandbox(&mut self, sandbox: SandboxLevel, cx: &mut Context<Self>) {

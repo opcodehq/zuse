@@ -75,6 +75,7 @@ mod file_mutations;
 mod files_panel;
 mod harness_updates;
 mod main_tabs;
+mod keyboard_commands;
 mod navigation_focus;
 #[cfg(test)]
 mod navigation_tests;
@@ -320,6 +321,10 @@ fn titlebar_new_session_alpha(route: &Route, has_selected_chat: bool) -> f32 {
 #[action(namespace = shell, no_json)]
 pub struct JumpSession(pub usize);
 
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = shell, no_json)]
+pub struct DesktopCommand(pub settings::keybindings::Command);
+
 /// Show the command palette's tab at this (zero-based) position. Bound to
 /// mod-1…4 inside the palette's key context only, where it outranks the
 /// session jumps on the same keys while the palette is open.
@@ -430,7 +435,7 @@ pub fn apply_keymap(
     // gpui-base installed at startup. Reinitialize the component layer before
     // rebuilding Zuse's bindings so the file editor keymap remains active.
     gpui_base::init(cx);
-    crate::composer::init(cx, composer_send_behavior);
+    crate::composer::init_with_keymap(cx, composer_send_behavior, keymap);
     cx.bind_keys([KeyBinding::new(
         &valid_or_default(
             &keymap.toggle_dictation,
@@ -443,93 +448,24 @@ pub fn apply_keymap(
     // close, ⌘M minimize, ⌘H hide on macOS) — these back the native menu
     // key equivalents and must survive keymap re-application.
     crate::app_menus::bind_keys(cx);
-    cx.bind_keys([
-        KeyBinding::new(
-            &valid_or_default(&keymap.random_wallpaper, "mod-u"),
-            RandomWallpaper,
-            None,
-        ),
-        KeyBinding::new(
-            &valid_or_default(&keymap.save_file, "mod-s"),
-            SaveFile,
-            None,
-        ),
-        KeyBinding::new(
-            &valid_or_default(&keymap.toggle_sidebar, "mod-b"),
-            ToggleSidebar,
-            None,
-        ),
-        KeyBinding::new(
-            &valid_or_default(&keymap.toggle_changes, "mod-r"),
-            ToggleChanges,
-            None,
-        ),
-        KeyBinding::new(
-            &valid_or_default(&keymap.toggle_files, "mod-e"),
-            ToggleFiles,
-            None,
-        ),
-        KeyBinding::new(
-            &valid_or_default(&keymap.toggle_terminal, "mod-j"),
-            ToggleTerminal,
-            None,
-        ),
-        KeyBinding::new(
-            &valid_or_default(&keymap.new_session, "mod-n"),
-            NewSession,
-            None,
-        ),
-        KeyBinding::new(
-            &valid_or_default(
-                &keymap.next_session,
-                crate::settings::ShortcutId::NextSession.default_combo(),
-            ),
-            NextSession,
-            None,
-        ),
-        KeyBinding::new(
-            &valid_or_default(
-                &keymap.prev_session,
-                crate::settings::ShortcutId::PrevSession.default_combo(),
-            ),
-            PrevSession,
-            None,
-        ),
-        KeyBinding::new(
-            &valid_or_default(&keymap.archive_session, "mod-shift-a"),
-            ArchiveSession,
-            None,
-        ),
-        KeyBinding::new(
-            &valid_or_default(&keymap.new_project, ShortcutId::NewProject.default_combo()),
-            AddSpacePalette,
-            None,
-        ),
-        // Fixed: ⌘K summons the command palette.
-        // Pressing it again dismisses.
-        KeyBinding::new(&platform_combo("mod-k"), ToggleCommandPalette, None),
-        KeyBinding::new(
-            &valid_or_default(&keymap.open_model_picker, "mod-/"),
-            OpenModelPicker,
-            None,
-        ),
-    ]);
+    // Native-only additions remain available alongside the desktop command contract.
+    for id in [ShortcutId::RandomWallpaper, ShortcutId::ToggleFiles, ShortcutId::ArchiveSession, ShortcutId::OpenModelPicker] {
+        let combo=platform_combo(keymap.get(id));
+        if combo.is_empty() || Keystroke::parse(&combo).is_err(){continue;}
+        let binding=match id {
+            ShortcutId::RandomWallpaper=>KeyBinding::new(&combo,RandomWallpaper,None),
+            ShortcutId::ToggleFiles=>KeyBinding::new(&combo,ToggleFiles,None),
+            ShortcutId::ArchiveSession=>KeyBinding::new(&combo,ArchiveSession,None),
+            _=>KeyBinding::new(&combo,OpenModelPicker,None),
+        };
+        cx.bind_keys([binding]);
+    }
     crate::browser::bind_keys(cx, keymap);
-    // ⌘1..⌘9 open the sidebar's first nine rows. A slot left unbound (an empty
-    // combo in a hand-edited file) binds nothing rather than falling back —
-    // the user cleared it on purpose.
-    cx.bind_keys((0..JUMP_SLOTS).filter_map(|slot| {
-        let id = ShortcutId::JumpSession(slot);
-        let combo = keymap.get(id);
-        if combo.is_empty() {
-            return None;
-        }
-        Some(KeyBinding::new(
-            &valid_or_default(combo, id.default_combo()),
-            JumpSession(slot),
-            None,
-        ))
-    }));
+    for slot in 0..JUMP_SLOTS {
+        let combo=platform_combo(keymap.get(ShortcutId::JumpSession(slot)));
+        if !combo.is_empty() && Keystroke::parse(&combo).is_ok(){cx.bind_keys([KeyBinding::new(&combo,JumpSession(slot),None)]);}
+    }
+    keyboard_commands::bind(cx, keymap);
     // Context-free bindings (the jumps above) match at the full focus depth,
     // so a palette binding must too: one for the palette's focused search
     // input, one for the card itself. Bound after the jumps, they win the tie.
@@ -14408,11 +14344,11 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
                 if matches!(this.route,Route::Archives | Route::Usage){return;}
-                if matches!(this.route, Route::Chat) && this.right_pane_open(cx) {
-                    let file = match this.resolved_right_active(cx) {
+                if matches!(this.route, Route::Chat) {
+                    let file = this.active_main_file(cx).and_then(|id|this.file_surfaces.get(&id).cloned()).or_else(|| match this.resolved_right_active(cx) {
                         RightSurface::File(id) => this.file_surfaces.get(&id).cloned(),
                         _ => None,
-                    };
+                    });
                     if let Some(file) = file {
                         file.update(cx, |file, cx| file.save_active_document(cx));
                     }
@@ -14524,6 +14460,9 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &OpenCloudSettings, _, cx| {
                 this.open_settings(SettingsSection::Cloud, cx)
+            }))
+            .on_action(cx.listener(|this, command: &DesktopCommand, window, cx| {
+                this.desktop_command(command.0, window, cx);
             }))
             .on_action(cx.listener(|this, _: &NextSession, window, cx| {
                 this.cycle_navigation(true, window, cx)
@@ -15238,6 +15177,7 @@ mod tests {
         // default gpui cannot parse would ship as a dead shortcut.
         for id in crate::settings::ShortcutId::ALL {
             let combo = platform_combo(id.default_combo());
+            if combo.is_empty(){continue;}
             assert!(
                 Keystroke::parse(&combo).is_ok(),
                 "{} default {combo:?} does not parse",
@@ -20239,8 +20179,10 @@ mod settings_modal_regressions {
     #[gpui::test]
     fn navigation_shortcuts_work_from_settings(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
-        init_settings_test(settings::UiSettings::default(), dir.path(), cx);
-        let keymap = KeymapConfig::default();
+        let mut saved=settings::UiSettings::default();
+        saved.keymap.set(ShortcutId::JumpSession(0),"mod-alt-1".into());
+        let keymap=saved.keymap.clone();
+        init_settings_test(saved, dir.path(), cx);
         cx.update(|cx| apply_keymap(cx, &keymap, ComposerSendBehavior::default()));
         let window = cx.add_window(|_, cx| {
             let mut shell = test_shell(dir.path(), cx);

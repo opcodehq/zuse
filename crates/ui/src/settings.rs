@@ -21,6 +21,7 @@ pub mod accounts;
 pub mod appearance;
 pub mod archived;
 pub mod composer;
+pub mod keybindings;
 mod custom_acp;
 pub mod defaults;
 pub mod devices;
@@ -1157,9 +1158,7 @@ impl Default for UiSettings {
 pub const JUMP_SLOTS: usize = 9;
 
 /// Default combo per jump slot, and the label the shortcuts table shows.
-const JUMP_DEFAULTS: [&str; JUMP_SLOTS] = [
-    "mod-1", "mod-2", "mod-3", "mod-4", "mod-5", "mod-6", "mod-7", "mod-8", "mod-9",
-];
+const JUMP_DEFAULTS: [&str; JUMP_SLOTS] = [""; JUMP_SLOTS];
 const JUMP_LABELS: [&str; JUMP_SLOTS] = [
     "Jump to session 1",
     "Jump to session 2",
@@ -1177,6 +1176,7 @@ const JUMP_LABELS: [&str; JUMP_SLOTS] = [
 /// rather than panicking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShortcutId {
+    Desktop(keybindings::Command),
     ToggleDictation,
     CaptureAppshot,
     RandomWallpaper,
@@ -1196,21 +1196,48 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 15 + JUMP_SLOTS] = [
+    pub const ALL: [ShortcutId; 51] = [
+        ShortcutId::Desktop(keybindings::Command::NewChat),
+        ShortcutId::Desktop(keybindings::Command::NewChatWithoutProject),
+        ShortcutId::Desktop(keybindings::Command::OpenProject),
+        ShortcutId::Desktop(keybindings::Command::Settings),
+        ShortcutId::Desktop(keybindings::Command::CloseTab),
+        ShortcutId::Desktop(keybindings::Command::ToggleLeftSidebar),
+        ShortcutId::Desktop(keybindings::Command::ToggleRightSidebar),
+        ShortcutId::Desktop(keybindings::Command::ToggleTerminal),
+        ShortcutId::Desktop(keybindings::Command::FocusComposer),
+        ShortcutId::Desktop(keybindings::Command::NextTab),
+        ShortcutId::Desktop(keybindings::Command::PrevTab),
+        ShortcutId::Desktop(keybindings::Command::SelectTab1),
+        ShortcutId::Desktop(keybindings::Command::SelectTab2),
+        ShortcutId::Desktop(keybindings::Command::SelectTab3),
+        ShortcutId::Desktop(keybindings::Command::SelectTab4),
+        ShortcutId::Desktop(keybindings::Command::SelectTab5),
+        ShortcutId::Desktop(keybindings::Command::SelectTab6),
+        ShortcutId::Desktop(keybindings::Command::SelectTab7),
+        ShortcutId::Desktop(keybindings::Command::SelectTab8),
+        ShortcutId::Desktop(keybindings::Command::SelectLastTab),
+        ShortcutId::Desktop(keybindings::Command::NewTab),
+        ShortcutId::Desktop(keybindings::Command::NextChat),
+        ShortcutId::Desktop(keybindings::Command::PrevChat),
+        ShortcutId::Desktop(keybindings::Command::NextPanel),
+        ShortcutId::Desktop(keybindings::Command::PrevPanel),
+        ShortcutId::Desktop(keybindings::Command::FocusNextPane),
+        ShortcutId::Desktop(keybindings::Command::FocusPrevPane),
+        ShortcutId::Desktop(keybindings::Command::OpenChatSwitcher),
+        ShortcutId::Desktop(keybindings::Command::SearchFiles),
+        ShortcutId::Desktop(keybindings::Command::ComposerSubmit),
+        ShortcutId::Desktop(keybindings::Command::ComposerNewline),
+        ShortcutId::Desktop(keybindings::Command::ComposerForceSubmit),
+        ShortcutId::Desktop(keybindings::Command::ComposerTogglePlanMode),
+        ShortcutId::Desktop(keybindings::Command::EditorSave),
+        ShortcutId::Desktop(keybindings::Command::EditorAnnotate),
         ShortcutId::ToggleDictation,
         ShortcutId::CaptureAppshot,
         ShortcutId::RandomWallpaper,
-        ShortcutId::SaveFile,
         ShortcutId::BrowserReload,
-        ShortcutId::ToggleSidebar,
-        ShortcutId::ToggleChanges,
         ShortcutId::ToggleFiles,
-        ShortcutId::ToggleTerminal,
-        ShortcutId::NewSession,
-        ShortcutId::NewProject,
         ShortcutId::OpenModelPicker,
-        ShortcutId::NextSession,
-        ShortcutId::PrevSession,
         ShortcutId::ArchiveSession,
         ShortcutId::JumpSession(0),
         ShortcutId::JumpSession(1),
@@ -1223,6 +1250,22 @@ impl ShortcutId {
         ShortcutId::JumpSession(8),
     ];
 
+    pub fn canonical(self) -> Self {
+        use keybindings::Command;
+        Self::Desktop(match self {
+            Self::SaveFile=>Command::EditorSave,Self::ToggleSidebar=>Command::ToggleLeftSidebar,
+            Self::ToggleChanges=>Command::ToggleRightSidebar,Self::ToggleTerminal=>Command::ToggleTerminal,
+            Self::NewSession=>Command::NewChat,Self::NewProject=>Command::OpenProject,
+            Self::NextSession=>Command::NextChat,Self::PrevSession=>Command::PrevChat,
+            other=>return other,
+        })
+    }
+    pub fn overlaps_context(self, other:Self) -> bool {
+        self.key_context().is_none() || other.key_context().is_none() || self.key_context()==other.key_context()
+    }
+    pub fn key_context(self) -> Option<&'static str> {
+        match self {Self::Desktop(command)=>command.context(),Self::ToggleDictation=>Some("MessageComposer"), _=>None}
+    }
     pub fn available(self) -> bool {
         self != Self::CaptureAppshot || crate::appshots::is_desktop()
     }
@@ -1230,6 +1273,7 @@ impl ShortcutId {
     /// Row label (zuse lib/shortcuts.ts `SHORTCUT_DEFINITIONS`, verbatim).
     pub fn label(self) -> &'static str {
         match self {
+            ShortcutId::Desktop(command) => command.label(),
             ShortcutId::ToggleDictation => "Hold to dictate",
             ShortcutId::RandomWallpaper => "Random wallpaper",
             ShortcutId::CaptureAppshot => "Capture Appshot",
@@ -1258,6 +1302,11 @@ impl ShortcutId {
     /// this guards against only exists off macOS).
     pub fn default_combo_on(self, mac: bool) -> &'static str {
         match self {
+            ShortcutId::Desktop(keybindings::Command::NextChat) if !mac => "mod-tab",
+            ShortcutId::Desktop(keybindings::Command::PrevChat) if !mac => "mod-shift-tab",
+            ShortcutId::Desktop(keybindings::Command::FocusNextPane) if !mac => "mod-`",
+            ShortcutId::Desktop(keybindings::Command::FocusPrevPane) if !mac => "mod-shift-`",
+            ShortcutId::Desktop(command) => command.default_combo(),
             ShortcutId::ToggleDictation => "mod-d",
             ShortcutId::RandomWallpaper => "mod-u",
             ShortcutId::CaptureAppshot if mac => "ctrl-alt-space",
@@ -1265,11 +1314,11 @@ impl ShortcutId {
             ShortcutId::SaveFile => "mod-s",
             ShortcutId::BrowserReload => "mod-shift-r",
             ShortcutId::ToggleSidebar => "mod-b",
-            ShortcutId::ToggleChanges => "mod-r",
+            ShortcutId::ToggleChanges => "mod-alt-b",
             ShortcutId::ToggleFiles => "mod-e",
             ShortcutId::ToggleTerminal => "mod-j",
             ShortcutId::NewSession => "mod-n",
-            ShortcutId::NewProject => "mod-shift-n",
+            ShortcutId::NewProject => "mod-o",
             ShortcutId::OpenModelPicker => "mod-/",
             // Ctrl+Tab on every platform — but spelled the way THAT platform's
             // recorder spells ctrl (see `combo_from_keystroke`). Off macOS
@@ -1288,7 +1337,7 @@ impl ShortcutId {
             ShortcutId::PrevSession => "mod-shift-tab",
             // Mod+A is the composer's Select all, so archiving takes the
             // shifted combo.
-            ShortcutId::ArchiveSession => "mod-shift-a",
+            ShortcutId::ArchiveSession => "",
             ShortcutId::JumpSession(slot) => JUMP_DEFAULTS.get(slot).copied().unwrap_or(""),
         }
     }
@@ -1307,6 +1356,10 @@ impl ShortcutId {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct KeymapConfig {
+    #[serde(default)]
+    pub desktop_defaults_version: u8,
+    pub desktop: HashMap<keybindings::Command, String>,
+    pub desktop_rules: Vec<keybindings::Rule>,
     pub toggle_dictation: String,
     #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), serde(skip))]
     pub capture_appshot: String,
@@ -1374,6 +1427,9 @@ pub fn sidebar_pin_profile_key(
 impl Default for KeymapConfig {
     fn default() -> Self {
         Self {
+            desktop_defaults_version: 1,
+            desktop: HashMap::new(),
+            desktop_rules: Vec::new(),
             toggle_dictation: ShortcutId::ToggleDictation.default_combo().into(),
             capture_appshot: ShortcutId::CaptureAppshot.default_combo().into(),
             random_wallpaper: ShortcutId::RandomWallpaper.default_combo().into(),
@@ -1395,8 +1451,45 @@ impl Default for KeymapConfig {
 }
 
 impl KeymapConfig {
+    pub fn import_desktop_rules(&mut self, rules:Vec<keybindings::Rule>) {
+        for command in keybindings::Command::ALL {self.set(ShortcutId::Desktop(command),command.default_combo().into());}
+        for rule in &rules {if let Some(id)=Self::legacy_command(rule.command){self.set(id,rule.key.clone());}}
+        self.desktop_rules=rules;
+    }
+    fn align_desktop_defaults(&mut self) {
+        if self.desktop_defaults_version>0{return;}
+        for (field,old,new) in [(&mut self.toggle_changes,"mod-r","mod-alt-b"),(&mut self.new_project,"mod-shift-n","mod-o"),(&mut self.archive_session,"mod-shift-a","")] {
+            if field==old {*field=new.into();}
+        }
+        for (slot,combo) in self.jump_session.iter_mut().enumerate(){if *combo==format!("mod-{}",slot+1){combo.clear();}}
+        self.desktop_defaults_version=1;
+    }
+
+    fn legacy_command(command: keybindings::Command) -> Option<ShortcutId> {
+        use keybindings::Command;
+        Some(match command {
+            Command::NewChat => ShortcutId::NewSession,
+            Command::OpenProject => ShortcutId::NewProject,
+            Command::ToggleLeftSidebar => ShortcutId::ToggleSidebar,
+            Command::ToggleRightSidebar => ShortcutId::ToggleChanges,
+            Command::ToggleTerminal => ShortcutId::ToggleTerminal,
+            Command::NextChat => ShortcutId::NextSession,
+            Command::PrevChat => ShortcutId::PrevSession,
+            Command::EditorSave => ShortcutId::SaveFile,
+            _ => return None,
+        })
+    }
+    pub fn desktop_bindings(&self) -> Vec<keybindings::Rule> {
+        let mut rules:Vec<_>=keybindings::Command::ALL.into_iter()
+            .filter(|command| !self.desktop_rules.iter().any(|rule|rule.command==*command))
+            .map(|command|keybindings::Rule{key:self.get(ShortcutId::Desktop(command)).to_owned(),command,when:None}).collect();
+        rules.extend(self.desktop_rules.iter().cloned());
+        rules
+    }
+
     pub fn get(&self, id: ShortcutId) -> &str {
         match id {
+            ShortcutId::Desktop(command) => self.desktop_rules.iter().rev().find(|rule|rule.command==command).map(|rule|rule.key.as_str()).unwrap_or_else(||self.desktop.get(&command).map(String::as_str).unwrap_or_else(||Self::legacy_command(command).map(|id|self.get(id)).unwrap_or_else(||ShortcutId::Desktop(command).default_combo()))),
             ShortcutId::ToggleDictation => &self.toggle_dictation,
             ShortcutId::CaptureAppshot => &self.capture_appshot,
             ShortcutId::RandomWallpaper => &self.random_wallpaper,
@@ -1422,6 +1515,10 @@ impl KeymapConfig {
 
     pub fn set(&mut self, id: ShortcutId, combo: String) {
         match id {
+            ShortcutId::Desktop(command) => {
+                self.desktop_rules.retain(|rule|rule.command!=command);
+                if let Some(id)=Self::legacy_command(command) {self.set(id,combo);} else {self.desktop.insert(command,combo);}
+            }
             ShortcutId::ToggleDictation => self.toggle_dictation = combo,
             ShortcutId::CaptureAppshot => self.capture_appshot = combo,
             ShortcutId::RandomWallpaper => self.random_wallpaper = combo,
@@ -1469,6 +1566,7 @@ impl KeymapConfig {
     /// defaults and preserve every unrelated customization.
     fn heal_reserved_composer_shortcuts(&mut self) {
         for id in ShortcutId::ALL {
+            if matches!(id, ShortcutId::Desktop(command) if command.context()==Some("MessageComposer")) {continue;}
             if self.get(id) == "mod-enter" {
                 self.reset(id);
             }
@@ -1539,7 +1637,7 @@ pub fn conflicted_shortcuts(keymap: &KeymapConfig) -> Vec<ShortcutId> {
                 && !combo.is_empty()
                 && ShortcutId::ALL
                     .into_iter()
-                    .any(|other| other.available() && other != id && keymap.get(other) == combo)
+                    .any(|other| other.available() && other != id && other.overlaps_context(id) && platform_combo(keymap.get(other)) == platform_combo(combo))
         })
         .collect()
 }
@@ -1856,6 +1954,7 @@ impl UiSettings {
         if let Some(background) = self.new_thread_composer_background.as_mut() {
             background.adjustment = background.adjustment.normalized();
         }
+        self.keymap.align_desktop_defaults();
         self.keymap.heal_jump_slots();
         self.keymap.heal_reserved_composer_shortcuts();
         self
@@ -3456,7 +3555,7 @@ mod tests {
     #[test]
     fn defaults_match_zuse() {
         let d = UiSettings::default();
-        assert_eq!(d.sidebar_width, 256.0);
+        assert_eq!(d.sidebar_width, SIDEBAR_DEFAULT);
         assert_eq!(d.right_pane_width, 520.0);
         assert_eq!(d.terminal_height, 280.0);
         assert!(!d.sidebar_collapsed && !d.right_pane_open && !d.terminal_open);
@@ -3467,7 +3566,7 @@ mod tests {
     fn legacy_panel_defaults_migrate_and_custom_shortcuts_survive() {
         let dir = tempfile::tempdir().unwrap();
         for (sidebar, right, expected_sidebar, expected_right) in [
-            ("mod-s", "mod-b", "mod-b", "mod-r"),
+            ("mod-s", "mod-b", "mod-b", "mod-alt-b"),
             ("mod-shift-x", "mod-alt-b", "mod-shift-x", "mod-alt-b"),
         ] {
             std::fs::write(
@@ -3525,14 +3624,14 @@ mod tests {
     fn new_project_shortcut_migrates_and_persists() {
         let mut keymap: KeymapConfig =
             serde_json::from_str(r#"{"newSession":"mod-alt-n"}"#).unwrap();
-        assert_eq!(keymap.get(ShortcutId::NewProject), "mod-shift-n");
+        assert_eq!(keymap.get(ShortcutId::NewProject), "mod-o");
         assert_eq!(keymap.get(ShortcutId::NewSession), "mod-alt-n");
         keymap.set(ShortcutId::NewProject, "mod-alt-p".into());
         let mut restored: KeymapConfig =
             serde_json::from_str(&serde_json::to_string(&keymap).unwrap()).unwrap();
         assert_eq!(restored.get(ShortcutId::NewProject), "mod-alt-p");
         restored.reset(ShortcutId::NewProject);
-        assert_eq!(restored.get(ShortcutId::NewProject), "mod-shift-n");
+        assert_eq!(restored.get(ShortcutId::NewProject), "mod-o");
     }
 
     #[test]
@@ -3543,7 +3642,7 @@ mod tests {
         keymap.reset(ShortcutId::SaveFile);
         assert_eq!(keymap.get(ShortcutId::SaveFile), "mod-s");
         assert_eq!(keymap.get(ShortcutId::ToggleSidebar), "mod-b");
-        assert_eq!(keymap.get(ShortcutId::ToggleChanges), "mod-r");
+        assert_eq!(keymap.get(ShortcutId::ToggleChanges), "mod-alt-b");
         assert_eq!(keymap.get(ShortcutId::ToggleTerminal), "mod-j");
         let ctrl = if cfg!(target_os = "macos") {
             "ctrl"
@@ -3556,7 +3655,7 @@ mod tests {
             format!("{ctrl}-shift-tab")
         );
         assert_eq!(keymap.get(ShortcutId::NewSession), "mod-n");
-        assert_eq!(keymap.get(ShortcutId::ArchiveSession), "mod-shift-a");
+        assert_eq!(keymap.get(ShortcutId::ArchiveSession), "");
         keymap.set(ShortcutId::ToggleSidebar, "mod-shift-x".into());
         assert_eq!(keymap.get(ShortcutId::ToggleSidebar), "mod-shift-x");
         keymap.reset(ShortcutId::ToggleSidebar);
@@ -3564,7 +3663,7 @@ mod tests {
         keymap.set(ShortcutId::ArchiveSession, "mod-shift-y".into());
         assert_eq!(keymap.get(ShortcutId::ArchiveSession), "mod-shift-y");
         keymap.reset(ShortcutId::ArchiveSession);
-        assert_eq!(keymap.get(ShortcutId::ArchiveSession), "mod-shift-a");
+        assert_eq!(keymap.get(ShortcutId::ArchiveSession), "");
     }
 
     #[test]
@@ -3632,6 +3731,7 @@ mod tests {
         for mac in [true, false] {
             for id in ShortcutId::ALL {
                 let combo = id.default_combo_on(mac);
+                if combo.is_empty(){continue;}
                 // Via the platform spelling, where modifier names are
                 // unambiguous, so the decode can't inherit the bug it checks.
                 let bound = platform_combo_on(mac, combo);
@@ -3662,6 +3762,7 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for id in ShortcutId::ALL {
             let bound = platform_combo(id.default_combo());
+            if bound.is_empty(){continue;}
             assert!(seen.insert(bound.clone()), "{bound:?} bound twice");
         }
     }
@@ -3672,9 +3773,9 @@ mod tests {
         assert!(conflicted_shortcuts(&keymap).is_empty());
         keymap.set(ShortcutId::ToggleChanges, "mod-b".into());
         let conflicts = conflicted_shortcuts(&keymap);
-        assert!(conflicts.contains(&ShortcutId::ToggleSidebar));
-        assert!(conflicts.contains(&ShortcutId::ToggleChanges));
-        assert!(!conflicts.contains(&ShortcutId::ToggleTerminal));
+        assert!(conflicts.contains(&ShortcutId::ToggleSidebar.canonical()));
+        assert!(conflicts.contains(&ShortcutId::ToggleChanges.canonical()));
+        assert!(!conflicts.contains(&ShortcutId::ToggleTerminal.canonical()));
         keymap.reset(ShortcutId::ToggleChanges);
         assert!(conflicted_shortcuts(&keymap).is_empty());
     }
@@ -3735,8 +3836,8 @@ mod tests {
     #[test]
     fn jump_slots_get_set_and_reset() {
         let mut keymap = KeymapConfig::default();
-        assert_eq!(keymap.get(ShortcutId::JumpSession(0)), "mod-1");
-        assert_eq!(keymap.get(ShortcutId::JumpSession(8)), "mod-9");
+        assert_eq!(keymap.get(ShortcutId::JumpSession(0)), "");
+        assert_eq!(keymap.get(ShortcutId::JumpSession(8)), "");
         // Past the last slot there is no shortcut, not a panic.
         assert_eq!(keymap.get(ShortcutId::JumpSession(9)), "");
         assert_eq!(ShortcutId::JumpSession(9).jump_slot(), None);
@@ -3746,7 +3847,7 @@ mod tests {
         keymap.set(ShortcutId::JumpSession(2), "mod-alt-3".into());
         assert_eq!(keymap.get(ShortcutId::JumpSession(2)), "mod-alt-3");
         keymap.reset(ShortcutId::JumpSession(2));
-        assert_eq!(keymap.get(ShortcutId::JumpSession(2)), "mod-3");
+        assert_eq!(keymap.get(ShortcutId::JumpSession(2)), "");
         // A write past the last slot is dropped, and grows nothing.
         keymap.set(ShortcutId::JumpSession(9), "mod-0".into());
         assert_eq!(keymap.jump_session.len(), JUMP_SLOTS);
@@ -3762,7 +3863,7 @@ mod tests {
         keymap.heal_jump_slots();
         assert_eq!(keymap.jump_session.len(), JUMP_SLOTS);
         assert_eq!(keymap.get(ShortcutId::JumpSession(0)), "mod-alt-1");
-        assert_eq!(keymap.get(ShortcutId::JumpSession(1)), "mod-2");
+        assert_eq!(keymap.get(ShortcutId::JumpSession(1)), "");
 
         // Long: the tail is dropped.
         let mut keymap = KeymapConfig {
@@ -3795,7 +3896,7 @@ mod tests {
         assert_eq!(loaded.sidebar_width, 300.0);
         assert_eq!(loaded.keymap.get(ShortcutId::ToggleSidebar), "mod-shift-x");
         assert_eq!(loaded.keymap.get(ShortcutId::JumpSession(0)), "mod-alt-1");
-        assert_eq!(loaded.keymap.get(ShortcutId::JumpSession(8)), "mod-9");
+        assert_eq!(loaded.keymap.get(ShortcutId::JumpSession(8)), "");
         assert_eq!(loaded.keymap.jump_session.len(), JUMP_SLOTS);
     }
 
@@ -3818,7 +3919,9 @@ mod tests {
 
     #[test]
     fn jump_hints_need_an_exact_modifier_match() {
-        let keymap = KeymapConfig::default();
+        let mut keymap = KeymapConfig::default();
+        assert!(!jump_hints_visible(&keymap,true,false,false));
+        for slot in 0..JUMP_SLOTS {keymap.set(ShortcutId::JumpSession(slot),format!("mod-{}",slot+1));}
         // Mod alone matches mod-1..9.
         assert!(jump_hints_visible(&keymap, true, false, false));
         // Extra modifiers are a different chord (Cmd+Shift+4 screenshots).
@@ -3916,7 +4019,7 @@ mod tests {
             keymap.get(ShortcutId::NextSession),
             ShortcutId::NextSession.default_combo()
         );
-        assert_eq!(keymap.get(ShortcutId::ArchiveSession), "mod-shift-a");
+        assert_eq!(keymap.get(ShortcutId::ArchiveSession), "");
     }
 
     #[test]

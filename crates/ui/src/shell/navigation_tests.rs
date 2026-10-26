@@ -26,6 +26,9 @@ impl Render for NavigationHost {
                 .flex_col()
                 .track_focus(&shell.shortcut_focus)
                 .child(div().track_focus(&shell.unfocused))
+                .on_action(cx.listener(|shell, command: &DesktopCommand, window, cx| {
+                    shell.desktop_command(command.0,window,cx);
+                }))
                 .on_action(cx.listener(|shell, _: &NextSession, window, cx| {
                     shell.cycle_navigation(true, window, cx);
                 }))
@@ -127,14 +130,12 @@ fn setup(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
     (shell, cx)
 }
 
-fn press(cx: &mut VisualTestContext, forward: bool) {
-    let id = if forward {
-        ShortcutId::NextSession
-    } else {
-        ShortcutId::PrevSession
-    };
-    cx.simulate_keystrokes(&platform_combo(id.default_combo()));
-    cx.update(|window, cx| window.draw(cx).clear());
+fn press(shell:&Entity<Shell>,cx: &mut VisualTestContext, forward: bool) {
+    use settings::keybindings::Command;
+    let right=cx.update(|window,cx|shell.read(cx).navigation_focus.in_right(window,cx));
+    let command=match(right,forward){(true,true)=>Command::NextPanel,(true,false)=>Command::PrevPanel,(false,true)=>Command::NextChat,(false,false)=>Command::PrevChat};
+    cx.simulate_keystrokes(&platform_combo(command.default_combo()));
+    cx.update(|window,cx|window.draw(cx).clear());
 }
 
 fn assert_surface(shell: &Entity<Shell>, cx: &mut VisualTestContext, surface: RightSurface) {
@@ -155,18 +156,18 @@ fn repeated_keys_stay_in_read_only_pane_and_follow_reordering(cx: &mut TestAppCo
     let tab = cx.debug_bounds("right-surface-tab-0").unwrap().center();
     cx.simulate_click(tab, gpui::Modifiers::default());
     for expected in [2, 1, 2, 1] {
-        press(cx, true);
+        press(&shell,cx, true);
         assert_surface(&shell, cx, RightSurface::Subagent(expected));
     }
     shell.update(cx, |shell, cx| {
         shell.add_subagent_surface("parent".into(), "third".into(), "Third".into(), false, cx);
         shell.reorder_right_tabs(2, 0, cx);
     });
-    press(cx, true);
+    press(&shell,cx, true);
     assert_surface(&shell, cx, RightSurface::Subagent(1));
-    press(cx, false);
+    press(&shell,cx, false);
     assert_surface(&shell, cx, RightSurface::Subagent(3));
-    press(cx, false);
+    press(&shell,cx, false);
     assert_surface(&shell, cx, RightSurface::Subagent(2));
 }
 
@@ -175,13 +176,13 @@ fn clicking_main_transcript_switches_back_to_session_navigation(cx: &mut TestApp
     let (shell, cx) = setup(cx);
     let tab = cx.debug_bounds("right-surface-tab-0").unwrap().center();
     cx.simulate_click(tab, gpui::Modifiers::default());
-    press(cx, true);
+    press(&shell,cx, true);
     let main = cx.debug_bounds("navigation-main").unwrap();
     cx.simulate_click(
         main.origin + gpui::point(px(100.), px(150.)),
         gpui::Modifiers::default(),
     );
-    press(cx, true);
+    press(&shell,cx, true);
     shell.read_with(cx, |shell, cx| {
         assert_eq!(shell.state.read(cx).selected_chat.as_deref(), Some("other"));
     });
@@ -211,8 +212,8 @@ fn side_chat_to_diff_retains_right_focus_and_custom_bindings(cx: &mut TestAppCon
                 .is_focused(window)
         );
         let mut keymap = KeymapConfig::default();
-        keymap.next_session = "alt-down".into();
-        keymap.prev_session = "alt-up".into();
+        keymap.set(ShortcutId::Desktop(settings::keybindings::Command::NextPanel), "alt-down".into());
+        keymap.set(ShortcutId::Desktop(settings::keybindings::Command::PrevPanel), "alt-up".into());
         apply_keymap(cx, &keymap, ComposerSendBehavior::default());
     });
     cx.simulate_keystrokes("alt-down");
@@ -253,7 +254,7 @@ fn closing_active_and_last_tabs_recovers_the_correct_pane(cx: &mut TestAppContex
             shell.close_right_surface(RightSurface::Subagent(1), window, cx);
         })
     });
-    press(cx, true);
+    press(&shell,cx, true);
     assert_surface(&shell, cx, RightSurface::Subagent(2));
     cx.update(|window, cx| {
         shell.update(cx, |shell, cx| {
@@ -262,7 +263,7 @@ fn closing_active_and_last_tabs_recovers_the_correct_pane(cx: &mut TestAppContex
             assert!(shell.composer.focus_handle(cx).is_focused(window));
         })
     });
-    press(cx, true);
+    press(&shell,cx, true);
     shell.read_with(cx, |shell, cx| {
         assert_eq!(shell.state.read(cx).selected_chat.as_deref(), Some("other"));
     });
@@ -283,8 +284,8 @@ fn modal_and_picker_block_navigation_in_both_panes(cx: &mut TestAppContext) {
                 shell.delete_confirm = Some("parent".into());
             })
         });
-        press(cx, true);
-        press(cx, false);
+        press(&shell,cx, true);
+        press(&shell,cx, false);
         shell.update(cx, |shell, cx| {
             assert_eq!(
                 shell.state.read(cx).selected_chat.as_deref(),
@@ -301,7 +302,7 @@ fn modal_and_picker_block_navigation_in_both_panes(cx: &mut TestAppContext) {
                 .update(cx, |composer, cx| composer.open_model_menu(window, cx));
         })
     });
-    press(cx, true);
+    press(&shell,cx, true);
     shell.read_with(cx, |shell, cx| {
         assert_eq!(
             shell.state.read(cx).selected_chat.as_deref(),
@@ -322,8 +323,8 @@ fn empty_picker_and_stale_tabs_do_not_change_sessions(cx: &mut TestAppContext) {
             window.focus(&shell.navigation_focus.right, cx);
         })
     });
-    press(cx, true);
-    press(cx, false);
+    press(&shell,cx, true);
+    press(&shell,cx, false);
     assert_surface(&shell, cx, RightSurface::Picker);
 }
 
@@ -333,7 +334,7 @@ fn hiding_reopening_and_expanding_preserve_navigation_boundaries(cx: &mut TestAp
     let tab = cx.debug_bounds("right-surface-tab-0").unwrap().center();
     cx.simulate_click(tab, gpui::Modifiers::default());
     shell.update(cx, |shell, cx| shell.toggle_right_pane_expand(cx));
-    press(cx, true);
+    press(&shell,cx, true);
     assert_surface(&shell, cx, RightSurface::Subagent(2));
     shell.update(cx, |shell, cx| shell.set_surfaces_open(false, cx));
     cx.update(|window, cx| window.draw(cx).clear());
@@ -347,7 +348,7 @@ fn hiding_reopening_and_expanding_preserve_navigation_boundaries(cx: &mut TestAp
         assert!(shell.read(cx).composer.focus_handle(cx).is_focused(window));
     });
     // Restored tabs do not take navigation away from the main composer.
-    press(cx, true);
+    press(&shell,cx, true);
     shell.read_with(cx, |shell, cx| {
         assert_eq!(shell.state.read(cx).selected_chat.as_deref(), Some("other"));
     });
@@ -369,7 +370,7 @@ fn embedded_terminal_and_browser_focus_route_to_right_tabs(cx: &mut TestAppConte
         let terminal = shell.read(cx).right_terminal.as_ref().unwrap().read(cx);
         assert!(terminal.focus_handle().is_focused(window));
     });
-    press(cx, true);
+    press(&shell,cx, true);
     assert_surface(&shell, cx, RightSurface::Subagent(1));
     cx.update(|window, cx| {
         shell.update(cx, |shell, cx| {
@@ -377,7 +378,7 @@ fn embedded_terminal_and_browser_focus_route_to_right_tabs(cx: &mut TestAppConte
         })
     });
     cx.update(|window, cx| window.draw(cx).clear());
-    press(cx, true);
+    press(&shell,cx, true);
     assert_surface(&shell, cx, RightSurface::Subagent(1));
     // Exercise the GPUI target the native browser bridge focuses before it
     // redispatches a shortcut (the native OS event itself needs platform QA).
@@ -388,7 +389,7 @@ fn embedded_terminal_and_browser_focus_route_to_right_tabs(cx: &mut TestAppConte
         })
     });
     cx.update(|window, cx| window.draw(cx).clear());
-    press(cx, true);
+    press(&shell,cx, true);
     assert_surface(&shell, cx, RightSurface::Subagent(1));
 }
 
@@ -416,7 +417,7 @@ fn bottom_terminal_keeps_session_navigation(cx: &mut TestAppContext) {
                 .is_focused(window)
         );
     });
-    press(cx, true);
+    press(&shell,cx, true);
     shell.read_with(cx, |shell, cx| {
         assert_eq!(shell.state.read(cx).selected_chat.as_deref(), Some("other"));
     });
@@ -433,7 +434,7 @@ fn each_session_cycles_only_its_own_tabs(cx: &mut TestAppContext) {
             shell.activate_right_surface(RightSurface::Subagent(3), window, cx);
         })
     });
-    press(cx, true);
+    press(&shell,cx, true);
     shell.read_with(cx, |shell, cx| {
         assert_eq!(shell.state.read(cx).selected_chat.as_deref(), Some("other"));
         assert_eq!(shell.resolved_right_active(cx), RightSurface::Subagent(3));
@@ -442,9 +443,9 @@ fn each_session_cycles_only_its_own_tabs(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.draw(cx).clear());
     let tab = cx.debug_bounds("right-surface-tab-0").unwrap().center();
     cx.simulate_click(tab, gpui::Modifiers::default());
-    press(cx, true);
+    press(&shell,cx, true);
     assert_surface(&shell, cx, RightSurface::Subagent(2));
-    press(cx, true);
+    press(&shell,cx, true);
     assert_surface(&shell, cx, RightSurface::Subagent(1));
 }
 

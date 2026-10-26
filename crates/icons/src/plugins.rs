@@ -20,6 +20,11 @@ pub fn load_plugin_icon(path: &str) -> Option<&'static [u8]> {
         "plugin-icons/zapier.com" => Some(include_bytes!("../assets/plugins/zapier.svg")),
         "plugin-icons/github.com" => Some(include_bytes!("../assets/plugins/github.png")),
         "plugin-icons/cloudflare.com" => Some(include_bytes!("../assets/plugins/cloudflare.jpg")),
+        "plugin-icons/stripe.com" => Some(include_bytes!("../assets/plugins/stripe.jpg")),
+        "plugin-icons/posthog.com" => Some(include_bytes!("../assets/plugins/posthog.jpg")),
+        "plugin-icons/workos.com" => Some(include_bytes!("../assets/plugins/workos.jpg")),
+        "plugin-icons/customer.io" => Some(include_bytes!("../assets/plugins/customer-io.svg")),
+        "plugin-icons/betterstack.com" => Some(include_bytes!("../assets/plugins/better-stack.jpg")),
         _ => None,
     }
 }

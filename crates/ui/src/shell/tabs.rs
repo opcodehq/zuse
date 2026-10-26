@@ -150,7 +150,7 @@ impl Shell {
         }
     }
 
-    fn navigation_overlay_open(&self, cx: &App) -> bool {
+    pub(super) fn navigation_overlay_open(&self, cx: &App) -> bool {
         self.overlay_owns_keyboard(cx)
             || self.sync_flow.has_visible_overlay()
             || self.delete_confirm.is_some()
@@ -423,7 +423,7 @@ impl Shell {
 
     /// The strip's `+`: a new conversation in the selected thread, sharing
     /// its checkout, opened as the active tab.
-    fn add_thread_conversation(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn add_thread_conversation(&mut self, cx: &mut Context<Self>) {
         if self.thread_conversation_creating {
             return;
         }
@@ -459,7 +459,7 @@ impl Shell {
     }
 
     /// The selected thread's conversations as `(thread id, open tabs, closed)`.
-    fn thread_conversation_tabs(
+    pub(super) fn thread_conversation_tabs(
         &self,
         cx: &App,
     ) -> Option<(String, Vec<zuse_protocol::Chat>, Vec<zuse_protocol::Chat>)> {
@@ -487,7 +487,7 @@ impl Shell {
     /// Close a conversation tab: it leaves the strip but stays in the thread,
     /// listed in the history menu. The last open tab never closes; closing
     /// the one on screen shows its neighbour.
-    fn close_thread_conversation(&mut self, chat_id: &str, cx: &mut Context<Self>) {
+    pub(super) fn close_thread_conversation(&mut self, chat_id: &str, cx: &mut Context<Self>) {
         let Some((root, open, _)) = self.thread_conversation_tabs(cx) else {
             return;
         };

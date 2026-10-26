@@ -2668,10 +2668,13 @@ mod tests {
     }
 
     #[gpui::test]
-    fn digit_shortcuts_jump_to_sessions_once_the_palette_closes(cx: &mut TestAppContext) {
+    fn digit_shortcuts_select_thread_tabs_once_the_palette_closes(cx: &mut TestAppContext) {
         let (window, _dir) = keyed_palette_window(cx);
         window
             .update(cx, |shell, window, cx| {
+                shell.state.update(cx,|state,_|{
+                    state.chats.iter_mut().find(|chat|chat.id=="second").unwrap().thread_id=Some("first".into());
+                });
                 shell.toggle_command_palette(window, cx);
                 shell.close_command_palette(window, cx);
             })

@@ -247,13 +247,9 @@ impl WorkspaceView {
                 .child(self.account_settings(cx))
                 .child(self.appearance_settings(cx))
                 .child(self.completion_sound_settings(cx))
-                .child(column().gap_4()
-                    .child(s::disclosure("general-more-preferences", "More preferences", "Motion, thread naming and worktree storage.", self.general_more)
-                        .on_click(cx.listener(|this, _, _, cx| {this.general_more=!this.general_more;cx.notify();})))
-                    .when(self.general_more, |view| view
-                        .child(self.motion_settings(cx))
-                        .child(self.worktree_settings_card(cx))
-                        .child(self.thread_naming_settings_card(cx))))
+                .child(self.motion_settings(cx))
+                .child(self.worktree_settings_card(cx))
+                .child(self.thread_naming_settings_card(cx))
                 .into_any_element(),
             Section::Defaults => self.default_model_settings(cx),
             Section::Providers => self.providers_settings(cx),

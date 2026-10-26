@@ -4,7 +4,7 @@
 //! shell persists them and re-applies the app keymap.
 
 use gpui::{
-    Context, Entity, EventEmitter, FocusHandle, Keystroke, SharedString, Window, div, prelude::*,
+    Context, Entity, EventEmitter, FocusHandle, Keystroke, PathPromptOptions, SharedString, Window, div, prelude::*,
     px,
 };
 
@@ -62,7 +62,6 @@ pub enum ShortcutsEvent {
 pub struct ShortcutsPage {
     appshots_page: bool,
     general_page: bool,
-    general_more: bool,
     general_account: Entity<crate::settings::plugins::PluginsCard>,
     general_updates_focus: FocusHandle,
     completion_preset_select: widgets::SelectState,
@@ -112,7 +111,6 @@ impl ShortcutsPage {
         Self {
             appshots_page: false,
             general_page: false,
-            general_more: false,
             general_updates_focus: cx.focus_handle().tab_stop(true),
             completion_preset_select: Default::default(),
             appshots_focus_pending: false,
@@ -656,7 +654,7 @@ fn refusal(
             .into(),
         );
     }
-    if send_combo_is_reserved(behavior, combo) {
+    if !matches!(id, ShortcutId::Desktop(command) if command.context()==Some("MessageComposer")) && send_combo_is_reserved(behavior, combo) {
         return Some(format!("{} is reserved for the composer.", display_combo(combo)).into());
     }
     conflict_owner(keymap, id, combo).map(|owner| {
@@ -678,7 +676,7 @@ fn refusal(
 pub fn conflict_owner(keymap: &KeymapConfig, id: ShortcutId, combo: &str) -> Option<ShortcutId> {
     ShortcutId::ALL
         .into_iter()
-        .find(|&other| other.available() && other != id && keymap.get(other) == combo)
+        .find(|&other| other.available() && other != id.canonical() && other.overlaps_context(id) && crate::settings::platform_combo(keymap.get(other)) == crate::settings::platform_combo(combo))
 }
 
 pub fn send_combo_is_reserved(_behavior: ComposerSendBehavior, combo: &str) -> bool {
@@ -694,13 +692,15 @@ pub fn modifier_send_label(is_macos: bool) -> &'static str {
 /// extends the match and appears on the page by construction
 /// (`every_shortcut_lands_in_a_rendered_group` holds the other half: its group
 /// name must be listed here).
-const GROUP_ORDER: [&str; 9] = [
+const GROUP_ORDER: [&str; 11] = [
+    "Application",
+    "Navigation",
+    "Composer",
     "Appearance",
     "Files",
     "Browser",
     "Panels",
     "Sessions",
-    "Projects",
     "Jump to session",
     "Appshots",
     "Voice",
@@ -709,6 +709,7 @@ const GROUP_ORDER: [&str; 9] = [
 /// The section a shortcut's row renders under.
 fn group(id: ShortcutId) -> &'static str {
     match id {
+        ShortcutId::Desktop(command) => command.group(),
         ShortcutId::RandomWallpaper => "Appearance",
         ShortcutId::CaptureAppshot => "Appshots",
         ShortcutId::SaveFile => "Files",
@@ -964,11 +965,7 @@ impl Render for ShortcutsPage {
                                                     .on_click(|_,window,cx|window.dispatch_action(Box::new(crate::desktop_import::OpenDesktopImport),cx))))
                                             .child(self.general_preferences(&theme, cx))
                                             .child(div().flex().flex_col().gap(px(16.))
-                                                .child(zuse_viewport::settings_style::disclosure(
-                                                    "general-more-preferences", "More preferences",
-                                                    "Composer, links, thread names and worktree storage.", self.general_more)
-                                                    .on_click(cx.listener(|this, _, _, cx| {this.general_more=!this.general_more;cx.notify();})))
-                                                .when(self.general_more, |view| view.child(
+                                                .child(
                                                 widgets::group(&theme, "Composer", "").child(
                                                     widgets::section_card(&theme)
                                                         .mt_0()
@@ -986,7 +983,7 @@ impl Render for ShortcutsPage {
                                                     .child(pull_request_destination_row),
                                             ))
                                             .child(self.thread_naming.clone())
-                                            .child(self.worktrees.clone())))
+                                            .child(self.worktrees.clone()))
                                             .when(!cfg!(target_os = "macos"), |stack| stack.child(self.general_app_updates(&theme, cx))),
                                     ),
                             ),
@@ -1081,6 +1078,10 @@ impl Render for ShortcutsPage {
                                             .into_any_element()
                                     }),
                                 ))
+                                .child(div().mb_3().flex().justify_end().child(
+                                    widgets::ghost_action(&theme).id("shortcuts-import-electron")
+                                        .child("Import from Electron…")
+                                        .on_click(cx.listener(|this,_,_,cx|this.import_shortcuts(cx)))))
                                 .child(widgets::section_stack().children(groups))
                                 .child(
                                     div()
@@ -1376,7 +1377,7 @@ mod tests {
                     page.conflict_notice
                         .as_deref()
                         .unwrap()
-                        .contains("New session")
+                        .contains("New chat")
                 );
                 assert_eq!(
                     page.keymap.capture_appshot,
@@ -1456,12 +1457,12 @@ mod tests {
         // zuse parity: a combo bound elsewhere is refused at record time (the
         // helper names the owner) — conflicts never persist into the keymap.
         let keymap = KeymapConfig::default();
-        let RecordOutcome::Set(combo) = record_key("r", false, false, false, true) else {
+        let RecordOutcome::Set(combo) = record_key("b", false, true, false, true) else {
             panic!("expected Set");
         };
         assert_eq!(
             conflict_owner(&keymap, ShortcutId::ToggleSidebar, &combo),
-            Some(ShortcutId::ToggleChanges)
+            Some(ShortcutId::ToggleChanges.canonical())
         );
         // Re-recording a shortcut's own combo is not a conflict.
         assert_eq!(
@@ -1481,7 +1482,7 @@ mod tests {
         let mut keymap = KeymapConfig::default();
         assert_eq!(
             conflict_owner(&keymap, ShortcutId::CaptureAppshot, "mod-n"),
-            Some(ShortcutId::NewSession)
+            Some(ShortcutId::NewSession.canonical())
         );
         keymap.set(ShortcutId::CaptureAppshot, "mod-alt-k".into());
         assert_eq!(
@@ -1514,5 +1515,35 @@ mod tests {
             ComposerSendBehavior::ModEnter,
             "mod-shift-enter"
         ));
+    }
+}
+
+impl ShortcutsPage {
+    fn import_shortcuts(&mut self, cx: &mut Context<Self>) {
+        let paths=cx.prompt_for_paths(PathPromptOptions{files:true,directories:false,multiple:false,prompt:Some("Choose Electron keybindings.json".into())});
+        cx.spawn(async move |this,cx| {
+            let Ok(Ok(Some(paths)))=paths.await else{return;};
+            let Some(path)=paths.first().cloned() else{return;};
+            let result=cx.background_executor().spawn(async move {
+                let bytes=std::fs::read(path).map_err(|_|"Could not read the keyboard shortcuts file.".to_owned())?;
+                if bytes.len()>256*1024{return Err("The keyboard shortcuts file is too large.".to_owned());}
+                let value=serde_json::from_slice(&bytes).map_err(|_|"Choose a valid Electron keybindings.json file.".to_owned())?;
+                super::keybindings::import(&value)
+            }).await;
+            let _=this.update(cx,|this,cx| {
+                match result {
+                    Ok(rules)=>{
+                        // Electron defaults plus its ordered overrides replace the
+                        // keyboard map; every unrelated GPUI preference stays.
+                        this.keymap=KeymapConfig::default();
+                        this.keymap.import_desktop_rules(rules);
+                        this.conflict_notice=Some("Keyboard shortcuts imported from Electron.".into());
+                        this.commit(cx);
+                    }
+                    Err(message)=>this.conflict_notice=Some(message.into()),
+                }
+                cx.notify();
+            });
+        }).detach();
     }
 }

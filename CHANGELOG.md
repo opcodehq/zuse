@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.25.1 Preview 3 - 2026-10-26
+
+### Changed
+
+- Show Composer, Links, Thread names, and Worktrees directly in General settings.
+- Match all 35 Electron keyboard commands and defaults, including separate chat, tab, and pane navigation, composer planning, and editor annotations.
+- Import custom Electron keyboard rules during onboarding or from Keyboard Shortcuts, preserving rule order and disabled commands.
+
+### Fixed
+
+- Cloud uses the same account API endpoint as Electron; the previous endpoint has an expired TLS certificate.
+- Bundle plugin logos for Stripe, PostHog, WorkOS, Customer.io, and Better Stack.
+- Keep composer and editor shortcuts inside their input contexts, including when an embedded browser page has focus.
+
 ## 0.25.1 Preview 2 - 2026-10-26
 
 ### Added

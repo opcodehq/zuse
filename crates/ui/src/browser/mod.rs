@@ -65,6 +65,38 @@ pub(crate) fn bind_keys(cx: &mut App, keymap: &crate::settings::KeymapConfig) {
     }
 }
 
+/// Only application commands leave an embedded page. Text-editing shortcuts
+/// stay in its inputs so Enter, Shift+Enter and Save keep their browser meaning.
+#[cfg(any(target_os = "macos", windows, test))]
+fn forwarded_shortcuts(keymap: &crate::settings::KeymapConfig) -> Vec<String> {
+    use crate::settings::{ShortcutId, platform_combo};
+    let desktop = keymap.desktop_bindings().into_iter()
+        .filter(|rule|rule.command.context().is_none())
+        .filter(|rule|rule.when.as_deref().is_none_or(|when|crate::settings::keybindings::evaluate_when(when).unwrap_or(false)))
+        .map(|rule|rule.key);
+    let native = ShortcutId::ALL.into_iter()
+        .filter(|id|!matches!(id,ShortcutId::Desktop(_)) && id.key_context().is_none())
+        .map(|id|keymap.get(id).to_owned());
+    desktop.chain(native).filter(|combo|!combo.is_empty())
+        .map(|combo|platform_combo(&combo)).filter(|combo|gpui::Keystroke::parse(combo).is_ok()).collect()
+}
+
+#[cfg(test)]
+mod keyboard_forwarding_tests {
+    use super::*;
+    #[test]
+    fn browser_keeps_text_keys_and_forwards_every_application_override() {
+        let mut keymap=crate::settings::KeymapConfig::default();
+        keymap.import_desktop_rules(crate::settings::keybindings::import(&serde_json::json!({"schemaVersion":1,"rules":[
+            {"key":"mod+shift+7","command":"new-tab"},
+            {"key":"mod+shift+8","command":"new-tab"}
+        ]})).unwrap());
+        let keys=forwarded_shortcuts(&keymap);
+        for key in ["enter","shift-enter","mod-enter","mod-s","shift-tab"]{assert!(!keys.contains(&crate::settings::platform_combo(key)),"{key}");}
+        for key in ["mod-shift-7","mod-shift-8","mod-n"]{assert!(keys.contains(&crate::settings::platform_combo(key)),"{key}");}
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum BrowserEvent {
     Changed,
@@ -234,11 +266,7 @@ impl BrowserSurface {
         #[cfg(any(target_os = "macos", windows))]
         if let Some(native) = &self.native {
             native.set_shortcuts(
-                crate::settings::ShortcutId::ALL
-                    .iter()
-                    .filter(|id| **id != crate::settings::ShortcutId::SaveFile)
-                    .map(|id| crate::settings::platform_combo(keymap.get(*id)))
-                    .collect(),
+                forwarded_shortcuts(keymap),
             );
         }
         #[cfg(not(any(target_os = "macos", windows)))]
@@ -825,6 +853,9 @@ mod tests {
     fn customized_app_shortcuts_win_over_browser_defaults(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let mut config = crate::settings::KeymapConfig::default();
+            // The browser address fallback is available after the application
+            // focus-composer command gives up its default chord.
+            config.set(crate::settings::ShortcutId::Desktop(crate::settings::keybindings::Command::FocusComposer),String::new());
             bind_keys(cx, &config);
             assert_eq!(
                 cx.key_bindings()
