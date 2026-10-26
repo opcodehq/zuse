@@ -282,7 +282,7 @@ fn ready_model_waits_for_stop_and_transcribes_only_once() {
 }
 
 #[test]
-fn audio_buffer_still_caps_recording_at_sixty_seconds() {
+fn audio_buffer_caps_recording_at_electron_duration_limit() {
     let audio = Audio::with_capacity(0);
     let rate = 8_000;
     append(
@@ -291,6 +291,6 @@ fn audio_buffer_still_caps_recording_at_sixty_seconds() {
         rate,
         &audio,
     );
-    assert_eq!(audio.samples.lock().unwrap().len(), rate as usize * 60);
+    assert_eq!(audio.samples.lock().unwrap().len(), rate as usize * MAX_SECONDS);
     assert!(audio.full.load(Ordering::Acquire));
 }
