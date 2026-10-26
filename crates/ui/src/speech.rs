@@ -106,7 +106,7 @@ async fn play(command: &str, args: &[&str], text: &str) -> std::io::Result<()> {
         Err(std::io::Error::other("Speech service stopped"))
     }
 }
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[tokio::test]
