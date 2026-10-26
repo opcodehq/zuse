@@ -32,6 +32,7 @@ impl Mapper {
             | Event::ToolStart { agent_id, .. }
             | Event::ToolResult { agent_id, .. }
             | Event::Usage { agent_id, .. }
+            | Event::RequestAttempt { agent_id, .. }
             | Event::Context { agent_id, .. }
             | Event::Compaction { agent_id, .. }
             | Event::Paused { agent_id, .. }
@@ -107,6 +108,9 @@ impl Mapper {
                     diff: None,
                 });
             }
+            Event::RequestAttempt { attempt, .. } => result.push(AgentEvent::RequestUsage {
+                details: serde_json::to_value(attempt).expect("request accounting serializes"),
+            }),
             Event::Usage { usage, .. } => result.push(AgentEvent::Usage {
                 input_tokens: usage.input_tokens,
                 output_tokens: usage.output_tokens,

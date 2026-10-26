@@ -1,4 +1,4 @@
-//! Model inventory, account affinity and the shared narrow SDK bridge for Zuse.
+//! Model inventory, account affinity and shared native model transport for Zuse.
 use crate::model_connections::ModelConnections;
 use async_trait::async_trait;
 use futures::{StreamExt, future::join_all};
@@ -14,8 +14,8 @@ use tokio::sync::{Mutex as AsyncMutex, broadcast};
 use tokio_util::sync::CancellationToken;
 use zuse_harness::{
     Error, ModelInput, ModelOutput,
-    bridge::{Credential as BridgeCredential, ModelBridge},
     broker::{AccountBroker, BrokerHost, Connection as BrokerConnection},
+    transport::{Credential as TransportCredential, ModelTransport, NativeTransport, Route},
 };
 use zuse_model_accounts::{Connection, Credential, Provider};
 const INVENTORY_LIMIT: usize = 2 * 1024 * 1024;
@@ -58,26 +58,47 @@ impl Accounts for ModelConnections {
         self.credential(id).await.map_err(account_error)
     }
 }
+struct AccountCredential {
+    connection_id: String,
+    provider: String,
+    access_token: String,
+    authorization_generation: u64,
+    route: Option<Route>,
+}
 #[async_trait]
 trait Wire: Send + Sync {
     async fn request(
         &self,
         input: ModelInput,
-        credential: BridgeCredential,
+        credential: AccountCredential,
     ) -> Result<ModelOutput, Error>;
     async fn close(&self);
 }
 #[async_trait]
-impl Wire for ModelBridge {
+impl Wire for NativeTransport {
     async fn request(
         &self,
         input: ModelInput,
-        credential: BridgeCredential,
+        credential: AccountCredential,
     ) -> Result<ModelOutput, Error> {
-        self.request(input, credential).await
+        let route = match credential.route {
+            Some(route) => route,
+            None => Route::subscription(&credential.provider)?,
+        };
+        ModelTransport::request(
+            self,
+            input,
+            TransportCredential {
+                connection_id: credential.connection_id,
+                access_token: credential.access_token,
+                authorization_generation: credential.authorization_generation,
+                route,
+            },
+        )
+        .await
     }
     async fn close(&self) {
-        self.close().await;
+        ModelTransport::close(self).await;
     }
 }
 fn account_error(error: zuse_model_accounts::Error) -> Error {
@@ -193,6 +214,7 @@ struct CacheSlot {
     used: Instant,
 }
 struct Transport {
+    api: crate::harness_api::ApiModels,
     accounts: Arc<dyn Accounts>,
     wire: Arc<dyn Wire>,
     http: reqwest::Client,
@@ -211,27 +233,27 @@ pub struct HarnessModels {
 }
 impl HarnessModels {
     pub fn new(accounts: ModelConnections, directory: PathBuf) -> Result<Self, Error> {
-        let bridge = ModelBridge::new(directory).with_environment_source(Arc::new(|| {
-            let mut command = tokio::process::Command::new("node");
-            zuse_providers::compose_login_shell_path(&mut command);
-            command
-                .as_std()
-                .get_envs()
-                .filter_map(|(key, value)| {
-                    value.map(|value| (key.to_os_string(), value.to_os_string()))
-                })
-                .collect()
-        }));
-        Self::configured(
+        let transport = NativeTransport::new()?;
+        Self::configured_api(
+            crate::harness_api::ApiModels::load(&directory.join("providers.json"))?,
             Arc::new(accounts),
-            Arc::new(bridge),
+            Arc::new(transport),
             [
                 "https://api.openai.com/v1/models".into(),
                 "https://api.x.ai/v1/models".into(),
             ],
         )
     }
+    #[cfg(test)]
     fn configured(
+        accounts: Arc<dyn Accounts>,
+        wire: Arc<dyn Wire>,
+        endpoints: [String; 2],
+    ) -> Result<Self, Error> {
+        Self::configured_api(Default::default(), accounts, wire, endpoints)
+    }
+    fn configured_api(
+        api: crate::harness_api::ApiModels,
         accounts: Arc<dyn Accounts>,
         wire: Arc<dyn Wire>,
         endpoints: [String; 2],
@@ -243,6 +265,7 @@ impl HarnessModels {
             .build()
             .map_err(|_| failure("model_inventory_unavailable", None))?;
         let transport = Arc::new(Transport {
+            api,
             accounts,
             wire,
             http,
@@ -276,7 +299,7 @@ impl HarnessModels {
             let rows = self.transport.sync().await?;
             let candidates = rows.iter().filter(|c| c.authorized).collect::<Vec<_>>();
             if candidates.is_empty() {
-                return Ok(vec![]);
+                return Ok(self.transport.api.models());
             }
             let inventories = join_all(
                 candidates
@@ -294,8 +317,11 @@ impl HarnessModels {
                     }
                 }
             }
-            if !succeeded {
+            if !succeeded && self.transport.api.models().is_empty() {
                 return Err(failure("model_inventory_unavailable", None));
+            }
+            for model in self.transport.api.models() {
+                result.insert(model.id.clone(), model);
             }
             Ok(result.into_values().collect())
         };
@@ -447,6 +473,14 @@ impl Transport {
 #[async_trait]
 impl BrokerHost for Transport {
     async fn connections(&self, input: &ModelInput) -> Result<Vec<BrokerConnection>, Error> {
+        if input.model.starts_with("api/") {
+            let id = self.api.connection(&input.model)?;
+            return Ok(vec![BrokerConnection {
+                id,
+                authorized: true,
+                preferred: true,
+            }]);
+        }
         let (provider, _) = parse_model(&input.model)?;
         let collect = async {
             let rows = self.sync().await?;
@@ -474,6 +508,26 @@ impl BrokerHost for Transport {
         connection_id: &str,
         mut input: ModelInput,
     ) -> Result<ModelOutput, Error> {
+        if input.model.starts_with("api/") {
+            let (model, credential) = self.api.credential(&input.model)?;
+            if credential.connection_id != connection_id {
+                return Err(Error::AccountsUnavailable);
+            }
+            input.model = model;
+            return self
+                .wire
+                .request(
+                    input,
+                    AccountCredential {
+                        connection_id: credential.connection_id,
+                        provider: "api".into(),
+                        access_token: credential.access_token,
+                        route: Some(credential.route),
+                        authorization_generation: credential.authorization_generation,
+                    },
+                )
+                .await;
+        }
         let (provider, model) = parse_model(&input.model)?;
         let model = model.to_owned();
         let lifetime = self.accounts.lifetime(connection_id);
@@ -485,13 +539,18 @@ impl BrokerHost for Transport {
             return Err(Error::Interrupted);
         }
         input.model = model;
+        let authorization_generation = lock(&self.versions)
+            .get(connection_id)
+            .map_or(0, |(generation, _)| *generation);
         tokio::select! {biased;_=lifetime.cancelled()=>Err(Error::Interrupted),result=self.wire
         .request(
             input,
-            BridgeCredential {
+            AccountCredential {
                 connection_id: credential.connection_id,
                 provider: provider.as_str().into(),
                 access_token: credential.access_token,
+                route: None,
+                authorization_generation,
             },
         )=>result}
     }
@@ -561,7 +620,7 @@ mod tests {
         async fn request(
             &self,
             input: ModelInput,
-            credential: BridgeCredential,
+            credential: AccountCredential,
         ) -> Result<ModelOutput, Error> {
             struct Active<'a>(&'a AtomicUsize);
             impl Drop for Active<'_> {
@@ -626,11 +685,14 @@ mod tests {
             agent_id: agent.into(),
             model: model.into(),
             reasoning: None,
-            messages: vec![],
-            tools: Tools::new(),
+            messages: Arc::new(vec![]),
+            tools: Arc::new(Tools::new()),
+            purpose: Default::default(),
+            retry_index: 0,
             cancel: CancellationToken::new(),
             text: Arc::new(|_| {}),
             budget,
+            report: Arc::new(|_| {}),
         }
     }
     fn row(id: &str, provider: Provider, preferred: bool) -> Connection {

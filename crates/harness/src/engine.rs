@@ -24,6 +24,7 @@ pub struct Options {
     pub compact_tokens: Option<u64>,
     pub effective_window_percent: f64,
     pub automatic_notifications: bool,
+    pub context_policy: prompt::ContextPolicy,
 }
 impl Options {
     pub fn new(model: impl Into<String>) -> Self {
@@ -36,6 +37,7 @@ impl Options {
             compact_tokens: None,
             effective_window_percent: 95.,
             automatic_notifications: true,
+            context_policy: prompt::ContextPolicy::Preserve,
         }
     }
 }
@@ -47,7 +49,7 @@ struct Inner {
     host: Arc<dyn Host>,
     state: AsyncMutex<Checkpoint>,
     options: Mutex<Options>,
-    tools: Tools,
+    tools: Arc<Tools>,
     runners: Mutex<HashMap<String, Runner>>,
     mode: Mutex<PermissionMode>,
     stopping: AtomicBool,
@@ -196,11 +198,18 @@ impl Engine {
                 tools.insert(name, tool);
             }
         }
+        for (name, tool) in context_tools() {
+            if tools.insert(name, tool).is_some() {
+                return Err(Error::Tool(
+                    "A host tool conflicts with a reserved context tool.".into(),
+                ));
+            }
+        }
         Ok(Self(Arc::new(Inner {
             host,
             state: AsyncMutex::new(state),
             options: Mutex::new(options),
-            tools,
+            tools: Arc::new(tools),
             runners: Mutex::new(HashMap::new()),
             mode: Mutex::new(PermissionMode::Default),
             stopping: AtomicBool::new(recovered),
@@ -618,7 +627,7 @@ impl Engine {
                                 call.name
                             )));
                         }
-                        receipt.output.clone()
+                        receipt.output.as_ref().map(|output| (**output).clone())
                     } else {
                         state.tools.insert(
                             key.clone(),
@@ -673,7 +682,7 @@ impl Engine {
                             key,
                             Receipt {
                                 status: ReceiptStatus::Completed,
-                                output: Some(output.clone()),
+                                output: Some(output.clone().into()),
                                 signature: Some(digest),
                             },
                         );
@@ -732,12 +741,13 @@ impl Engine {
                 }
             }
             self.compact(agent_id, cancel).await?;
-            let messages = {
+            let mut messages = {
                 let state = self.0.state.lock().await;
                 let agent = state.agent(agent_id)?;
                 prompt::render(&agent.history, agent.checkpoint.as_ref())
             };
             let options = self.options();
+            prompt::apply_policy(&mut messages, options.context_policy, agent_id);
             let limits = prompt::limits(
                 options.window_tokens,
                 options.compact_tokens,
@@ -884,22 +894,36 @@ impl Engine {
         &self,
         agent_id: &str,
         messages: Vec<Message>,
-        tools: Tools,
+        tools: Arc<Tools>,
         cancel: &CancellationToken,
         text: Arc<dyn Fn(String) + Send + Sync>,
     ) -> Result<ModelOutput, Error> {
         let root_id = self.0.state.lock().await.root_id.clone();
         let options = self.options();
+        let host = self.0.host.clone();
+        let report_agent = agent_id.to_owned();
         let input = ModelInput {
+            retry_index: 0,
             root_id,
             agent_id: agent_id.into(),
             model: options.model,
             reasoning: options.reasoning,
-            messages,
+            messages: Arc::new(messages),
+            purpose: if tools.is_empty() {
+                RequestPurpose::Summary
+            } else {
+                RequestPurpose::Agent
+            },
             tools,
             cancel: cancel.clone(),
             text,
             budget: Arc::new(self.clone()),
+            report: Arc::new(move |attempt| {
+                host.notify(Event::RequestAttempt {
+                    agent_id: report_agent.clone(),
+                    attempt: Box::new(attempt),
+                })
+            }),
         };
         tokio::select! {biased;_=cancel.cancelled()=>Err(Error::Interrupted),result=self.0.host.model(input)=>result}
     }
@@ -927,6 +951,58 @@ impl Engine {
             )
         {
             return Err(Error::Tool("Tool is not allowed in read-only mode".into()));
+        }
+        if call.name == "read_tool_output" {
+            let owner = call
+                .input
+                .get("agent_id")
+                .and_then(Value::as_str)
+                .unwrap_or(agent_id);
+            let id = call.input["call_id"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| Error::Tool("Missing call_id".into()))?;
+            let offset =
+                call.input
+                    .get("offset")
+                    .map(Value::as_u64)
+                    .unwrap_or(Some(0))
+                    .ok_or_else(|| Error::Tool("Invalid offset".into()))? as usize;
+            let limit = call
+                .input
+                .get("max_bytes")
+                .map(Value::as_u64)
+                .unwrap_or(Some(16000))
+                .filter(|n| *n > 0 && *n <= 64000)
+                .ok_or_else(|| Error::Tool("Invalid max_bytes".into()))?
+                as usize;
+            let state = self.0.state.lock().await;
+            if owner != agent_id && !state.descendant(owner, agent_id) {
+                return Err(Error::Tool("Tool output belongs to another agent".into()));
+            }
+            let output = state
+                .tools
+                .get(&format!("{owner}:{id}"))
+                .and_then(|r| r.output.as_ref())
+                .ok_or_else(|| Error::Tool("Completed tool output is unavailable".into()))?;
+            let ToolOutput::Text(text) = &**output else {
+                return Err(Error::Tool(
+                    "Image output must be read through its image tool".into(),
+                ));
+            };
+            if offset > text.len() || !text.is_char_boundary(offset) {
+                return Err(Error::Tool("Invalid output cursor".into()));
+            }
+            let mut end = offset.saturating_add(limit).min(text.len());
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == offset && end < text.len() {
+                return Err(Error::Tool(
+                    "max_bytes is too small for the next UTF-8 character".into(),
+                ));
+            }
+            return Ok(json!({"text":&text[offset..end],"next_cursor":end,"has_more":end<text.len(),"total_bytes":text.len()}).to_string().into());
         }
         if !child_tools().contains_key(&call.name) {
             return self
@@ -1167,8 +1243,16 @@ impl Engine {
         interrupted.and(closed)
     }
     async fn compact(&self, agent_id: &str, cancel: &CancellationToken) -> Result<(), Error> {
-        let agent = self.0.state.lock().await.agent(agent_id)?.clone();
-        let before = prompt::estimate(&prompt::render(&agent.history, agent.checkpoint.as_ref()));
+        let before = {
+            let state = self.0.state.lock().await;
+            let agent = state.agent(agent_id)?;
+            prompt::estimate_context(
+                &agent.history,
+                agent.checkpoint.as_ref(),
+                self.options().context_policy,
+                agent_id,
+            )
+        };
         let options = self.options();
         let limits = prompt::limits(
             options.window_tokens,
@@ -1178,6 +1262,7 @@ impl Engine {
         if before < limits.compact_at {
             return Ok(());
         }
+        let agent = self.0.state.lock().await.agent(agent_id)?.clone();
         let target = (limits.window / 2).min(limits.compact_at * 6 / 10);
         let previous = agent.checkpoint.as_ref().map_or(0, |c| c.covered);
         let mut covered = prompt::boundary(&agent.history);
@@ -1230,11 +1315,12 @@ impl Engine {
             let prefix=prompt::render(&agent.history[..covered],agent.checkpoint.as_ref());let mut best:Option<(String,u64)>=None;
             for attempt in 0..2 {
                 self.reserve().await?;let mut messages=prefix.clone();messages.push(Message::text(Role::User,format!("Summarize this context for continuation in at most {} tokens. Preserve the original task, requirements, decisions, unresolved work, instructions, paths, and tool outcomes. Do not claim pending work is complete. Omit raw tool output and repetition. {}",(budget/(attempt+1)).max(64),if attempt>0{"The previous summary was too large; make this substantially shorter."}else{""})));
-                let result=self.request(agent_id,messages,Tools::new(),cancel,Arc::new(|_|{})).await?;
+                let result=self.request(agent_id,messages,Arc::new(Tools::new()),cancel,Arc::new(|_|{})).await?;
                 self.0.host.notify(Event::Usage { agent_id: agent_id.into(), usage: result.usage.clone() });
                 if !result.calls.is_empty() || result.text.trim().is_empty(){continue;}
                 let after=prompt::estimate(&prompt::render(&agent.history,Some(&Compaction{covered,summary:result.text.clone()})));
-                if best.as_ref().is_none_or(|(_,size)|after<*size){best=Some((result.text,after));}if after<=target{break;}
+                if best.as_ref().is_none_or(|(_,size)|after<*size){best=Some((result.text,after));}
+                if after<=target{break;}
             }
             let (summary,after)=best.filter(|(_,after)|*after<limits.compact_at && *after<before).ok_or_else(||Error::paused("Compaction could not fit the context after two attempts. Your history is preserved."))?;
             let mut state=self.0.state.lock().await;let old=state.agent(agent_id)?.checkpoint.clone();state.agent_mut(agent_id)?.checkpoint=Some(Compaction{covered,summary});
@@ -1274,4 +1360,12 @@ fn child_tools() -> Tools {
         ("wait_agent","Wait for this agent's descendants to finish or reach a safe boundary.",ToolCategory::Read,json!({}),vec![]),
         ("interrupt_agent","Interrupt a descendant and its children.",ToolCategory::Delegate,json!({"target":{"type":"string"}}),vec!["target"]),
     ].into_iter().map(|(name,description,category,properties,required)|(name.into(),ToolDefinition{description:description.into(),category,parameters:json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})})).collect()
+}
+
+fn context_tools() -> Tools {
+    BTreeMap::from([("read_tool_output".into(),ToolDefinition {
+        description:"Read a retained tool result by call_id using a byte cursor. Defaults to this agent; descendants are visible to their parent. Use this when older output was shortened in context.".into(),
+        category:ToolCategory::Read,
+        parameters:json!({"type":"object","properties":{"call_id":{"type":"string"},"agent_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"max_bytes":{"type":"integer","minimum":1,"maximum":64000}},"required":["call_id"],"additionalProperties":false}),
+    })])
 }

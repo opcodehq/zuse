@@ -336,6 +336,43 @@ async fn large_reads_preserve_edit_metadata_and_binary_and_image_reads_stay_boun
     let full: Value = serde_json::from_slice(&std::fs::read(&artifact).unwrap()).unwrap();
     assert_eq!(full["content"], large);
     assert_eq!(full["hash"], result["hash"]);
+    let mut cursor = 0u64;
+    let mut retained = String::new();
+    loop {
+        let page = value(
+            fixture
+                .call(
+                    "read_artifact",
+                    json!({"artifact":artifact,"offset":cursor,"max_bytes":16000}),
+                )
+                .await
+                .unwrap(),
+        );
+        retained.push_str(page["text"].as_str().unwrap());
+        cursor = page["next_cursor"].as_u64().unwrap();
+        if page["has_more"] == false {
+            break;
+        }
+    }
+    assert_eq!(serde_json::from_str::<Value>(&retained).unwrap(), full);
+    assert!(
+        fixture
+            .call("read_artifact", json!({"artifact":"../../checkpoint.json"}))
+            .await
+            .is_err()
+    );
+    let linked = artifact
+        .parent()
+        .unwrap()
+        .join(format!("{}.result.json", uuid::Uuid::new_v4()));
+    std::os::unix::fs::symlink(fixture.checkout.join("large"), &linked).unwrap();
+    assert!(
+        fixture
+            .call("read_artifact", json!({"artifact":linked}))
+            .await
+            .is_err()
+    );
+
     assert_eq!(
         std::fs::metadata(artifact).unwrap().permissions().mode() & 0o777,
         0o600
@@ -535,7 +572,7 @@ impl Host for KernelHost {
         Ok(ModelOutput {
             messages: vec![Message {
                 role: Role::Assistant,
-                content: Value::Array(parts),
+                content: Value::Array(parts).into(),
                 metadata: Default::default(),
             }],
             calls,

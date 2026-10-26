@@ -1,7 +1,7 @@
 //! Atomic private checkpoints. A damaged journal is preserved, never reset.
 use crate::{Checkpoint, Error};
 use std::{
-    io::Write,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 pub struct FileStore {
@@ -15,13 +15,13 @@ impl FileStore {
         &self.path
     }
     pub fn load(&self) -> Result<Option<Checkpoint>, Error> {
-        let bytes = match std::fs::read(&self.path) {
-            Ok(bytes) => bytes,
+        let file = match std::fs::File::open(&self.path) {
+            Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(Error::Storage),
         };
-        let state: Checkpoint =
-            serde_json::from_slice(&bytes).map_err(|_| Error::InvalidCheckpoint)?;
+        let state: Checkpoint = serde_json::from_reader(std::io::BufReader::new(file))
+            .map_err(|_| Error::InvalidCheckpoint)?;
         state.validate()?;
         Ok(Some(state))
     }
@@ -44,10 +44,12 @@ impl FileStore {
                 use std::os::unix::fs::OpenOptionsExt;
                 options.mode(0o600);
             }
-            let mut file = options.open(&temp).map_err(|_| Error::Storage)?;
+            // Bound serialization memory without issuing a syscall for every
+            // JSON fragment. Flush userspace bytes before the durability barrier.
+            let mut file = BufWriter::new(options.open(&temp).map_err(|_| Error::Storage)?);
             serde_json::to_writer(&mut file, state).map_err(|_| Error::Storage)?;
             file.flush()
-                .and_then(|_| file.sync_all())
+                .and_then(|_| file.get_ref().sync_all())
                 .map_err(|_| Error::Storage)?;
             std::fs::rename(&temp, &self.path).map_err(|_| Error::Storage)?;
             #[cfg(unix)]

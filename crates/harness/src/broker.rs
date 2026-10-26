@@ -111,7 +111,28 @@ impl AccountBroker {
                     return Err(Error::Interrupted);
                 }
                 let mut portable = input.clone();
-                portable.messages = portable_history(&input.messages);
+                portable.retry_index = physical - 1;
+                if input
+                    .messages
+                    .iter()
+                    .any(|message| requires_portable(message, &connection.id, &input.model))
+                {
+                    portable.messages = Arc::new(
+                        input
+                            .messages
+                            .iter()
+                            .map(|message| {
+                                if requires_portable(message, &connection.id, &input.model) {
+                                    portable_history(std::slice::from_ref(message))
+                                        .pop()
+                                        .unwrap()
+                                } else {
+                                    message.clone()
+                                }
+                            })
+                            .collect(),
+                    );
+                }
                 let result = tokio::select! {biased;_=input.cancel.cancelled()=>return Err(Error::Interrupted),result=self.host.request(&connection.id,portable)=>result};
                 match result {
                     Ok(result) => return Ok(result),
@@ -153,12 +174,26 @@ impl AccountBroker {
 }
 /// Never send account-bound encrypted reasoning or provider item ids to another
 /// account. Tool outcomes and user intent remain portable.
+fn requires_portable(message: &Message, connection: &str, model: &str) -> bool {
+    let origin = message.metadata.get("zuseOrigin");
+    let compatible = origin.is_some_and(|o| {
+        o["connection"] == connection && o["model"] == crate::transport::model_name(model)
+    });
+    !compatible
+        && (message.metadata.contains_key("providerOptions")
+            || message.content.as_array().is_some_and(|parts| {
+                parts
+                    .iter()
+                    .any(|p| p["type"] == "reasoning" || p.get("providerOptions").is_some())
+            }))
+}
 pub fn portable_history(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()
         .cloned()
         .map(|mut m| {
             m.metadata.remove("providerOptions");
+            m.metadata.remove("zuseOrigin");
             if let Some(parts) = m.content.as_array_mut() {
                 parts.retain(|p| p["type"] != "reasoning");
                 for part in parts {

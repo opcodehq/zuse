@@ -159,6 +159,7 @@ fn specifications() -> &'static BTreeMap<&'static str, Specification> {
         let mut specs=BTreeMap::new();
         let mut add=|name,category,description,fields|{specs.insert(name,Specification {description,category,shape:Object(fields)});};
         add("read_file",Read,"Read fresh UTF-8 lines and SHA-256. Offsets are zero-based; use the returned hash for edits.",vec![field("path",path()),field("offset",Number(0,u64::MAX)).default(json!(0)),field("limit",Number(1,2000)).default(json!(400))]);
+        add("read_artifact",Read,"Read a retained result artifact from this conversation using a byte cursor. Accepts the artifact path returned by a tool or its file name.",vec![field("artifact",path()),field("offset",Number(0,u64::MAX)).default(json!(0)),field("max_bytes",Number(1,64000)).default(json!(16000))]);
         add("read_image",Read,"Read a checkout PNG, JPEG, GIF or WebP as image content.",vec![field("path",path())]);
         add("list_directory",Read,"List immediate directory entries including hidden names.",vec![dir()]);
         add("glob",Read,"Find files by ripgrep glob. Honors ignore rules and excludes symlink traversal.",vec![field("pattern",Text(1,512,None)),dir()]);

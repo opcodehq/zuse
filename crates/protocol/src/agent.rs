@@ -742,6 +742,11 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         diff: Option<ToolDiff>,
     },
+    /// Per-physical-request diagnostics, including failed requests and cache
+    /// counters. Observational only; never grants execution or billing authority.
+    RequestUsage {
+        details: serde_json::Value,
+    },
     /// Latest context occupancy, independent of cumulative billing usage.
     /// Missing fields preserve the previous measurement; zero tokens is valid.
     #[serde(rename_all = "camelCase")]

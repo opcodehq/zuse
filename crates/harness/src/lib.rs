@@ -1,8 +1,10 @@
 //! Zuse's durable agent runtime. Rust owns execution, recovery, permissions,
 //! child scheduling, mailboxes, request budgets, and context compaction.
-pub mod bridge;
+mod artifact;
 pub mod broker;
 mod engine;
+pub mod evaluation;
+pub mod journal;
 pub mod native;
 #[cfg(unix)]
 pub mod native_tools;
@@ -10,6 +12,7 @@ pub mod processes;
 pub mod prompt;
 pub mod state;
 pub mod store;
+pub mod transport;
 use async_trait::async_trait;
 pub use engine::{AgentRoute, Engine, Options, SendOutcome, WeakEngine};
 use serde::{Deserialize, Serialize};
@@ -58,11 +61,22 @@ pub struct ModelInput {
     pub agent_id: String,
     pub model: String,
     pub reasoning: Option<String>,
-    pub messages: Vec<Message>,
-    pub tools: Tools,
+    pub messages: Arc<Vec<Message>>,
+    pub tools: Arc<Tools>,
+    pub purpose: RequestPurpose,
+    /// Zero for the first broker attempt; includes retries and account fallback.
+    pub retry_index: u32,
     pub cancel: CancellationToken,
     pub text: Arc<dyn Fn(String) + Send + Sync>,
     pub budget: Arc<dyn RequestBudget>,
+    pub report: Arc<dyn Fn(transport::Attempt) + Send + Sync>,
+}
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RequestPurpose {
+    #[default]
+    Agent,
+    Summary,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +87,18 @@ pub struct Usage {
     pub cache_write_tokens: Option<u64>,
     pub connection_id: String,
     pub first_token_ms: Option<f64>,
+    #[serde(default)]
+    pub uncached_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub purpose: RequestPurpose,
+    #[serde(default)]
+    pub billing_route: Option<String>,
+    #[serde(default)]
+    pub prefix_fingerprint: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,6 +147,10 @@ pub enum Event {
     Usage {
         agent_id: String,
         usage: Usage,
+    },
+    RequestAttempt {
+        agent_id: String,
+        attempt: Box<transport::Attempt>,
     },
     Context {
         agent_id: String,

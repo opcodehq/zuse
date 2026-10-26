@@ -37,8 +37,8 @@ fn output(text: &str, calls: Vec<Call>) -> ModelOutput {
     ModelOutput {
         messages: vec![Message {
             role: Role::Assistant,
-            content: Value::Array(parts),
-            metadata: BTreeMap::new(),
+            content: Value::Array(parts).into(),
+            metadata: BTreeMap::new().into(),
         }],
         calls,
         text: text.into(),
@@ -90,7 +90,7 @@ impl Models for ModelFixture {
             agent: input.agent_id.clone(),
             model: input.model.clone(),
             tools: input.tools.keys().cloned().collect(),
-            messages: input.messages.clone(),
+            messages: input.messages.to_vec(),
         });
         if self.block_root.load(Ordering::Acquire) && !child
             || self.block_child.load(Ordering::Acquire) && child
@@ -669,12 +669,12 @@ async fn doc_queue_stop_case(hard_stop: bool) {
     let root_id = lock(&fixture.seen)[0].root.clone();
     let journal = profile
         .join("harness")
-        .join(format!("{:x}", Sha256::digest(root_id.as_bytes())))
-        .join("checkpoint.json");
+        .join(format!("{:x}", Sha256::digest(root_id.as_bytes())));
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let state: zuse_harness::Checkpoint =
-                serde_json::from_slice(&tokio::fs::read(&journal).await.unwrap()).unwrap();
+            let state = zuse_harness::journal::JournalStore::inspect(&journal)
+                .unwrap()
+                .unwrap();
             if state
                 .agents
                 .iter()
@@ -692,8 +692,9 @@ async fn doc_queue_stop_case(hard_stop: bool) {
     } else {
         core.sessions.stop_turn("chat").await.unwrap()
     });
-    let state: zuse_harness::Checkpoint =
-        serde_json::from_slice(&tokio::fs::read(&journal).await.unwrap()).unwrap();
+    let state = zuse_harness::journal::JournalStore::inspect(&journal)
+        .unwrap()
+        .unwrap();
     assert!(state.cancelled_notifications.contains(&id));
     assert!(
         state
@@ -1157,7 +1158,7 @@ async fn initial_delivery_replay_finds_its_journal_without_a_saved_cursor_or_att
         let store = RootStore::acquire(&harness.profile, &session).unwrap();
         let state = store.load().unwrap().unwrap();
         assert!(state.consumed_notifications.contains_key("first"));
-        std::fs::read(store.directory().join("checkpoint.json")).unwrap()
+        journal_files(store.directory())
     };
     let (controls, _, _) = run_controls();
     let replay = harness
@@ -1194,10 +1195,7 @@ async fn initial_delivery_replay_finds_its_journal_without_a_saved_cursor_or_att
     assert_eq!(lock(&fixture.seen).len(), 1);
     {
         let store = RootStore::acquire(&harness.profile, &session).unwrap();
-        assert_eq!(
-            std::fs::read(store.directory().join("checkpoint.json")).unwrap(),
-            before
-        );
+        assert_eq!(journal_files(store.directory()), before);
     }
     // The same message ID in another chat has an independent namespace.
     let (controls, _, _) = run_controls();
@@ -1362,11 +1360,11 @@ async fn crashed_initial_model_request_continues_its_saved_history_without_dupli
     let path = harness
         .profile
         .join("harness")
-        .join(format!("{:x}", Sha256::digest(session.as_bytes())))
-        .join("checkpoint.json");
+        .join(format!("{:x}", Sha256::digest(session.as_bytes())));
     // Preserve the exact on-disk state at process death during the model call.
-    let crashed: zuse_harness::Checkpoint =
-        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let crashed = zuse_harness::journal::JournalStore::inspect(&path)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         crashed.agent(&session).unwrap().status,
         zuse_harness::Status::Running
@@ -1376,6 +1374,7 @@ async fn crashed_initial_model_request_continues_its_saved_history_without_dupli
     retired(&fixture).await;
     {
         let store = RootStore::acquire(&harness.profile, &session).unwrap();
+        store.load().unwrap();
         store.save(&crashed).unwrap();
     }
     fixture.block_root.store(false, Ordering::Release);
@@ -1409,4 +1408,15 @@ async fn crashed_initial_model_request_continues_its_saved_history_without_dupli
     }
     drop(resumed);
     retired(&fixture).await;
+}
+
+fn journal_files(directory: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    ["snapshot.json", "transitions.log"]
+        .into_iter()
+        .filter_map(|name| {
+            std::fs::read(directory.join(name))
+                .ok()
+                .map(|bytes| (name.to_owned(), bytes))
+        })
+        .collect()
 }

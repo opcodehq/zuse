@@ -2,6 +2,36 @@ use crate::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+/// Cheap immutable snapshots; mutation copies only the affected payload.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Shared<T>(std::sync::Arc<T>);
+impl<T> Shared<T> {
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl<T> From<T> for Shared<T> {
+    fn from(value: T) -> Self {
+        Self(std::sync::Arc::new(value))
+    }
+}
+impl<T> std::ops::Deref for Shared<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+impl<T: Clone> std::ops::DerefMut for Shared<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+impl PartialEq<&str> for Shared<Value> {
+    fn eq(&self, other: &&str) -> bool {
+        self.0.as_ref() == *other
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -13,23 +43,23 @@ pub enum Role {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
-    pub content: Value,
+    pub content: Shared<Value>,
     #[serde(flatten)]
-    pub metadata: BTreeMap<String, Value>,
+    pub metadata: Shared<BTreeMap<String, Value>>,
 }
 impl Message {
     pub fn text(role: Role, text: impl Into<String>) -> Self {
         Self {
             role,
-            content: Value::String(text.into()),
-            metadata: BTreeMap::new(),
+            content: Value::String(text.into()).into(),
+            metadata: BTreeMap::new().into(),
         }
     }
     pub fn tool(call: &Call, output: &ToolOutput) -> Self {
         Self {
             role: Role::Tool,
-            content: json!([{"type":"tool-result","toolCallId":call.id,"toolName":call.name,"output":output.model_value()}]),
-            metadata: BTreeMap::new(),
+            content: json!([{"type":"tool-result","toolCallId":call.id,"toolName":call.name,"output":output.model_value()}]).into(),
+            metadata: BTreeMap::new().into(),
         }
     }
     pub fn has_tool_calls(&self) -> bool {
@@ -66,8 +96,8 @@ impl Mail {
         );
         Message {
             role: Role::User,
-            content: Value::Array(content),
-            metadata: BTreeMap::new(),
+            content: Value::Array(content).into(),
+            metadata: BTreeMap::new().into(),
         }
     }
 }
@@ -170,7 +200,7 @@ pub enum ReceiptStatus {
 pub struct Receipt {
     pub status: ReceiptStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub output: Option<ToolOutput>,
+    pub output: Option<Shared<ToolOutput>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
 }
@@ -247,7 +277,7 @@ impl Checkpoint {
                 }
                 let receipt = self.tools.get_mut(&key).unwrap();
                 receipt.status = ReceiptStatus::Completed;
-                receipt.output = Some(output);
+                receipt.output = Some(output.into());
                 "recordOutcome"
             }
         };
@@ -359,5 +389,11 @@ impl Checkpoint {
             current = next;
         }
         false
+    }
+}
+
+impl From<String> for Shared<ToolOutput> {
+    fn from(value: String) -> Self {
+        Self::from(ToolOutput::from(value))
     }
 }

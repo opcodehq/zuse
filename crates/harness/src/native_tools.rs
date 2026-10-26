@@ -237,6 +237,38 @@ impl NativeTools {
         }
         check(&context.cancel)?;
         match name {
+            "read_artifact" => {
+                let supplied = Path::new(text(&input, "artifact"));
+                let name = supplied
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| error("Invalid artifact"))?;
+                let stem = name
+                    .strip_suffix(".result.json")
+                    .ok_or_else(|| error("Invalid artifact"))?;
+                let uuid = uuid::Uuid::parse_str(stem).map_err(|_| error("Invalid artifact"))?;
+                if uuid.to_string() != stem {
+                    return Err(error("Invalid artifact"));
+                }
+                let path = self.directory.join(name);
+                if supplied.components().count() > 1 && supplied != path {
+                    return Err(error("Artifact belongs to another conversation"));
+                }
+                let offset = number(&input, "offset");
+                let limit = number(&input, "max_bytes") as usize;
+                self.filesystem(lease,context.cancel.clone(),move |_|{
+                    use std::{io::{Read,Seek},os::unix::fs::OpenOptionsExt};
+                    let mut file=std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK).open(path).map_err(|_|error("Artifact is unavailable"))?;
+                    let metadata=file.metadata().map_err(|_|Error::Storage)?;
+                    if !metadata.is_file()||metadata.len()>16*1024*1024||offset>metadata.len(){return Err(error("Invalid artifact cursor"));}
+                    file.seek(std::io::SeekFrom::Start(offset)).map_err(|_|Error::Storage)?;
+                    let mut bytes=Vec::new();file.take(limit as u64).read_to_end(&mut bytes).map_err(|_|Error::Storage)?;
+                    let valid=match std::str::from_utf8(&bytes){Ok(_)=>bytes.len(),Err(e)if e.error_len().is_none()=>e.valid_up_to(),Err(_)=>return Err(error("Artifact cursor is not a UTF-8 boundary"))};
+                    if valid==0&&offset<metadata.len(){return Err(error("Artifact changed or max_bytes is too small for the next UTF-8 character"));}
+                    let text=std::str::from_utf8(&bytes[..valid]).unwrap();
+                    Ok(json!({"text":text,"next_cursor":offset+valid as u64,"has_more":offset+(valid as u64)<metadata.len(),"total_bytes":metadata.len()}).to_string().into())
+                }).await
+            }
             "read_file" => {
                 let path = path.unwrap();
                 let offset = number(&input, "offset");
