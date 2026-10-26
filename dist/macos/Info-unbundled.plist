@@ -5,6 +5,6 @@
     <!-- Privacy declarations for direct source/CLI launches. App bundles keep
          their own name, identity, version and runtime environment. -->
     <key>NSMicrophoneUsageDescription</key>
-    <string>Zuse uses your microphone for on-device dictation and for voice sessions you start. Voice sessions stream your audio to OpenAI through your ChatGPT-authenticated Codex account.</string>
+    <string>Zuse uses your microphone when you start dictation. Your recording is sent to ChatGPT using your Codex sign-in to transcribe it into your draft.</string>
 </dict>
 </plist>
