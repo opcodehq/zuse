@@ -3586,7 +3586,9 @@ impl Changes {
                     .border_1()
                     .border_color(theme.text_muted)
                     .when(reviewed, |v| {
-                        v.child(crate::icons::icon(crate::icons::CHECK).size(px(12.)))
+                        v.bg(theme.accent).border_color(theme.accent).child(
+                            crate::icons::icon(crate::icons::CHECK).size(px(12.)).text_color(theme.bg),
+                        )
                     }),
             )
             .child("Viewed")
