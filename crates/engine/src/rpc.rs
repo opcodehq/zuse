@@ -2011,12 +2011,38 @@ impl RpcService for AuthRpc {
             return RpcReply::value(&result);
         }
         #[cfg(unix)]
-        if matches!(method,methods::CLOUD_SYNC_STATUS|methods::CLOUD_SYNC_CONFIGURE|methods::CLOUD_SYNC_RETRY) {
-            let auth=self.cloud.clone();let method=method.to_owned();
-            let result=tokio::spawn(async move {crate::cloud::sync::handle(auth,&method,params).await})
-                .await.map_err(|_|RpcError::Failed("Cloud sync request was interrupted. Reopen its status.".into()))?
-                .map_err(|error|RpcError::Failed(error.to_string()))?;
+        if matches!(
+            method,
+            methods::CLOUD_SYNC_STATUS | methods::CLOUD_SYNC_CONFIGURE | methods::CLOUD_SYNC_RETRY
+        ) {
+            let auth = self.cloud.clone();
+            let method = method.to_owned();
+            let result =
+                tokio::spawn(
+                    async move { crate::cloud::sync::handle(auth, &method, params).await },
+                )
+                .await
+                .map_err(|_| {
+                    RpcError::Failed(
+                        "Cloud sync request was interrupted. Reopen its status.".into(),
+                    )
+                })?
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
             return RpcReply::value(&result);
+        }
+        #[cfg(unix)]
+        if method == methods::CLOUD_LOCAL_TERMINAL {
+            let auth = self.cloud.clone();
+            return tokio::spawn(async move {
+                crate::cloud::local_terminal::handle(auth, params).await
+            })
+            .await
+            .map_err(|_| {
+                RpcError::Failed(
+                    "Local terminal request was interrupted. Reopen its catalog before retrying."
+                        .into(),
+                )
+            })?;
         }
         if method == methods::CLOUD_PAUSE {
             let value = crate::cloud::environment::pause(&self.cloud, params)
@@ -4458,9 +4484,17 @@ impl RpcService for EngineRpc {
             #[cfg(unix)]
             methods::WORKSPACE_SYNC_SNAPSHOT => {
                 let request: crate::cloud::mirror::SnapshotRequest = parse_params(params)?;
-                let resolved = self.workspace_files.resolve_target(&request.target).await.map_err(RpcError::from)?;
-                let stream = crate::cloud::mirror::snapshot_stream(resolved.root, resolved.checkout_id, request.have)
-                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                let resolved = self
+                    .workspace_files
+                    .resolve_target(&request.target)
+                    .await
+                    .map_err(RpcError::from)?;
+                let stream = crate::cloud::mirror::snapshot_stream(
+                    resolved.root,
+                    resolved.checkout_id,
+                    request.have,
+                )
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
                 Ok(RpcReply::Stream(stream))
             }
             methods::LIST_WORKSPACE_DIRECTORY => {

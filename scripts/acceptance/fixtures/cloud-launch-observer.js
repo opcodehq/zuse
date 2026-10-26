@@ -31,9 +31,9 @@
           if (method === 'CloudPause') proof.pauses.push(value.workspace);
           if (method === 'CloudWorkspace') proof.metadata.push(value.workspace);
           if (method === 'CloudHistory') proof.history.push({workspaceId:value.head.workspaceId,sessionId:value.head.sessionId,reply:JSON.stringify(value.head.transcript).includes('Brokered native provider reply') || JSON.stringify(value.head?.transcript ?? value).includes('Cloud attachment verified')});
-          if (method === 'CloudRpc') {
-            if(['ListTerminals','OpenTerminal','WriteTerminal','CloseTerminal','ReadWorkspaceFile','WriteWorkspaceFile','ListWorkspaceDirectory','GetCheckoutDiff','GetGitWorkspace'].includes(request.inner) && Object.hasOwn(value,'ok')) proof.tools.push({method:request.inner,params:request.params,result:value.ok});
-            if(request.inner==='SubscribeTerminal' && value.item?.type==='data') proof.tools.push({method:'TerminalData',data:value.item.data});
+          if (method === 'CloudRpc' || method === 'CloudLocalTerminal') {
+            if(['ListTerminals','OpenTerminal','WriteTerminal','CloseTerminal','ReadWorkspaceFile','WriteWorkspaceFile','ListWorkspaceDirectory','GetCheckoutDiff','GetGitWorkspace'].includes(request.inner) && Object.hasOwn(value,'ok')) proof.tools.push({environment:method==='CloudLocalTerminal'?'local':'cloud',method:request.inner,params:request.params,result:value.ok});
+            if(request.inner==='SubscribeTerminal' && value.item?.type==='data') proof.tools.push({environment:method==='CloudLocalTerminal'?'local':'cloud',method:'TerminalData',data:value.item.data});
             proof.forwards.push({id:value.id,done:value.done,error:value.err,reply:JSON.stringify(value).includes('Brokered native provider reply') || JSON.stringify(value.head?.transcript ?? value).includes('Cloud attachment verified'),attachmentReply:JSON.stringify(value).includes('Cloud attachment verified')});
             if(request.inner==='ReadAttachmentChunk' && value.ok?.data)proof.imageReads.push({done:value.ok.done,bytes:value.ok.data.length});
             if(request.inner==='UploadCommit' && value.ok?.path)proof.uploads.push(value.ok.path);
@@ -44,7 +44,7 @@
     send(value) {
       try {
         const frame = JSON.parse(value);
-        if (frame.method) { if(frame.method==='CloudRpc')proof.innerMethods.push(frame.params?.method);proof.methods.push(frame.method); pending.set(frame.id,{method:frame.method,inner:frame.params?.method,params:frame.params?.params}); }
+        if (frame.method) { if(frame.method==='CloudRpc'||frame.method==='CloudLocalTerminal')proof.innerMethods.push(frame.params?.method);proof.methods.push(frame.method); pending.set(frame.id,{method:frame.method,inner:frame.params?.method,params:frame.params?.params}); }
         if (frame.cancel) pending.delete(frame.id);
       } catch {}
       super.send(value);

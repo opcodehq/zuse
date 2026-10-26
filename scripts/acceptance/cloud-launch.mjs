@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import {engine,browser,fixture,artifact,sleep} from './harness.mjs';
 import {beforeCloudTools,afterCloudTools} from './cloud-tools.mjs';
 import {beforeCloudSync,afterCloudSync} from './cloud-sync-ui.mjs';
+import {beforeLocalTerminals,afterLocalTerminals,acceptPausedLocalTerminals} from './cloud-local-terminal.mjs';
 let host,page,stage='startup';
 const file=process.env.ZUSE_CLOUD_LAUNCH_UI_FIXTURE_FILE;
 try {
@@ -48,6 +49,7 @@ try {
     page.screenshot('cloud-launch-streamed-chat.png');
     const workspace=page.evaluate('window.__cloudLaunch.creates[0]');
     if(process.env.ZUSE_CLOUD_SYNC_UI_ACCEPTANCE==='1') { stage='cloud-sync';await beforeCloudSync(page,file,host); }
+    if(process.env.ZUSE_CLOUD_LOCAL_TERMINAL_ACCEPTANCE==='1') { stage='local-terminal';await beforeLocalTerminals(page,file,host); }
     if(process.env.ZUSE_CLOUD_TOOLS_ACCEPTANCE==='1') { stage='workspace-tools';await beforeCloudTools(page,file); }
     if(process.env.ZUSE_CLOUD_TOOLS_MANUAL==='1') {
       fs.writeFileSync(file.replace(/\.[^.]+$/,'.tools-ready'),'ready');
@@ -67,6 +69,7 @@ try {
     page.wait('window.__cloudLaunch.forwards.some(f=>f.reply)');await sleep(2500);
     page.screenshot('cloud-composer-connected.png');
     if(process.env.ZUSE_CLOUD_SYNC_UI_ACCEPTANCE==='1') { stage='cloud-sync-reopen';await afterCloudSync(page,file,host); }
+    if(process.env.ZUSE_CLOUD_LOCAL_TERMINAL_ACCEPTANCE==='1') { stage='local-terminal-reopen';await afterLocalTerminals(page,file,host); }
     if(process.env.ZUSE_CLOUD_TOOLS_ACCEPTANCE==='1') { stage='retained-terminal';await afterCloudTools(page,file); }
     if(process.env.ZUSE_CLOUD_TOOLS_MANUAL==='1') {
       fs.writeFileSync(file.replace(/\.[^.]+$/,'.tools-reconnected'),'ready');
@@ -117,6 +120,7 @@ try {
     assert.equal(proof.status.filter(s=>s.state==='ready').length,process.env.ZUSE_CLOUD_LIFECYCLE_ACCEPTANCE==='1'?3:1,'One ready connection per explicit connect');
     artifact('cloud-launch-browser-acceptance.json',{actualCompiledGpui:true,hostSupervisor:true,postgresApiAndPackagedGuest:true,firstMessageAcceptedOnce:true,durableEncryptedLaunch:true,stableStartupSubscriptions:true,liveStream:true,clientClosure:true,cachedReadDoesNotWake:true,reconnectOriginalSession:true,workspaceId:workspace.workspaceId,liveProvider:false});
   }
+  if(process.env.ZUSE_CLOUD_LOCAL_TERMINAL_ACCEPTANCE==='1') { stage='paused-local-terminal';await acceptPausedLocalTerminals(page,file,host); }
   fs.writeFileSync(file.replace(/\.[^.]+$/,'.done'),'verified\n');
   console.log('Cloud launch acceptance passed');
 } catch(error) {

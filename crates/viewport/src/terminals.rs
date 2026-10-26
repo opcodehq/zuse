@@ -1,6 +1,7 @@
 //! Terminal tabs remain attached to their owning chat and engine across navigation.
 use super::*;
 use crate::shell::{BORDER, RAISED, column, control, icon_button, row};
+pub(super) const LOCAL_MIRROR_PREFIX: &str = "cloud-local/";
 #[derive(Clone)]
 pub(super) struct TerminalTab {
     pub id: String,
@@ -17,25 +18,57 @@ pub(super) struct OpeningTerminal {
 }
 impl WorkspaceView {
     pub(super) fn terminal_scope(&self) -> String {
-        match &self.selected {
+        let scope = match &self.selected {
             Some(chat) => format!(
                 "{}:{}",
                 chat["deviceId"].as_str().unwrap_or_default(),
                 chat["id"].as_str().unwrap_or_default()
             ),
             None => format!("canvas:{}", self.cwd()),
+        };
+        if self.cloud.guest && self.cloud.local_terminals {
+            format!("local:{scope}")
+        } else {
+            scope
         }
+    }
+    fn terminal_target_host(&self) -> Option<String> {
+        if self.cloud.guest && self.cloud.local_terminals {
+            Some(format!(
+                "{LOCAL_MIRROR_PREFIX}{}",
+                self.selected
+                    .as_ref()
+                    .and_then(|c| c["id"].as_str())
+                    .unwrap_or("browser-canvas")
+            ))
+        } else {
+            self.selected
+                .as_ref()
+                .and_then(|c| c["deviceId"].as_str())
+                .map(str::to_owned)
+        }
+    }
+    fn select_terminal_environment(&mut self, local: bool, cx: &mut Context<Self>) {
+        if self.cloud.local_terminals == local {
+            return;
+        }
+        self.detach_browser_terminal(cx);
+        if let Some(opening) = self.terminal_open.take() {
+            self.cancel(opening.id);
+            self.pending.remove(&opening.id);
+        }
+        self.cloud.local_terminals = local;
+        if !self.restore_browser_terminal(cx) {
+            self.discover_browser_terminals(cx);
+        }
+        cx.notify();
     }
     pub(super) fn open_browser_terminal(&mut self, cx: &mut Context<Self>) {
         if !self.require_connection(cx) || self.terminal_open.is_some() {
             return;
         }
         let scope = self.terminal_scope();
-        let host = self
-            .selected
-            .as_ref()
-            .and_then(|chat| chat["deviceId"].as_str())
-            .map(str::to_owned);
+        let host = self.terminal_target_host();
         let id = self.call(methods::OPEN_TERMINAL, json!({"chatId":self.selected.as_ref().map(|chat| chat["id"].clone()).unwrap_or(json!("browser-canvas")),"cwd":self.cwd(),"cols":80,"rows":28,"targetDeviceId":host}));
         self.terminal_open = Some(OpeningTerminal {
             id,
@@ -50,11 +83,7 @@ impl WorkspaceView {
             return;
         }
         let scope = self.terminal_scope();
-        let host = self
-            .selected
-            .as_ref()
-            .and_then(|chat| chat["deviceId"].as_str())
-            .map(str::to_owned);
+        let host = self.terminal_target_host();
         let id = self.call(methods::LIST_TERMINALS,json!({"chatId":self.selected.as_ref().map(|c|c["id"].clone()).unwrap_or(json!("browser-canvas")),"targetDeviceId":host}));
         self.terminal_open = Some(OpeningTerminal {
             id,
@@ -249,6 +278,24 @@ impl WorkspaceView {
                     .p_1()
                     .border_b_1()
                     .border_color(rgb(BORDER))
+                    .when(self.cloud.guest, |view| {
+                        view.child(
+                            control("terminal-cloud-environment", "Cloud")
+                                .role(Role::Tab)
+                                .aria_selected(!self.cloud.local_terminals)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.select_terminal_environment(false, cx)
+                                })),
+                        )
+                        .child(
+                            control("terminal-local-environment", "Local (synced)")
+                                .role(Role::Tab)
+                                .aria_selected(self.cloud.local_terminals)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.select_terminal_environment(true, cx)
+                                })),
+                        )
+                    })
                     .children(
                         self.terminal_tabs
                             .iter()

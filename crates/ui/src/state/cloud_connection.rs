@@ -143,8 +143,8 @@ impl super::remote_connection::Source for Source {
                             let frame: zuse_rpc::ClientFrame=match serde_json::from_str(line){Ok(frame)=>frame,Err(_)=>continue};
                             tasks.retain(|_,task|!task.is_finished());
                             if frame.cancel {tasks.remove(&frame.id);continue;}
-                            let id=frame.id;let reply=replies.clone();let controller=source.target.controller.clone();let workspace=source.target.workspace.clone();
-                            tasks.insert(id,AbortOnDropHandle::new(tokio::spawn(async move{forward(controller,workspace,frame,reply).await;})));
+                            let id=frame.id;let reply=replies.clone();let controller=source.target.controller.clone();let workspace=source.target.workspace.clone();let subject=source.target.subject.clone();
+                            tasks.insert(id,AbortOnDropHandle::new(tokio::spawn(async move{forward(controller,workspace,subject,frame,reply).await;})));
                         }
                     }
                 }
@@ -163,6 +163,7 @@ impl super::remote_connection::Source for Source {
 async fn forward(
     controller: EngineHandle,
     workspace: String,
+    subject: String,
     frame: zuse_rpc::ClientFrame,
     replies: mpsc::Sender<String>,
 ) {
@@ -178,7 +179,15 @@ async fn forward(
                 | methods::CLOUD_ACCOUNT_SIGN_IN
                 | methods::CLOUD_ACCOUNT_SIGN_OUT
         );
-    let (method, params) = if authority {
+    let local_chat = frame.params["targetDeviceId"]
+        .as_str()
+        .and_then(|s| s.strip_prefix(crate::terminal::panel::LOCAL_MIRROR_PREFIX));
+    let (method, params) = if let Some(chat) = local_chat {
+        (
+            methods::CLOUD_LOCAL_TERMINAL.into(),
+            json!({"workspaceId":workspace,"expectedAccountId":subject,"chatId":chat,"requestId":id,"method":method,"params":frame.params}),
+        )
+    } else if authority {
         (method, frame.params)
     } else {
         (

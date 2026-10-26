@@ -40,6 +40,15 @@ impl RpcService for Controller {
                     json!({"id":params["requestId"],"done":true}),
                 ]))))
             }
+            methods::CLOUD_LOCAL_TERMINAL => {
+                assert_eq!(params["expectedAccountId"], "owner");
+                assert_eq!(params["workspaceId"], "workspace-one");
+                assert_eq!(params["chatId"], "session-one");
+                assert_eq!(params["method"], methods::LIST_TERMINALS);
+                Ok(RpcReply::Stream(Box::pin(stream::iter([
+                    json!({"id":params["requestId"],"ok":[],"done":true}),
+                ]))))
+            }
             methods::CLOUD_ACCOUNT_SIGN_OUT => RpcReply::value(&json!({"root":true})),
             _ => Err(RpcError::UnknownMethod(method.into())),
         }
@@ -81,6 +90,9 @@ async fn native_cloud_tools_share_workspace_authority_and_end_on_account_change(
     assert_eq!(reply["id"], 43);
     assert_eq!(reply["ok"]["root"], true);
     assert_eq!(root.calls.lock().unwrap().len(), 1);
+    channel.outgoing.send(json!({"id":44,"method":methods::LIST_TERMINALS,"params":{"targetDeviceId":"cloud-local/session-one"}}).to_string()).await.unwrap();
+    let reply: Value = serde_json::from_str(&channel.incoming.recv().await.unwrap()).unwrap();
+    assert_eq!(reply, json!({"id":44,"ok":[],"done":true}));
     root.account.send_replace(json!({"user":null,"login":null,"error":null}));
     tokio::time::timeout(std::time::Duration::from_secs(2), source.closed.cancelled())
         .await

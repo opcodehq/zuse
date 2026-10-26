@@ -107,7 +107,7 @@ fn save(file: &Path, config: &Config) -> Result<()> {
     fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
-fn authorized(auth: &Auth, account: &str) -> bool {
+pub(super) fn authorized(auth: &Auth, account: &str) -> bool {
     matches!(auth.state(),crate::auth::AuthState::SignedIn{user,org_id:None} if user.id==account)
 }
 impl Manager {
@@ -180,6 +180,11 @@ impl Manager {
         }
         loaded.insert(profile);
         Ok(())
+    }
+    pub(super) fn local_root(&self, account: &str, workspace: &str) -> Option<PathBuf> {
+        lock(&self.records)
+            .get(&key(account, workspace))
+            .map(|r| r.config.local_path.clone())
     }
     fn status(&self, account: &str, workspace: &str) -> Status {
         lock(&self.records)
@@ -657,6 +662,12 @@ pub async fn handle(auth: Auth, method: &str, params: Value) -> Result<Value> {
     } else {
         None
     };
+    if previous
+        .as_ref()
+        .is_some_and(|old| old.local_path != config.local_path)
+    {
+        api.local_terminals.stop_workspace(&account, &id);
+    }
     let file = directory(&auth, &account).join(format!("{}.json", hashed(&id)));
     for root in &config.roots {
         api.mirrors.register_root(&account, &id, root.clone());

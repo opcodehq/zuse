@@ -3,9 +3,11 @@ pub mod environment;
 pub mod launch;
 pub mod identity;
 #[cfg(unix)]
-pub mod sync;
+pub mod local_terminal;
 #[cfg(unix)]
 pub mod mirror;
+#[cfg(unix)]
+pub mod sync;
 // The cloud modules share this account authority, independently of workspace login.
 use identity::CloudIdentity as Auth;
 use anyhow::{Result, ensure};
@@ -25,6 +27,7 @@ pub fn handles(method: &str) -> bool {
     matches!(
         method,
         LIST | READ
+            | zuse_protocol::methods::CLOUD_LOCAL_TERMINAL
             | zuse_protocol::methods::CLOUD_SYNC_STATUS
             | zuse_protocol::methods::CLOUD_SYNC_CONFIGURE
             | zuse_protocol::methods::CLOUD_SYNC_RETRY
@@ -64,6 +67,8 @@ pub struct CloudApi {
     mirrors: mirror::Manager,
     #[cfg(unix)]
     syncs: sync::Manager,
+    #[cfg(unix)]
+    local_terminals: Arc<local_terminal::Manager>,
 }
 impl CloudApi {
     pub fn new(origin: &str) -> Result<Self> {
@@ -85,6 +90,8 @@ impl CloudApi {
             environments: environment::Manager::default(),
             #[cfg(unix)]
             syncs: sync::Manager::default(),
+            #[cfg(unix)]
+            local_terminals: Arc::default(),
             #[cfg(unix)]
             mirrors: mirror::Manager::new(
                 std::env::var_os("ZUSE_CLOUD_MIRROR_ROOT")
@@ -115,6 +122,7 @@ impl CloudApi {
         let admitted = matches!(row.state.as_str(), "archived" | "deleting" | "deleted");
         #[cfg(unix)]
         {
+            self.local_terminals.observe(account, row);
             row.local_mirror_cleanup =
                 self.mirrors
                     .observe(account, &row.workspace_id, admitted, retry);

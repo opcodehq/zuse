@@ -252,6 +252,7 @@ pub const CLOUD_HISTORY: &str = "CloudHistory";
 pub const CLOUD_CLEANUP_MIRROR: &str = "CloudCleanupMirror";
 pub const CLOUD_DELETE: &str = "CloudDelete";
 pub const CLOUD_UNARCHIVE: &str = "CloudUnarchive";
+pub const CLOUD_LOCAL_TERMINAL: &str = "CloudLocalTerminal";
 pub const CLOUD_SYNC_STATUS: &str = "CloudSyncStatus";
 pub const CLOUD_SYNC_CONFIGURE: &str = "CloudSyncConfigure";
 pub const CLOUD_SYNC_RETRY: &str = "CloudSyncRetry";
@@ -361,6 +362,7 @@ mod retry_tests {
             MODEL_CONNECT,
             CLOUD_UNARCHIVE,
             CLOUD_PAUSE,
+            CLOUD_LOCAL_TERMINAL,
             CLOUD_SYNC_CONFIGURE,
             CLOUD_SYNC_RETRY,
             CLOUD_DELETE,

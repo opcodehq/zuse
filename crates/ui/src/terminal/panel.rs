@@ -42,6 +42,7 @@ use super::view::{
 /// Fixed tab width — drag-reorder math stays analytic.
 pub const TAB_WIDTH: f32 = 118.0;
 pub const TAB_BAR_HEIGHT: f32 = 40.0;
+pub(crate) const LOCAL_MIRROR_PREFIX: &str = "cloud-local/";
 const SELECTION_SCROLL_TICK_MS: u64 = 24;
 
 actions!(terminal, [ToggleTerminal]);
@@ -331,6 +332,7 @@ pub struct TerminalPanel {
     /// explicitly (no ensure-on-open/chat-switch), and closing the last tab
     /// must not dispatch the bottom drawer's [`ToggleTerminal`].
     embedded: bool,
+    local_mirror: bool,
     /// The right pane is in its width tween. Keep painting the retained grid
     /// through the changing clip, but do not feed transient widths into the
     /// emulator: alternate-screen rows truncate rather than reflow.
@@ -373,6 +375,7 @@ impl TerminalPanel {
             catalogs: HashMap::new(),
             open: false,
             embedded: false,
+            local_mirror: false,
             resize_suspended: false,
             window_corner_bl: false,
             window_corner_br: false,
@@ -617,11 +620,37 @@ impl TerminalPanel {
     /// engine checks the chat's cwd against its OWN filesystem and fails with
     /// "Session working directory is unavailable" (user report).
     fn chat_target(&self, chat: &str, cx: &App) -> Option<String> {
-        self.state.read(cx).terminal_target_device(chat)
+        if chat.starts_with(LOCAL_MIRROR_PREFIX)
+            && self
+                .state
+                .read(cx)
+                .engine()
+                .and_then(|e| e.cloud_workspace())
+                .is_some()
+        {
+            Some(chat.to_owned())
+        } else {
+            self.state.read(cx).terminal_target_device(chat)
+        }
     }
 
     fn selected_chat(&self, cx: &App) -> String {
-        self.state.read(cx).panel_session_key()
+        let state = self.state.read(cx);
+        let key = state.panel_session_key();
+        if self.local_mirror && state.engine().and_then(|e| e.cloud_workspace()).is_some() {
+            format!("{LOCAL_MIRROR_PREFIX}{key}")
+        } else {
+            key
+        }
+    }
+    fn select_environment(&mut self, local: bool, cx: &mut Context<Self>) {
+        if self.local_mirror == local {
+            return;
+        }
+        self.local_mirror = local;
+        self.on_state_changed(cx);
+        self.ensure_tab(cx);
+        cx.notify();
     }
 
     fn ensure_tab(&mut self, cx: &mut Context<Self>) {
@@ -1676,6 +1705,44 @@ impl TerminalPanel {
                             _ => tab_el.into_any_element(),
                         }
                     }),
+            )
+            .when(
+                self.state
+                    .read(cx)
+                    .engine()
+                    .and_then(|e| e.cloud_workspace())
+                    .is_some(),
+                |bar| {
+                    bar.children(
+                        [(false, "Cloud"), (true, "Local (synced)")]
+                            .into_iter()
+                            .map(|(local, label)| {
+                                div()
+                                    .id(if local {
+                                        "terminal-local-environment"
+                                    } else {
+                                        "terminal-cloud-environment"
+                                    })
+                                    .role(gpui::Role::Tab)
+                                    .aria_selected(self.local_mirror == local)
+                                    .h(px(28.))
+                                    .px(px(8.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(6.))
+                                    .cursor_pointer()
+                                    .text_size(px(12.))
+                                    .text_color(theme.text_muted)
+                                    .when(self.local_mirror == local, |d| {
+                                        d.bg(crate::theme::ink(0.08))
+                                    })
+                                    .child(label)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.select_environment(local, cx)
+                                    }))
+                            }),
+                    )
+                },
             )
             .child(
                 div()
