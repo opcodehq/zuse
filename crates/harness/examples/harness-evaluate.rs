@@ -251,6 +251,7 @@ async fn evaluate() -> Result<(), Box<dyn std::error::Error>> {
             processes.max_output_bytes = 4 * 1024 * 1024;
             let tools = Arc::new(
                 NativeTools::open(NativeOptions {
+                    extensions: None,
                     cwd,
                     lock_directory: locks,
                     processes,

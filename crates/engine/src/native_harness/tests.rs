@@ -115,6 +115,8 @@ impl Models for ModelFixture {
 }
 fn harness(root: &std::path::Path, fixture: Arc<ModelFixture>) -> NativeHarness {
     NativeHarness {
+        scheduling: Default::default(),
+        extensions: zuse_harness_extensions::Registry::load(&root.join("profile")).unwrap(),
         profile: root.join("profile"),
         device_id: "device".into(),
         models: fixture,

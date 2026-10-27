@@ -7,6 +7,7 @@ pub(super) const INSTRUCTIONS: &str = "Native coding workflow: Paths are relativ
 
 #[derive(Clone)]
 enum Shape {
+    JsonObject,
     Text(usize, usize, Option<&'static str>),
     Number(u64, u64),
     Boolean,
@@ -47,6 +48,7 @@ fn error(field: &str) -> Error {
 impl Shape {
     fn schema(&self) -> Value {
         match self {
+            Self::JsonObject => json!({"type":"object","additionalProperties":true}),
             Self::Text(min, max, format) => {
                 let mut value = json!({"type":"string","minLength":min,"maxLength":max});
                 if let Some(format) = format {
@@ -84,6 +86,7 @@ impl Shape {
     }
     fn validate(&self, value: &mut Value, path: &str) -> Result<(), Error> {
         let valid = match self {
+            Self::JsonObject => value.is_object(),
             Self::Text(min, max, format) => value.as_str().is_some_and(|text| {
                 let count = text.chars().count();
                 count >= *min
@@ -161,6 +164,13 @@ fn specifications() -> &'static BTreeMap<&'static str, Specification> {
         let edit=||vec![field("old_string",Text(1,2*1024*1024,None)),field("new_string",text()),field("replace_all",Boolean).default(json!(false))];
         let mut specs=BTreeMap::new();
         let mut add=|name,category,description,fields|{specs.insert(name,Specification {description,category,shape:Object(fields)});};
+        add("mcp_servers",Read,"List configured external tool servers without starting processes or connections.",vec![]);
+        add("mcp_tools",ToolCategory::Network,"Discover one bounded page of a configured server's tool schemas on demand; pass its next cursor to continue.",vec![field("server",Text(1,64,None)),field("cursor",Text(1,4096,None)).optional()]);
+        add("mcp_call",ToolCategory::Network,"Invoke a configured external tool with its exact discovered arguments. Unknown outcomes pause for review rather than automatic retry.",vec![field("server",Text(1,64,None)),field("tool",Text(1,256,None)),field("arguments",JsonObject)]);
+        #[cfg(feature="structural-search")]
+        add("code_outline",Read,"Get fresh function/type symbols, signatures and line ranges for Rust, Python, JavaScript or TypeScript without reading every function body. Hash identifies the actual file version; use read_file to inspect relevant lines before editing.",vec![field("path",path()),field("limit",Number(1,512)).default(json!(128))]);
+        add("list_skills",Read,"List up to 64 project skill names and descriptions from .agents/skills. Bodies load only through read_skill; no skill scripts are executed.",vec![]);
+        add("read_skill",Read,"Load a named project's SKILL.md on demand. Follow the user and repository instruction hierarchy.",vec![field("name",Text(1,64,None))]);
         add("read_file",Read,"Read fresh UTF-8 lines and SHA-256. Offsets are zero-based; use the returned hash for edits.",vec![field("path",path()),field("offset",Number(0,u64::MAX)).default(json!(0)),field("limit",Number(1,2000)).default(json!(400))]);
         add("read_artifact",Read,"Read a retained result artifact from this conversation using a byte cursor. Accepts the artifact path returned by a tool or its file name.",vec![field("artifact",path()),field("offset",Number(0,u64::MAX)).default(json!(0)),field("max_bytes",Number(1,64000)).default(json!(16000))]);
         add("read_image",Read,"Read a checkout PNG, JPEG, GIF or WebP as image content.",vec![field("path",path())]);
@@ -186,6 +196,9 @@ pub(super) fn definitions(questions: bool, plans: bool) -> Tools {
     specifications()
         .iter()
         .filter(|(name, _)| {
+            if name.starts_with("mcp_") {
+                return false;
+            }
             (**name != "request_user_input" || questions) && (**name != "update_plan" || plans)
         })
         .map(|(name, spec)| {
@@ -206,4 +219,21 @@ pub(super) fn validate(name: &str, value: &mut Value) -> Result<(), Error> {
         .ok_or_else(|| Error::Tool("Unknown native tool".into()))?
         .shape
         .validate(value, name)
+}
+
+pub(super) fn extension_definitions() -> Tools {
+    specifications()
+        .iter()
+        .filter(|(name, _)| name.starts_with("mcp_"))
+        .map(|(name, spec)| {
+            (
+                (*name).into(),
+                ToolDefinition {
+                    description: spec.description.into(),
+                    parameters: spec.shape.schema(),
+                    category: spec.category,
+                },
+            )
+        })
+        .collect()
 }

@@ -84,6 +84,12 @@ struct Fixture {
 }
 impl Fixture {
     async fn new(callbacks: Option<Arc<dyn NativeCallbacks>>) -> Self {
+        Self::with_extensions(callbacks, None).await
+    }
+    async fn with_extensions(
+        callbacks: Option<Arc<dyn NativeCallbacks>>,
+        extensions: Option<Arc<dyn Extensions>>,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let checkout = root.path().join("checkout");
         std::fs::create_dir(&checkout).unwrap();
@@ -99,6 +105,7 @@ impl Fixture {
         let current = mode.clone();
         let tools = Arc::new(
             NativeTools::open(NativeOptions {
+                extensions,
                 cwd: checkout.clone(),
                 lock_directory: root.path().join("harness/file-locks"),
                 processes,
@@ -298,6 +305,7 @@ async fn concurrent_roots_share_file_locks_and_only_one_stale_hash_writer_commit
     )
     .unwrap();
     let second = NativeTools::open(NativeOptions {
+        extensions: None,
         cwd: fixture.checkout.clone(),
         lock_directory: fixture.root.path().join("harness/file-locks"),
         processes,
@@ -612,6 +620,7 @@ async fn native_tools_run_through_the_durable_kernel_and_root_owned_host_composi
             processes.command_host = env!("CARGO_BIN_EXE_zuse-command-host").into();
             let tools = Arc::new(
                 NativeTools::open(NativeOptions {
+                    extensions: None,
                     cwd,
                     lock_directory: locks,
                     processes,
@@ -648,4 +657,138 @@ async fn native_tools_run_through_the_durable_kernel_and_root_owned_host_composi
     engine.close().await.unwrap();
     let recovered = RootStore::acquire(root.path(), "root").unwrap();
     assert_eq!(recovered.load().unwrap().unwrap().tools.len(), 3);
+}
+
+#[tokio::test]
+async fn skills_load_on_demand_and_cannot_alias_sensitive_checkout_files() {
+    let fixture = Fixture::new(None).await;
+    assert!(
+        value(fixture.call("list_skills", json!({})).await.unwrap())["skills"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let folder = fixture.checkout.join(".agents/skills/example");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("SKILL.md"),"---\nname: example\ndescription: Check this skill\n---\nFollow the project instructions.\n").unwrap();
+    let list = value(fixture.call("list_skills", json!({})).await.unwrap());
+    assert_eq!(list["skills"][0]["name"], "example");
+    assert!(list["skills"][0].get("content").is_none());
+    let first = value(
+        fixture
+            .call("read_skill", json!({"name":"example"}))
+            .await
+            .unwrap(),
+    );
+    assert!(
+        first["content"]
+            .as_str()
+            .unwrap()
+            .contains("Follow the project")
+    );
+    std::fs::write(folder.join("SKILL.md"), "changed instructions").unwrap();
+    let next = value(
+        fixture
+            .call("read_skill", json!({"name":"example"}))
+            .await
+            .unwrap(),
+    );
+    assert_ne!(first["hash"], next["hash"]);
+    assert!(
+        fixture
+            .call("read_skill", json!({"name":"../escape"}))
+            .await
+            .is_err()
+    );
+    std::fs::remove_file(folder.join("SKILL.md")).unwrap();
+    std::fs::write(fixture.checkout.join(".env"), "description: private").unwrap();
+    symlink(fixture.checkout.join(".env"), folder.join("SKILL.md")).unwrap();
+    assert!(
+        fixture
+            .call("read_skill", json!({"name":"example"}))
+            .await
+            .is_err()
+    );
+    assert!(
+        value(fixture.call("list_skills", json!({})).await.unwrap())["skills"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    fixture.tools.close().await;
+}
+
+#[cfg(feature = "structural-search")]
+#[tokio::test]
+async fn structural_outlines_are_fresh_and_ignore_names_in_strings_or_comments() {
+    let fixture = Fixture::new(None).await;
+    let path = fixture.checkout.join("symbols.py");
+    std::fs::write(&path,"# def fake():\ntext = 'def also_fake():'\nclass Real:\n    def method(self):\n        return 1\n").unwrap();
+    let first = value(
+        fixture
+            .call("code_outline", json!({"path":"symbols.py"}))
+            .await
+            .unwrap(),
+    );
+    let symbols = first["symbols"].as_array().unwrap();
+    assert_eq!(symbols.len(), 2);
+    assert_eq!(symbols[0]["name"], "Real");
+    assert_eq!(symbols[1]["name"], "method");
+    assert_eq!(symbols[0]["start_line"], 3);
+    std::fs::write(path, "def changed():\n    pass\n").unwrap();
+    let next = value(
+        fixture
+            .call("code_outline", json!({"path":"symbols.py"}))
+            .await
+            .unwrap(),
+    );
+    assert_ne!(first["hash"], next["hash"]);
+    assert_eq!(next["symbols"][0]["name"], "changed");
+    fixture.tools.close().await;
+}
+
+#[derive(Default)]
+struct ExtensionFixture(AtomicUsize);
+#[async_trait]
+impl Extensions for ExtensionFixture {
+    fn servers(&self) -> Value {
+        json!(["fixture"])
+    }
+    fn read_only(&self, server: &str, tool: &str) -> bool {
+        server == "fixture" && tool == "read"
+    }
+    async fn tools(&self, _: &str, _: Option<String>, _: ToolContext) -> Result<Value, Error> {
+        Ok(json!({"tools":[]}))
+    }
+    async fn call(&self, _: &str, _: &str, _: Value, _: ToolContext) -> Result<ToolOutput, Error> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok("executed".to_owned().into())
+    }
+}
+#[tokio::test]
+async fn external_tools_cannot_bypass_plan_or_runtime_permissions() {
+    let extensions = Arc::new(ExtensionFixture::default());
+    let fixture = Fixture::with_extensions(None, Some(extensions.clone())).await;
+    let args = |tool: &str| json!({"server":"fixture","tool":tool,"arguments":{}});
+    let mut read_only = context("child");
+    read_only.read_only = true;
+    assert!(
+        fixture
+            .tools
+            .execute("mcp_call", args("write"), read_only.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(extensions.0.load(Ordering::SeqCst), 0);
+    fixture
+        .tools
+        .execute("mcp_call", args("read"), read_only)
+        .await
+        .unwrap();
+    fixture.mode.store(2, Ordering::Release);
+    assert!(fixture.call("mcp_call", args("write")).await.is_err());
+    assert_eq!(extensions.0.load(Ordering::SeqCst), 1);
+    fixture.mode.store(0, Ordering::Release);
+    fixture.call("mcp_call", args("write")).await.unwrap();
+    assert_eq!(extensions.0.load(Ordering::SeqCst), 2);
 }

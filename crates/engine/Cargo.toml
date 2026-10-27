@@ -19,6 +19,7 @@ zeroize = "1"
 zuse-serve.workspace = true
 zuse-remote.workspace = true
 zuse-harness.workspace = true
+zuse-harness-extensions = { path = "../harness-extensions" }
 zuse-mcp.workspace = true
 zuse-preview.workspace = true
 zuse-protocol.workspace = true

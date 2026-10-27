@@ -42,6 +42,7 @@ members = [
     "crates/remote",
     "crates/plugins",
     "crates/harness",
+    "crates/harness-extensions",
     "crates/model-accounts",
 ]
 
