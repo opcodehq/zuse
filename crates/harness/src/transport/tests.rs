@@ -235,9 +235,10 @@ async fn messages_streams_tool_arguments_signatures_and_disjoint_cache_counters(
         json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"thought"}}),
         json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"signed"}}),
         json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"c1","name":"edit","input":{}}}),
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":""}}),
         json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}),
         json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"a\"}"}}),
-        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5,"output_tokens_details":{"thinking_tokens":2}}}),
         json!({"type":"message_stop"}),
     ];
     let (c, body) = fixture(Protocol::Messages, events, false).await;
@@ -250,10 +251,64 @@ async fn messages_streams_tool_arguments_signatures_and_disjoint_cache_counters(
     assert_eq!(output.usage.input_tokens, 100);
     assert_eq!(output.usage.uncached_input_tokens, Some(7));
     assert_eq!(output.usage.cache_write_tokens, Some(13));
+    assert_eq!(output.usage.reasoning_tokens, Some(2));
+    assert_eq!(output.usage.output_tokens, 5);
     assert!(output.messages[0].content.to_string().contains("signed"));
     let body = body.await.unwrap();
     assert_eq!(body["tools"][0]["cache_control"]["type"], "ephemeral");
 }
+#[tokio::test]
+async fn messages_accept_empty_argument_deltas_without_losing_initial_input() {
+    for initial in [json!({}), json!({"path":"a"})] {
+        let events = vec![
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"empty","name":"edit","input":initial}}),
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
+            json!({"type":"message_stop"}),
+        ];
+        let (credential, _body) = fixture(Protocol::Messages, events, false).await;
+        let output = NativeTransport::new()
+            .unwrap()
+            .request(input(), credential)
+            .await
+            .unwrap();
+        assert_eq!(output.calls.len(), 1);
+        assert_eq!(output.calls[0].input, initial);
+    }
+}
+
+#[tokio::test]
+async fn messages_reject_empty_argument_deltas_for_unknown_blocks() {
+    let (credential, _body) = fixture(Protocol::Messages, vec![
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
+        json!({"type":"message_stop"}),
+    ], false).await;
+    let result = NativeTransport::new()
+        .unwrap()
+        .request(input(), credential)
+        .await;
+    assert!(matches!(result, Err(Error::Model { code, .. }) if code == "unknown_content_block"));
+}
+
+#[tokio::test]
+async fn messages_reject_nonempty_malformed_arguments_after_empty_delta() {
+    let events = vec![
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"invalid","name":"edit","input":{}}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{"}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
+        json!({"type":"message_stop"}),
+    ];
+    let (credential, _body) = fixture(Protocol::Messages, events, false).await;
+    let result = NativeTransport::new()
+        .unwrap()
+        .request(input(), credential)
+        .await;
+    assert!(matches!(result, Err(Error::Model { code, .. }) if code == "invalid_tool_arguments"));
+}
+
 #[tokio::test]
 async fn generate_content_and_chat_completions_normalize_streams() {
     let(c,body)=fixture(Protocol::GenerateContent,vec![json!({"candidates":[{"content":{"parts":[{"text":"answer"},{"functionCall":{"name":"edit","args":{"path":"a"}},"thoughtSignature":"signed"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":75,"candidatesTokenCount":10,"thoughtsTokenCount":3}})],false).await;

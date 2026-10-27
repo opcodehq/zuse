@@ -227,7 +227,11 @@ impl Assembly {
                         .items
                         .get_mut(&index)
                         .ok_or_else(|| failed("unknown_content_block"))?;
-                    append(block, field, value, "content_block_too_large")?;
+                    // Parameterless calls may send only an empty JSON delta.
+                    // Preserve initial input, but still validate the block index.
+                    if field != "zuseArguments" || !value.is_empty() {
+                        append(block, field, value, "content_block_too_large")?;
+                    }
                 }
                 "message_delta" => {
                     self.merge_usage(&event["usage"]);
@@ -549,7 +553,7 @@ pub(super) fn usage(protocol: Protocol, value: &Value) -> Usage {
                 read,
                 write,
                 number(value, "output_tokens"),
-                None,
+                number(&value["output_tokens_details"], "thinking_tokens"),
             )
         }
         Protocol::GenerateContent => (
