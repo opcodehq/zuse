@@ -24,8 +24,14 @@ wrapped lines joined in memory. Both exact models at medium again returned HTTP
 429 through the native evaluator. A small Sonnet diagnostic also returned 429;
 no retry/reset headers or token usage were supplied. This does not establish
 successful inference or validate the new credential independently of the throttle.
-The credential was handed to child evaluators through a scoped environment
-variable and was not written into profile files, command arguments or reports.
+During the initial retest, the credential was handed to child evaluators through a
+scoped environment variable and was not written into profile files, command
+arguments or reports. At the user's subsequent storage request, it was saved
+outside the workspace in `~/.config/zuse-harness/internal-auth/credentials.json`
+(mode `0600`, directory `0700`). The adjacent `with-auth` launcher sets
+`CLAUDE_CODE_OAUTH_TOKEN` for one requested process. Local handoff and CLI auth
+status were verified without another model request; its fingerprint matches the
+credential used for the preceding failed smoke checks.
 
 These results establish inventory access and attempted model routing, not successful
 inference, actual reasoning execution, task quality, cache hits or cost savings.
