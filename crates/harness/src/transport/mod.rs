@@ -20,6 +20,8 @@ pub enum Authentication {
     #[default]
     ProtocolDefault,
     Bearer,
+    /// Messages subscription OAuth includes provider-required caller attribution.
+    AnthropicOauth,
 }
 impl Authentication {
     fn is_protocol_default(&self) -> bool {
@@ -59,7 +61,31 @@ pub struct Route {
     pub include_encrypted_reasoning: bool,
 }
 impl Route {
+    fn client_attribution(&self) -> Option<&'static str> {
+        (self.authentication == Authentication::AnthropicOauth).then_some(concat!(
+            "x-anthropic-billing-header: cc_version=",
+            env!("CARGO_PKG_VERSION"),
+            "; cc_entrypoint=cli;"
+        ))
+    }
+    fn beta_header(&self) -> String {
+        if self.authentication != Authentication::AnthropicOauth {
+            return self.betas.join(",");
+        }
+        let mut flags = vec!["claude-code-20250219", "oauth-2025-04-20"];
+        for flag in &self.betas {
+            if !flags.contains(&flag.as_str()) {
+                flags.push(flag);
+            }
+        }
+        flags.join(",")
+    }
     pub fn validate_authentication(&self) -> Result<(), Error> {
+        if self.authentication == Authentication::AnthropicOauth
+            && (self.protocol != Protocol::Messages || !self.subscription)
+        {
+            return Err(failed("unsupported_oauth_route"));
+        }
         if self.betas.len() > 16
             || (!self.betas.is_empty() && self.protocol != Protocol::Messages)
             || self.betas.iter().any(|beta| {
@@ -232,8 +258,9 @@ impl NativeTransport {
         key.set_sensitive(true);
         if credential.route.protocol == Protocol::Messages {
             request = request.header("anthropic-version", "2023-06-01");
-            if !credential.route.betas.is_empty() {
-                request = request.header("anthropic-beta", credential.route.betas.join(","));
+            let betas = credential.route.beta_header();
+            if !betas.is_empty() {
+                request = request.header("anthropic-beta", betas);
             }
         }
         request = match (credential.route.authentication, credential.route.protocol) {

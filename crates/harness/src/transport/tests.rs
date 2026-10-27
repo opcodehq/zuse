@@ -65,7 +65,17 @@ async fn authenticated_fixture(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/", listener.local_addr().unwrap());
     let (tx, rx) = oneshot::channel();
-    let expected_betas = betas.join(",");
+    let expected_betas = if authentication == Authentication::AnthropicOauth {
+        let mut flags = vec!["claude-code-20250219", "oauth-2025-04-20"];
+        for beta in &betas {
+            if !flags.contains(&beta.as_str()) {
+                flags.push(beta);
+            }
+        }
+        flags.join(",")
+    } else {
+        betas.join(",")
+    };
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut bytes = Vec::new();
@@ -80,7 +90,7 @@ async fn authenticated_fixture(
         };
         let headers = String::from_utf8(bytes[..boundary].to_vec()).unwrap();
         let lower = headers.to_ascii_lowercase();
-        if authentication == Authentication::Bearer
+        if authentication != Authentication::ProtocolDefault
             || matches!(protocol, Protocol::Responses | Protocol::ChatCompletions)
         {
             assert!(lower.contains("authorization: bearer fixture-token\r\n"));
@@ -502,4 +512,66 @@ fn provider_beta_configuration_is_bounded_and_default_route_hashes_stay_compatib
     assert!(route.validate_authentication().is_ok());
     route.betas = vec!["invalid\r\nheader".into()];
     assert!(route.validate_authentication().is_err());
+}
+
+#[tokio::test]
+async fn subscription_oauth_emits_native_attribution_without_changing_identity_or_cache_boundaries()
+{
+    let (mut credential, body) = authenticated_fixture(Protocol::Messages, vec![
+        json!({"type":"message_start","message":{"usage":{"input_tokens":1}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ready"}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
+        json!({"type":"message_stop"}),
+    ], false, Authentication::AnthropicOauth, Vec::new()).await;
+    credential.route.subscription = true;
+    let mut request = input();
+    request.reasoning = Some("medium".into());
+    assert_eq!(
+        NativeTransport::new()
+            .unwrap()
+            .request(request, credential)
+            .await
+            .unwrap()
+            .text,
+        "ready"
+    );
+    let body = body.await.unwrap();
+    let prefix = body["system"][0]["text"].as_str().unwrap();
+    assert!(prefix.starts_with("x-anthropic-billing-header:"));
+    assert!(prefix.contains(env!("CARGO_PKG_VERSION")));
+    assert!(body["system"][0].get("cache_control").is_none());
+    assert_eq!(body["system"][1]["text"], "instructions");
+    assert_eq!(body["system"][1]["cache_control"]["type"], "ephemeral");
+    assert_eq!(body["output_config"]["effort"], "medium");
+    assert!(!body.to_string().contains("built on"));
+}
+#[test]
+fn subscription_oauth_requires_its_exact_protocol_and_preserves_attribution_without_system_text() {
+    let mut route = Route::subscription("chatgpt").unwrap();
+    route.authentication = Authentication::AnthropicOauth;
+    assert!(route.validate_authentication().is_err());
+    route.protocol = Protocol::Messages;
+    route.subscription = false;
+    assert!(route.validate_authentication().is_err());
+    route.subscription = true;
+    assert!(route.validate_authentication().is_ok());
+    let mut request = input();
+    Arc::make_mut(&mut request.messages).retain(|m| m.role != Role::System);
+    let credential = Credential {
+        connection_id: "fixture".into(),
+        access_token: "unused".into(),
+        authorization_generation: 0,
+        route,
+    };
+    let fingerprint = request::fingerprint(&request, &credential);
+    let body = request::body(&request, &credential).unwrap();
+    assert_eq!(body["system"].as_array().unwrap().len(), 1);
+    assert!(
+        body["system"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("x-anthropic-billing-header:")
+    );
+    Arc::make_mut(&mut request.messages).push(Message::text(Role::User, "next turn"));
+    assert_eq!(request::fingerprint(&request, &credential), fingerprint);
 }

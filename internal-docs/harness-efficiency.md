@@ -201,13 +201,13 @@ tests. Clippy passes with the three existing style-lint exceptions shown above.
 The application test executable was linked without debug symbols to fit the shared
 VM; the release benchmark uses the workspace release profile.
 
-Live status was updated on 2026-10-27: Conductor's environment credential reached
-authenticated model inventory. Native smoke requests for the two selected models
-at medium reasoning both returned HTTP 429, so coding/cache comparisons have not
-run. See the [live check and request accounting](harness-live-evaluation.md).
-No claims about live success rate, cache-hit improvement, cost per successful task,
-quota savings or superiority over other harnesses are supported yet. Four small
-coding fixtures alone would not establish broad quality equivalence.
+Live status was updated on 2026-10-27: the initial 429 responses were traced to
+missing OAuth caller attribution, not exhausted account quota. The explicit
+`anthropic-oauth` mode fixes that request format. Both selected models now pass
+native smoke checks at medium; one Opus coding trial passed, while a Sonnet trial
+reported an undiagnosed tool-argument error. See the [live checks, controlled proof
+and request accounting](harness-live-evaluation.md). No comparative success-rate,
+cache-hit improvement, cost or quota advantage is established by these small checks.
 
 ## Release measurements
 

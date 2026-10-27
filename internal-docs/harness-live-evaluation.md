@@ -4,7 +4,66 @@
 `claude-opus-5-5`, both configured with **medium** reasoning. No fallback model or
 lower effort was selected.
 
-## Observations
+## Root cause and corrected native OAuth mode
+
+The initial 429 interpretation was incomplete. The user's account showed only
+11% session usage and 45% weekly usage. A capped check through the bundled client
+succeeded with the same credential, exact Sonnet model and medium effort. Its
+provider headers also reported the subscription windows as allowed. Quota reads
+with either token returned 403 because the tokens lack `user:profile`; that was
+not an inference-authentication failure.
+
+Controlled changes isolated a missing request-body attribution requirement:
+
+| Controlled request | Result |
+| --- | --- |
+| Stock client request | HTTP 200 |
+| Remove only its billing-attribution block | HTTP 200 |
+| Remove only its SDK-identification block | HTTP 200 |
+| Remove both blocks | HTTP 429, `rate_limit_error: Error` |
+| Native Rust request plus native-version billing attribution only | HTTP 200 |
+
+Changing the stock client's user-agent to the native runtime's name still worked.
+Removing account metadata or lowering its output ceiling to the native limit also
+worked. Adding beta flags alone to the native request did not resolve the error.
+These observations identify an OAuth request-compatibility problem, rather than
+exhausted account quota, for the original failures. The provider returned a generic
+429 instead of identifying the absent attribution context.
+
+`authentication: "anthropic-oauth"` is now an explicit native transport mode. It:
+
+- Requires Messages protocol and a declared subscription route.
+- Uses Bearer authentication and the two required OAuth/coding beta flags.
+- Inserts a stable, dedicated `x-anthropic-billing-header` system block using the
+  native crate's **actual** version and the coding-harness CLI entrypoint.
+- Preserves the caller's instructions and their existing cache breakpoint.
+- Includes the generated attribution in the diagnostic prefix fingerprint.
+
+This mode does not claim the application was built with the vendor SDK or change
+its user-agent to the bundled client's identity. Generic Bearer and API-key modes
+retain their previous behavior. The generated context stays out of durable
+canonical history and is generated once in each wire request.
+
+Both direct native smoke checks now complete successfully: `claude-sonnet-5-5`
+and `claude-opus-5-5`, each at medium. Regression tests cover required attribution,
+automatic beta flags, empty system instructions, protocol validation, cache-boundary
+preservation and stable fingerprints across ordinary turns.
+
+One subsequent coding trial per model exercised real native tools. Opus passed
+the clamp acceptance test in five physical requests. Sonnet's trial stopped after
+two requests when the parser reported `invalid_tool_arguments`; its acceptance
+check failed. This separate tool-response issue is not diagnosed here and is not
+claimed fixed. Both trials observed provider-reported cache reads. These are small
+live checks, not a comparative quality/cost benchmark or a reason to enable context
+reductions.
+
+At this checkpoint the shared ceiling has **33/300 reservations** consumed,
+including earlier diagnostics and one unused preparation reservation. Continue
+from the same ledger. Corrected smoke and coding evidence is in
+`.context/native-oauth-fixed/`; controlled differential requests are in the
+`.context/rate-limit-*/` directories. Credentials are absent from those reports.
+
+## Historical initial observations (before the attribution fix)
 
 The credential inherited from Conductor's environment reached the provider:
 
@@ -33,21 +92,20 @@ outside the workspace in `~/.config/zuse-harness/internal-auth/credentials.json`
 status were verified without another model request; its fingerprint matches the
 credential used for the preceding failed smoke checks.
 
-These results establish inventory access and attempted model routing, not successful
-inference, actual reasoning execution, task quality, cache hits or cost savings.
-The exact throttle/quota cause and reset time are unknown. Further live comparisons
-were stopped rather than repeatedly issuing requests against the same failure.
+Those initial failures established inventory access but no successful inference.
+The attribution investigation above supersedes the initial unknown-cause diagnosis.
 
-The persistent global ledger has **9 of 300 reservations** consumed: eight observed
+At that earlier checkpoint, the persistent global ledger had **9 of 300 reservations** consumed: eight observed
 HTTP requests and one unused preparation reservation retained conservatively.
 Six HTTP requests attempted inference; none completed. Inventory and invalid-model
 probes are also counted conservatively. No API-equivalent dollar estimate or actual
-subscription charge is inferred. There are 291 reservations left for subsequent
-live work; retain the ledger when resuming.
+subscription charge is inferred. At that point 291 reservations remained; the corrected checkpoint above supersedes
+that count. Retain the ledger when resuming.
 
 ## Credential handoff
 
-Native routes now accept explicit `authentication: "bearer"`; API-key protocol
+Native routes accept generic `authentication: "bearer"` and the explicit
+`authentication: "anthropic-oauth"` mode above; API-key protocol
 defaults remain unchanged. Optional provider beta flags are bounded and validated
 before dispatch. Default-valued new fields are omitted from route serialization
 so existing continuation/cache route fingerprints remain compatible.
@@ -76,8 +134,7 @@ Example connection file, kept private with mode `0600`:
   "route": {
     "endpoint": "https://api.anthropic.com/v1/messages",
     "protocol": "messages",
-    "authentication": "bearer",
-    "betas": ["oauth-2025-04-20"],
+    "authentication": "anthropic-oauth",
     "subscription": true,
     "capabilities": {
       "images": true, "tools": true, "reasoning": true, "promptCache": true
@@ -121,6 +178,6 @@ Cloud-local evidence lives in this worktree's ignored `.context/`:
 - `harness-evaluation-global.ledger` is the persistent shared 300-reservation ceiling.
 - `harness-oauth-offline-validation/` contains the local integration evidence.
 
-The two model suites have not proceeded to coding/cache comparisons. Resume those
-with the same model IDs and medium effort once requests can complete; do not reset
-the global ledger or enable context reductions as a result of these failed smokes.
+The full comparative suites remain pending. Preserve failed runs, retain the
+shared ledger, and keep the selected model IDs and medium effort when continuing.
+The limited successful checks do not enable context reductions by default.

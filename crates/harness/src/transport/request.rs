@@ -24,19 +24,21 @@ pub(super) fn fingerprint(input: &ModelInput, credential: &Credential) -> String
         .iter()
         .filter(|m| m.role == Role::System)
         .collect::<Vec<_>>();
-    format!(
-        "{:x}",
-        Sha256::digest(
-            serde_json::to_vec(&(
-                &input.model,
-                &input.reasoning,
-                &*input.tools,
-                &credential.route,
-                system
-            ))
-            .unwrap()
-        )
-    )
+    let mut hash = Sha256::new();
+    hash.update(
+        serde_json::to_vec(&(
+            &input.model,
+            &input.reasoning,
+            &*input.tools,
+            &credential.route,
+            system,
+        ))
+        .unwrap(),
+    );
+    if let Some(attribution) = credential.route.client_attribution() {
+        hash.update(attribution);
+    }
+    format!("{:x}", hash.finalize())
 }
 pub(super) fn route_key(route: &Route) -> String {
     format!(
@@ -343,8 +345,16 @@ pub(super) fn body(input: &ModelInput, credential: &Credential) -> Result<Value,
                     block["cache_control"] = json!({"type":"ephemeral"});
                 }
             }
-            let mut body = json!({"model":input.model,"system":instructions,"messages":history,"tools":tools,"max_tokens":route.max_output_tokens,"stream":true});
             if system.is_empty() {
+                instructions.clear();
+            }
+            if let Some(attribution) = route.client_attribution() {
+                // This is stable provider routing metadata, not an SDK identity.
+                // Keep the actual instruction block's cache breakpoint intact.
+                instructions.insert(0, json!({"type":"text","text":attribution}));
+            }
+            let mut body = json!({"model":input.model,"system":instructions,"messages":history,"tools":tools,"max_tokens":route.max_output_tokens,"stream":true});
+            if instructions.is_empty() {
                 body.as_object_mut().unwrap().remove("system");
             }
             if tools.is_empty() {
