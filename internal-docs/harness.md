@@ -24,6 +24,9 @@ The pinned transport uses stateless streamed requests and validates its request 
 
 ## Commands and evidence
 
+See [harness performance](harness-performance.md) for repeatable concurrent-session
+workloads, resource sampling and the limits of these measurements.
+
 ```sh
 cargo test -p zuse-harness
 cd crates/harness/bridge

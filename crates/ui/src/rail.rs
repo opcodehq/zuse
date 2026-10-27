@@ -9,7 +9,10 @@
 //! extension since the rail shares the transcript's rows and `ListState`.
 
 use gpui::{AnyElement, Context, ListOffset, SharedString, div, prelude::*, px};
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use zuse_doc::{MessagePart, MessageRole, SessionMessageEntry};
 
@@ -97,6 +100,25 @@ pub fn rail_ticks(
         }
     }
     ticks
+}
+
+/// Resolve outline targets in one pass over the rows, preserving first matches.
+fn position_ticks<'a>(
+    ticks: Vec<RailTick>,
+    row_ids: impl IntoIterator<Item = (usize, &'a str)>,
+) -> Vec<(RailTick, usize)> {
+    let row_ids = row_ids.into_iter();
+    let mut positions = HashMap::with_capacity(row_ids.size_hint().0);
+    for (index, id) in row_ids {
+        positions.entry(id).or_insert(index);
+    }
+    ticks
+        .into_iter()
+        .filter_map(|tick| {
+            let index = *positions.get(tick.message_id.as_str())?;
+            Some((tick, index))
+        })
+        .collect()
 }
 
 /// The active tick for a scroll position: the last tick whose transcript row is
@@ -472,22 +494,16 @@ impl Transcript {
         if !self.rail_enabled() {
             return gpui::Empty.into_any_element();
         }
-        let (entries, echoes) = {
+        let pairs = {
             let state = self.state_entity().read(cx);
-            (state.transcript.clone(), state.pending_echoes().to_vec())
-        };
-        let ticks = rail_ticks(&entries, &echoes);
-        // Map each tick to its transcript row (user rows share the entry id).
-        let pairs: Vec<(RailTick, usize)> = ticks
-            .into_iter()
-            .filter_map(|tick| {
-                let row = self
-                    .rows()
+            position_ticks(
+                rail_ticks(&state.transcript, state.pending_echoes()),
+                self.rows()
                     .iter()
-                    .position(|r| r.id.as_ref() == tick.message_id.as_str())?;
-                Some((tick, row))
-            })
-            .collect();
+                    .enumerate()
+                    .map(|(index, row)| (index, row.id.as_ref())),
+            )
+        };
         // A minimap of one exchange is noise, not navigation — the original
         // rail hides below two marks (message-rail.tsx `marks.length < 2`).
         if pairs.len() < 2 {
@@ -840,6 +856,23 @@ mod tests {
         assert_eq!(ticks[0].prompt, "first question");
         assert_eq!(ticks[0].reply.as_deref(), Some("first answer"));
         assert_eq!(ticks[1].reply.as_deref(), Some("second answer"));
+    }
+
+    #[test]
+    fn outline_targets_preserve_prompt_order_and_first_matching_row() {
+        let entries = vec![
+            entry("first", MessageRole::User, "first question"),
+            entry("hidden", MessageRole::User, "no visible row"),
+            entry("last", MessageRole::User, "last question"),
+        ];
+        let ticks = rail_ticks(&entries, &[]);
+        let expected = vec![(ticks[0].clone(), 7), (ticks[2].clone(), 3)];
+        assert_eq!(
+            position_ticks(ticks, [(3, "last"), (7, "first"), (9, "first")]),
+            expected
+        );
+        assert!(position_ticks(rail_ticks(&entries, &[]), []).is_empty());
+        assert!(position_ticks(vec![], [(0, "first")]).is_empty());
     }
 
     #[test]

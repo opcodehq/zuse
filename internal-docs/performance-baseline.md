@@ -128,3 +128,122 @@ histories, many active agents and their descendant processes still need
 measurements. Idle CPU alone does not establish battery efficiency. Agent count
 claims must include the selected providers' processes and tools, not only the
 desktop shell.
+
+## Large-chat switching diagnostic (2026-10-27)
+
+A native Linux debug build on a private Xvfb desktop with software Vulkan
+reproduced slow switching between cached 10,000-message chats. Keyboard input
+was timed until the correct chat's final-message pixels appeared. Alpha/Beta
+negative-control images differ; accepted frames match the expected marker.
+The fixture uses full offline legacy snapshots; current thin online history
+is not measured. This is a same-machine diagnostic, not a macOS release latency
+measurement.
+
+Four debugger samples found the main UI thread searching the complete row list
+once per prompt inside the transcript outline. At 10,000 alternating messages,
+that requires roughly 25 million comparisons per redraw. The outline now builds
+one borrowed row-id index per render, preserves first-match targets and prompt
+order, and reads the transcript without cloning its complete message payload.
+No history or navigation marks are removed.
+
+| Scenario | Before p95 | After p95 |
+| --- | ---: | ---: |
+| Two chats, 1,000 messages each (control) | 113 ms | — |
+| Two chats, 10,000 messages each | 1,739 ms | 346 ms |
+| 125 stored chats, 10,000 messages each; 20 switches | 2,265 ms | 456 ms |
+
+The original 125-chat repro passes its 500 ms diagnostic budget after the fix.
+The captured outline pixels also match. All 15 outline tests pass, including
+missing rows, first-match duplicate ids, ordering, previews and navigation math.
+Raw timings, executable hashes, the input/pixel loop and stack samples are
+preserved in `.context/efficiency/ui-lag/`.
+
+A separate three-sample composer check timed real keystrokes until draft text
+appeared, with no prompt submitted. Observed p95 (the maximum of three samples)
+fell from 1,595 ms to 286 ms; median fell from 1,431 ms to 262 ms. This small
+diagnostic sample is not a general input-latency distribution.
+
+## Concurrent full-history memory diagnostic (2026-10-27)
+
+A Linux debug headless native engine on eight logical CPUs and 16 GiB RAM
+received simultaneous `WatchDocMessages` requests over its real WebSocket.
+Every 10,000-message response was checked for complete count, text and order.
+The fixture uses full offline legacy snapshots, not current thin online
+history. These are single-process diagnostic trials, not Mac release figures.
+External test-client memory is excluded; engine RSS was sampled every 50 ms.
+
+| Concurrent chats | Original peak RSS | First-pass peak RSS | Original / first-pass batch time |
+| --- | ---: | ---: | ---: |
+| 50 | 3,744 MiB | 875 MiB | 9.37 / 9.23 s |
+| 100 | 5,545 MiB | 945 MiB | 17.70 / 13.47 s |
+| 125 | 6,730 MiB | 1,059 MiB | 22.41 / 17.76 s |
+
+Whole-list JSON expansion was a modest contributor. The larger issue was
+unbounded initial history materialization combined with a 256-frame socket
+output queue. Each connection now admits four history openings before
+opening their documents and buffers eight outgoing socket frames. Admission
+lasts through an opening preview and full hydration; established watches
+release it. Canceled requests release their slots and other RPC methods
+remain independent. This bounds bursts without truncating history or changing
+persistence. Decoding also captures stable row handles and materializes one
+row at a time; strict decoding borrows its JSON input instead of cloning it.
+
+After 12 seconds idle, the 125-chat RSS fell from 4,593 to 1,023 MiB; the
+initial 512 MiB-at-12s diagnostic target remains unmet. Allocator-reclaim
+probes are separate evidence and excluded from headline numbers. The Mac
+release path still requires verification; allocator behavior differs by OS.
+All 123 document and 28 RPC unit tests pass, together with six targeted
+engine tests for replay, reconnect, context updates and full opening history. The new admission regression
+failed before the fix, then passed with cancellation, full hydration after
+previews, unrelated RPCs and idle watch admission release covered.
+Raw measurements and diagnostic scripts live in `.context/efficiency/ram/`.
+
+A second fixed 125-chat run verified all 1.25 million messages again. RSS was
+986 MiB at 12 seconds idle and 361 MiB at 70 seconds, through the existing
+Linux allocator cleanup. A later diagnostic reclaim did not lower it further.
+That repeated run peaked at 1,011 MiB and completed in 19.92 seconds. It is
+kept separately rather than substituting its lower peak for the first trial.
+
+## Direct transcript serialization follow-up (2026-10-27)
+
+History updates now stay typed until the RPC transport serializes them into
+the existing `{id,item}` envelope. This removes a complete intermediate JSON
+object tree and drops the typed payload before waiting for the output queue.
+Value-based streams and typed streams share one sending loop. A single typed
+update producer supplies full history and deltas; opening previews retain
+initial admission through full hydration. Encoding errors return a terminal
+RPC error and release admission. No wire format or history storage changes.
+
+Fresh controls reran the first-pass executable before comparing the completed
+source. Every response's complete count, order and text was checked. The
+following are Linux debug headless engine trials with full offline legacy
+snapshots, not Mac release app measurements. Each row has one process trial
+per build. Timings varied across sessions, so timing comparisons below use
+these fresh controls instead of the earlier first-pass timing table.
+
+| Chats × 10,000 messages | First-pass peak RSS | Typed peak RSS | Control / typed batch time |
+| --- | ---: | ---: | ---: |
+| 50 | 933 MiB | 750 MiB | 17.61 / 13.04 s |
+| 100 | 927 MiB | 713 MiB | 31.78 / 24.10 s |
+| 125 | 1,019 MiB | 763 MiB | 40.66 / 31.55 s |
+
+The completed executable's SHA-256 is
+`ca7959db4938e0c5f883c9b0935daca5959dda54c1c88b1e25df6459ab70c73e`.
+The 125-chat run used 743 MiB at 12 seconds idle and 302 MiB at 70 seconds
+before any debugger reclaim. The 512 MiB-at-12s target remains unmet.
+
+Four history openings and eight socket output frames remain the limits. A
+two-opening probe lowered RAM but slowed the fresh 50-chat batch from 17.61
+to 29.28 seconds; a two-frame queue showed no convincing RAM benefit. Neither
+change was retained. Warm transcript mirrors retain their existing behavior.
+
+All 123 document tests, 32 RPC tests and seven targeted engine/integration
+checks pass. New tests cover deferred single encoding, compatibility with
+the existing envelope, typed cancellation and preview admission, and recovery
+from encoding errors. Strict Clippy remains blocked by existing lints in
+unchanged protocol and RPC client/managed/device-room files; modified RPC
+files produced no lint diagnostics.
+
+The benchmark scripts, fresh controls, exact-source measurements, probes and
+validation logs are preserved in `.context/efficiency/ram/`. Mac release and
+current thin online history still require measurements.

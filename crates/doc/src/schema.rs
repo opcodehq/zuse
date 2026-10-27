@@ -441,27 +441,28 @@ impl SessionDoc {
     /// whole transcript — one bad entry took down every publish for the chat
     /// (2026-07-31, "missing field `id`" during a multi-update import).
     pub fn read_entries(&self) -> Result<Vec<SessionMessageEntry>, DocError> {
-        // Materialize only the messages container — a whole-doc deep value
-        // here also serialized the commands ledger on every 120ms commit tick.
-        let messages = self
-            .doc
-            .get_list("messages")
-            .get_deep_value()
-            .to_json_value();
-        let raw: Vec<serde_json::Value> = serde_json::from_value(messages)?;
-        Ok(raw
+        // Decode one row at a time: expanding the full list first keeps a
+        // second JSON transcript alive while the typed entries are collected.
+        let messages = self.doc.get_list("messages");
+        // Capture the row handles together so concurrent list edits cannot
+        // shift indices while we decode. Only one row's deep value is live.
+        let mut rows = Vec::with_capacity(messages.len());
+        messages.for_each(|row| rows.push(row));
+        Ok(rows
             .into_iter()
-            .filter_map(|v| match entry_from_json(v) {
-                Ok(entry) => Some(entry),
-                Err(err) => {
-                    tracing::warn!(
-                        chat = %self.chat_id().unwrap_or_default(),
-                        error = %err,
-                        "skipping unsalvageable transcript entry"
-                    );
-                    None
-                }
-            })
+            .filter_map(
+                |value| match entry_from_json(value.get_deep_value().to_json_value()) {
+                    Ok(entry) => Some(entry),
+                    Err(err) => {
+                        tracing::warn!(
+                            chat = %self.chat_id().unwrap_or_default(),
+                            error = %err,
+                            "skipping unsalvageable transcript entry"
+                        );
+                        None
+                    }
+                },
+            )
             .collect())
     }
 
@@ -965,7 +966,7 @@ fn entry_from_json(v: serde_json::Value) -> Result<SessionMessageEntry, DocError
         #[serde(default)]
         duration_ms: Option<i64>,
     }
-    match serde_json::from_value::<RawEntry>(v.clone()) {
+    match RawEntry::deserialize(&v) {
         Ok(raw) => Ok(SessionMessageEntry {
             id: raw.id,
             role: raw.role,
@@ -1516,6 +1517,42 @@ mod tests {
         assert_eq!(entries[0].parts, vec![seam]);
     }
     use zuse_protocol::{AgentEvent, ToolCall};
+
+    #[test]
+    fn read_entries_preserves_mixed_rows_and_skips_only_unsalvageable_values() {
+        let doc = SessionDoc::init("mixed").unwrap();
+        let messages = doc.doc().get_list("messages");
+        let first = messages.push_container(loro::LoroMap::new()).unwrap();
+        first.insert("id", "first").unwrap();
+        first.insert("role", "user").unwrap();
+        first.insert("createdAt", 1).unwrap();
+        first.insert("deviceId", "device").unwrap();
+        messages.push(42).unwrap();
+        // Inline legacy rows are valid alongside container-backed entries.
+        messages
+            .push(loro::LoroValue::from(serde_json::json!({
+                "id": "inline", "role": "assistant", "createdAt": 2,
+                "deviceId": "device", "continuationOf": "first", "durationMs": 7,
+                "parts": [{"id": "text", "kind": "text", "text": "Unicode λ\nretained"}]
+            })))
+            .unwrap();
+        let torn = messages.push_container(loro::LoroMap::new()).unwrap();
+        torn.insert("role", "assistant").unwrap();
+        doc.doc().commit();
+        let before = doc.export_snapshot().unwrap();
+        let entries = doc.read_entries().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].id, "first");
+        assert_eq!(entries[1].id, "inline");
+        assert_eq!(entries[1].continuation_of.as_deref(), Some("first"));
+        assert_eq!(entries[1].duration_ms, Some(7));
+        assert!(
+            matches!(&entries[1].parts[0], MessagePart::Text {text, ..} if text == "Unicode λ\nretained")
+        );
+        assert!(entries[2].id.starts_with("recovered-"));
+        assert_eq!(doc.read_entries().unwrap(), entries);
+        assert_eq!(doc.export_snapshot().unwrap(), before);
+    }
 
     #[test]
     fn opening_tail_bounds_parts_and_preserves_continuation_ids() {

@@ -1,4 +1,5 @@
 use crate::prompt;
+use crate::state::{MAX_AGENTS, MAX_CHILD_DEPTH, MAX_RUNNING_CHILDREN};
 use crate::*;
 use futures::{FutureExt, future::BoxFuture};
 use serde_json::{Value, json};
@@ -164,8 +165,8 @@ impl Engine {
                     depth: 0,
                     read_only: false,
                     history: vec![
-                        Message::text(Role::System, INSTRUCTIONS),
-                        Message::text(Role::System, host.instructions().await?),
+                        Message::text(Role::System, INSTRUCTIONS).into(),
+                        Message::text(Role::System, host.instructions().await?).into(),
                     ],
                     mailbox: vec![],
                     status: Status::Idle,
@@ -218,7 +219,7 @@ impl Engine {
         loop {
             let agent = state.agent(current)?;
             match (&agent.parent_id, &agent.parent_item_id) {
-                (Some(parent), Some(call)) if parents.len() < 2 => {
+                (Some(parent), Some(call)) if parents.len() < usize::from(MAX_CHILD_DEPTH) => {
                     parents.push(call.clone());
                     current = parent;
                 }
@@ -233,6 +234,9 @@ impl Engine {
     }
     pub async fn snapshot(&self) -> Checkpoint {
         self.0.state.lock().await.clone()
+    }
+    pub async fn root_id(&self) -> String {
+        self.0.state.lock().await.root_id.clone()
     }
     fn options(&self) -> Options {
         lock(&self.0.options).clone()
@@ -249,6 +253,10 @@ impl Engine {
             return Err(Error::paused(
                 "Changing collaboration tools requires a fresh runtime.",
             ));
+        }
+        if state.model == options.model && state.reasoning == options.reasoning {
+            *lock(&self.0.options) = options;
+            return Ok(());
         }
         let previous = (state.model.clone(), state.reasoning.clone());
         state.model = options.model.clone();
@@ -684,7 +692,7 @@ impl Engine {
                 {
                     let mut state = self.0.state.lock().await;
                     let agent = state.agent_mut(agent_id)?;
-                    agent.history.push(Message::tool(&call, &output));
+                    agent.history.push(Message::tool(&call, &output).into());
                     agent.pending_calls.remove(0);
                     self.persist(&state).await?;
                 }
@@ -703,6 +711,7 @@ impl Engine {
             {
                 let mut state = self.0.state.lock().await;
                 let mail = std::mem::take(&mut state.agent_mut(agent_id)?.mailbox);
+                let has_mail = !mail.is_empty();
                 let mut consumed = Vec::new();
                 let mut child_messages = Vec::new();
                 for message in mail {
@@ -715,9 +724,14 @@ impl Engine {
                             .insert(message.id.clone(), agent_id.into());
                         consumed.push(message.id.clone());
                     }
-                    state.agent_mut(agent_id)?.history.push(message.message());
+                    state
+                        .agent_mut(agent_id)?
+                        .history
+                        .push(message.message().into());
                 }
-                self.persist(&state).await?;
+                if has_mail {
+                    self.persist(&state).await?;
+                }
                 for text in child_messages {
                     self.0.host.notify(Event::UserMessage {
                         agent_id: agent_id.into(),
@@ -769,9 +783,9 @@ impl Engine {
                 )
                 .await?;
             check(cancel)?;
+            let has_calls = !response.calls.is_empty();
             {
                 let mut state = self.0.state.lock().await;
-                let existing = state.agent(agent_id)?;
                 let mut ids = std::collections::BTreeSet::new();
                 if response.calls.iter().any(|c| {
                     c.id.is_empty()
@@ -783,11 +797,15 @@ impl Engine {
                         "Model reused a tool identity. Inspect the execution journal.",
                     ));
                 }
-                let _ = existing;
                 let agent = state.agent_mut(agent_id)?;
-                agent.history.extend(response.messages);
-                agent.pending_calls = response.calls.clone();
+                agent
+                    .history
+                    .extend(response.messages.into_iter().map(Arc::new));
+                agent.pending_calls = response.calls;
                 agent.turns += 1;
+                if !has_calls {
+                    agent.summary = response.text;
+                }
                 self.persist(&state).await?;
             }
             self.0.host.notify(Event::ModelCompleted {
@@ -798,13 +816,8 @@ impl Engine {
                 agent_id: agent_id.into(),
                 usage: response.usage,
             });
-            if !response.calls.is_empty() {
+            if has_calls {
                 continue;
-            }
-            {
-                let mut state = self.0.state.lock().await;
-                state.agent_mut(agent_id)?.summary = response.text;
-                self.persist(&state).await?;
             }
             let root = self.0.state.lock().await.root_id.clone();
             if agent_id == root {
@@ -840,7 +853,10 @@ impl Engine {
                     }
                 }
                 let delivered = !messages.is_empty();
-                state.agent_mut(agent_id)?.history.extend(messages);
+                state
+                    .agent_mut(agent_id)?
+                    .history
+                    .extend(messages.into_iter().map(Arc::new));
                 if delivered || !state.agent(agent_id)?.mailbox.is_empty() {
                     self.persist(&state).await?;
                     continue;
@@ -883,7 +899,7 @@ impl Engine {
     async fn request(
         &self,
         agent_id: &str,
-        messages: Vec<Message>,
+        messages: Messages,
         tools: Tools,
         cancel: &CancellationToken,
         text: Arc<dyn Fn(String) + Send + Sync>,
@@ -975,7 +991,7 @@ impl Engine {
         }
         if call.name == "spawn_agent" {
             let message = field("message")?;
-            if depth >= 2 {
+            if depth >= MAX_CHILD_DEPTH {
                 return Err(Error::Tool("Child nesting limit reached".into()));
             }
             let child_id = id();
@@ -986,11 +1002,11 @@ impl Engine {
                     .iter()
                     .filter(|a| a.parent_id.is_some() && a.status == Status::Running)
                     .count()
-                    >= 3
+                    >= MAX_RUNNING_CHILDREN
                 {
                     return Err(Error::Tool("Child capacity reached".into()));
                 }
-                if state.agents.len() >= 4096 {
+                if state.agents.len() >= MAX_AGENTS {
                     return Err(Error::paused(
                         "The durable agent limit was reached. Start a new session.",
                     ));
@@ -1058,7 +1074,7 @@ impl Engine {
                     .iter()
                     .filter(|a| a.parent_id.is_some() && a.status == Status::Running)
                     .count()
-                    >= 3
+                    >= MAX_RUNNING_CHILDREN
             {
                 return Err(Error::Tool("Child capacity reached".into()));
             }
@@ -1167,17 +1183,21 @@ impl Engine {
         interrupted.and(closed)
     }
     async fn compact(&self, agent_id: &str, cancel: &CancellationToken) -> Result<(), Error> {
-        let agent = self.0.state.lock().await.agent(agent_id)?.clone();
-        let before = prompt::estimate(&prompt::render(&agent.history, agent.checkpoint.as_ref()));
         let options = self.options();
         let limits = prompt::limits(
             options.window_tokens,
             options.compact_tokens,
             options.effective_window_percent,
         );
-        if before < limits.compact_at {
-            return Ok(());
-        }
+        let (agent, before) = {
+            let state = self.0.state.lock().await;
+            let agent = state.agent(agent_id)?;
+            let before = prompt::estimate_context(&agent.history, agent.checkpoint.as_ref());
+            if before < limits.compact_at {
+                return Ok(());
+            }
+            (agent.clone(), before)
+        };
         let target = (limits.window / 2).min(limits.compact_at * 6 / 10);
         let previous = agent.checkpoint.as_ref().map_or(0, |c| c.covered);
         let mut covered = prompt::boundary(&agent.history);
@@ -1193,13 +1213,13 @@ impl Engine {
                 continue;
             }
             covered = candidate;
-            if prompt::estimate(&prompt::render(
+            if prompt::estimate_context(
                 &agent.history,
                 Some(&Compaction {
                     covered,
                     summary: String::new(),
                 }),
-            )) < target * 8 / 10
+            ) < target * 8 / 10
             {
                 break;
             }
@@ -1223,22 +1243,54 @@ impl Engine {
             })
         };
         notify("in_progress", None);
-        let result=async {
-            let retained=prompt::estimate(&prompt::render(&agent.history,Some(&Compaction{covered,summary:String::new()})));
-            let mut budget=target.saturating_sub(retained);if budget<128{budget=(limits.window*3/4).min(limits.compact_at*9/10).saturating_sub(retained);}
-            if budget<128{return Err(Error::paused("The original task and required instructions exceed the compaction budget. This conversation is preserved."));}
-            let prefix=prompt::render(&agent.history[..covered],agent.checkpoint.as_ref());let mut best:Option<(String,u64)>=None;
-            for attempt in 0..2 {
-                self.reserve().await?;let mut messages=prefix.clone();messages.push(Message::text(Role::User,format!("Summarize this context for continuation in at most {} tokens. Preserve the original task, requirements, decisions, unresolved work, instructions, paths, and tool outcomes. Do not claim pending work is complete. Omit raw tool output and repetition. {}",(budget/(attempt+1)).max(64),if attempt>0{"The previous summary was too large; make this substantially shorter."}else{""})));
-                let result=self.request(agent_id,messages,Tools::new(),cancel,Arc::new(|_|{})).await?;
-                self.0.host.notify(Event::Usage { agent_id: agent_id.into(), usage: result.usage.clone() });
-                if !result.calls.is_empty() || result.text.trim().is_empty(){continue;}
-                let after=prompt::estimate(&prompt::render(&agent.history,Some(&Compaction{covered,summary:result.text.clone()})));
-                if best.as_ref().is_none_or(|(_,size)|after<*size){best=Some((result.text,after));}if after<=target{break;}
+        let result = async {
+            let retained = prompt::estimate_context(
+                &agent.history,
+                Some(&Compaction { covered, summary: String::new() }),
+            );
+            let mut budget = target.saturating_sub(retained);
+            if budget < 128 {
+                budget = (limits.window * 3 / 4)
+                    .min(limits.compact_at * 9 / 10)
+                    .saturating_sub(retained);
             }
-            let (summary,after)=best.filter(|(_,after)|*after<limits.compact_at && *after<before).ok_or_else(||Error::paused("Compaction could not fit the context after two attempts. Your history is preserved."))?;
-            let mut state=self.0.state.lock().await;let old=state.agent(agent_id)?.checkpoint.clone();state.agent_mut(agent_id)?.checkpoint=Some(Compaction{covered,summary});
-            if let Err(error)=self.persist(&state).await{state.agent_mut(agent_id)?.checkpoint=old;return Err(error);}Ok(after)
+            if budget < 128 {
+                return Err(Error::paused("The original task and required instructions exceed the compaction budget. This conversation is preserved."));
+            }
+            let prefix = prompt::render(&agent.history[..covered], agent.checkpoint.as_ref());
+            let mut best: Option<(String, u64)> = None;
+            for attempt in 0..2 {
+                self.reserve().await?;
+                let mut messages = prefix.clone();
+                messages.push(Message::text(Role::User, format!(
+                    "Summarize this context for continuation in at most {} tokens. Preserve the original task, requirements, decisions, unresolved work, instructions, paths, and tool outcomes. Do not claim pending work is complete. Omit raw tool output and repetition. {}",
+                    (budget / (attempt + 1)).max(64),
+                    if attempt > 0 { "The previous summary was too large; make this substantially shorter." } else { "" },
+                )).into());
+                let result = self.request(agent_id, messages, Tools::new(), cancel, Arc::new(|_| {})).await?;
+                self.0.host.notify(Event::Usage { agent_id: agent_id.into(), usage: result.usage });
+                if !result.calls.is_empty() || result.text.trim().is_empty() {
+                    continue;
+                }
+                let checkpoint = Compaction { covered, summary: result.text };
+                let after = prompt::estimate_context(&agent.history, Some(&checkpoint));
+                if best.as_ref().is_none_or(|(_, size)| after < *size) {
+                    best = Some((checkpoint.summary, after));
+                }
+                if after <= target {
+                    break;
+                }
+            }
+            let (summary, after) = best
+                .filter(|(_, after)| *after < limits.compact_at && *after < before)
+                .ok_or_else(|| Error::paused("Compaction could not fit the context after two attempts. Your history is preserved."))?;
+            let mut state = self.0.state.lock().await;
+            let old = state.agent_mut(agent_id)?.checkpoint.replace(Compaction { covered, summary });
+            if let Err(error) = self.persist(&state).await {
+                state.agent_mut(agent_id)?.checkpoint = old;
+                return Err(error);
+            }
+            Ok(after)
         }.await;
         match result {
             Ok(after) => {
@@ -1266,8 +1318,11 @@ impl RequestBudget for Engine {
     }
 }
 fn child_tools() -> Tools {
+    let spawn_description = format!(
+        "Start a child in this checkout. Inherits history by default; at most {MAX_RUNNING_CHILDREN} running children and depth {MAX_CHILD_DEPTH}."
+    );
     [
-        ("spawn_agent","Start a child in this checkout. Inherits history by default; at most three running children and depth two.",ToolCategory::Delegate,json!({"message":{"type":"string"},"name":{"type":"string"},"inherit":{"type":"boolean"},"readOnly":{"type":"boolean"}}),vec!["message"]),
+        ("spawn_agent",spawn_description.as_str(),ToolCategory::Delegate,json!({"message":{"type":"string"},"name":{"type":"string"},"inherit":{"type":"boolean"},"readOnly":{"type":"boolean"}}),vec!["message"]),
         ("send_message","Queue a message for a descendant without waking an idle child.",ToolCategory::Delegate,json!({"target":{"type":"string"},"message":{"type":"string"}}),vec!["target","message"]),
         ("followup_task","Queue a task and wake an idle descendant.",ToolCategory::Delegate,json!({"target":{"type":"string"},"message":{"type":"string"}}),vec!["target","message"]),
         ("list_agents","List agents and their current status.",ToolCategory::Read,json!({}),vec![]),

@@ -107,12 +107,47 @@ where
     serde_json::Value::deserialize(deserializer).map(Some)
 }
 
+/// One typed stream payload, serialized once at the transport boundary.
+/// Keeping the payload typed avoids allocating an intermediate JSON tree.
+pub struct RpcStreamItem {
+    encode: Box<dyn FnOnce(u64) -> Result<String, serde_json::Error> + Send>,
+    pub(crate) initialization_pending: bool,
+}
+
+impl RpcStreamItem {
+    pub fn new<T: Serialize + Send + 'static>(item: T) -> Self {
+        Self {
+            encode: Box::new(move |id| {
+                #[derive(Serialize)]
+                struct Frame<'a, T> {
+                    id: u64,
+                    item: &'a T,
+                }
+                serde_json::to_string(&Frame { id, item: &item })
+            }),
+            initialization_pending: false,
+        }
+    }
+
+    /// Keep initial stream admission until a later, authoritative item.
+    pub fn initializing(mut self) -> Self {
+        self.initialization_pending = true;
+        self
+    }
+
+    pub fn encode(self, id: u64) -> Result<String, serde_json::Error> {
+        (self.encode)(id)
+    }
+}
+
 /// What a service returns for one invocation.
 pub enum RpcReply {
     /// Unary response — sent as `{id, ok}`.
     Value(serde_json::Value),
     /// Stream — each item sent as `{id, item}`, then `{id, done: true}` when it ends.
     Stream(BoxStream<'static, serde_json::Value>),
+    /// Typed payloads serialized directly to the same stream wire format.
+    TypedStream(BoxStream<'static, RpcStreamItem>),
 }
 
 impl RpcReply {
@@ -152,6 +187,40 @@ mod tests {
     use super::*;
     use futures::StreamExt;
     use std::sync::Mutex;
+
+    #[test]
+    fn typed_stream_encoding_matches_the_wire_and_is_deferred_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Payload {
+            value: serde_json::Value,
+            calls: Arc<AtomicUsize>,
+        }
+        impl Serialize for Payload {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.value.serialize(serializer)
+            }
+        }
+        let value = serde_json::json!({"reset":[{"text":"Unicode λ\n\"quoted\"","parts":[]}],"contextUsage":null,"count":1});
+        let expected = serde_json::to_value(ServerFrame {
+            id: 42,
+            item: Some(value.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let item = RpcStreamItem::new(Payload {
+            value,
+            calls: calls.clone(),
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let encoded = item.encode(42).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&encoded).unwrap(),
+            expected
+        );
+    }
 
     struct TestService;
 

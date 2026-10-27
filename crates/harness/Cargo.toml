@@ -14,7 +14,7 @@ async-trait.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["rt", "codec"] }
 futures.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 thiserror.workspace = true
 sha2.workspace = true

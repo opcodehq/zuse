@@ -1,5 +1,5 @@
 //! One account affinity and health authority for roots and their children.
-use crate::{Error, Message, ModelInput, ModelOutput};
+use crate::{Error, Message, Messages, ModelInput, ModelOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -110,8 +110,17 @@ impl AccountBroker {
                 if input.cancel.is_cancelled() {
                     return Err(Error::Interrupted);
                 }
-                let mut portable = input.clone();
-                portable.messages = portable_history(&input.messages);
+                let portable = ModelInput {
+                    root_id: input.root_id.clone(),
+                    agent_id: input.agent_id.clone(),
+                    model: input.model.clone(),
+                    reasoning: input.reasoning.clone(),
+                    messages: portable_history(&input.messages),
+                    tools: input.tools.clone(),
+                    cancel: input.cancel.clone(),
+                    text: input.text.clone(),
+                    budget: input.budget.clone(),
+                };
                 let result = tokio::select! {biased;_=input.cancel.cancelled()=>return Err(Error::Interrupted),result=self.host.request(&connection.id,portable)=>result};
                 match result {
                     Ok(result) => return Ok(result),
@@ -153,13 +162,26 @@ impl AccountBroker {
 }
 /// Never send account-bound encrypted reasoning or provider item ids to another
 /// account. Tool outcomes and user intent remain portable.
-pub fn portable_history(messages: &[Message]) -> Vec<Message> {
+pub fn portable_history(messages: &[Arc<Message>]) -> Messages {
     messages
         .iter()
         .cloned()
         .map(|mut m| {
-            m.metadata.remove("providerOptions");
-            if let Some(parts) = m.content.as_array_mut() {
+            let needs_copy = m.metadata.contains_key("providerOptions")
+                || m.content.as_array().is_some_and(|parts| {
+                    parts.iter().any(|part| {
+                        part["type"] == "reasoning"
+                            || part
+                                .as_object()
+                                .is_some_and(|fields| fields.contains_key("providerOptions"))
+                    })
+                });
+            if !needs_copy {
+                return m;
+            }
+            let message = Arc::make_mut(&mut m);
+            message.metadata.remove("providerOptions");
+            if let Some(parts) = message.content.as_array_mut() {
                 parts.retain(|p| p["type"] != "reasoning");
                 for part in parts {
                     if let Some(map) = part.as_object_mut() {

@@ -248,10 +248,10 @@ async fn dropping_the_manager_closes_its_private_control_pipe_and_stops_descenda
         .unwrap();
     let pid = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if let Ok(text) = tokio::fs::read_to_string(root.path().join("descendant.pid")).await {
-                if let Ok(pid) = text.trim().parse::<i32>() {
-                    break pid;
-                }
+            if let Ok(text) = tokio::fs::read_to_string(root.path().join("descendant.pid")).await
+                && let Ok(pid) = text.trim().parse::<i32>()
+            {
+                break pid;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -377,10 +377,10 @@ async fn supervisor_requires_launch_ack_and_control_eof_releases_its_command_lea
     );
     let descendant = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if let Ok(value) = tokio::fs::read_to_string(root.path().join("descendant.pid")).await {
-                if let Ok(pid) = value.trim().parse::<i32>() {
-                    break pid;
-                }
+            if let Ok(value) = tokio::fs::read_to_string(root.path().join("descendant.pid")).await
+                && let Ok(pid) = value.trim().parse::<i32>()
+            {
+                break pid;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

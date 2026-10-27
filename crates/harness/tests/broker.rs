@@ -115,7 +115,14 @@ async fn authentication_failure_requires_reauthorization_instead_of_account_fall
 #[test]
 fn portable_history_removes_account_bound_metadata_and_preserves_tool_outcomes() {
     let message:Message=serde_json::from_value(json!({"role":"assistant","providerOptions":{"openai":{"id":"private-a"}},"content":[{"type":"reasoning","text":"private"},{"type":"text","text":"answer","providerOptions":{"openai":{"id":"private-b"}}}]})).unwrap();
-    let portable = serde_json::to_value(portable_history(&[message])).unwrap();
+    let message = Arc::new(message);
+    let portable = portable_history(std::slice::from_ref(&message));
+    assert!(message.metadata.contains_key("providerOptions"));
+    assert_eq!(message.content.as_array().unwrap().len(), 2);
+    assert!(!Arc::ptr_eq(&message, &portable[0]));
+    let again = portable_history(&portable);
+    assert!(Arc::ptr_eq(&portable[0], &again[0]));
+    let portable = serde_json::to_value(portable).unwrap();
     assert_eq!(portable[0]["content"].as_array().unwrap().len(), 1);
     assert_eq!(portable[0]["content"][0]["text"], "answer");
     assert_eq!(portable[0].get("providerOptions"), None);

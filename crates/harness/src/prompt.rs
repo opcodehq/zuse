@@ -1,39 +1,54 @@
 //! Prompt accounting and compaction boundaries preserve complete tool exchanges.
-use crate::{Compaction, Message, Role};
+use crate::{Compaction, Message, Messages, Role};
+use serde::Serialize;
 use serde_json::Value;
-pub fn render(history: &[Message], checkpoint: Option<&Compaction>) -> Vec<Message> {
-    let Some(c) = checkpoint else {
-        return history.to_vec();
-    };
-    let split = c.covered.min(history.len());
-    let mut result = history[..split]
+use std::{borrow::Cow, io, sync::Arc};
+
+pub fn render(history: &[Arc<Message>], checkpoint: Option<&Compaction>) -> Messages {
+    context(history, checkpoint).map(Cow::into_owned).collect()
+}
+
+// Rendering and accounting must retain exactly the same context. Borrow the
+// history for accounting; model requests share the immutable message contents.
+fn context<'a>(
+    history: &'a [Arc<Message>],
+    checkpoint: Option<&Compaction>,
+) -> impl Iterator<Item = Cow<'a, Arc<Message>>> {
+    let split = checkpoint.map_or(0, |c| c.covered.min(history.len()));
+    let task = history[..split].iter().find(|m| m.role == Role::User);
+    let summary = checkpoint.map(|c| {
+        Arc::new(Message::text(
+            Role::User,
+            format!("Durable context summary:\n{}", c.summary),
+        ))
+    });
+    history[..split]
         .iter()
         .filter(|m| m.role == Role::System)
-        .cloned()
-        .collect::<Vec<_>>();
-    if let Some(task) = history[..split].iter().find(|m| m.role == Role::User) {
-        result.push(task.clone());
-    }
-    result.push(Message::text(
-        Role::User,
-        format!("Durable context summary:\n{}", c.summary),
-    ));
-    result.extend_from_slice(&history[split..]);
-    result
+        .chain(task)
+        .map(Cow::Borrowed)
+        .chain(summary.map(Cow::Owned))
+        .chain(history[split..].iter().map(Cow::Borrowed))
 }
-pub fn boundary(history: &[Message]) -> usize {
-    let boundaries = history
+
+pub fn estimate_context(history: &[Arc<Message>], checkpoint: Option<&Compaction>) -> u64 {
+    context(history, checkpoint)
+        .map(|m| estimate_message(&m))
+        .sum()
+}
+pub fn boundary(history: &[Arc<Message>]) -> usize {
+    history
         .iter()
         .enumerate()
+        .rev()
         .filter(|(_, m)| m.role == Role::User || m.role == Role::Assistant)
-        .map(|(i, _)| i)
-        .collect::<Vec<_>>();
-    boundaries.len().checked_sub(2).map_or(0, |i| boundaries[i])
+        .nth(1)
+        .map_or(0, |(i, _)| i)
 }
-pub fn complete_prefix(history: &[Message]) -> Vec<Message> {
+pub fn complete_prefix(history: &[Arc<Message>]) -> Messages {
     let end = history
         .iter()
-        .rposition(Message::has_tool_calls)
+        .rposition(|message| message.has_tool_calls())
         .unwrap_or(history.len());
     history[..end].to_vec()
 }
@@ -58,34 +73,120 @@ pub fn limits(window: u64, cap: Option<u64>, percent: f64) -> Limits {
             .map_or(threshold, |v| v.min(threshold)),
     }
 }
-pub fn estimate(messages: &[Message]) -> u64 {
+pub fn estimate(messages: &[Arc<Message>]) -> u64 {
     messages
         .iter()
-        .map(|m| {
-            let mut copy = serde_json::to_value(m).unwrap_or(Value::Null);
-            let mut images = 0;
-            if let Some(parts) = copy["content"].as_array_mut() {
-                for part in parts {
-                    if part["type"] == "image" {
-                        images += 8192;
-                        part["image"] = Value::String(String::new());
-                    }
-                    if part["type"] == "tool-result" && part["output"]["type"] == "content" {
-                        if let Some(files) = part["output"]["value"].as_array_mut() {
-                            for f in files {
-                                if f["mediaType"]
-                                    .as_str()
-                                    .is_some_and(|s| s.starts_with("image/"))
-                                {
-                                    images += 8192;
-                                    f["data"]["data"] = Value::String(String::new());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            serde_json::to_vec(&copy).map_or(0, |v| (v.len() as u64).div_ceil(3)) + 8 + images
-        })
+        .map(|message| estimate_message(message))
         .sum()
+}
+
+// Count the same JSON bytes as the wire estimate without copying messages or
+// scanning inline image payloads that are charged at a fixed token allowance.
+struct ByteCount(usize);
+impl io::Write for ByteCount {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn json_len(value: &(impl Serialize + ?Sized)) -> usize {
+    let mut count = ByteCount(0);
+    // Only JSON values and strings reach this helper; the writer cannot fail.
+    serde_json::to_writer(&mut count, value).expect("JSON byte counting is infallible");
+    count.0
+}
+
+fn replaced_len(value: &Value, key: &str, replacement: usize) -> usize {
+    let Some(object) = value.as_object() else {
+        return if value.is_null() {
+            2 + json_len(key) + 1 + replacement
+        } else {
+            json_len(value)
+        };
+    };
+    let missing = !object.contains_key(key);
+    let fields = object.len() + usize::from(missing);
+    2 + fields.saturating_sub(1)
+        + object
+            .iter()
+            .map(|(name, value)| {
+                json_len(name)
+                    + 1
+                    + if name == key {
+                        replacement
+                    } else {
+                        json_len(value)
+                    }
+            })
+            .sum::<usize>()
+        + if missing {
+            json_len(key) + 1 + replacement
+        } else {
+            0
+        }
+}
+
+fn part_len(part: &Value, images: &mut u64) -> usize {
+    if part["type"] == "image" {
+        *images += 8192;
+        return replaced_len(part, "image", 2);
+    }
+    if part["type"] == "tool-result"
+        && part["output"]["type"] == "content"
+        && let Some(files) = part["output"]["value"].as_array()
+    {
+        let length = 2
+            + files.len().saturating_sub(1)
+            + files
+                .iter()
+                .map(|file| {
+                    if file["mediaType"]
+                        .as_str()
+                        .is_some_and(|s| s.starts_with("image/"))
+                    {
+                        *images += 8192;
+                        replaced_len(file, "data", replaced_len(&file["data"], "data", 2))
+                    } else {
+                        json_len(file)
+                    }
+                })
+                .sum::<usize>();
+        return replaced_len(
+            part,
+            "output",
+            replaced_len(&part["output"], "value", length),
+        );
+    }
+    json_len(part)
+}
+
+fn estimate_message(message: &Message) -> u64 {
+    let mut images = 0;
+    // Flattened metadata has the same last-field-wins behavior as to_value.
+    let content = message.metadata.get("content").unwrap_or(&message.content);
+    let content_len = content.as_array().map_or_else(
+        || json_len(content),
+        |parts| {
+            2 + parts.len().saturating_sub(1)
+                + parts
+                    .iter()
+                    .map(|part| part_len(part, &mut images))
+                    .sum::<usize>()
+        },
+    );
+    let role_len = message
+        .metadata
+        .get("role")
+        .map_or_else(|| json_len(&message.role), json_len);
+    let extra = message
+        .metadata
+        .iter()
+        .filter(|(key, _)| key.as_str() != "role" && key.as_str() != "content")
+        .map(|(key, value)| 1 + json_len(key) + 1 + json_len(value))
+        .sum::<usize>();
+    (20 + role_len + content_len + extra).div_ceil(3) as u64 + 8 + images
 }

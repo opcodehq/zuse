@@ -1840,10 +1840,10 @@ fn chat_config_stream(
 /// The transcript watch as delta frames (`zuse_doc::transcript_delta`): a
 /// full `reset` first, then only changed entries per commit — the whole-Vec
 /// serialization here was the per-tick cost that scaled with transcript size.
-fn doc_messages_stream(
+fn doc_message_updates(
     rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
     doc: std::sync::Arc<zuse_doc::SessionDoc>,
-) -> BoxStream<'static, serde_json::Value> {
+) -> BoxStream<'static, zuse_doc::TranscriptUpdate> {
     use zuse_doc::transcript_delta::{TranscriptFrame, diff_transcript};
     futures::stream::unfold(
         (
@@ -1901,12 +1901,11 @@ fn doc_messages_stream(
                     continue;
                 }
                 previous_usage = usage;
-                let value = serde_json::to_value(zuse_doc::TranscriptUpdate {
+                let value = zuse_doc::TranscriptUpdate {
                     frame,
                     context_usage: usage,
                     replay_baseline,
-                })
-                .ok()?;
+                };
                 return Some((value, (rx, prev, doc, previous_usage, opening_baseline)));
             }
         },
@@ -1914,22 +1913,61 @@ fn doc_messages_stream(
     .boxed()
 }
 
+fn doc_messages_typed_stream(
+    rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
+    doc: std::sync::Arc<zuse_doc::SessionDoc>,
+) -> BoxStream<'static, zuse_rpc::RpcStreamItem> {
+    doc_message_updates(rx, doc)
+        .map(zuse_rpc::RpcStreamItem::new)
+        .boxed()
+}
+
+#[cfg(test)]
+fn doc_messages_stream(
+    rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
+    doc: std::sync::Arc<zuse_doc::SessionDoc>,
+) -> BoxStream<'static, serde_json::Value> {
+    decoded_stream(doc_messages_typed_stream(rx, doc))
+}
+
+#[cfg(test)]
+fn decoded_stream(
+    stream: BoxStream<'static, zuse_rpc::RpcStreamItem>,
+) -> BoxStream<'static, serde_json::Value> {
+    stream
+        .map(|item| {
+            let mut frame: serde_json::Value =
+                serde_json::from_str(&item.encode(0).unwrap()).unwrap();
+            frame["item"].take()
+        })
+        .boxed()
+}
+
 /// First paint reads only the local tail; full history is deferred until the
 /// next stream poll. No network dependency or persisted truncation.
-async fn opening_doc_messages_stream(
+async fn opening_doc_messages_typed_stream(
     host: crate::doc_host::DocHost,
     chat_id: String,
-) -> Result<BoxStream<'static, serde_json::Value>, RpcError> {
+) -> Result<BoxStream<'static, zuse_rpc::RpcStreamItem>, RpcError> {
     let (handle, preview) = tokio::task::spawn_blocking(move || {
         let handle = host.open(&chat_id)?;
         let entries = handle.doc().read_opening_tail(128)?;
-        let mut preview = serde_json::to_value(zuse_doc::TranscriptUpdate {
-            frame: zuse_doc::TranscriptFrame::reset(&entries),
-            context_usage: handle.doc().context_usage(),
-            replay_baseline: Some(zuse_doc::TranscriptBaseline::capture(&entries)),
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Preview {
+            #[serde(flatten)]
+            update: zuse_doc::TranscriptUpdate,
+            history_pending: bool,
+        }
+        let preview = zuse_rpc::RpcStreamItem::new(Preview {
+            update: zuse_doc::TranscriptUpdate {
+                frame: zuse_doc::TranscriptFrame::reset(&entries),
+                context_usage: handle.doc().context_usage(),
+                replay_baseline: Some(zuse_doc::TranscriptBaseline::capture(&entries)),
+            },
+            history_pending: true,
         })
-        .map_err(|e| crate::EngineError::Other(e.to_string()))?;
-        preview["historyPending"] = serde_json::Value::Bool(true);
+        .initializing();
         Ok::<_, crate::EngineError>((handle, preview))
     })
     .await
@@ -1941,7 +1979,7 @@ async fn opening_doc_messages_stream(
     let full = futures::stream::once(async move {
         match tokio::task::spawn_blocking(move || (handle.watch_messages(), handle.doc_arc())).await
         {
-            Ok((rx, doc)) => doc_messages_stream(rx, doc),
+            Ok((rx, doc)) => doc_messages_typed_stream(rx, doc),
             Err(error) => {
                 tracing::warn!(%error, "transcript opening failed");
                 futures::stream::empty().boxed()
@@ -1952,6 +1990,16 @@ async fn opening_doc_messages_stream(
     Ok(futures::stream::once(async move { preview })
         .chain(full)
         .boxed())
+}
+
+#[cfg(test)]
+async fn opening_doc_messages_stream(
+    host: crate::doc_host::DocHost,
+    chat_id: String,
+) -> Result<BoxStream<'static, serde_json::Value>, RpcError> {
+    opening_doc_messages_typed_stream(host, chat_id)
+        .await
+        .map(decoded_stream)
 }
 
 /// Authentication-only RPC surface used while the headed app is waiting for a
@@ -2400,17 +2448,22 @@ impl RpcService for EngineRpc {
             zuse_protocol::external_chat::LIST | zuse_protocol::external_chat::IMPORT => {
                 self.external_chats(method, params).await
             }
-            crate::desktop_import::onboarding::DISCOVER | crate::desktop_import::onboarding::IMPORT => {
+            crate::desktop_import::onboarding::DISCOVER
+            | crate::desktop_import::onboarding::IMPORT => {
                 self.desktop_migration(method, params).await
             }
             zuse_protocol::creation_source::LIST | zuse_protocol::creation_source::RESOLVE => {
                 self.creation_sources(method, params).await
             }
             zuse_protocol::usage::OVERVIEW | zuse_protocol::usage::SESSIONS => {
-                let usage = self.usage.as_ref().ok_or_else(|| RpcError::Failed("Recorded usage is unavailable on this host.".into()))?;
+                let usage = self.usage.as_ref().ok_or_else(|| {
+                    RpcError::Failed("Recorded usage is unavailable on this host.".into())
+                })?;
                 let request: zuse_protocol::usage::Request = parse_params(params)?;
                 let spaces = self.workspace.read_spaces().map_err(failed)?;
-                usage.handle(method, request, &spaces, self.doc_host.device_id()).await
+                usage
+                    .handle(method, request, &spaces, self.doc_host.device_id())
+                    .await
             }
             methods::INSPECT_RECOVERY | methods::RESOLVE_RECOVERY => {
                 let profile = self.repos.data_dir().to_path_buf();
@@ -2746,7 +2799,8 @@ impl RpcService for EngineRpc {
                     .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
                 let stream = match self.auth() {
                     Ok(auth) => crate::cloud::identity::CloudIdentity::workspace(auth.clone())
-                        .with_account(Some(account.clone())).status_stream(),
+                        .with_account(Some(account.clone()))
+                        .status_stream(),
                     Err(_) => watch_stream(account.watch()),
                 };
                 Ok(RpcReply::Stream(stream))
@@ -3272,15 +3326,15 @@ impl RpcService for EngineRpc {
                 // exactly as long as the stream.
                 let interest = self.diff_sync.retain_chat(&p.chat_id);
                 let stream = if opening_tail {
-                    opening_doc_messages_stream(self.doc_host.clone(), p.chat_id).await?
+                    opening_doc_messages_typed_stream(self.doc_host.clone(), p.chat_id).await?
                 } else {
                     let handle = self
                         .doc_host
                         .open(&p.chat_id)
                         .map_err(|e| RpcError::Failed(e.to_string()))?;
-                    doc_messages_stream(handle.watch_messages(), handle.doc_arc())
+                    doc_messages_typed_stream(handle.watch_messages(), handle.doc_arc())
                 };
-                Ok(RpcReply::Stream(
+                Ok(RpcReply::TypedStream(
                     stream
                         .map(move |frame| {
                             let _held = &interest;
@@ -4664,11 +4718,22 @@ impl RpcService for EngineRpc {
                     None => None,
                 };
                 let (worktree, created) = if let Some(source) = &p.source {
-                    self.repos.prepare_creation_source(std::path::Path::new(&p.repo_path), source, &self.github)
-                        .await.map_err(|e| RpcError::Failed(e.to_string()))?
+                    self.repos
+                        .prepare_creation_source(
+                            std::path::Path::new(&p.repo_path),
+                            source,
+                            &self.github,
+                        )
+                        .await
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
                 } else {
-                    (self.repos.create_worktree(std::path::Path::new(&p.repo_path), &p.branch)
-                        .await.map_err(|e| RpcError::Failed(e.to_string()))?, true)
+                    (
+                        self.repos
+                            .create_worktree(std::path::Path::new(&p.repo_path), &p.branch)
+                            .await
+                            .map_err(|e| RpcError::Failed(e.to_string()))?,
+                        true,
+                    )
                 };
                 let mut outcome = CreateWorktreeOutcome {
                     worktree,
@@ -5121,14 +5186,25 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let core = crate::EngineCore::assemble_with_profile(
             crate::EngineProfile::local(temp.path()).unwrap(),
-            std::sync::Arc::new(HarnessRegistry::new()), HarnessId::Codex, None,
-        ).unwrap();
+            std::sync::Arc::new(HarnessRegistry::new()),
+            HarnessId::Codex,
+            None,
+        )
+        .unwrap();
         assert!(core.account.status().user.is_none());
         assert!(core.auth().state().is_signed_in());
-        let RpcReply::Value(value) = core.rpc_service()
-            .handle(methods::CLOUD_WORKSPACES, serde_json::json!({})).await.unwrap()
-        else { panic!("Cloud catalog must be a value"); };
-        assert!(value["accountId"].is_null(), "Signed-out General must not become a dev cloud account");
+        let RpcReply::Value(value) = core
+            .rpc_service()
+            .handle(methods::CLOUD_WORKSPACES, serde_json::json!({}))
+            .await
+            .unwrap()
+        else {
+            panic!("Cloud catalog must be a value");
+        };
+        assert!(
+            value["accountId"].is_null(),
+            "Signed-out General must not become a dev cloud account"
+        );
         assert_eq!(value["workspaces"], serde_json::json!([]));
         core.sessions.shutdown().await;
     }

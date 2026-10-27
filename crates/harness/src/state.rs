@@ -1,7 +1,15 @@
 use crate::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
+/// Immutable message contents shared by journals, snapshots and model requests.
+pub type Messages = Vec<Arc<Message>>;
+pub(crate) const MAX_CHILD_DEPTH: u8 = 2;
+pub(crate) const MAX_RUNNING_CHILDREN: usize = 3;
+pub(crate) const MAX_AGENTS: usize = 4096;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -150,7 +158,7 @@ pub struct Agent {
     pub parent_item_id: Option<String>,
     pub depth: u8,
     pub read_only: bool,
-    pub history: Vec<Message>,
+    pub history: Messages,
     pub mailbox: Vec<Mail>,
     pub status: Status,
     pub turns: u64,
@@ -263,7 +271,7 @@ impl Checkpoint {
         Ok(())
     }
     pub fn validate(&self) -> Result<(), Error> {
-        if self.version != 1 || self.root_id.is_empty() || self.agents.len() > 4096 {
+        if self.version != 1 || self.root_id.is_empty() || self.agents.len() > MAX_AGENTS {
             return Err(Error::InvalidCheckpoint);
         }
         if self.consumed_notifications.iter().any(|(id, agent)| {
@@ -295,20 +303,19 @@ impl Checkpoint {
         }
         for a in &self.agents {
             if a.id.is_empty()
-                || a.depth > 2
+                || a.depth > MAX_CHILD_DEPTH
                 || a.checkpoint
                     .as_ref()
                     .is_some_and(|c| c.covered > a.history.len())
             {
                 return Err(Error::InvalidCheckpoint);
             }
-            if let Some(parent) = &a.parent_id {
-                if !by_id
+            if let Some(parent) = &a.parent_id
+                && !by_id
                     .get(parent.as_str())
                     .is_some_and(|p| p.depth + 1 == a.depth)
-                {
-                    return Err(Error::InvalidCheckpoint);
-                }
+            {
+                return Err(Error::InvalidCheckpoint);
             }
             let mut calls = BTreeSet::new();
             if a.pending_calls
