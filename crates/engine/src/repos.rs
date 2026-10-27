@@ -18,6 +18,7 @@ use std::time::Duration;
 use futures::{StreamExt, stream};
 use sha2::{Digest, Sha256};
 
+use zuse_protocol::presentation::git_history::{compact_commits_to_visible, git_history_matches};
 use zuse_protocol::{
     DriveEntry, FileSearchMatch, FolderEntry, FolderListing, GitHistoryCommit,
     GitHistoryComparison, GitHistoryPage, GitHistoryRef, GitHistoryRefKind, HomeFolderMatch,
@@ -1148,7 +1149,7 @@ impl Repos {
             .filter(|commit| git_history_matches(query, commit))
             .map(|commit| commit.sha.clone())
             .collect();
-        let matches = compact_history_commits(&all_commits, &visible);
+        let matches = compact_commits_to_visible(&all_commits, &visible);
         let total_count = matches.len();
         let start = cursor.min(total_count);
         let end = start.saturating_add(limit).min(total_count);
@@ -2041,164 +2042,6 @@ fn unescape_mount_point(raw: &str) -> String {
     out
 }
 
-/// Case-insensitive subsequence score. Lower is better: adjacent and earlier
-/// characters win, while still allowing `cmp rs` to find `composer.rs`.
-fn fuzzy_score(query: &str, candidate: &str) -> Option<usize> {
-    let candidate = candidate.to_lowercase();
-    query
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .try_fold(0usize, |total, term| {
-            let mut at = 0;
-            let mut score = 0usize;
-            let mut previous_end = None;
-            for needle in term.chars() {
-                let found = candidate[at..].find(needle)? + at;
-                score += found;
-                if previous_end == Some(found) {
-                    score = score.saturating_sub(2);
-                }
-                at = found + needle.len_utf8();
-                previous_end = Some(at);
-            }
-            Some(total.saturating_add(score))
-        })
-}
-
-/// Match a history commit using the same semantics as the history UI.
-///
-/// This remains the shared entry point so RPC filtering and client-side
-/// filtering cannot disagree about Unicode case normalization.
-pub fn git_history_matches(query: &str, commit: &GitHistoryCommit) -> bool {
-    let query = query.trim();
-    if query.is_empty() {
-        return true;
-    }
-    let normalized = query.to_ascii_lowercase();
-    commit.sha.to_ascii_lowercase().starts_with(&normalized)
-        || fuzzy_score(query, &format!("{} {}", commit.sha, commit.subject)).is_some()
-}
-
-/// Contract hidden commits to their nearest visible ancestors. Search results
-/// remain sparse without leaving graph lanes aimed at rows that are absent.
-fn compact_history_commits(
-    commits: &[GitHistoryCommit],
-    visible: &HashSet<String>,
-) -> Vec<GitHistoryCommit> {
-    let by_sha: HashMap<_, _> = commits
-        .iter()
-        .map(|commit| (commit.sha.as_str(), commit))
-        .collect();
-
-    /// Resolve a hidden commit to its nearest visible ancestors without using
-    /// the call stack. Completed nodes are cached across visible commits so a
-    /// shared hidden branch is contracted only once.
-    fn nearest_visible_parents(
-        sha: &str,
-        visible: &HashSet<String>,
-        by_sha: &HashMap<&str, &GitHistoryCommit>,
-        memo: &mut HashMap<String, Vec<String>>,
-    ) -> Vec<String> {
-        if visible.contains(sha) || !by_sha.contains_key(sha) {
-            return vec![sha.to_string()];
-        }
-        if let Some(cached) = memo.get(sha) {
-            return cached.clone();
-        }
-
-        struct Frame {
-            sha: String,
-            next_parent: usize,
-            resolved: Vec<String>,
-            seen: HashSet<String>,
-        }
-
-        impl Frame {
-            fn new(sha: String) -> Self {
-                Self {
-                    sha,
-                    next_parent: 0,
-                    resolved: Vec::new(),
-                    seen: HashSet::new(),
-                }
-            }
-
-            fn extend(&mut self, parents: &[String]) {
-                for parent in parents {
-                    if self.seen.insert(parent.clone()) {
-                        self.resolved.push(parent.clone());
-                    }
-                }
-            }
-        }
-
-        let mut visiting = HashSet::from([sha.to_string()]);
-        let mut stack = vec![Frame::new(sha.to_string())];
-        loop {
-            let next_parent = {
-                let frame = stack.last_mut().expect("history traversal frame");
-                let parents = &by_sha[frame.sha.as_str()].parent_shas;
-                (frame.next_parent < parents.len()).then(|| {
-                    let parent = parents[frame.next_parent].clone();
-                    frame.next_parent += 1;
-                    parent
-                })
-            };
-
-            let Some(parent) = next_parent else {
-                let frame = stack.pop().expect("history traversal frame");
-                visiting.remove(&frame.sha);
-                let resolved = frame.resolved;
-                memo.insert(frame.sha, resolved.clone());
-                if let Some(caller) = stack.last_mut() {
-                    caller.extend(&resolved);
-                    continue;
-                }
-                return resolved;
-            };
-
-            let resolved = if visible.contains(&parent) || !by_sha.contains_key(parent.as_str()) {
-                Some(vec![parent.clone()])
-            } else if let Some(cached) = memo.get(&parent) {
-                Some(cached.clone())
-            } else if visiting.contains(&parent) {
-                // Git commit graphs are acyclic, but keep malformed input from
-                // looping forever just as the previous `visiting` guard did.
-                Some(Vec::new())
-            } else {
-                None
-            };
-
-            if let Some(resolved) = resolved {
-                stack
-                    .last_mut()
-                    .expect("history traversal frame")
-                    .extend(&resolved);
-            } else {
-                visiting.insert(parent.clone());
-                stack.push(Frame::new(parent));
-            }
-        }
-    }
-
-    let mut memo = HashMap::new();
-    commits
-        .iter()
-        .filter(|commit| visible.contains(&commit.sha))
-        .cloned()
-        .map(|mut commit| {
-            let mut seen = HashSet::new();
-            commit.parent_shas = commit
-                .parent_shas
-                .iter()
-                .flat_map(|parent| nearest_visible_parents(parent, visible, &by_sha, &mut memo))
-                .filter(|parent| seen.insert(parent.clone()))
-                .collect();
-            commit
-        })
-        .collect()
-}
-
 fn search_files_blocking(
     search: &WorkspaceSearch,
     root: &Path,
@@ -2346,7 +2189,7 @@ fn folder_browser_path(path: &Path) -> String {
 /// in index order, by how well the folder itself matches: an exact name,
 /// then a name starting with the query, then one containing it. A query
 /// with `/` matches the path's last segments instead, each query segment a
-/// prefix of its path segment (`dev/com` → `…/development/zuse`). Within a
+/// prefix of its path segment (`dev/com` → `…/development/components`). Within a
 /// tier repositories go first, then shallower folders. Candidates matching
 /// only through a typo or a parent's name are kept only when nothing better
 /// matched, ordered the same way.
@@ -3044,7 +2887,7 @@ tmpfs /run tmpfs rw 0 0
         let oldest = "c00000".to_string();
         let visible = HashSet::from([newest.clone(), oldest.clone()]);
 
-        let compact = compact_history_commits(&commits, &visible);
+        let compact = compact_commits_to_visible(&commits, &visible);
 
         assert_eq!(compact.len(), 2);
         assert_eq!(compact[0].sha, newest);
@@ -3228,14 +3071,15 @@ tmpfs /run tmpfs rw 0 0
     #[test]
     fn slash_queries_match_trailing_segment_prefixes() {
         let candidates = [
-            ("Documentos/development/zuse/apps", false),
-            ("Documentos/development/zuse", true),
+            ("Documentos/development/components/apps", false),
+            ("Documentos/development/components", true),
             ("Documentos/dev/tools", false),
             ("dev/com", false),
+            ("Documentos/development/zuse", true),
         ];
         assert_eq!(
             ranked("dev/com", &candidates),
-            ["dev/com", "Documentos/development/zuse"]
+            ["dev/com", "Documentos/development/components"]
         );
     }
 

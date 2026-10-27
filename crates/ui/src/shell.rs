@@ -24,7 +24,9 @@ use gpui::{
 
 use gpui_tokio::Tokio;
 use zuse_engine::InstanceLock;
-use zuse_protocol::{AuthState, ChatConfig, HarnessId, WorkspaceScope};
+use zuse_protocol::{AuthState, WorkspaceScope};
+#[cfg(test)]
+use zuse_protocol::HarnessId;
 use zuse_rpc::methods;
 
 use crate::changes::{Changes, ChangesEvent, DiscardWorkingTreeRequest};
@@ -1979,7 +1981,6 @@ pub struct Shell {
     /// The window's voice orchestrator: independent of the selected chat.
     voice: Entity<crate::voice::VoiceController>,
     /// Sidebar footer orb (session live) and the full-window stage's orb.
-    voice_footer_orb: Entity<crate::orb::Orb>,
     voice_stage_orb: Entity<crate::orb::Orb>,
     /// Above the composer, only while the orchestrator's own chat is open.
     voice_composer_orb: Entity<crate::orb::Orb>,
@@ -2440,12 +2441,6 @@ impl Shell {
         transcript.update(cx, |transcript, _| transcript.retain_for_route_exit());
         let composer = cx.new(|cx| Composer::new(state.clone(), cx));
         let voice = cx.new(|_| crate::voice::VoiceController::default());
-        let voice_footer_orb = cx.new(|_| {
-            crate::orb::Orb::new()
-                .size(crate::orb::OrbSize::Inline)
-                .state_transition(Duration::from_millis(300))
-                .visible(false)
-        });
         let voice_stage_orb = cx.new(|_| {
             crate::orb::Orb::new()
                 .size(crate::orb::OrbSize::Hero)
@@ -2609,7 +2604,6 @@ impl Shell {
             transcript,
             composer,
             voice,
-            voice_footer_orb,
             voice_stage_orb,
             voice_composer_orb,
             voice_caption: zuse_veil::CaptionVeil::new(voice_stage::STAGE_CAPTION_CHARS),

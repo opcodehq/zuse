@@ -54,27 +54,6 @@ pub fn secondary_button(theme: &Theme, id: impl Into<gpui::ElementId>) -> Statef
         .hover(move |s| s.bg(hover))
 }
 
-/// Primary (accent) button: 28px, accent fill.
-pub fn primary_button(theme: &Theme, id: impl Into<gpui::ElementId>) -> Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .flex_none()
-        .h(px(28.))
-        .px(px(12.))
-        .rounded(px(7.))
-        .bg(theme.accent)
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap(px(6.))
-        .text_size(crate::typography::text_xs())
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.on_accent)
-        .cursor_pointer()
-        .role(gpui::Role::Button)
-        .tab_index(0)
-        .hover(|s| s.opacity(0.9))
-}
 
 /// A square 28px ghost icon button.
 pub fn icon_button(

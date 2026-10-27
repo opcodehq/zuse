@@ -575,29 +575,6 @@ impl AccountsPage {
         self.load(force_usage_for(LoadTrigger::Refresh), cx);
     }
 
-    pub(crate) fn set_target_device(&mut self, target: Option<String>, cx: &mut Context<Self>) {
-        if self.target_device == target {
-            cx.notify();
-            return;
-        }
-        self.target_device = target;
-        // A different device = a different accounts world: drop in-flight
-        // login/action state and reload with a forced usage probe (the new
-        // device's cache is cold).
-        self.login = None;
-        self.busy_account = None;
-        self.error = None;
-        self.load(force_usage_for(LoadTrigger::Mount), cx);
-    }
-
-    pub(crate) fn set_embedded_harness(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
-        if self.embedded_harness != Some(harness) {
-            self.embedded_harness = Some(harness);
-            self.login = None;
-            self.error = None;
-            cx.notify();
-        }
-    }
 
     /// Review fixture: one live Claude login with usage meters.
     #[cfg(feature = "browser-fixture")]
@@ -2664,8 +2641,8 @@ mod tests {
             provider: Some("openai".into()),
         };
         window
-            .update(cx, |page, _, cx| {
-                page.set_embedded_harness(HarnessId::Opencode, cx);
+            .update(cx, |page, _, _cx| {
+                page.embedded_harness = Some(HarnessId::Opencode);
                 page.snapshot = Loadable::Ready(AgentAccountsSnapshot {
                     accounts: vec![
                         row("a", "a@example.com", true, true),
