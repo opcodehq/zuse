@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::{collections::HashSet, path::Path};
 use zuse_harness::{
     Error,
-    transport::{Capabilities, Credential, Protocol, Route},
+    transport::{Authentication, Capabilities, Credential, Protocol, Route},
 };
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -19,7 +19,14 @@ struct ApiConnection {
     id: String,
     protocol: Protocol,
     endpoint: String,
-    api_key_env: String,
+    #[serde(alias = "apiKeyEnv")]
+    credential_env: String,
+    #[serde(default)]
+    authentication: Authentication,
+    #[serde(default)]
+    betas: Vec<String>,
+    #[serde(default)]
+    subscription: bool,
     capabilities: Capabilities,
     #[serde(default = "output_limit")]
     max_output_tokens: u32,
@@ -80,14 +87,27 @@ impl ApiModels {
             {
                 return Err(error());
             }
-            if c.api_key_env.is_empty()
+            if c.credential_env.is_empty()
                 || !c
-                    .api_key_env
+                    .credential_env
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_')
             {
                 return Err(error());
             }
+            Route {
+                endpoint: c.endpoint.clone(),
+                protocol: c.protocol,
+                subscription: c.subscription,
+                authentication: c.authentication,
+                betas: c.betas.clone(),
+                capabilities: c.capabilities.clone(),
+                max_output_tokens: c.max_output_tokens,
+                tool_namespace: c.tool_namespace.clone(),
+                include_encrypted_reasoning: c.include_encrypted_reasoning,
+            }
+            .validate_authentication()
+            .map_err(|_| error())?;
             let mut models = HashSet::new();
             for model in &c.models {
                 if model.id.is_empty()
@@ -103,7 +123,7 @@ impl ApiModels {
         Ok(config)
     }
     fn available(c: &ApiConnection) -> bool {
-        std::env::var(&c.api_key_env).is_ok_and(|s| !s.is_empty())
+        std::env::var(&c.credential_env).is_ok_and(|s| !s.is_empty())
     }
     pub fn models(&self) -> Vec<HarnessModel> {
         self.connections
@@ -125,7 +145,7 @@ impl ApiModels {
         if !Self::available(c) {
             return Err(Error::AccountsUnavailable);
         }
-        let key = std::env::var(&c.api_key_env).map_err(|_| Error::AccountsUnavailable)?;
+        let key = std::env::var(&c.credential_env).map_err(|_| Error::AccountsUnavailable)?;
         Ok(format!("api/{}/{:x}", c.id, Sha256::digest(key.as_bytes())))
     }
     fn find(&self, model: &str) -> Result<(&ApiConnection, &ApiModel), Error> {
@@ -149,7 +169,7 @@ impl ApiModels {
     }
     pub fn credential(&self, model: &str) -> Result<(String, Credential), Error> {
         let (c, m) = self.find(model)?;
-        let key = std::env::var(&c.api_key_env).map_err(|_| Error::AccountsUnavailable)?;
+        let key = std::env::var(&c.credential_env).map_err(|_| Error::AccountsUnavailable)?;
         if key.is_empty() {
             return Err(Error::AccountsUnavailable);
         }
@@ -172,7 +192,9 @@ impl ApiModels {
                 route: Route {
                     endpoint: c.endpoint.replace("{model}", &encoded),
                     protocol: c.protocol,
-                    subscription: false,
+                    subscription: c.subscription,
+                    authentication: c.authentication,
+                    betas: c.betas.clone(),
                     capabilities: c.capabilities.clone(),
                     max_output_tokens: c.max_output_tokens,
                     tool_namespace: c.tool_namespace.clone(),
@@ -224,5 +246,20 @@ mod tests {
             models.credential("api/fixture/org/model"),
             Err(Error::AccountsUnavailable)
         ));
+    }
+    #[test]
+    fn explicit_bearer_connections_preserve_declared_subscription_billing() {
+        let mut config = connection();
+        config.as_object_mut().unwrap().remove("apiKeyEnv");
+        config["credentialEnv"] = json!("PATH");
+        config["authentication"] = json!("bearer");
+        config["protocol"] = json!("messages");
+        config["betas"] = json!(["oauth-2025-04-20"]);
+        config["subscription"] = json!(true);
+        let models = load(json!({"connections":[config]})).unwrap();
+        let (_, credential) = models.credential("api/fixture/org/model").unwrap();
+        assert!(credential.route.subscription);
+        assert_eq!(credential.route.authentication, Authentication::Bearer);
+        assert_eq!(credential.route.betas, ["oauth-2025-04-20"]);
     }
 }

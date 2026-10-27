@@ -55,7 +55,7 @@ Explicit API routes are loaded at startup from `<profile>/harness/providers.json
     "id": "primary-api",
     "protocol": "responses",
     "endpoint": "https://api.openai.com/v1/responses",
-    "apiKeyEnv": "OPENAI_API_KEY",
+    "credentialEnv": "OPENAI_API_KEY",
     "capabilities": {
       "images": true, "tools": true, "reasoning": true, "promptCache": true
     },
@@ -72,7 +72,9 @@ Explicit API routes are loaded at startup from `<profile>/harness/providers.json
 
 Set model IDs, context/output limits and capabilities for the actual entitlement;
 the example's context limit is illustrative. Configuration contains environment
-variable names, not secrets. Entries with missing credentials are unavailable.
+variable names, not secrets; `apiKeyEnv` remains an alias for `credentialEnv`.
+Explicit Bearer routes and internal environment handoff are covered in the
+[live transport check](harness-live-evaluation.md). Entries with missing credentials are unavailable.
 Models appear as `api/<connection-id>/<model-id>`. API-key identity participates
 in continuation/cache scoping, so rotating a key cannot reuse account-bound metadata.
 
@@ -175,7 +177,8 @@ The manifest has up to four arms:
 }]}
 ```
 
-The private connection JSON, mode `0600`, contains `connectionId`, `accessToken`,
+The private connection JSON, mode `0600`, contains `connectionId`, exactly one of
+`accessToken` or `credentialEnv`,
 `model`, optional `reasoning`, `contextWindowTokens` and the `route` structure
 (`endpoint`, `protocol`, `subscription`, `capabilities`, `maxOutputTokens`, optional
 `toolNamespace` and `includeEncryptedReasoning`). Never commit it or paste tokens
@@ -198,11 +201,13 @@ tests. Clippy passes with the three existing style-lint exceptions shown above.
 The application test executable was linked without debug symbols to fit the shared
 VM; the release benchmark uses the workspace release profile.
 
-No live comparison has run: this VM has no configured native subscription profile
-or model API credentials. No claims about live success rate, cache-hit improvement,
-cost per successful task, quota savings or superiority over other harnesses are
-supported yet. Four small coding fixtures alone would not establish broad quality
-equivalence even after live execution.
+Live status was updated on 2026-10-27: Conductor's environment credential reached
+authenticated model inventory. Native smoke requests for the two selected models
+at medium reasoning both returned HTTP 429, so coding/cache comparisons have not
+run. See the [live check and request accounting](harness-live-evaluation.md).
+No claims about live success rate, cache-hit improvement, cost per successful task,
+quota savings or superiority over other harnesses are supported yet. Four small
+coding fixtures alone would not establish broad quality equivalence.
 
 ## Release measurements
 
@@ -250,4 +255,4 @@ Raw results and offline evaluation artifacts are retained under the primary
 workspace's ignored `.context/` (`harness-kernel-comparison-release.json`,
 `harness-offline-evaluation-release/` and `harness-live-availability-final/`). They are cloud-local evidence, not a public CI
 performance guarantee. Context reductions remain gated and live comparison remains
-pending access.
+pending successful provider requests.

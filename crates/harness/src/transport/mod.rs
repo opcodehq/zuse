@@ -13,6 +13,19 @@ pub enum Protocol {
     GenerateContent,
     ChatCompletions,
 }
+/// Select credentials explicitly; protocol defaults preserve API-key behavior.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Authentication {
+    #[default]
+    ProtocolDefault,
+    Bearer,
+}
+impl Authentication {
+    fn is_protocol_default(&self) -> bool {
+        *self == Self::ProtocolDefault
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
@@ -34,6 +47,10 @@ pub struct Route {
     pub endpoint: String,
     pub protocol: Protocol,
     pub subscription: bool,
+    #[serde(default, skip_serializing_if = "Authentication::is_protocol_default")]
+    pub authentication: Authentication,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub betas: Vec<String>,
     pub capabilities: Capabilities,
     pub max_output_tokens: u32,
     #[serde(default)]
@@ -42,6 +59,19 @@ pub struct Route {
     pub include_encrypted_reasoning: bool,
 }
 impl Route {
+    pub fn validate_authentication(&self) -> Result<(), Error> {
+        if self.betas.len() > 16
+            || (!self.betas.is_empty() && self.protocol != Protocol::Messages)
+            || self.betas.iter().any(|beta| {
+                beta.is_empty()
+                    || beta.len() > 128
+                    || !beta.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            })
+        {
+            return Err(failed("invalid_provider_betas"));
+        }
+        Ok(())
+    }
     pub fn subscription(provider: &str) -> Result<Self, Error> {
         let endpoint = match provider {
             "chatgpt" => "https://api.openai.com/v1/responses",
@@ -52,6 +82,8 @@ impl Route {
             endpoint: endpoint.into(),
             protocol: Protocol::Responses,
             subscription: true,
+            authentication: Authentication::ProtocolDefault,
+            betas: Vec::new(),
             capabilities: Capabilities {
                 images: true,
                 tools: true,
@@ -183,6 +215,7 @@ impl NativeTransport {
         if !url.username().is_empty() || url.password().is_some() {
             return Err(failed("invalid_model_endpoint"));
         }
+        credential.route.validate_authentication()?;
         let body = request::body(input, credential)?;
         let body = serde_json::to_vec(&body).map_err(|_| failed("invalid_model_request"))?;
         if body.len() > 96 * 1024 * 1024 {
@@ -197,11 +230,19 @@ impl NativeTransport {
         let mut key = reqwest::header::HeaderValue::from_str(&credential.access_token)
             .map_err(|_| failed("invalid_model_credential"))?;
         key.set_sensitive(true);
-        request = match credential.route.protocol {
-            Protocol::Messages => request
-                .header("x-api-key", key.clone())
-                .header("anthropic-version", "2023-06-01"),
-            Protocol::GenerateContent => request.header("x-goog-api-key", key),
+        if credential.route.protocol == Protocol::Messages {
+            request = request.header("anthropic-version", "2023-06-01");
+            if !credential.route.betas.is_empty() {
+                request = request.header("anthropic-beta", credential.route.betas.join(","));
+            }
+        }
+        request = match (credential.route.authentication, credential.route.protocol) {
+            (Authentication::ProtocolDefault, Protocol::Messages) => {
+                request.header("x-api-key", key)
+            }
+            (Authentication::ProtocolDefault, Protocol::GenerateContent) => {
+                request.header("x-goog-api-key", key)
+            }
             _ => request.bearer_auth(&credential.access_token),
         };
         if let Some(budget) = &self.budget {

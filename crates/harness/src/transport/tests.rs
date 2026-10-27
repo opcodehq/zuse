@@ -46,9 +46,26 @@ async fn fixture(
     events: Vec<Value>,
     end: bool,
 ) -> (Credential, oneshot::Receiver<Value>) {
+    authenticated_fixture(
+        protocol,
+        events,
+        end,
+        Authentication::ProtocolDefault,
+        Vec::new(),
+    )
+    .await
+}
+async fn authenticated_fixture(
+    protocol: Protocol,
+    events: Vec<Value>,
+    end: bool,
+    authentication: Authentication,
+    betas: Vec<String>,
+) -> (Credential, oneshot::Receiver<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/", listener.local_addr().unwrap());
     let (tx, rx) = oneshot::channel();
+    let expected_betas = betas.join(",");
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut bytes = Vec::new();
@@ -62,6 +79,22 @@ async fn fixture(
             }
         };
         let headers = String::from_utf8(bytes[..boundary].to_vec()).unwrap();
+        let lower = headers.to_ascii_lowercase();
+        if authentication == Authentication::Bearer
+            || matches!(protocol, Protocol::Responses | Protocol::ChatCompletions)
+        {
+            assert!(lower.contains("authorization: bearer fixture-token\r\n"));
+            assert!(!lower.contains("x-api-key:"));
+            assert!(!lower.contains("x-goog-api-key:"));
+        } else if protocol == Protocol::Messages {
+            assert!(lower.contains("x-api-key: fixture-token\r\n"));
+            assert!(!lower.contains("authorization:"));
+        } else {
+            assert!(lower.contains("x-goog-api-key: fixture-token\r\n"));
+        }
+        if !expected_betas.is_empty() {
+            assert!(lower.contains(&format!("anthropic-beta: {expected_betas}\r\n")));
+        }
         let length = headers
             .lines()
             .find_map(|l| {
@@ -110,6 +143,8 @@ async fn fixture(
                 endpoint,
                 protocol,
                 subscription: false,
+                authentication,
+                betas,
                 capabilities: Capabilities {
                     images: true,
                     tools: true,
@@ -431,4 +466,40 @@ fn image_tool_results_follow_protocol_capabilities() {
     assert!(
         matches!(request::body(&request, &credential), Err(Error::Model {code, ..}) if code == "unsupported_images")
     );
+}
+
+#[tokio::test]
+async fn explicit_bearer_authentication_preserves_medium_reasoning_and_subscription_usage() {
+    let (mut credential, body) = authenticated_fixture(Protocol::Messages, vec![
+        json!({"type":"message_start","message":{"usage":{"input_tokens":1}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ready"}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
+        json!({"type":"message_stop"}),
+    ], false, Authentication::Bearer, vec!["oauth-2025-04-20".into()]).await;
+    credential.route.subscription = true;
+    let mut request = input();
+    request.reasoning = Some("medium".into());
+    let output = NativeTransport::new()
+        .unwrap()
+        .request(request, credential)
+        .await
+        .unwrap();
+    assert_eq!(output.text, "ready");
+    assert_eq!(output.usage.billing_route.as_deref(), Some("subscription"));
+    let body = body.await.unwrap();
+    assert_eq!(body["thinking"]["type"], "adaptive");
+    assert_eq!(body["output_config"]["effort"], "medium");
+}
+#[test]
+fn provider_beta_configuration_is_bounded_and_default_route_hashes_stay_compatible() {
+    let mut route = Route::subscription("chatgpt").unwrap();
+    let serialized = serde_json::to_value(&route).unwrap();
+    assert!(serialized.get("authentication").is_none());
+    assert!(serialized.get("betas").is_none());
+    route.betas = vec!["oauth-2025-04-20".into()];
+    assert!(route.validate_authentication().is_err());
+    route.protocol = Protocol::Messages;
+    assert!(route.validate_authentication().is_ok());
+    route.betas = vec!["invalid\r\nheader".into()];
+    assert!(route.validate_authentication().is_err());
 }

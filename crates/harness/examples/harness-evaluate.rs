@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -18,11 +19,41 @@ use zuse_harness::{
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Connection {
     connection_id: String,
-    access_token: String,
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    credential_env: Option<String>,
     route: Route,
     model: String,
     reasoning: Option<String>,
     context_window_tokens: u64,
+}
+impl Connection {
+    fn identity(&self, token: &str) -> String {
+        format!(
+            "{}/{:x}",
+            self.connection_id,
+            Sha256::digest(token.as_bytes())
+        )
+    }
+    fn credential(&self) -> Result<String, Error> {
+        match (&self.access_token, &self.credential_env) {
+            (Some(token), None) if !token.is_empty() => Ok(token.clone()),
+            (None, Some(name))
+                if !name.is_empty()
+                    && name.len() <= 128
+                    && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') =>
+            {
+                std::env::var(name)
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .ok_or(Error::AccountsUnavailable)
+            }
+            _ => Err(Error::paused(
+                "Configure exactly one accessToken or credentialEnv",
+            )),
+        }
+    }
 }
 struct Budget {
     global: RequestLedger,
@@ -62,14 +93,16 @@ struct ConnectionTransport {
 #[async_trait]
 impl broker::BrokerHost for ConnectionTransport {
     async fn connections(&self, _: &ModelInput) -> Result<Vec<broker::Connection>, Error> {
+        let token = self.connection.credential()?;
         Ok(vec![broker::Connection {
-            id: self.connection.connection_id.clone(),
+            id: self.connection.identity(&token),
             authorized: true,
             preferred: true,
         }])
     }
     async fn request(&self, id: &str, input: ModelInput) -> Result<ModelOutput, Error> {
-        if id != self.connection.connection_id {
+        let token = self.connection.credential()?;
+        if id != self.connection.identity(&token) {
             return Err(Error::AccountsUnavailable);
         }
         self.transport
@@ -77,7 +110,7 @@ impl broker::BrokerHost for ConnectionTransport {
                 input,
                 Credential {
                     connection_id: id.into(),
-                    access_token: self.connection.access_token.clone(),
+                    access_token: token,
                     authorization_generation: 0,
                     route: self.connection.route.clone(),
                 },
@@ -166,6 +199,8 @@ async fn evaluate() -> Result<(), Box<dyn std::error::Error>> {
     }
     let connection: Connection = serde_json::from_slice(&std::fs::read(credential_file)?)
         .map_err(|_| "Invalid connection configuration")?;
+    connection.credential()?;
+    connection.route.validate_authentication()?;
     let args = std::env::args().collect::<Vec<_>>();
     let request_limit = args
         .windows(2)
@@ -182,7 +217,9 @@ async fn evaluate() -> Result<(), Box<dyn std::error::Error>> {
     let mut options = Options::new(&connection.model);
     options.reasoning = connection.reasoning.clone();
     options.window_tokens = connection.context_window_tokens;
-    options.max_requests = request_limit;
+    // Let the transport report the first denied admission. Its durable ledgers
+    // remain the authority for the physical ceiling; no extra request is sent.
+    options.max_requests = request_limit + 1;
     if std::env::args().any(|a| a == "--bounded-context") {
         options.context_policy = prompt::ContextPolicy::BoundedTools;
     }
@@ -236,9 +273,7 @@ async fn evaluate() -> Result<(), Box<dyn std::error::Error>> {
     let completed = result.is_ok() && snapshot.agent("evaluation")?.status == Status::Completed;
     let status = if completed {
         "completed"
-    } else if capped.load(std::sync::atomic::Ordering::Acquire)
-        || snapshot.requests >= request_limit
-    {
+    } else if capped.load(std::sync::atomic::Ordering::Acquire) {
         "capped"
     } else {
         "failed"
@@ -270,4 +305,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .enable_all()
         .build()?
         .block_on(evaluate())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn connection() -> Connection {
+        serde_json::from_value(json!({
+            "connectionId":"fixture", "credentialEnv":"PATH",
+            "route":Route::subscription("chatgpt").unwrap(),
+            "model":"fixture", "reasoning":"medium", "contextWindowTokens":32000
+        }))
+        .unwrap()
+    }
+    #[test]
+    fn credentials_can_be_handed_off_by_environment_without_copying_them_to_config() {
+        let profile = connection();
+        assert!(profile.access_token.is_none());
+        assert_ne!(profile.identity("account-a"), profile.identity("account-b"));
+        assert_eq!(
+            profile.credential().unwrap(),
+            std::env::var("PATH").unwrap()
+        );
+    }
+    #[test]
+    fn ambiguous_missing_and_invalid_credentials_are_rejected() {
+        let mut profile = connection();
+        profile.access_token = Some("fixture".into());
+        assert!(profile.credential().is_err());
+        profile.access_token = None;
+        profile.credential_env = Some("ZUSE_MISSING_FIXTURE_CREDENTIAL_7B12".into());
+        assert!(profile.credential().is_err());
+        profile.credential_env = Some("invalid\r\nname".into());
+        assert!(profile.credential().is_err());
+    }
 }

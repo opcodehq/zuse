@@ -68,6 +68,15 @@ class Model(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["content-length"])))
         with self.counter_lock:
             type(self).requests += 1
+        if body["model"] == "fixture-rate-limited":
+            encoded = json.dumps({"error": {"type": "rate_limit_error", "message": "Fixture rate limit"}}).encode()
+            self.send_response(429)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+            self.wfile.flush()
+            return
         calls, text = replies(body)
         items = [{"type": "function_call", "call_id": cid, "name": name, "arguments": json.dumps(arguments)} for cid, name, arguments in calls]
         if text:
@@ -132,8 +141,27 @@ def main():
             outcomes = [json.loads(line) for line in capped.stdout.splitlines()]
             assert outcomes[-1]["status"] == "capped"
             (cap / "events.jsonl").write_text(capped.stdout)
+            # A provider failure on the final allowed request is not a cap.
+            rate = args.output / "rate-limit-test"
+            rate.mkdir()
+            (rate / "checkout").mkdir()
+            (rate / "task.txt").write_text("Reply ready")
+            config = json.loads(connection.read_text())
+            config["model"] = "fixture-rate-limited"
+            rate_connection = rate / "connection.json"
+            rate_connection.write_text(json.dumps(config))
+            rate_connection.chmod(0o600)
+            before = Model.requests
+            failed = subprocess.run([str(binary), "--checkout", str(rate / "checkout"), "--profile", str(rate / "profile"),
+                "--connection", str(rate_connection), "--task", str(rate / "task.txt"), "--global-ledger", str(rate / "global"),
+                "--run-ledger", str(rate / "local"), "--request-limit", "1"], capture_output=True, text=True, timeout=30)
+            assert failed.returncode != 0 and Model.requests - before == 1
+            outcomes = [json.loads(line) for line in failed.stdout.splitlines()]
+            assert outcomes[-1]["status"] == "failed"
+            assert outcomes[0]["attempt"]["errorCode"] == "http_429"
+            (rate / "events.jsonl").write_text(failed.stdout)
             assert server.connections < Model.requests, "Native HTTP connections were not reused"
-            summary = {"mode": "scripted-local-http", "coding_runs": 12, "smoke_runs": 3, "capped_run": 1,
+            summary = {"mode": "scripted-local-http", "coding_runs": 12, "smoke_runs": 3, "capped_run": 1, "rate_limited_run": 1,
                        "external_model_requests": 0, "local_http_requests": Model.requests, "tcp_connections": server.connections,
                        "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(), "status": "passed"}
             (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
