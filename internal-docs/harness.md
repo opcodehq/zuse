@@ -4,7 +4,7 @@
 
 ## Runtime authority
 
-`Engine` owns a durable graph of one root and nested children, bounded to three running children and depth two. Rust schedules concurrent child requests, records mailboxes and idempotent delivery identifiers, enforces inherited read-only and plan modes, and delivers child outcomes before root synthesis. The model request budget is shared across the graph and includes compaction and broker retries. User continuation explicitly grants another turn's budget.
+`Engine` owns a durable graph of one root and nested children, bounded by profile configuration (three running children by default) and depth two. Rust schedules concurrent child requests, records mailboxes and idempotent delivery identifiers, enforces inherited read-only and plan modes, and delivers child outcomes before root synthesis. The model request budget is shared across the graph and includes compaction and broker retries. User continuation explicitly grants another turn's budget.
 
 `Host` supplies model transport, native tools, checkpoint storage, instructions and application events. Native adapters use `Engine::open_native_with`, which acquires a per-root OS lease before reading its private journal and retains it until host cleanup succeeds. Root IDs map to hashed profile directories, and journal identities must match their owner. `Engine::open` remains available for fixtures and custom hosts that supply their own ownership authority. Tool definitions and permission decisions belong to the trusted host; model input cannot grant permission or call recovery APIs. `JournalStore` writes sequenced, checksummed committed transitions and periodic atomic snapshots. Large immutable payloads use content-addressed artifacts. `FileStore` remains the version-one import format. Invalid graphs and damaged journals are preserved for inspection.
 
@@ -32,6 +32,9 @@ The subscription request shape follows the
 [official transport requirements](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
 Protocol fixtures establish offline behavior; successful live authorization is
 still an acceptance gate.
+
+See [native capabilities and configuration](harness-native-capabilities.md) for
+parallel reads, child admission, local skills, syntax outlines and lazy external MCP tools.
 
 ## Commands and evidence
 

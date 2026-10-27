@@ -54,6 +54,7 @@ class ProcessTreeMetrics:
         self.identities = set()
         self.peak_rss = self.peak_pss = self.peak_processes = 0
         self.samples = 0
+        self.current_rss = self.current_pss = 0
 
     def sample(self):
         table = {}
@@ -84,6 +85,7 @@ class ProcessTreeMetrics:
                 pss += int(values["Pss"].split()[0]) * 1024
             except (OSError, ValueError, KeyError):
                 continue
+        self.current_rss, self.current_pss = rss, pss
         self.peak_rss = max(self.peak_rss, rss)
         self.peak_pss = max(self.peak_pss, pss)
         self.peak_processes = max(self.peak_processes, count)
