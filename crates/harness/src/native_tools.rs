@@ -603,7 +603,8 @@ impl Host for ToolHost {
         self.application.save(state).await
     }
     async fn instructions(&self) -> Result<String, Error> {
-        self.application.instructions().await
+        let application = self.application.instructions().await?;
+        Ok(format!("{}\n\n{}", schema::INSTRUCTIONS, application))
     }
     async fn model(&self, input: ModelInput) -> Result<ModelOutput, Error> {
         self.application.model(input).await

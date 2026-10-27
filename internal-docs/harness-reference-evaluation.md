@@ -182,3 +182,13 @@ runner passes 12 coding runs, three smoke checks, a six-request-cap check and a
 rate-limit classification check: 61 local HTTP requests, zero external requests.
 Its assertions verify nonzero process-tree metrics and inclusion of command
 helpers. Clippy passes with the three documented inherited style allowances.
+
+
+## Subsequent work
+
+The historical suite and its 274/300 checkpoint above are preserved. The
+[tool-efficiency follow-up](harness-tool-efficiency.md) records subsequent targeted
+checks and the final 300/300 ledger. The [improvement roadmap](harness-improvement-roadmap.md)
+separates implemented mechanisms from remaining diagnostics, scheduling, provider
+coverage and optional capability work. The source audit confirms shared native
+hosting and basic Todo UI already exist; neither requires a fresh architecture.

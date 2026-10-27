@@ -24,6 +24,15 @@ fn io(error: std::io::Error) -> Error {
 fn message(value: &str) -> Error {
     Error::Tool(value.into())
 }
+fn create_error(error: std::io::Error) -> Error {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        message(
+            "File already exists. Read it with read_file and use the returned hash as expected_hash to replace it.",
+        )
+    } else {
+        io(error)
+    }
+}
 pub(super) fn check(cancel: &CancellationToken) -> Result<(), Error> {
     if cancel.is_cancelled() {
         Err(Error::Interrupted)
@@ -318,6 +327,26 @@ impl CheckoutFiles {
             return Err(message("Path changed before edit"));
         }
         let (parent, name) = self.parent(path, true)?;
+        if expected.is_none() {
+            // Reject a known create conflict before constructing and syncing a
+            // replacement. linkat below still arbitrates concurrent creation.
+            let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+            if unsafe {
+                libc::fstatat(
+                    parent.as_raw_fd(),
+                    name.as_ptr(),
+                    metadata.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            } == 0
+            {
+                return Err(create_error(std::io::ErrorKind::AlreadyExists.into()));
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(io(error));
+            }
+        }
         let previous = expected
             .map(|_| Self::read_at(&parent, &name, true))
             .transpose()?;
@@ -392,7 +421,7 @@ impl CheckoutFiles {
             )
         } < 0
         {
-            return Err(io(std::io::Error::last_os_error()));
+            return Err(create_error(std::io::Error::last_os_error()));
         }
         parent.sync_all().map_err(io)?;
         Ok(json!({"path":path,"hash":digest(next.as_bytes()),"bytes":next.len()}))
@@ -427,4 +456,52 @@ pub(super) fn replace(content: &str, edit: &Value) -> Result<String, Error> {
     result.push_str(new);
     result.push_str(&content[first + old.len()..]);
     Ok(result)
+}
+
+#[cfg(test)]
+mod creation_tests {
+    use super::*;
+
+    #[test]
+    fn existing_file_rejects_creation_before_constructing_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let files = CheckoutFiles::open(directory.path(), directory.path().join("locks")).unwrap();
+        let path = directory.path().join("existing.txt");
+        std::fs::write(&path, "original").unwrap();
+        let result = files.change(
+            &path,
+            None,
+            |_| panic!("creation conflict must be detected before replacement work"),
+            &CancellationToken::new(),
+        );
+        assert!(
+            matches!(result, Err(Error::Tool(message)) if message.contains("read_file") && message.contains("expected_hash"))
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "original");
+    }
+
+    #[test]
+    fn creation_race_preserves_the_other_writers_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let files = CheckoutFiles::open(directory.path(), directory.path().join("locks")).unwrap();
+        let path = directory.path().join("racing.txt");
+        let result = files.change(
+            &path,
+            None,
+            |_| {
+                std::fs::write(&path, "other writer").unwrap();
+                Ok("replacement".into())
+            },
+            &CancellationToken::new(),
+        );
+        assert!(matches!(result, Err(Error::Tool(message)) if message.contains("read_file")));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "other writer");
+        assert!(!std::fs::read_dir(directory.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".zuse-")
+        }));
+    }
 }

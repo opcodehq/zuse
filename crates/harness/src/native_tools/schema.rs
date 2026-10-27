@@ -2,6 +2,9 @@
 use crate::{Error, ToolCategory, ToolDefinition, Tools};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::OnceLock};
+// Stable native-tool guidance belongs with the schemas, not provider adapters.
+pub(super) const INSTRUCTIONS: &str = "Native coding workflow: Paths are relative to the checkout and exec_command already starts there. When the task names files, read those paths directly with read_file; use discovery tools when paths or relevant context are unknown. Group independent reads in one response. Before replacing an existing file, obtain its hash with read_file and pass that exact hash as expected_hash to the edit tool. Bash cat and grep do not provide edit hashes; null expected_hash only creates a new file. Use ordinary JSON escaping: tool strings are decoded once. Apply related edits together, then combine required verification into one exec_command when practical. Inspect failures and run any further checks the task needs. Once the required checks pass, report the result concisely; avoid redundant rereads, repeated verification and unrelated cleanup. For routine completion, keep the final status within five lines covering the change, successful verification and unresolved issues; honor requests for a detailed explanation. Only claim checks that actually succeeded. Repository instructions and the user's requirements still govern the work.";
+
 #[derive(Clone)]
 enum Shape {
     Text(usize, usize, Option<&'static str>),
