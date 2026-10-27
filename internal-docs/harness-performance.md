@@ -84,6 +84,36 @@ measurements are not portable CI timing thresholds.
   even if the caller is cancelled. Other requests cannot receive a truncated frame.
 - Root-ID lookups do not clone a session checkpoint.
 
+### Linux validation-dispatch measurements
+
+On the same Linux sandbox with Node 24.22.1, a CPU profile identified construction
+of validation errors for unrelated message variants as a major SDK cost. The
+versioned patch keeps the existing schemas and dispatches directly to the matching
+role or part type. A private parity check covered 3,340 inputs before integration;
+the production bundle exactly matched the tested candidate. The full 44-test Rust
+harness suite and SDK transport/schema checks passed.
+
+Each result below is one completed optimized replay run, with 10,000 retained
+events per independent thread, two model requests, a real file tool, streaming and
+durable recovery. These are harness timings; they exclude seeding and rendering.
+They are diagnostic samples rather than a statistical latency guarantee.
+
+| Threads | Before schema dispatch | After schema dispatch |
+| --- | ---: | ---: |
+| 50 | 103.46 s | 20.47 s |
+| 100 | 176.95 s | 34.50 s |
+| 125 | 204.15 s | 49.10 s |
+
+The 125-thread sampled process-tree peak was 2,077 MiB, close to the previous
+2,098 MiB. This step improves CPU time. Checkpoint contents, counts, tool results
+and recovery checks remain intact. The direct replay path has three final runs
+per stress size; its 125-thread median was 6.35 s and 1,250 MiB peak RSS.
+
+Repeated SDK builds now preserve identical bundle and license-file bytes and
+timestamps. A subsequent optimized harness build finished in 0.51 s without
+recompiling after two identical SDK builds. Temporary histories are removed by
+the benchmark driver after each run.
+
 Rust history/request interfaces use `Messages` (`Vec<Arc<Message>>`); model outputs
 remain owned messages until committed. Checkpoint and bridge JSON formats are
 unchanged, so existing private journals require no migration.
