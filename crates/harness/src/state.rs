@@ -115,6 +115,10 @@ pub enum ToolOutput {
         r#type: String,
         value: Vec<ImageContent>,
     },
+    Mixed {
+        r#type: String,
+        parts: Vec<Value>,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -138,6 +142,21 @@ impl ToolOutput {
     pub fn validate(&self) -> bool {
         match self {
             Self::Text(_) => true,
+            Self::Mixed { r#type, parts } => {
+                r#type == "mixed"
+                    && !parts.is_empty()
+                    && parts.len() <= 64
+                    && parts.iter().all(|p| {
+                        (p["type"] == "text" && p["text"].is_string())
+                            || (p["type"] == "file"
+                                && matches!(
+                                    p["mediaType"].as_str(),
+                                    Some("image/png" | "image/jpeg" | "image/webp" | "image/gif")
+                                )
+                                && p["data"]["type"] == "data"
+                                && p["data"]["data"].is_string())
+                    })
+            }
             Self::Content { r#type, value } => {
                 r#type == "content"
                     && value.iter().all(|i| {

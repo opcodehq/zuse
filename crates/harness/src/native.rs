@@ -117,6 +117,15 @@ impl Host for NativeHost {
     fn tools(&self) -> Tools {
         self.inner.tools()
     }
+    fn parallel_read(&self, name: &str) -> bool {
+        self.inner.parallel_read(name)
+    }
+    fn notifications(&self, agent: &str) -> Vec<Mail> {
+        self.inner.notifications(agent)
+    }
+    fn acknowledge_notifications(&self, agent: &str, ids: &[String]) {
+        self.inner.acknowledge_notifications(agent, ids);
+    }
     async fn load(&self) -> Result<Option<Checkpoint>, Error> {
         let root = self.storage().as_ref().ok_or(Error::Storage)?.clone();
         let guard = root.gate.clone().lock_owned().await;

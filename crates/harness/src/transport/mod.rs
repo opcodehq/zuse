@@ -1,6 +1,8 @@
 //! Native provider protocols. No scheduling, tool execution or credential renewal.
+mod diagnostics;
 use crate::{Error, ModelInput, ModelOutput, RequestBudget, Usage};
 use async_trait::async_trait;
+pub use diagnostics::{CacheDiagnostic, CacheRead, PrefixChange, Timing};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -55,6 +57,8 @@ pub struct Route {
     pub betas: Vec<String>,
     pub capabilities: Capabilities,
     pub max_output_tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_reasoning: Option<Vec<String>>,
     #[serde(default)]
     pub tool_namespace: Option<String>,
     #[serde(default)]
@@ -81,6 +85,21 @@ impl Route {
         flags.join(",")
     }
     pub fn validate_authentication(&self) -> Result<(), Error> {
+        if self.max_output_tokens == 0
+            || self.allowed_reasoning.as_ref().is_some_and(|v| {
+                v.is_empty()
+                    || v.len() > 16
+                    || v.iter().any(|s| {
+                        s.is_empty()
+                            || s.len() > 32
+                            || !s
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                    })
+            })
+        {
+            return Err(failed("invalid_provider_capabilities"));
+        }
         if self.authentication == Authentication::AnthropicOauth
             && (self.protocol != Protocol::Messages || !self.subscription)
         {
@@ -100,6 +119,8 @@ impl Route {
     }
     pub fn subscription(provider: &str) -> Result<Self, Error> {
         let endpoint = match provider {
+            // Registered direct token-sharing flow. First-party CLI OAuth uses
+            // a different endpoint; never swap those authentication routes.
             "chatgpt" => "https://api.openai.com/v1/responses",
             "supergrok" => "https://api.x.ai/v1/responses",
             _ => return Err(failed("unsupported_subscription_route")),
@@ -117,6 +138,7 @@ impl Route {
                 prompt_cache: provider == "chatgpt",
             },
             max_output_tokens: 16384,
+            allowed_reasoning: None,
             tool_namespace: if provider == "chatgpt" {
                 Some("zuse".into())
             } else {
@@ -142,6 +164,7 @@ pub struct NativeTransport {
     admission: Arc<tokio::sync::Semaphore>,
     budget: Option<Arc<dyn RequestBudget>>,
     observer: Arc<dyn Fn(Attempt) + Send + Sync>,
+    diagnostics: Arc<diagnostics::Monitor>,
 }
 pub(super) fn failed(code: &str) -> Error {
     Error::Model {
@@ -149,7 +172,7 @@ pub(super) fn failed(code: &str) -> Error {
         status: None,
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attempt {
     pub request_id: String,
@@ -165,6 +188,10 @@ pub struct Attempt {
     pub usage: Option<Usage>,
     pub error_code: Option<String>,
     pub prefix_fingerprint: String,
+    #[serde(default)]
+    pub timing: Timing,
+    #[serde(default)]
+    pub cache: CacheDiagnostic,
 }
 impl NativeTransport {
     pub fn with_budget(mut self, budget: Arc<dyn RequestBudget>) -> Self {
@@ -188,6 +215,7 @@ impl NativeTransport {
             admission: Arc::new(tokio::sync::Semaphore::new(32)),
             budget: None,
             observer: Arc::new(|_| {}),
+            diagnostics: Arc::new(diagnostics::Monitor::default()),
         })
     }
 }
@@ -203,7 +231,12 @@ impl ModelTransport for NativeTransport {
         input: ModelInput,
         credential: Credential,
     ) -> Result<ModelOutput, Error> {
-        let mut audit = AttemptGuard::new(&input, &credential, self.observer.clone());
+        let mut audit = AttemptGuard::new(
+            &input,
+            &credential,
+            self.observer.clone(),
+            self.diagnostics.clone(),
+        );
         let result = tokio::select! {biased;_=self.stop.cancelled()=>Err(Error::Interrupted),_=input.cancel.cancelled()=>Err(Error::Interrupted),result=self.send(&input,&credential,&audit)=>result};
         audit.attempt.usage = result.as_ref().ok().map(|output| output.usage.clone());
         audit.attempt.error_code = result.as_ref().err().map(|error| match error {
@@ -225,11 +258,18 @@ impl NativeTransport {
         credential: &Credential,
         audit: &AttemptGuard,
     ) -> Result<ModelOutput, Error> {
+        let admission_started = std::time::Instant::now();
         let _permit = self
             .admission
             .acquire()
             .await
             .map_err(|_| Error::Interrupted)?;
+        audit
+            .timing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .admission_ms = Some(admission_started.elapsed().as_secs_f64() * 1000.);
+        let preparation_started = std::time::Instant::now();
         let url = reqwest::Url::parse(&credential.route.endpoint)
             .map_err(|_| failed("invalid_model_endpoint"))?;
         if url.scheme() != "https"
@@ -272,16 +312,28 @@ impl NativeTransport {
             }
             _ => request.bearer_auth(&credential.access_token),
         };
+        audit
+            .timing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .preparation_ms = Some(preparation_started.elapsed().as_secs_f64() * 1000.);
         if let Some(budget) = &self.budget {
             budget.reserve().await?;
         }
         audit
             .dispatched
             .store(true, std::sync::atomic::Ordering::Release);
+        let dispatch_started = std::time::Instant::now();
         let response = tokio::time::timeout(std::time::Duration::from_secs(120), request.send())
             .await
             .map_err(|_| failed("model_headers_timeout"))?
             .map_err(|_| failed("model_connection_failed"))?;
+        audit
+            .timing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .headers_ms = Some(dispatch_started.elapsed().as_secs_f64() * 1000.);
+        let stream_started = std::time::Instant::now();
         let status = response.status();
         if !status.is_success() {
             let mut stream = response.bytes_stream();
@@ -334,6 +386,12 @@ impl NativeTransport {
                     let result = assembly.event(input, credential.route.protocol, value);
                     *audit.partial.lock().unwrap_or_else(|e| e.into_inner()) =
                         assembly.partial_usage(credential.route.protocol);
+                    {
+                        let mut timing = audit.timing.lock().unwrap_or_else(|e| e.into_inner());
+                        timing.first_content_ms = assembly.first_content_ms;
+                        timing.first_text_ms = assembly.first_token_ms;
+                        timing.stream_ms = Some(stream_started.elapsed().as_secs_f64() * 1000.);
+                    }
                     result?;
                 }
             }
@@ -363,6 +421,9 @@ pub fn model_name(model: &str) -> &str {
 /// observer is diagnostic and cannot turn unwinding into a process abort.
 struct AttemptGuard {
     attempt: Attempt,
+    timing: std::sync::Mutex<Timing>,
+    probe: Option<diagnostics::Probe>,
+    diagnostics: Arc<diagnostics::Monitor>,
     started: std::time::Instant,
     dispatched: std::sync::atomic::AtomicBool,
     partial: std::sync::Mutex<Option<Usage>>,
@@ -374,9 +435,22 @@ impl AttemptGuard {
         input: &ModelInput,
         credential: &Credential,
         observer: Arc<dyn Fn(Attempt) + Send + Sync>,
+        diagnostics: Arc<diagnostics::Monitor>,
     ) -> Self {
         let started = std::time::Instant::now();
+        let fingerprint = request::fingerprint(input, credential);
+        let probe = diagnostics.begin(
+            &input.root_id,
+            &input.agent_id,
+            &credential.connection_id,
+            &input.model,
+            &fingerprint,
+            &input.messages,
+        );
         Self {
+            timing: std::sync::Mutex::new(Timing::default()),
+            probe: Some(probe),
+            diagnostics,
             started,
             dispatched: std::sync::atomic::AtomicBool::new(false),
             partial: std::sync::Mutex::new(None),
@@ -400,7 +474,9 @@ impl AttemptGuard {
                 elapsed_ms: 0.,
                 usage: None,
                 error_code: Some("request_abandoned".into()),
-                prefix_fingerprint: request::fingerprint(input, credential),
+                prefix_fingerprint: fingerprint,
+                timing: Timing::default(),
+                cache: CacheDiagnostic::default(),
             },
         }
     }
@@ -422,6 +498,14 @@ impl Drop for AttemptGuard {
             usage.purpose = self.attempt.purpose;
             usage.billing_route = Some(self.attempt.billing_route.clone());
             usage.prefix_fingerprint = Some(self.attempt.prefix_fingerprint.clone());
+        }
+        self.attempt.timing = self
+            .timing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(probe) = self.probe.take() {
+            self.diagnostics.finish(probe, &mut self.attempt);
         }
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             (self.observer)(self.attempt.clone())

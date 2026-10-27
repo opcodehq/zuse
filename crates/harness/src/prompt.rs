@@ -107,8 +107,15 @@ fn content_bytes(content: &Value) -> (u64, u64) {
         count += if part["type"] == "image" {
             images += 8192;
             object_bytes(part, "image", 2)
-        } else if part["type"] == "tool-result" && part["output"]["type"] == "content" {
-            if let Some(files) = part["output"]["value"].as_array() {
+        } else if part["type"] == "tool-result"
+            && matches!(part["output"]["type"].as_str(), Some("content" | "mixed"))
+        {
+            let field = if part["output"]["type"] == "mixed" {
+                "parts"
+            } else {
+                "value"
+            };
+            if let Some(files) = part["output"][field].as_array() {
                 let mut length = 2 + files.len().saturating_sub(1) as u64;
                 for file in files {
                     length += if file["mediaType"]
@@ -121,11 +128,7 @@ fn content_bytes(content: &Value) -> (u64, u64) {
                         bytes(file)
                     };
                 }
-                object_bytes(
-                    part,
-                    "output",
-                    object_bytes(&part["output"], "value", length),
-                )
+                object_bytes(part, "output", object_bytes(&part["output"], field, length))
             } else {
                 bytes(part)
             }

@@ -162,6 +162,7 @@ async fn authenticated_fixture(
                     prompt_cache: true,
                 },
                 max_output_tokens: 4096,
+                allowed_reasoning: None,
                 tool_namespace: None,
                 include_encrypted_reasoning: false,
             },
@@ -629,4 +630,125 @@ fn subscription_oauth_requires_its_exact_protocol_and_preserves_attribution_with
     );
     Arc::make_mut(&mut request.messages).push(Message::text(Role::User, "next turn"));
     assert_eq!(request::fingerprint(&request, &credential), fingerprint);
+}
+
+#[tokio::test]
+async fn explicit_model_reasoning_capabilities_reject_unsupported_levels_before_sending() {
+    let (mut credential, _body) = fixture(Protocol::Messages, vec![], false).await;
+    credential.route.allowed_reasoning = Some(vec!["medium".into()]);
+    let mut request = input();
+    request.reasoning = Some("high".into());
+    let result = NativeTransport::new()
+        .unwrap()
+        .request(request, credential)
+        .await;
+    assert!(matches!(result,Err(Error::Model{code,..}) if code=="unsupported_reasoning_level"));
+}
+#[tokio::test]
+async fn tool_only_streams_report_first_content_and_provider_wait_separately() {
+    let events = vec![
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call","name":"edit","input":{}}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
+        json!({"type":"message_stop"}),
+    ];
+    let (credential, _body) = fixture(Protocol::Messages, events, false).await;
+    let seen = Arc::new(std::sync::Mutex::new(vec![]));
+    let capture = seen.clone();
+    let output = NativeTransport::new()
+        .unwrap()
+        .with_observer(Arc::new(move |attempt| {
+            capture.lock().unwrap().push(attempt)
+        }))
+        .request(input(), credential)
+        .await
+        .unwrap();
+    assert!(output.usage.first_token_ms.is_none());
+    let records = seen.lock().unwrap();
+    let timing = &records[0].timing;
+    assert!(timing.first_content_ms.is_some());
+    assert!(timing.first_text_ms.is_none());
+    assert!(timing.headers_ms.is_some());
+    assert!(timing.preparation_ms.is_some());
+    assert!(timing.stream_ms.is_some());
+}
+
+#[tokio::test]
+async fn registered_plan_route_keeps_public_responses_contract_and_selected_effort() {
+    let (mut credential, _body) = fixture(Protocol::Responses, vec![], false).await;
+    credential.route = Route::subscription("chatgpt").unwrap();
+    assert_eq!(
+        credential.route.endpoint,
+        "https://api.openai.com/v1/responses"
+    );
+    let mut request = input();
+    request.reasoning = Some("medium".into());
+    let body = super::request::body(&request, &credential).unwrap();
+    assert_eq!(body["store"], false);
+    assert_eq!(body["stream"], true);
+    assert!(body["input"].is_array());
+    assert!(body["instructions"].is_string());
+    assert_eq!(body["reasoning"]["effort"], "medium");
+    assert_eq!(body["tools"][0]["type"], "namespace");
+    assert_eq!(body["tools"][0]["name"], "zuse");
+    for field in [
+        "max_output_tokens",
+        "previous_response_id",
+        "temperature",
+        "top_p",
+        "prompt",
+        "text",
+    ] {
+        assert!(body.get(field).is_none(), "unsupported plan field: {field}");
+    }
+    assert!(
+        !body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["role"] == "system")
+    );
+}
+
+#[tokio::test]
+async fn mixed_tool_text_and_images_survive_supported_provider_translations() {
+    let output = crate::ToolOutput::Mixed {
+        r#type: "mixed".into(),
+        parts: vec![
+            json!({"type":"text","text":"Screenshot from browser"}),
+            json!({"type":"file","mediaType":"image/png","data":{"type":"data","data":"aGVsbG8="}}),
+        ],
+    };
+    assert!(output.validate());
+    let encoded = serde_json::to_vec(&output).unwrap();
+    let restored: crate::ToolOutput = serde_json::from_slice(&encoded).unwrap();
+    assert!(restored.validate());
+    for protocol in [
+        Protocol::Responses,
+        Protocol::Messages,
+        Protocol::GenerateContent,
+        Protocol::ChatCompletions,
+    ] {
+        let (mut credential, _body) = fixture(protocol, vec![], false).await;
+        let mut request = input();
+        let call = crate::Call {
+            id: "image-call".into(),
+            name: "edit".into(),
+            input: json!({}),
+        };
+        Arc::make_mut(&mut request.messages).push(Message::tool(&call, &output));
+        let body = super::request::body(&request, &credential);
+        if protocol == Protocol::ChatCompletions {
+            assert!(
+                matches!(body,Err(Error::Model{code,..}) if code=="unsupported_image_tool_result")
+            );
+            continue;
+        }
+        let body = body.unwrap().to_string();
+        assert!(body.contains("Screenshot from browser"));
+        assert!(body.contains("aGVsbG8="));
+        credential.route.capabilities.images = false;
+        assert!(
+            matches!(super::request::body(&request,&credential),Err(Error::Model{code,..}) if code=="unsupported_images")
+        );
+    }
 }

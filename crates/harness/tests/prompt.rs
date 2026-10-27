@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use zuse_harness::{Compaction, Message, Role, prompt::*};
+use zuse_harness::{Call, Compaction, Message, Role, ToolOutput, prompt::*};
 fn legacy_estimate(messages: &[Message]) -> u64 {
     messages
         .iter()
@@ -111,4 +111,28 @@ fn bounded_context_preserves_instructions_recent_exchanges_and_full_shared_histo
         serde_json::to_value(&history[4]).unwrap()
     );
     assert_eq!(serde_json::to_value(history).unwrap(), original);
+}
+
+#[test]
+fn mixed_tool_images_use_image_estimates_instead_of_counting_base64_as_text() {
+    let make = |size| {
+        Message::tool(
+            &Call {
+                id: "image".into(),
+                name: "image".into(),
+                input: serde_json::json!({}),
+            },
+            &ToolOutput::Mixed {
+                r#type: "mixed".into(),
+                parts: vec![
+                    serde_json::json!({"type":"text","text":"Image result"}),
+                    serde_json::json!({"type":"file","mediaType":"image/png","data":{"type":"data","data":"a".repeat(size)}}),
+                ],
+            },
+        )
+    };
+    assert_eq!(
+        zuse_harness::prompt::estimate(&[make(32)]),
+        zuse_harness::prompt::estimate(&[make(100000)])
+    );
 }

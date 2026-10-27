@@ -10,6 +10,7 @@ pub mod native;
 pub mod native_tools;
 pub mod processes;
 pub mod prompt;
+pub mod settings;
 pub mod state;
 pub mod store;
 pub mod transport;
@@ -204,6 +205,15 @@ pub trait RequestBudget: Send + Sync {
 #[async_trait]
 pub trait Host: Send + Sync {
     fn tools(&self) -> Tools;
+    /// Only independent, side-effect-free operations may opt in. Category alone
+    /// is insufficient: questions and plan updates are also classified as reads.
+    fn parallel_read(&self, _name: &str) -> bool {
+        false
+    }
+    fn notifications(&self, _agent: &str) -> Vec<Mail> {
+        vec![]
+    }
+    fn acknowledge_notifications(&self, _agent: &str, _ids: &[String]) {}
     async fn load(&self) -> Result<Option<Checkpoint>, Error>;
     async fn save(&self, state: &Checkpoint) -> Result<(), Error>;
     async fn instructions(&self) -> Result<String, Error>;

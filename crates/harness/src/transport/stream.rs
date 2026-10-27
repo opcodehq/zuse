@@ -67,6 +67,7 @@ pub(super) struct Assembly {
     stop: Option<String>,
     pub response_id: Option<String>,
     pub first_token_ms: Option<f64>,
+    pub first_content_ms: Option<f64>,
     started: Option<std::time::Instant>,
 }
 impl Assembly {
@@ -119,6 +120,39 @@ impl Assembly {
         }
         if event.get("error").is_some() || event["type"] == "error" {
             return Err(failed("provider_stream_error"));
+        }
+        let meaningful = match protocol {
+            Protocol::Messages => {
+                event["content_block"]["type"] == "tool_use"
+                    || ["text", "thinking", "partial_json"]
+                        .iter()
+                        .any(|k| event["delta"][*k].as_str().is_some_and(|s| !s.is_empty()))
+            }
+            Protocol::Responses => {
+                event["item"]["type"] == "function_call"
+                    || event["delta"].as_str().is_some_and(|s| !s.is_empty())
+            }
+            Protocol::GenerateContent => event["candidates"].as_array().is_some_and(|v| {
+                v.iter().any(|c| {
+                    c["content"]["parts"]
+                        .as_array()
+                        .is_some_and(|parts| !parts.is_empty())
+                })
+            }),
+            Protocol::ChatCompletions => event["choices"].as_array().is_some_and(|v| {
+                v.iter().any(|c| {
+                    c["delta"]["content"]
+                        .as_str()
+                        .is_some_and(|s| !s.is_empty())
+                        || c["delta"]["tool_calls"]
+                            .as_array()
+                            .is_some_and(|parts| !parts.is_empty())
+                })
+            }),
+        };
+        if meaningful {
+            self.first_content_ms
+                .get_or_insert_with(|| self.started.unwrap().elapsed().as_secs_f64() * 1000.);
         }
         match protocol {
             Protocol::Responses => match event["type"].as_str().unwrap_or("") {

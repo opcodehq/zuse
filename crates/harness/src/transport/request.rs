@@ -61,7 +61,29 @@ fn image(part: &Value) -> Result<(&str, &str), Error> {
     }
     Ok((mime, data))
 }
+fn tool_parts(output: &Value) -> Option<&Vec<Value>> {
+    match output["type"].as_str() {
+        Some("content") => output["value"].as_array(),
+        Some("mixed") => output["parts"].as_array(),
+        _ => None,
+    }
+}
+fn tool_images(output: &Value) -> bool {
+    tool_parts(output).is_some_and(|parts| {
+        parts
+            .iter()
+            .any(|p| matches!(p["type"].as_str(), Some("file" | "image")))
+    })
+}
 fn text_result(output: &Value) -> String {
+    if output["type"] == "mixed" {
+        return tool_parts(output)
+            .into_iter()
+            .flatten()
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
     if output["type"] == "text" {
         output["value"].as_str().unwrap_or("").to_owned()
     } else {
@@ -203,6 +225,11 @@ pub(super) fn body(input: &ModelInput, credential: &Credential) -> Result<Value,
             }
         }
     }
+    if let (Some(level), Some(allowed)) = (&input.reasoning, &route.allowed_reasoning)
+        && !allowed.contains(level)
+    {
+        return Err(failed("unsupported_reasoning_level"));
+    }
     if input.reasoning.is_some() && !route.capabilities.reasoning {
         return Err(failed("unsupported_reasoning"));
     }
@@ -211,7 +238,7 @@ pub(super) fn body(input: &ModelInput, credential: &Credential) -> Result<Value,
     }
     if input.messages.iter().any(|m| {
         parts(m).iter().any(|p| {
-            p["type"] == "image" || (p["type"] == "tool-result" && p["output"]["type"] == "content")
+            p["type"] == "image" || (p["type"] == "tool-result" && tool_images(&p["output"]))
         })
     }) && !route.capabilities.images
     {
@@ -243,9 +270,8 @@ pub(super) fn body(input: &ModelInput, credential: &Credential) -> Result<Value,
                         Some("image") => { let (mime,data)=image(part)?; content.push(json!({"type":"input_image","image_url":format!("data:{mime};base64,{data}")})); },
                         Some("tool-call") => { let mut call=json!({"type":"function_call","call_id":part["toolCallId"],"name":part["toolName"],"arguments":part["input"].to_string()}); if let Some(namespace)=&route.tool_namespace{call["namespace"]=json!(namespace);} history.push(call); },
                         Some("tool-result") => {
-                            let output = if part["output"]["type"]=="content" {
-                                let files=part["output"]["value"].as_array().ok_or_else(|| failed("invalid_tool_output"))?;
-                                Value::Array(files.iter().map(|f| json!({"type":"input_image","image_url":format!("data:{};base64,{}",f["mediaType"].as_str().unwrap_or(""),f["data"]["data"].as_str().unwrap_or(""))})).collect())
+                            let output = if let Some(files)=tool_parts(&part["output"]) {
+                                Value::Array(files.iter().map(|f| if f["type"]=="text" {json!({"type":"input_text","text":f["text"]})} else {json!({"type":"input_image","image_url":format!("data:{};base64,{}",f["mediaType"].as_str().unwrap_or(""),f["data"]["data"].as_str().unwrap_or(""))})}).collect())
                             } else { json!(text_result(&part["output"])) };
                             history.push(json!({"type":"function_call_output","call_id":part["toolCallId"],"output":output}));
                         },
@@ -293,8 +319,8 @@ pub(super) fn body(input: &ModelInput, credential: &Credential) -> Result<Value,
                             Some("image")=>{let(mime,data)=image(part)?;json!({"type":"image","source":{"type":"base64","media_type":mime,"data":data}})},
                             Some("tool-call")=>json!({"type":"tool_use","id":part["toolCallId"],"name":part["toolName"],"input":part["input"]}),
                             Some("tool-result")=>{
-                                let result=if part["output"]["type"]=="content" {
-                                    Value::Array(part["output"]["value"].as_array().ok_or_else(||failed("invalid_tool_output"))?.iter().map(|f|json!({"type":"image","source":{"type":"base64","media_type":f["mediaType"],"data":f["data"]["data"]}})).collect())
+                                let result=if let Some(files)=tool_parts(&part["output"]) {
+                                    Value::Array(files.iter().map(|f|if f["type"]=="text" {json!({"type":"text","text":f["text"]})} else {json!({"type":"image","source":{"type":"base64","media_type":f["mediaType"],"data":f["data"]["data"]}})}).collect())
                                 }else{json!(text_result(&part["output"]))};
                                 json!({"type":"tool_result","tool_use_id":part["toolCallId"],"content":result})
                             },
@@ -380,10 +406,9 @@ pub(super) fn body(input: &ModelInput, credential: &Credential) -> Result<Value,
                         Some("tool-call")=>json!({"functionCall":{"id":part["toolCallId"],"name":part["toolName"],"args":part["input"]}}),
                         Some("tool-result")=>{
                             let mut response = json!({"id":part["toolCallId"],"name":part["toolName"],"response":{"output":text_result(&part["output"])}});
-                            if part["output"]["type"] == "content" {
-                                let files = part["output"]["value"].as_array().ok_or_else(|| failed("invalid_tool_output"))?;
+                            if let Some(files)=tool_parts(&part["output"]) {
                                 let mut images = Vec::with_capacity(files.len());
-                                for file in files {
+                                for file in files.iter().filter(|f|matches!(f["type"].as_str(),Some("file"|"image"))) {
                                     let mime = file["mediaType"].as_str().ok_or_else(|| failed("invalid_image"))?;
                                     let data = file["data"]["data"].as_str().ok_or_else(|| failed("invalid_image"))?;
                                     if !matches!(mime, "image/png" | "image/jpeg" | "image/webp" | "image/gif") {
@@ -391,7 +416,7 @@ pub(super) fn body(input: &ModelInput, credential: &Credential) -> Result<Value,
                                     }
                                     images.push(json!({"inlineData":{"mimeType":mime,"data":data}}));
                                 }
-                                response["response"] = json!({"output":"Images returned by tool"});
+                                response["response"] = json!({"output":if part["output"]["type"]=="mixed" {text_result(&part["output"])} else {"Images returned by tool".into()}});
                                 response["parts"] = json!(images);
                             }
                             json!({"functionResponse":response})
@@ -437,7 +462,7 @@ pub(super) fn body(input: &ModelInput, credential: &Credential) -> Result<Value,
                     Some("text")=>content.push(json!({"type":"text","text":text(part)})),
                     Some("image")=>{let(mime,data)=image(part)?;content.push(json!({"type":"image_url","image_url":{"url":format!("data:{mime};base64,{data}")}}));},
                     Some("tool-call")=>calls.push(json!({"id":part["toolCallId"],"type":"function","function":{"name":part["toolName"],"arguments":part["input"].to_string()}})),
-                    Some("tool-result")=>{if part["output"]["type"]=="content"{return Err(failed("unsupported_image_tool_result"));}history.push(json!({"role":"tool","tool_call_id":part["toolCallId"],"content":text_result(&part["output"])}));},
+                    Some("tool-result")=>{if tool_images(&part["output"]){return Err(failed("unsupported_image_tool_result"));}history.push(json!({"role":"tool","tool_call_id":part["toolCallId"],"content":text_result(&part["output"])}));},
                     Some("reasoning")=>{if compatible{reasoning.push_str(part["text"].as_str().unwrap_or(""));}},
                     _=>return Err(failed("unsupported_message_part")),
                 }

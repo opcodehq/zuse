@@ -35,6 +35,8 @@ struct ApiConnection {
     tool_namespace: Option<String>,
     #[serde(default)]
     include_encrypted_reasoning: bool,
+    #[serde(default)]
+    allowed_reasoning: Option<Vec<String>>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -103,6 +105,7 @@ impl ApiModels {
                 betas: c.betas.clone(),
                 capabilities: c.capabilities.clone(),
                 max_output_tokens: c.max_output_tokens,
+                allowed_reasoning: c.allowed_reasoning.clone(),
                 tool_namespace: c.tool_namespace.clone(),
                 include_encrypted_reasoning: c.include_encrypted_reasoning,
             }
@@ -197,6 +200,7 @@ impl ApiModels {
                     betas: c.betas.clone(),
                     capabilities: c.capabilities.clone(),
                     max_output_tokens: c.max_output_tokens,
+                    allowed_reasoning: c.allowed_reasoning.clone(),
                     tool_namespace: c.tool_namespace.clone(),
                     include_encrypted_reasoning: c.include_encrypted_reasoning,
                 },
