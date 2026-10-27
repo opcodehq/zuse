@@ -128,6 +128,10 @@ def main():
             assert len(report["runs"]) == 15
             assert all(run["status"] == "passed" for run in report["runs"]), f"See {report_path}"
             assert report["reserved_requests"] == Model.requests <= 300
+            assert all(run["peak_tree_rss_bytes"] > 0 and run["peak_tree_pss_bytes"] > 0 for run in report["runs"])
+            assert all(run["cpu_seconds"] >= 0 and run["process_output_block_bytes"] >= 0 for run in report["runs"])
+            assert any(run["peak_processes"] > 1 for run in report["runs"]), "Command helpers must count toward process-tree memory"
+
             # Force an endless tool loop and prove both root and physical caps.
             cap = args.output / "cap-test"
             cap.mkdir()

@@ -49,17 +49,20 @@ and `claude-opus-5-5`, each at medium. Regression tests cover required attributi
 automatic beta flags, empty system instructions, protocol validation, cache-boundary
 preservation and stable fingerprints across ordinary turns.
 
-One subsequent coding trial per model exercised real native tools. Opus passed
-the clamp acceptance test in five physical requests. Sonnet's trial stopped after
-two requests when the parser reported `invalid_tool_arguments`; its acceptance
-check failed. This separate tool-response issue is not diagnosed here and is not
-claimed fixed. Both trials observed provider-reported cache reads. These are small
-live checks, not a comparative quality/cost benchmark or a reason to enable context
-reductions.
+One initial coding trial per model exercised real native tools. Opus passed
+the clamp acceptance test in five physical requests. Sonnet stopped after two
+requests with `invalid_tool_arguments`. A subsequent captured stream isolated a
+valid parameterless call that sent only an empty `input_json_delta`. The native
+parser now preserves initial input for empty deltas, while rejecting malformed
+nonempty JSON and references to unknown blocks. Fragmented transport tests cover
+these cases, and the original coding task subsequently passed. Initial failures
+remain in the discovery evidence. See the [reference evaluation](harness-reference-evaluation.md)
+for repeated coding measurements; the earlier checks alone do not establish
+comparative quality or justify enabling context reductions.
 
-At this checkpoint the shared ceiling has **33/300 reservations** consumed,
-including earlier diagnostics and one unused preparation reservation. Continue
-from the same ledger. Corrected smoke and coding evidence is in
+At that historical checkpoint the shared ceiling had **33/300 reservations** consumed,
+including earlier diagnostics and one unused preparation reservation. The subsequent comparison continues from that same ledger; its report records
+the updated count. Corrected smoke and coding evidence is in
 `.context/native-oauth-fixed/`; controlled differential requests are in the
 `.context/rate-limit-*/` directories. Credentials are absent from those reports.
 

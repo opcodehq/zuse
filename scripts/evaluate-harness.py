@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import resource
 from pathlib import Path
 import signal
 import subprocess
@@ -42,6 +43,72 @@ def describe(command):
         return False
 
 
+class ProcessTreeMetrics:
+    """Sample concurrent resident pages; retain identity across child reparenting.
+
+    PSS divides shared pages, while RSS counts them in each process. Short-lived
+    children can escape sampling; wait-based CPU and block IO cover reaped work.
+    """
+    def __init__(self, pid):
+        self.pid = pid
+        self.identities = set()
+        self.peak_rss = self.peak_pss = self.peak_processes = 0
+        self.samples = 0
+
+    def sample(self):
+        table = {}
+        for directory in Path("/proc").iterdir():
+            if not directory.name.isdigit():
+                continue
+            try:
+                fields = (directory / "stat").read_text().rpartition(")")[2].split()
+                table[int(directory.name)] = (int(fields[1]), fields[19], fields[0], directory)
+            except (OSError, ValueError, IndexError):
+                continue
+        selected = {pid for pid, (_, start, _, _) in table.items()
+                    if pid == self.pid or (pid, start) in self.identities}
+        previous = -1
+        while previous != len(selected):
+            previous = len(selected)
+            selected.update(pid for pid, (parent, _, _, _) in table.items() if parent in selected)
+        rss = pss = count = 0
+        for pid in selected:
+            _, start, state, directory = table[pid]
+            self.identities.add((pid, start))
+            if state == "Z":
+                continue
+            count += 1
+            try:
+                values = dict(line.split(":", 1) for line in (directory / "smaps_rollup").read_text().splitlines() if ":" in line)
+                rss += int(values["Rss"].split()[0]) * 1024
+                pss += int(values["Pss"].split()[0]) * 1024
+            except (OSError, ValueError, KeyError):
+                continue
+        self.peak_rss = max(self.peak_rss, rss)
+        self.peak_pss = max(self.peak_pss, pss)
+        self.peak_processes = max(self.peak_processes, count)
+        self.samples += 1
+        return count
+
+    def result(self):
+        return {"peak_tree_rss_bytes": self.peak_rss, "peak_tree_pss_bytes": self.peak_pss,
+                "peak_processes": self.peak_processes, "resource_samples": self.samples,
+                "resource_sample_interval_ms": 20}
+
+
+def wait_with_metrics(process, timeout):
+    metrics = ProcessTreeMetrics(process.pid)
+    deadline = time.monotonic() + timeout
+    while process.poll() is None:
+        metrics.sample()
+        if time.monotonic() > deadline:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            break
+        time.sleep(0.02)
+    return process.returncode, metrics.result()
+
+
 def run(arm, case, directory, global_ledger, output, repetition, smoke=False):
     root = directory / f"{arm['label']}-{case['id']}-{repetition}"
     checkout, profile = root / "checkout", root / "profile"
@@ -61,13 +128,12 @@ def run(arm, case, directory, global_ledger, output, repetition, smoke=False):
         command.append("--bounded-context")
     started = time.monotonic()
     with (root / "events.jsonl").open("w") as stdout, (root / "stderr.log").open("w") as stderr:
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
         process = subprocess.Popen(command, stdout=stdout, stderr=stderr, start_new_session=True)
-        try:
-            code = process.wait(timeout=900)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-            code = -9
+        code, metrics = wait_with_metrics(process, 900)
+        after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        metrics.update(cpu_seconds=after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime,
+                       process_output_block_bytes=(after.ru_oublock - before.ru_oublock) * 512)
     events = []
     for line in (root / "events.jsonl").read_text().splitlines():
         try:
@@ -90,6 +156,8 @@ def run(arm, case, directory, global_ledger, output, repetition, smoke=False):
            "unreported_reservations": max(0, reservations - sum(bool(r.get("dispatched")) for r in requests)), "fixture_sha256": hashlib.sha256(json.dumps(original, sort_keys=True).encode()).hexdigest()}
     if reservations > 6:
         raise RuntimeError("Runner violated per-run request cap")
+    row.update(metrics)
+    row["retained_profile_bytes"] = sum(path.stat().st_size for path in profile.rglob("*") if path.is_file() and not path.is_symlink())
     output["runs"].append(row)
     return row
 
