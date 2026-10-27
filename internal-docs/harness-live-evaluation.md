@@ -19,16 +19,24 @@ The credential inherited from Conductor's environment reached the provider:
 | `claude-sonnet-5-5` | medium | HTTP 429; no completed inference | unknown |
 | `claude-opus-5-5` | medium | HTTP 429; no completed inference | unknown |
 
+A second check used the credential subsequently provided by the user, with its
+wrapped lines joined in memory. Both exact models at medium again returned HTTP
+429 through the native evaluator. A small Sonnet diagnostic also returned 429;
+no retry/reset headers or token usage were supplied. This does not establish
+successful inference or validate the new credential independently of the throttle.
+The credential was handed to child evaluators through a scoped environment
+variable and was not written into profile files, command arguments or reports.
+
 These results establish inventory access and attempted model routing, not successful
 inference, actual reasoning execution, task quality, cache hits or cost savings.
 The exact throttle/quota cause and reset time are unknown. Further live comparisons
 were stopped rather than repeatedly issuing requests against the same failure.
 
-The persistent global ledger has **6 of 300 reservations** consumed: five observed
+The persistent global ledger has **9 of 300 reservations** consumed: eight observed
 HTTP requests and one unused preparation reservation retained conservatively.
-Three HTTP requests attempted inference; none completed. Inventory and invalid-model
+Six HTTP requests attempted inference; none completed. Inventory and invalid-model
 probes are also counted conservatively. No API-equivalent dollar estimate or actual
-subscription charge is inferred. There are 294 reservations left for subsequent
+subscription charge is inferred. There are 291 reservations left for subsequent
 live work; retain the ledger when resuming.
 
 ## Credential handoff
@@ -101,6 +109,7 @@ Checks passed:
 Cloud-local evidence lives in this worktree's ignored `.context/`:
 
 - `live-native-medium/report.json` and per-model smoke events/configuration.
+- `live-user-token-medium/report.json` and its per-model events record the supplied-credential retest.
 - `native-oauth-auth-probe.json`, `native-oauth-model-inventory.json` and
   `native-oauth-rate-limit-diagnosis.json` contain sanitized probe results.
 - `harness-evaluation-global.ledger` is the persistent shared 300-reservation ceiling.
