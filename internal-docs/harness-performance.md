@@ -73,6 +73,13 @@ measurements are not portable CI timing thresholds.
   serializes borrowed request fields and consumes completed response values.
 - SDK admission uses one 128-request semaphore. Excess requests wait without
   expanding wire buffers; cancellation and shutdown release waiting requests.
+- The pinned SDK patch selects message schemas by `role` and content schemas by
+  `type`. It keeps the existing validators while avoiding construction of errors
+  for unrelated variants on every retained message. Both the published source
+  and distribution are patched through Bun's versioned patch mechanism; no
+  validator is copied into the bridge. Run `bun install --frozen-lockfile`,
+  `bun run test` and `bun run build` in `crates/harness/bridge` when updating it.
+  Preserve the multimodal, reasoning, tool-approval and malformed-input checks.
 - Once a shared-pipe write begins, its complete JSON frame keeps the writer lock
   even if the caller is cancelled. Other requests cannot receive a truncated frame.
 - Root-ID lookups do not clone a session checkpoint.
