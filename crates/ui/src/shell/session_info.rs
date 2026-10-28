@@ -316,6 +316,7 @@ impl Shell {
             change_request,
             diff_stat,
             agents,
+            background,
         ) = {
             let state = self.state.read(cx);
             let chat = state.selected_chat_row()?.clone();
@@ -354,6 +355,14 @@ impl Shell {
             let change_request = state.change_request_for_chat(&chat).cloned();
             let diff_stat = state.diff_stat_for_chat(&chat);
             let agents = chat_agents(&state.transcript);
+            // Detached agents are listed with the other agents; this lists
+            // processes (shells, dev servers, monitors).
+            let background: Vec<zuse_protocol::BackgroundTask> =
+                zuse_protocol::view::background_tasks(state.session_for(&chat.id), now)
+                    .iter()
+                    .filter(|task| task.kind != zuse_protocol::BackgroundTaskKind::Agent)
+                    .cloned()
+                    .collect();
             (
                 chat,
                 device,
@@ -365,6 +374,7 @@ impl Shell {
                 change_request,
                 diff_stat,
                 agents,
+                background,
             )
         };
 
@@ -472,8 +482,10 @@ impl Shell {
                 .child(row_meta(&theme).child(SharedString::from(format!("#{}", model.number))))
         });
 
-        // ── Who works on it: the chat's subagents, running ones first.
-        let agents_section = self.render_session_info_agents(&chat, agents, &theme, cx);
+        // ── What runs for it: background processes, then the chat's
+        // subagents, running ones first.
+        let mut activity = self.render_session_info_background(&chat.id, background, &theme, cx);
+        activity.extend(self.render_session_info_agents(&chat, agents, &theme, cx));
 
         // ── This conversation. Forking lives on each reply's footer.
         let busy = self.side_chat_creating;
@@ -503,8 +515,8 @@ impl Shell {
             .children(pull_request_row)
             // The session's activity sits under a rule, apart from the
             // workspace it runs in.
-            .when(!agents_section.is_empty(), |body| {
-                body.child(fade_rule(&theme)).children(agents_section)
+            .when(!activity.is_empty(), |body| {
+                body.child(fade_rule(&theme)).children(activity)
             })
             .child(fade_rule(&theme))
             .child(side_chat)
@@ -609,6 +621,189 @@ impl Shell {
         )
         .into_any_element();
         (row, open)
+    }
+
+    /// The Background work section, folded by default: running processes
+    /// first, each with its own stop control when the runtime offers one,
+    /// then the recently ended ones with how they ended.
+    fn render_session_info_background(
+        &mut self,
+        chat_id: &str,
+        tasks: Vec<zuse_protocol::BackgroundTask>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        if tasks.is_empty() {
+            return Vec::new();
+        }
+        let now = Utc::now();
+        let (running, ended): (Vec<_>, Vec<_>) = tasks
+            .into_iter()
+            .partition(zuse_protocol::BackgroundTask::running);
+        // A requested stop lasts until the task leaves the live set.
+        self.background_stops
+            .retain(|id| running.iter().any(|task| &task.id == id));
+        let (header, open) = self.session_info_section(
+            "background",
+            false,
+            row_glyph(icons::TERMINAL, theme),
+            "Background work",
+            (!running.is_empty()).then(|| format!("{} running", running.len()).into()),
+            theme,
+            cx,
+        );
+        let mut rows = vec![header];
+        if !open {
+            return rows;
+        }
+        let elapsed = |task: &zuse_protocol::BackgroundTask| {
+            let end = task.ended_at.unwrap_or(now);
+            SharedString::from(crate::transcript::format_elapsed(
+                end.signed_duration_since(task.started_at).num_seconds(),
+            ))
+        };
+        let label = |task: &zuse_protocol::BackgroundTask| -> SharedString {
+            let text = task.description.trim();
+            if text.is_empty() {
+                "Background process".into()
+            } else {
+                text.to_owned().into()
+            }
+        };
+        let group = |text: &'static str, action: Option<AnyElement>| {
+            sub_row(theme)
+                .min_h(px(22.0))
+                .text_size(px(11.0))
+                .text_color(theme.text_muted.opacity(0.8))
+                .child(div().flex_1().min_w_0().truncate().child(text))
+                .children(action)
+                .into_any_element()
+        };
+        if !running.is_empty() {
+            let stoppable: Vec<String> = running
+                .iter()
+                .filter(|task| task.stoppable && !self.background_stops.contains(&task.id))
+                .map(|task| task.id.clone())
+                .collect();
+            let stop_all = (stoppable.len() > 1).then(|| {
+                let chat_id = chat_id.to_owned();
+                div()
+                    .id("session-info-background-stop-all")
+                    .flex_none()
+                    .cursor_pointer()
+                    .hover(|style| style.text_color(theme.text))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        for id in &stoppable {
+                            this.stop_background_task(&chat_id, id, cx);
+                        }
+                    }))
+                    .child("Stop all")
+                    .into_any_element()
+            });
+            rows.push(group("Running", stop_all));
+            for task in &running {
+                let stopping = self.background_stops.contains(&task.id);
+                let control: AnyElement = if stopping {
+                    crate::loaders::ring_spinner(
+                        SharedString::from(format!("session-info-background-stopping-{}", task.id)),
+                        12.0,
+                        1.5,
+                        theme.text_muted.opacity(0.25),
+                        theme.text_muted,
+                    )
+                } else if task.stoppable {
+                    let (chat_id, id) = (chat_id.to_owned(), task.id.clone());
+                    let group =
+                        SharedString::from(format!("session-info-background-stop-{}", task.id));
+                    div()
+                        .id(group.clone())
+                        .group(group.clone())
+                        .size(px(16.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .cursor_pointer()
+                        .tooltip(crate::settings::widgets::text_tooltip("Stop"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.stop_background_task(&chat_id, &id, cx);
+                        }))
+                        .child(
+                            icon(icons::STOP)
+                                .size(px(12.0))
+                                .text_color(theme.text_muted)
+                                .group_hover(group, |style| style.text_color(theme.text)),
+                        )
+                        .into_any_element()
+                } else {
+                    agent_status_glyph(zuse_doc::SubagentStatus::Running, theme)
+                };
+                rows.push(
+                    sub_row(theme)
+                        .min_h(px(SUMMARY_ROW_HEIGHT))
+                        .text_color(theme.text)
+                        .gap(px(8.0))
+                        .child(div().flex_1().min_w_0().truncate().child(label(task)))
+                        .child(row_meta(theme).child(elapsed(task)).child(control))
+                        .into_any_element(),
+                );
+            }
+        }
+        if !ended.is_empty() {
+            rows.push(group("Stopped", None));
+            for task in ended.iter().rev() {
+                let glyph = match task.outcome {
+                    Some(zuse_protocol::BackgroundTaskOutcome::Failed) => {
+                        agent_status_glyph(zuse_doc::SubagentStatus::Failed, theme)
+                    }
+                    // Stopped on request: a quiet dash, neither success nor failure.
+                    Some(zuse_protocol::BackgroundTaskOutcome::Stopped) => {
+                        icon(icons::WINDOW_MINIMIZE)
+                            .size(px(12.0))
+                            .text_color(theme.text_muted)
+                            .into_any_element()
+                    }
+                    _ => agent_status_glyph(zuse_doc::SubagentStatus::Done, theme),
+                };
+                rows.push(
+                    sub_row(theme)
+                        .min_h(px(SUMMARY_ROW_HEIGHT))
+                        .gap(px(8.0))
+                        .child(div().flex_1().min_w_0().truncate().child(label(task)))
+                        .child(row_meta(theme).child(elapsed(task)).child(glyph))
+                        .into_any_element(),
+                );
+            }
+        }
+        rows
+    }
+
+    /// Ask the chat's host to stop one background task: a session command,
+    /// so it reaches the device the chat runs on wherever this one is.
+    fn stop_background_task(&mut self, chat_id: &str, task_id: &str, cx: &mut Context<Self>) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        if !self.background_stops.insert(task_id.to_owned()) {
+            return;
+        }
+        cx.notify();
+        let params = serde_json::json!({
+            "chatId": chat_id,
+            "command": { "kind": "stopBackgroundTask", "taskId": task_id },
+        });
+        let task_id = task_id.to_owned();
+        cx.spawn(async move |this, cx| {
+            if let Err(error) = engine.client().call(methods::QUEUE_COMMAND, params).await {
+                tracing::warn!(%error, "background task stop failed");
+                this.update(cx, |this, cx| {
+                    this.background_stops.remove(&task_id);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
     /// The Agents section: the chat's subagents, running first, each opening

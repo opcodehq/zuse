@@ -20,8 +20,8 @@ use tokio::sync::{mpsc, oneshot};
 pub use tokio_util::sync::CancellationToken;
 
 use zuse_protocol::{
-    AgentEvent, HarnessId, Model, ReasoningLevel, RunRequest, SlashCommand, SteeringMode,
-    UserInputAnswer, UserInputQuestion,
+    AgentEvent, BackgroundTaskKind, BackgroundTaskOutcome, HarnessId, Model, ReasoningLevel,
+    RunRequest, SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -107,9 +107,54 @@ pub(crate) async fn receive_steer(
 pub struct TurnControl {
     stop: std::sync::Arc<tokio::sync::Notify>,
     background: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    background_tasks: std::sync::Arc<BackgroundTasks>,
     steering: std::sync::Arc<std::sync::Mutex<SteeringState>>,
     settled: std::sync::Arc<tokio::sync::Notify>,
 }
+/// One background task as a driver reports it; the host stamps its times.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveBackgroundTask {
+    pub id: String,
+    pub kind: BackgroundTaskKind,
+    pub description: String,
+    /// The driver can stop this task alone ([`TurnControl::stop_background_task`]).
+    pub stoppable: bool,
+}
+
+/// A background task with its lifetime: running until it leaves the
+/// driver's live set, then ended with whatever outcome the driver reported.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BackgroundTaskRecord {
+    pub task: LiveBackgroundTask,
+    pub started: std::time::SystemTime,
+    pub ended: Option<std::time::SystemTime>,
+    pub outcome: Option<BackgroundTaskOutcome>,
+}
+
+/// Ended tasks kept for display after they leave the live set.
+const ENDED_BACKGROUND_TASKS: usize = 8;
+
+/// The runtime's background tasks (live and recently ended), observable by
+/// the host, plus the per-task stop requests flowing back to the driver.
+struct BackgroundTasks {
+    records: tokio::sync::watch::Sender<Vec<BackgroundTaskRecord>>,
+    /// Outcomes reported before the task left the live set.
+    outcomes: std::sync::Mutex<std::collections::HashMap<String, BackgroundTaskOutcome>>,
+    stops: std::sync::Mutex<std::collections::VecDeque<String>>,
+    stop_requested: tokio::sync::Notify,
+}
+
+impl Default for BackgroundTasks {
+    fn default() -> Self {
+        Self {
+            records: tokio::sync::watch::channel(Vec::new()).0,
+            outcomes: Default::default(),
+            stops: Default::default(),
+            stop_requested: Default::default(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct SteeringState {
     epoch: u64,
@@ -212,6 +257,122 @@ impl TurnControl {
     /// would kill work nobody asked to stop.
     pub fn background_live(&self) -> bool {
         self.background.load(std::sync::atomic::Ordering::Acquire) > 0
+            || self
+                .background_tasks
+                .records
+                .borrow()
+                .iter()
+                .any(|record| record.ended.is_none())
+    }
+
+    /// Driver: the runtime's complete live set of background tasks (replace
+    /// semantics). New ids start now; running ones missing from `live` end
+    /// now, with the outcome reported for them or `Completed`.
+    pub fn set_background_tasks(&self, live: Vec<LiveBackgroundTask>) {
+        let now = std::time::SystemTime::now();
+        let mut outcomes = self
+            .background_tasks
+            .outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.background_tasks.records.send_if_modified(|records| {
+            let before = records.clone();
+            for record in records.iter_mut().filter(|r| r.ended.is_none()) {
+                if !live.iter().any(|task| task.id == record.task.id) {
+                    record.ended = Some(now);
+                    record.outcome = Some(
+                        outcomes
+                            .remove(&record.task.id)
+                            .unwrap_or(BackgroundTaskOutcome::Completed),
+                    );
+                }
+            }
+            for task in live {
+                match records
+                    .iter_mut()
+                    .find(|r| r.ended.is_none() && r.task.id == task.id)
+                {
+                    Some(record) => record.task = task,
+                    None => records.push(BackgroundTaskRecord {
+                        task,
+                        started: now,
+                        ended: None,
+                        outcome: None,
+                    }),
+                }
+            }
+            let ended = records.iter().filter(|r| r.ended.is_some()).count();
+            let mut drop = ended.saturating_sub(ENDED_BACKGROUND_TASKS);
+            records.retain(|r| {
+                if r.ended.is_some() && drop > 0 {
+                    drop -= 1;
+                    false
+                } else {
+                    true
+                }
+            });
+            *records != before
+        });
+    }
+
+    /// Driver: how a task ended, as the runtime announced it. Applies when
+    /// the task leaves the live set (or now, if it already has).
+    pub fn note_background_outcome(&self, id: &str, outcome: BackgroundTaskOutcome) {
+        let mut applied = false;
+        self.background_tasks.records.send_if_modified(|records| {
+            if let Some(record) = records
+                .iter_mut()
+                .rev()
+                .find(|r| r.task.id == id && r.ended.is_some())
+            {
+                applied = true;
+                let changed = record.outcome != Some(outcome);
+                record.outcome = Some(outcome);
+                return changed;
+            }
+            false
+        });
+        if !applied {
+            self.background_tasks
+                .outcomes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id.to_owned(), outcome);
+        }
+    }
+
+    /// Host: the background tasks now, and every later change.
+    pub fn watch_background_tasks(
+        &self,
+    ) -> tokio::sync::watch::Receiver<Vec<BackgroundTaskRecord>> {
+        self.background_tasks.records.subscribe()
+    }
+
+    /// Host: ask the driver to stop one background task, leaving the turn
+    /// and the runtime's other work running.
+    pub fn stop_background_task(&self, id: &str) {
+        self.background_tasks
+            .stops
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back(id.to_owned());
+        self.background_tasks.stop_requested.notify_one();
+    }
+
+    /// Driver: resolves with each task the host asked to stop.
+    pub async fn background_stop_requested(&self) -> String {
+        loop {
+            if let Some(id) = self
+                .background_tasks
+                .stops
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pop_front()
+            {
+                return id;
+            }
+            self.background_tasks.stop_requested.notified().await;
+        }
     }
 }
 
@@ -787,3 +948,72 @@ mod steering_control_tests {
 mod tool_output;
 
 pub mod credentials;
+
+#[cfg(test)]
+mod background_task_tests {
+    use super::*;
+
+    fn shell(id: &str) -> LiveBackgroundTask {
+        LiveBackgroundTask {
+            id: id.into(),
+            kind: BackgroundTaskKind::Shell,
+            description: format!("run {id}"),
+            stoppable: true,
+        }
+    }
+
+    #[test]
+    fn tasks_leaving_the_live_set_end_with_their_reported_outcome() {
+        let turn = TurnControl::default();
+        let watch = turn.watch_background_tasks();
+        turn.set_background_tasks(vec![shell("a"), shell("b")]);
+        assert!(turn.background_live());
+        // Announced before it leaves the set: applied when it does.
+        turn.note_background_outcome("a", BackgroundTaskOutcome::Failed);
+        turn.set_background_tasks(vec![shell("b")]);
+        // Announced after it left (the CLI's order is unspecified).
+        turn.set_background_tasks(Vec::new());
+        turn.note_background_outcome("b", BackgroundTaskOutcome::Stopped);
+        let records = watch.borrow().clone();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|r| r.ended.is_some()));
+        assert_eq!(records[0].outcome, Some(BackgroundTaskOutcome::Failed));
+        assert_eq!(records[1].outcome, Some(BackgroundTaskOutcome::Stopped));
+        assert!(!turn.background_live());
+    }
+
+    #[test]
+    fn only_the_latest_ended_tasks_are_kept() {
+        let turn = TurnControl::default();
+        for ix in 0..ENDED_BACKGROUND_TASKS + 3 {
+            turn.set_background_tasks(vec![shell(&ix.to_string())]);
+        }
+        turn.set_background_tasks(Vec::new());
+        let records = turn.watch_background_tasks().borrow().clone();
+        assert_eq!(records.len(), ENDED_BACKGROUND_TASKS);
+        assert_eq!(
+            records.last().map(|r| r.task.id.as_str()),
+            Some((ENDED_BACKGROUND_TASKS + 2).to_string().as_str())
+        );
+    }
+
+    #[test]
+    fn an_unchanged_live_set_notifies_nobody() {
+        let turn = TurnControl::default();
+        let mut watch = turn.watch_background_tasks();
+        turn.set_background_tasks(vec![shell("a")]);
+        assert!(watch.has_changed().unwrap());
+        watch.borrow_and_update();
+        turn.set_background_tasks(vec![shell("a")]);
+        assert!(!watch.has_changed().unwrap());
+    }
+
+    #[tokio::test]
+    async fn stop_requests_reach_the_driver_in_order() {
+        let turn = TurnControl::default();
+        turn.stop_background_task("a");
+        turn.stop_background_task("b");
+        assert_eq!(turn.background_stop_requested().await, "a");
+        assert_eq!(turn.background_stop_requested().await, "b");
+    }
+}

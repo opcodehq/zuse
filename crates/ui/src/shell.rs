@@ -1610,7 +1610,8 @@ enum ShellEscapeOutcome {
 
 /// When the shell next has render-only clock pixels to repaint, as of `now`:
 /// every second while the selected chat is Working (the trailer's elapsed
-/// timer), else the next wall-clock minute for
+/// timer) or holds running background tasks (their timers in the session
+/// card), else the next wall-clock minute for
 /// relative "5m"/"2h" labels. State transitions (staleness, device presence,
 /// send grace) arrive as AppState notifications instead — see
 /// [`AppState::watch_clock_transitions`]. Nothing else ticks: AwaitingInput
@@ -1621,7 +1622,13 @@ fn shell_clock_wake(state: &AppState, now: DateTime<Utc>) -> DateTime<Utc> {
         .selected_chat
         .as_deref()
         .is_some_and(|id| state.indicator_for(id, now) == Indicator::Working);
-    if working {
+    // Running background tasks count up in the session card, turn or not.
+    let background = state.selected_chat.as_deref().is_some_and(|id| {
+        zuse_protocol::view::background_tasks(state.session_for(id), now)
+            .iter()
+            .any(|task| task.running())
+    });
+    if working || background {
         return now + chrono::TimeDelta::seconds(1);
     }
     DateTime::from_timestamp((now.timestamp().div_euclid(60) + 1) * 60, 0)
@@ -2280,6 +2287,9 @@ pub struct Shell {
     session_info_overlay: bool,
     /// The card's sections the user toggled away from their default (by key).
     session_info_folded: std::collections::HashSet<&'static str>,
+    /// Background tasks with a stop request on its way (by task id); their
+    /// row shows a spinner until the task leaves the live set.
+    background_stops: std::collections::HashSet<String>,
     /// Whether the card showed at the toggle's press (see
     /// `note_session_info_press`).
     session_info_pressed_open: Option<bool>,
@@ -2790,6 +2800,7 @@ impl Shell {
             session_info_shown: false,
             session_info_overlay: false,
             session_info_folded: Default::default(),
+            background_stops: Default::default(),
             session_info_pressed_open: None,
             session_info_docked: false,
             session_info_last_reserve: 0.0,
@@ -15219,6 +15230,7 @@ mod tests {
             started_at: Some(updated_at),
             updated_at,
             running_subagents: 0,
+            background_tasks: Vec::new(),
         }
     }
 
@@ -19280,11 +19292,47 @@ impl Shell {
                     state.apply_sessions(vec![zuse_protocol::Session {
                         last_completed_turn: None,
                         running_subagents: 1,
+                        background_tasks: Vec::new(),
                         chat_id: "browser-fixture".into(),
                         device_id: "local".into(),
                         status: zuse_protocol::SessionStatus::Working,
                         started_at: Some(Utc::now() - chrono::Duration::seconds(42)),
                         updated_at: Utc::now(),
+                    }]);
+                    cx.notify();
+                });
+            }
+            // `:transcript-card-git` also runs background work, with the
+            // card's Background work section unfolded.
+            if variant == "transcript-card-git" {
+                self.session_info_folded.insert("background");
+                let now = Utc::now();
+                let task = |id: &str, description: &str, started: i64, ended: Option<(i64, zuse_protocol::BackgroundTaskOutcome)>, stoppable| {
+                    zuse_protocol::BackgroundTask {
+                        id: id.into(),
+                        kind: zuse_protocol::BackgroundTaskKind::Shell,
+                        description: description.into(),
+                        started_at: now - chrono::Duration::seconds(started),
+                        ended_at: ended.map(|(at, _)| now - chrono::Duration::seconds(at)),
+                        outcome: ended.map(|(_, outcome)| outcome),
+                        stoppable,
+                    }
+                };
+                self.state.update(cx, |state, cx| {
+                    state.apply_sessions(vec![zuse_protocol::Session {
+                        last_completed_turn: None,
+                        running_subagents: 0,
+                        background_tasks: vec![
+                            task("bg-1", "pnpm dev --port 3000", 312, None, true),
+                            task("bg-2", "cargo watch -x test", 95, None, true),
+                            task("bg-3", "npm run build", 400, Some((340, zuse_protocol::BackgroundTaskOutcome::Completed)), false),
+                            task("bg-4", "tail -f logs/server.log", 600, Some((420, zuse_protocol::BackgroundTaskOutcome::Stopped)), false),
+                        ],
+                        chat_id: "browser-fixture".into(),
+                        device_id: "local".into(),
+                        status: zuse_protocol::SessionStatus::Idle,
+                        started_at: Some(now),
+                        updated_at: now,
                     }]);
                     cx.notify();
                 });

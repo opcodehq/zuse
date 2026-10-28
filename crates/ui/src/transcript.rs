@@ -14407,6 +14407,7 @@ mod tests {
                         state.sessions.push(zuse_protocol::Session {
                             last_completed_turn: None,
                             running_subagents: 0,
+                            background_tasks: Vec::new(),
                             chat_id: "chat".into(),
                             device_id: "test".into(),
                             status: zuse_protocol::SessionStatus::Working,

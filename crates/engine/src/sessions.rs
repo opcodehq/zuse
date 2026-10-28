@@ -942,6 +942,23 @@ impl SessionsEngine {
         };
         let interrupt_token = CancellationToken::new();
         let turn = TurnControl::default();
+        // Mirror the runtime's background tasks onto the chat's session row
+        // until the runtime (and its control) goes away.
+        {
+            let inner = self.inner.clone();
+            let chat_id = chat_id.to_string();
+            let mut tasks = turn.watch_background_tasks();
+            tokio::spawn(async move {
+                while tasks.changed().await.is_ok() {
+                    let list = tasks
+                        .borrow_and_update()
+                        .iter()
+                        .map(background_task)
+                        .collect();
+                    inner.set_background_tasks(&chat_id, list);
+                }
+            });
+        }
         let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let fork_history_sent = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (voice_handle, realtime, _voice_events) = zuse_providers::codex::realtime::channel();
@@ -1351,6 +1368,27 @@ impl SessionsEngine {
 
     /// Resolve a pending `request_input` question set. Returns `false` when no such
     /// request is pending (unknown id, or the run already settled).
+    /// Ask the runtime of `chat_id` to stop one of its background tasks.
+    /// False when no runtime holds a stoppable running task by that id.
+    pub fn stop_background_task(&self, chat_id: &str, task_id: &str) -> bool {
+        let runs = lock(&self.inner.runs);
+        let Some(handle) = runs.get(chat_id) else {
+            return false;
+        };
+        let stoppable = handle
+            .turn
+            .watch_background_tasks()
+            .borrow()
+            .iter()
+            .any(|record| {
+                record.task.id == task_id && record.task.stoppable && record.ended.is_none()
+            });
+        if stoppable {
+            handle.turn.stop_background_task(task_id);
+        }
+        stoppable
+    }
+
     pub fn respond_input(
         &self,
         chat_id: &str,
@@ -1701,6 +1739,31 @@ impl Inner {
         }
     }
 
+    /// Publish the background tasks of `chat_id`'s runtime, mirrored like
+    /// [`Self::set_running_subagents`]: a change is a status transition, an
+    /// unchanged list is a no-op.
+    fn set_background_tasks(&self, chat_id: &str, tasks: Vec<zuse_protocol::BackgroundTask>) {
+        let session = {
+            let mut statuses = lock(&self.statuses);
+            let Some(entry) = statuses.get_mut(chat_id) else {
+                return;
+            };
+            if entry.background_tasks == tasks {
+                return;
+            }
+            entry.background_tasks = tasks;
+            entry.updated_at = Utc::now();
+            let session = entry.clone();
+            let mut list: Vec<Session> = statuses.values().cloned().collect();
+            list.sort_by(|a, b| a.chat_id.cmp(&b.chat_id));
+            self.sessions_tx.send_replace(list);
+            session
+        };
+        if let Some(ws) = self.workspace() {
+            ws.record_session(&session);
+        }
+    }
+
     fn has_pending_steers(&self, chat_id: &str, run_id: &str) -> bool {
         lock(&self.runs)
             .get(chat_id)
@@ -1730,6 +1793,7 @@ impl Inner {
                     started_at: None,
                     updated_at: now,
                     running_subagents: 0,
+                    background_tasks: Vec::new(),
                 });
             // `started_at` is the elapsed-timer base and must only ever mean
             // "this turn". Entering Working from a settled state always
@@ -3821,6 +3885,8 @@ async fn drive_run(
         }
     }
     inner.set_running_subagents(&chat_id, 0);
+    // The runtime's background work ended with it.
+    inner.set_background_tasks(&chat_id, Vec::new());
 
     // Claim any accepted-but-unconfirmed steers BEFORE the handle goes away:
     // a routed send that raced this exit either finds its entry gone (we own
@@ -3890,6 +3956,19 @@ async fn drive_run(
                 }
             }
         });
+    }
+}
+
+/// A driver's background task record as the session row carries it.
+fn background_task(record: &zuse_providers::BackgroundTaskRecord) -> zuse_protocol::BackgroundTask {
+    zuse_protocol::BackgroundTask {
+        id: record.task.id.clone(),
+        kind: record.task.kind,
+        description: record.task.description.clone(),
+        started_at: record.started.into(),
+        ended_at: record.ended.map(Into::into),
+        outcome: record.outcome,
+        stoppable: record.task.stoppable && record.ended.is_none(),
     }
 }
 

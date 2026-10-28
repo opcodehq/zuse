@@ -11,6 +11,7 @@ pub fn session_command_kind(kind: crate::session_commands::SessionCommandKind) -
         Steer => "zuse.session.steer",
         Interrupt => "zuse.session.interrupt",
         RespondInput => "zuse.session.respond-input",
+        StopBackgroundTask => "zuse.session.stop-background-task",
     }
 }
 pub fn is_session_command_kind(kind: &str) -> bool {
@@ -20,6 +21,7 @@ pub fn is_session_command_kind(kind: &str) -> bool {
             | "zuse.session.steer"
             | "zuse.session.interrupt"
             | "zuse.session.respond-input"
+            | "zuse.session.stop-background-task"
     )
 }
 #[derive(Clone, Serialize, Deserialize)]

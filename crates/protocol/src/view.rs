@@ -12,7 +12,9 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::{AuthState, Chat, ChatIndicator, Session, SessionStatus, Space, WorkspaceScope};
+use crate::{
+    AuthState, BackgroundTask, Chat, ChatIndicator, Session, SessionStatus, Space, WorkspaceScope,
+};
 
 // ---------------------------------------------------------------------------
 // Connection + status
@@ -70,6 +72,15 @@ pub fn running_subagents(session: Option<&Session>, now: DateTime<Utc>) -> u32 {
     session
         .filter(|s| now.signed_duration_since(s.updated_at).num_milliseconds() <= SESSION_STALE_MS)
         .map_or(0, |s| s.running_subagents)
+}
+
+/// A chat's background tasks, staleness-checked like [`running_subagents`]:
+/// a session row nobody refreshed belongs to a dead engine, whose tasks are
+/// gone with it. Pure.
+pub fn background_tasks(session: Option<&Session>, now: DateTime<Utc>) -> &[BackgroundTask] {
+    session
+        .filter(|s| now.signed_duration_since(s.updated_at).num_milliseconds() <= SESSION_STALE_MS)
+        .map_or(&[], |s| s.background_tasks.as_slice())
 }
 
 /// The full display status for a chat row / tab dot: live states win, then the
@@ -266,6 +277,7 @@ mod gate_tests {
             started_at: None,
             updated_at,
             running_subagents: running,
+            background_tasks: Vec::new(),
         }
     }
 

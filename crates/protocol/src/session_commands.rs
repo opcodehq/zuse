@@ -9,6 +9,7 @@ pub enum SessionCommandKind {
     Steer,
     Interrupt,
     RespondInput,
+    StopBackgroundTask,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,6 +32,12 @@ pub enum SessionCommandPayload {
         request_id: String,
         answers: Vec<UserInputAnswer>,
     },
+    /// Stop one background task of the chat's runtime (a shell, a dev
+    /// server) without ending the turn. Hosts that predate it skip it.
+    #[serde(rename_all = "camelCase")]
+    StopBackgroundTask {
+        task_id: String,
+    },
 }
 
 impl SessionCommandPayload {
@@ -40,6 +47,9 @@ impl SessionCommandPayload {
             SessionCommandPayload::Steer { .. } => SessionCommandKind::Steer,
             SessionCommandPayload::Interrupt {} => SessionCommandKind::Interrupt,
             SessionCommandPayload::RespondInput { .. } => SessionCommandKind::RespondInput,
+            SessionCommandPayload::StopBackgroundTask { .. } => {
+                SessionCommandKind::StopBackgroundTask
+            }
         }
     }
 }

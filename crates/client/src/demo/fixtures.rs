@@ -448,6 +448,7 @@ pub(crate) fn seed(
             doc.upsert_session(&Session {
                 last_completed_turn: None,
                 running_subagents: 0,
+                background_tasks: Vec::new(),
                 chat_id: demo.id.into(),
                 device_id: demo.device.into(),
                 status,
