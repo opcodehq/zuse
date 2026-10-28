@@ -488,6 +488,61 @@ impl GitHubCli {
         .await
     }
 
+    /// Explicit user action only: merge, toggle auto-merge, or change the
+    /// pull request's status. GitHub's own reason for refusing (a disallowed
+    /// merge method, a blocked merge) comes back as `Ok(Some(reason))`; never
+    /// retried after an ambiguous failure.
+    pub async fn update_pull_request(
+        &self,
+        url: &str,
+        update: zuse_protocol::ChangeRequestUpdate,
+    ) -> Result<Option<String>, ChangeRequestError> {
+        use zuse_protocol::{ChangeRequestMergeMethod as Method, ChangeRequestUpdate as Update};
+        let url = validated_pull_request_url(url)?;
+        let method_flag = |method: Method| match method {
+            Method::Squash => "--squash",
+            Method::Merge => "--merge",
+            Method::Rebase => "--rebase",
+        };
+        let args: Vec<String> = match update {
+            Update::Merge { method } => {
+                vec!["merge".into(), url.clone(), method_flag(method).into()]
+            }
+            Update::EnableAutoMerge { method } => vec![
+                "merge".into(),
+                url.clone(),
+                "--auto".into(),
+                method_flag(method).into(),
+            ],
+            Update::DisableAutoMerge => vec!["merge".into(), url.clone(), "--disable-auto".into()],
+            Update::MarkReady => vec!["ready".into(), url.clone()],
+            Update::MarkDraft => vec!["ready".into(), url.clone(), "--undo".into()],
+            Update::Close => vec!["close".into(), url.clone()],
+            Update::Reopen => vec!["reopen".into(), url.clone()],
+        };
+        let output = self
+            .runner
+            .run(ProcessRequest {
+                args: std::iter::once("pr".to_owned()).chain(args).collect(),
+                ..github_request()
+            })
+            .await;
+        // Like a comment: the write may have landed even when the receipt is
+        // lost, so every cached read of this pull request is stale now.
+        let mut cache = self.pr_cache.lock().await;
+        cache.entries.retain(|entry| !entry.0.contains(&url));
+        cache.in_flight.retain(|entry, _| !entry.contains(&url));
+        drop(cache);
+        let output = output.map_err(classify_run_error)?;
+        if output.success {
+            return Ok(None);
+        }
+        match classify_github_failure(&output.stderr) {
+            ChangeRequestError::CommandFailed => Ok(Some(github_refusal(&output.stderr))),
+            error => Err(error),
+        }
+    }
+
     /// Explicit user submission only. Never retry a write after an ambiguous failure.
     pub async fn post_comment(
         &self,
@@ -598,7 +653,7 @@ impl GitHubCli {
         if diff {
             args.push("--color=never".into());
         } else {
-            args.extend(["--json".into(), "title,body,url,number,author,baseRefName,headRefName,headRefOid,baseRefOid,state,isDraft,reviewDecision,mergeable,additions,deletions,comments,reviews,files,statusCheckRollup".into()]);
+            args.extend(["--json".into(), "title,body,url,number,author,baseRefName,headRefName,headRefOid,baseRefOid,state,isDraft,reviewDecision,mergeable,additions,deletions,comments,reviews,files,statusCheckRollup,autoMergeRequest".into()]);
         }
         let output = self
             .runner
@@ -1987,6 +2042,31 @@ fn validated_pull_request_url(raw: &str) -> Result<String, ChangeRequestError> {
     ))
 }
 
+/// GitHub's reason for refusing a write, as one readable line: the CLI's
+/// last non-empty stderr line, without its "X " / "! " status glyphs.
+fn github_refusal(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let line = text
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .unwrap_or_default();
+    // gh marks failures with an "X " (or "!", "✗") status prefix.
+    let line = line
+        .strip_prefix("X ")
+        .unwrap_or(line)
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(300)
+        .collect::<String>();
+    if line.is_empty() {
+        "GitHub refused the change.".into()
+    } else {
+        line
+    }
+}
+
 fn classify_github_failure(stderr: &[u8]) -> ChangeRequestError {
     let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
     if stderr.contains("rate limit") || stderr.contains("secondary rate") {
@@ -2758,6 +2838,82 @@ mod tests {
         let sent: serde_json::Value =
             serde_json::from_slice(requests[0].stdin.as_deref().unwrap()).unwrap();
         assert_eq!(sent, serde_json::json!({ "body": body }));
+    }
+
+    #[tokio::test]
+    async fn pr_updates_run_one_gh_command_each_and_invalidate_detail() {
+        use zuse_protocol::{ChangeRequestMergeMethod as Method, ChangeRequestUpdate as Update};
+        let url = "https://github.com/a/b/pull/7";
+        let cases = [
+            (
+                Update::Merge {
+                    method: Method::Squash,
+                },
+                vec!["pr", "merge", url, "--squash"],
+            ),
+            (
+                Update::EnableAutoMerge {
+                    method: Method::Rebase,
+                },
+                vec!["pr", "merge", url, "--auto", "--rebase"],
+            ),
+            (
+                Update::DisableAutoMerge,
+                vec!["pr", "merge", url, "--disable-auto"],
+            ),
+            (Update::MarkReady, vec!["pr", "ready", url]),
+            (Update::MarkDraft, vec!["pr", "ready", url, "--undo"]),
+            (Update::Close, vec!["pr", "close", url]),
+            (Update::Reopen, vec!["pr", "reopen", url]),
+        ];
+        for (update, args) in cases {
+            let runner = FakeProcessRunner::with_responses([command_success(Vec::new())]);
+            let github = GitHubCli::with_runner(runner.clone());
+            github.pr_cache.lock().await.entries.push((
+                format!("false:{url}::"),
+                Instant::now(),
+                Ok(serde_json::json!({})),
+            ));
+            assert_eq!(github.update_pull_request(url, update).await.unwrap(), None);
+            assert!(github.pr_cache.lock().await.entries.is_empty());
+            let requests = runner.requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].args, args);
+        }
+    }
+
+    #[tokio::test]
+    async fn pr_update_reports_githubs_refusal_and_never_retries() {
+        let runner = FakeProcessRunner::with_responses([command_failure(
+            "X Pull request a/b#7 is not mergeable: the merge commit cannot be cleanly created.\n",
+        )]);
+        let github = GitHubCli::with_runner(runner.clone());
+        let refusal = github
+            .update_pull_request(
+                "https://github.com/a/b/pull/7",
+                zuse_protocol::ChangeRequestUpdate::Merge {
+                    method: zuse_protocol::ChangeRequestMergeMethod::Merge,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            refusal.as_deref(),
+            Some(
+                "Pull request a/b#7 is not mergeable: the merge commit cannot be cleanly created."
+            )
+        );
+        assert_eq!(runner.requests().len(), 1);
+        assert!(
+            github
+                .update_pull_request(
+                    "https://evil.test/a/b/pull/7",
+                    zuse_protocol::ChangeRequestUpdate::Close
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(runner.requests().len(), 1);
     }
 
     #[cfg(unix)]

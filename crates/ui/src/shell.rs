@@ -91,6 +91,7 @@ pub(crate) mod project_icon;
 mod pull_request_pane;
 mod search_warm;
 mod session_info;
+mod summary_pull_request;
 mod side_chats;
 mod sidebar_pins;
 mod sidebar_controls;
@@ -2287,6 +2288,8 @@ pub struct Shell {
     session_info_overlay: bool,
     /// The card's sections the user toggled away from their default (by key).
     session_info_folded: std::collections::HashSet<&'static str>,
+    /// The session card's pull request: details, menu and updates.
+    summary_pr: summary_pull_request::SummaryPullRequest,
     /// Background tasks with a stop request on its way (by task id); their
     /// row shows a spinner until the task leaves the live set.
     background_stops: std::collections::HashSet<String>,
@@ -2801,6 +2804,7 @@ impl Shell {
             session_info_overlay: false,
             session_info_folded: Default::default(),
             background_stops: Default::default(),
+            summary_pr: Default::default(),
             session_info_pressed_open: None,
             session_info_docked: false,
             session_info_last_reserve: 0.0,
@@ -19269,7 +19273,7 @@ impl Shell {
             // `:transcript-card-git` runs the chat in a worktree of a Git
             // project whose branch has a pull request, so the card lists
             // the checkout, branch and pull request rows.
-            if variant == "transcript-card-git" {
+            if variant == "transcript-card-git" || variant.starts_with("transcript-card-pr") {
                 self.state.update(cx, |state, cx| {
                     if let Some(space) = state.spaces.iter_mut().find(|s| s.id == "project") {
                         space.git_detected = true;
@@ -19336,6 +19340,21 @@ impl Shell {
                     }]);
                     cx.notify();
                 });
+            }
+            // `:transcript-card-pr…` opens the card's pull request menu
+            // (`-repair` / `-merge` / `-status` its group).
+            if let Some(rest) = variant.strip_prefix("transcript-card-pr") {
+                let submenu = match rest {
+                    "-repair" => Some(summary_pull_request::PrSubmenu::Repair),
+                    "-merge" => Some(summary_pull_request::PrSubmenu::Merge),
+                    "-status" => Some(summary_pull_request::PrSubmenu::Status),
+                    _ => None,
+                };
+                self.fixture_seed_summary_pull_request(
+                    "https://github.com/opcodehq/zuse/pull/412",
+                    rest != "-row",
+                    submenu,
+                );
             }
             // `:transcript-fork` opens the Fork menu on the hovered reply.
             if variant == "transcript-fork" {

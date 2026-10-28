@@ -1101,6 +1101,40 @@ pub struct ChangeRequestPage {
     pub fetched_at: Option<DateTime<Utc>>,
 }
 
+/// How a pull request's commits land on its base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChangeRequestMergeMethod {
+    Squash,
+    Merge,
+    Rebase,
+}
+
+/// A change to a pull request the user asked for explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ChangeRequestUpdate {
+    Merge {
+        method: ChangeRequestMergeMethod,
+    },
+    /// Merge once requirements pass.
+    EnableAutoMerge {
+        method: ChangeRequestMergeMethod,
+    },
+    DisableAutoMerge,
+    MarkReady,
+    MarkDraft,
+    Close,
+    Reopen,
+}
+
+/// Auto-merge armed on a pull request (`autoMergeRequest`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestAutoMerge {
+    pub merge_method: String,
+}
+
 /// Read-only GitHub detail response. Optional collections tolerate absent provider data.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1129,6 +1163,9 @@ pub struct ChangeRequestDetail {
     pub review_threads: Option<Vec<ChangeRequestReviewThread>>,
     pub files: Vec<ChangeRequestFile>,
     pub status_check_rollup: Vec<ChangeRequestCheck>,
+    /// Set while auto-merge is armed; absent from older engines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_merge_request: Option<ChangeRequestAutoMerge>,
     /// The signed-in GitHub account, so clients can tell which comments and
     /// reviews are the viewer's. Absent from older engines.
     #[serde(skip_serializing_if = "Option::is_none")]

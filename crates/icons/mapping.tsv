@@ -134,3 +134,10 @@ wifi	Wifi01Icon
 summary-background	ComputerTerminal01Icon
 summary-agents	AiNetworkIcon
 task-stopped	MinusSignIcon
+pr-view	File01Icon
+pr-repair	Wrench01Icon
+pr-comments	Comment01Icon
+pr-checks	CheckmarkCircle02Icon
+pr-conflicts	GitMergeConflictIcon
+pr-add-to-chat	CommentAdd01Icon
+pr-github	GithubIcon

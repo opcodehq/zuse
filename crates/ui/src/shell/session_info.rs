@@ -40,7 +40,7 @@ const SUMMARY_CARD_RADIUS: f32 = 12.0;
 const SUMMARY_LABEL_INSET: f32 = 34.0;
 
 /// One summary row: 16px icon slot, 12px label, trailing meta by the caller.
-fn summary_row(theme: &Theme) -> gpui::Div {
+pub(super) fn summary_row(theme: &Theme) -> gpui::Div {
     div()
         .flex()
         .flex_row()
@@ -63,7 +63,7 @@ fn info_row(theme: &Theme, glyph: AnyElement, label: SharedString) -> gpui::Div 
 }
 
 /// A clickable card row, washed on hover.
-fn action_row(theme: &Theme, id: impl Into<SharedString>) -> gpui::Stateful<gpui::Div> {
+pub(super) fn action_row(theme: &Theme, id: impl Into<SharedString>) -> gpui::Stateful<gpui::Div> {
     let wash = theme.ink(0.06);
     summary_row(theme)
         .id(id.into())
@@ -72,7 +72,7 @@ fn action_row(theme: &Theme, id: impl Into<SharedString>) -> gpui::Stateful<gpui
 }
 
 /// A quiet sub-row under a section, indented to its labels.
-fn sub_row(theme: &Theme) -> gpui::Div {
+pub(super) fn sub_row(theme: &Theme) -> gpui::Div {
     div()
         .flex()
         .items_center()
@@ -83,7 +83,7 @@ fn sub_row(theme: &Theme) -> gpui::Div {
         .text_color(theme.text_muted)
 }
 
-fn row_glyph(path: &'static str, theme: &Theme) -> AnyElement {
+pub(super) fn row_glyph(path: &'static str, theme: &Theme) -> AnyElement {
     icon(path)
         .size(px(16.0))
         .text_color(theme.text_muted)
@@ -91,7 +91,7 @@ fn row_glyph(path: &'static str, theme: &Theme) -> AnyElement {
 }
 
 /// Trailing status on a row: counts, states, diff sizes.
-fn row_meta(theme: &Theme) -> gpui::Div {
+pub(super) fn row_meta(theme: &Theme) -> gpui::Div {
     div()
         .flex_none()
         .flex()
@@ -250,7 +250,7 @@ impl Shell {
 
     /// Dismiss the card floating over the transcript; one shown beside it
     /// stays put.
-    fn close_session_info_overlay(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_session_info_overlay(&mut self, cx: &mut Context<Self>) {
         if self.session_info_overlay {
             self.session_info_overlay = false;
             cx.notify();
@@ -444,43 +444,15 @@ impl Shell {
                     )
                 })
         });
-        // The branch's pull request: its state glyph and title, with the
-        // number as meta. The row opens it.
-        let pull_request_row = change_request.map(|summary| {
-            let model = crate::change_requests::ChangeRequestBadgeModel::from_summary(&summary);
-            let url = summary.url.clone();
-            let open_device = Some(chat.device_id.clone());
-            action_row(&theme, "session-info-pull-request")
-                .debug_selector(|| "session-info-pull-request".into())
-                .role(gpui::Role::Link)
-                .aria_label(SharedString::from(format!(
-                    "Open pull request {}: {}",
-                    model.number, model.title
-                )))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.close_session_info_overlay(cx);
-                    crate::pull_request_detail::open_on_device(
-                        &url,
-                        open_device.clone(),
-                        window,
-                        cx,
-                    );
-                }))
-                .child(popover::picker_icon_slot(
-                    icon(model.tone.glyph())
-                        .size(px(16.0))
-                        .text_color(model.tone.color(&theme))
-                        .into_any_element(),
-                ))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child(model.title.clone()),
-                )
-                .child(row_meta(&theme).child(SharedString::from(format!("#{}", model.number))))
-        });
+        // The branch's pull request, with its menu (view, repair, merge,
+        // add to chat, status, GitHub) and its next step.
+        let pull_request_rows = match change_request {
+            Some(summary) => {
+                let target = (!local).then(|| chat.device_id.clone());
+                self.render_summary_pull_request(summary, target, &theme, cx)
+            }
+            None => Vec::new(),
+        };
 
         // ── What runs for it: background processes, then the chat's
         // subagents, running ones first.
@@ -512,7 +484,7 @@ impl Shell {
             .child(device_row)
             .children(branch_row)
             .children(changes_row)
-            .children(pull_request_row)
+            .children(pull_request_rows)
             // The session's activity sits under a rule, apart from the
             // workspace it runs in.
             .when(!activity.is_empty(), |body| {
@@ -562,9 +534,13 @@ impl Shell {
                 // Over the transcript it is a popover: a press elsewhere, or
                 // choosing one of its rows, dismisses it.
                 .when(!docked, |card| {
-                    card.on_mouse_down_out(
-                        cx.listener(|this, _, _, cx| this.close_session_info_overlay(cx)),
-                    )
+                    card.on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        // The pull request menu floats beside the card and
+                        // dismisses itself first.
+                        if !this.summary_pr.menu_open {
+                            this.close_session_info_overlay(cx);
+                        }
+                    }))
                 })
                 .child(crate::frost::frosted(
                     SUMMARY_CARD_RADIUS,
@@ -762,7 +738,7 @@ impl Shell {
                     // Stopped on request: a quiet dash, neither success nor failure.
                     Some(zuse_protocol::BackgroundTaskOutcome::Stopped) => {
                         icon(icons::TASK_STOPPED)
-                        .size(px(12.0))
+                            .size(px(12.0))
                             .text_color(theme.text_muted)
                             .into_any_element()
                     }

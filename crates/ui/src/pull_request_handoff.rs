@@ -109,7 +109,7 @@ pub(super) fn checkout_command(detail: &ChangeRequestDetail, url: &str) -> Strin
 /// Pull request text for a prompt: one line, no code fences or control
 /// characters, bounded. Titles, branch and check names are written by whoever
 /// opened the pull request.
-fn plain(text: &str) -> String {
+pub(super) fn plain(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")

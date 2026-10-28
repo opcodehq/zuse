@@ -186,6 +186,10 @@ pub const LIST_CHANGE_REQUEST_PAGE: &str = "ListChangeRequestPage";
 pub const GET_CHANGE_REQUEST_REPOSITORY: &str = "GetChangeRequestRepository";
 pub const GET_CHANGE_REQUEST: &str = "GetChangeRequest";
 pub const POST_CHANGE_REQUEST_COMMENT: &str = "PostChangeRequestComment";
+/// Merge, toggle auto-merge, or change a pull request's status, on the
+/// device whose `gh` acts for the user. `{url, update}` →
+/// `{refusal?: string}`: GitHub's reason when it declined.
+pub const UPDATE_CHANGE_REQUEST: &str = "UpdateChangeRequest";
 pub const GET_CHANGE_REQUEST_DIFF: &str = "GetChangeRequestDiff";
 pub const GET_CHECKOUT_DIFF: &str = "GetCheckoutDiff";
 /// Permanently restore one chat-owned checkout to its current HEAD and
