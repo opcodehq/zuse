@@ -382,10 +382,19 @@ impl NativeTools {
                 let path = path.unwrap();
                 let offset = number(&input, "offset");
                 let limit = number(&input, "limit") as usize;
-                let value=self.filesystem(lease.clone(),context.cancel.clone(),move |files|{
-                    let data=files.read(&path,true)?;let content=std::str::from_utf8(&data).map_err(|_|error("Expected UTF-8 text"))?;
-                    let total=content.split('\n').count();let start=(offset.min(total as u64)) as usize;
-                    Ok(json!({"path":path,"hash":files::digest(&data),"total_lines":total,"offset":offset,"content":content.split('\n').skip(start).take(limit).collect::<Vec<_>>().join("\n"),"has_more":start.saturating_add(limit)<total}))
+                let tail = input["tail"] == true;
+                if tail && offset != 0 {
+                    return Err(error("tail=true cannot be combined with a nonzero offset"));
+                }
+                let value = self.filesystem(lease.clone(), context.cancel.clone(), move |files| {
+                    let data = files.read(&path, true)?;
+                    let content = std::str::from_utf8(&data).map_err(|_|error("Expected UTF-8 text"))?;
+                    let total = content.split('\n').count();
+                    let start = if tail { total.saturating_sub(limit) } else { offset.min(total as u64) as usize };
+                    Ok(json!({"path":path,"hash":files::digest(&data),"total_lines":total,
+                        "offset":if tail {start as u64} else {offset},
+                        "content":content.split('\n').skip(start).take(limit).collect::<Vec<_>>().join("\n"),
+                        "has_more":start.saturating_add(limit)<total,"has_before":start>0}))
                 }).await?;
                 if let (Some(path), Some(hash)) = (value["path"].as_str(), value["hash"].as_str()) {
                     self.coordination

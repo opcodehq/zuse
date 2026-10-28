@@ -815,3 +815,57 @@ async fn external_tools_cannot_bypass_plan_or_runtime_permissions() {
     fixture.call("mcp_call", args("write")).await.unwrap();
     assert_eq!(extensions.0.load(Ordering::SeqCst), 2);
 }
+
+#[tokio::test]
+async fn tail_reads_select_final_lines_and_hash_the_whole_current_file() {
+    let fixture = Fixture::new(None).await;
+    let path = fixture.checkout.join("events.log");
+    std::fs::write(&path, "header\nold prefix\nfirst\nsecond\nlast").unwrap();
+    let tail = value(
+        fixture
+            .call(
+                "read_file",
+                json!({"path":"events.log","tail":true,"limit":2}),
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(tail["content"], "second\nlast");
+    assert_eq!(tail["offset"], 3);
+    assert_eq!(tail["has_more"], false);
+    let first = fixture.read("events.log").await;
+    assert_eq!(tail["hash"], first["hash"]);
+    assert!(
+        fixture
+            .call(
+                "read_file",
+                json!({"path":"events.log","tail":true,"offset":1})
+            )
+            .await
+            .is_err()
+    );
+    // A change outside the selected tail must still invalidate its edit receipt.
+    std::fs::write(&path, "changed header\nold prefix\nfirst\nsecond\nlast").unwrap();
+    assert!(fixture.call("edit_file",json!({"path":"events.log","expected_hash":tail["hash"],"old_string":"last","new_string":"new"})).await.is_err());
+    let changed = value(
+        fixture
+            .call(
+                "read_file",
+                json!({"path":"events.log","tail":true,"limit":2}),
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(changed["content"], tail["content"]);
+    assert_ne!(changed["hash"], tail["hash"]);
+    std::fs::write(&path, "").unwrap();
+    let empty = value(
+        fixture
+            .call("read_file", json!({"path":"events.log","tail":true}))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(empty["content"], "");
+    assert_eq!(empty["offset"], 0);
+    fixture.tools.close().await;
+}

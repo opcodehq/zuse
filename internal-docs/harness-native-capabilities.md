@@ -58,6 +58,12 @@ after persistence. They are hints; fresh hashes still govern every mutation.
 These notices cover native edit tools, not shell commands or arbitrary external
 editors. They add no watcher process and do not replace the application watcher.
 
+`read_file` also accepts `tail: true` to select the final requested lines without
+first discovering the line count. Its default remains a forward read. Tail mode
+requires a zero offset and returns the actual selected offset; the edit hash
+always covers the whole current file, including unseen preceding lines. This
+retains stale-edit protection when another writer changes the file's beginning.
+
 ## External MCP tools
 
 The application loads `<profile>/harness/extensions.json` once on backend startup.
