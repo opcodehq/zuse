@@ -626,7 +626,7 @@ impl CloudApi {
                     .ok_or_else(|| anyhow::anyhow!("Saved cloud history is not available yet."))?;
                 // Fully materialize saved pages for the existing transcript renderer, without opening an execution channel.
                 let mut entries = match &head.transcript.frame {
-                    zuse_model::TranscriptFrame::Reset { reset } => reset.clone(),
+                    zuse_model::TranscriptFrame::Reset { reset } => reset.as_ref().clone(),
                     _ => anyhow::bail!("Saved history is invalid."),
                 };
                 let mut before = head.older_message_sequence;
@@ -647,7 +647,7 @@ impl CloudApi {
                 }
                 head.transcript.replay_baseline =
                     Some(zuse_model::TranscriptBaseline::capture(&entries));
-                head.transcript.frame = zuse_model::TranscriptFrame::Reset { reset: entries };
+                head.transcript.frame = zuse_model::TranscriptFrame::Reset { reset: entries.into() };
                 head.older_message_sequence = None;
                 json!({"accountId":account,"workspace":workspace,"head":head})
             }

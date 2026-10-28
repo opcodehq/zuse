@@ -4554,7 +4554,7 @@ mod tests {
 
         let before_reset = state.transcript_revision;
         state
-            .apply_transcript_frame(TranscriptFrame::Reset { reset: Vec::new() })
+            .apply_transcript_frame(TranscriptFrame::Reset { reset: Vec::new().into() })
             .unwrap();
         assert!(state.transcript_replayed);
         assert_ne!(
@@ -5863,7 +5863,7 @@ mod tests {
         assert!(!state.transcript_replayed);
 
         state
-            .apply_transcript_frame(TranscriptFrame::Reset { reset: Vec::new() })
+            .apply_transcript_frame(TranscriptFrame::Reset { reset: Vec::new().into() })
             .expect("empty reset");
         assert!(state.transcript_replayed);
     }

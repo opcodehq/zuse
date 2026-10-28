@@ -180,8 +180,8 @@ External test-client memory is excluded; engine RSS was sampled every 50 ms.
 
 Whole-list JSON expansion was a modest contributor. The larger issue was
 unbounded initial history materialization combined with a 256-frame socket
-output queue. Each connection now admits four history openings before
-opening their documents and buffers eight outgoing socket frames. Admission
+output queue. At that checkpoint, each connection admitted four history openings
+before opening their documents and buffered eight outgoing socket frames. Admission
 lasts through an opening preview and full hydration; established watches
 release it. Canceled requests release their slots and other RPC methods
 remain independent. This bounds bursts without truncating history or changing
@@ -232,7 +232,7 @@ The completed executable's SHA-256 is
 The 125-chat run used 743 MiB at 12 seconds idle and 302 MiB at 70 seconds
 before any debugger reclaim. The 512 MiB-at-12s target remains unmet.
 
-Four history openings and eight socket output frames remain the limits. A
+That measured snapshot used four history openings and eight socket output frames. A
 two-opening probe lowered RAM but slowed the fresh 50-chat batch from 17.61
 to 29.28 seconds; a two-frame queue showed no convincing RAM benefit. Neither
 change was retained. Warm transcript mirrors retain their existing behavior.
@@ -247,3 +247,41 @@ files produced no lint diagnostics.
 The benchmark scripts, fresh controls, exact-source measurements, probes and
 validation logs are preserved in `.context/efficiency/ram/`. Mac release and
 current thin online history still require measurements.
+
+
+## Speed-prioritized history opening follow-up
+
+The current opening policy allows five simultaneous history openings and eight
+queued socket frames. Reset frames share the host's immutable transcript through
+`Arc<Vec<SessionMessageEntry>>`; an owned viewport reset reuses its allocation,
+while a shared reset copies on application. JSON envelopes are unchanged.
+The transport reserves output capacity before encoding a frame, after polling
+its stream, so idle watches do not hold output slots. There is no new process
+RAM ceiling or history truncation.
+
+A matched Linux debug headless-engine comparison changed only opening concurrency
+from four to five, using the same established JSON decoder and shared snapshots.
+Each chat contained 10,000 messages; every text and position was verified before
+canceling its subscription. These are concurrent history receipts, not sustained
+active provider sessions or rendered chat-switch measurements.
+
+| Concurrent chats | Four / five opening receipt time | Four / five peak app RSS |
+| --- | ---: | ---: |
+| 1 | 0.91 / 0.95 s | 126 / 127 MiB |
+| 50 | 11.66 / 9.36 s | 602 / 704 MiB |
+| 100 | 22.09 / 18.68 s | 685 / 773 MiB |
+| 125 | 28.41 / 22.24 s | 741 / 800 MiB |
+
+Single-chat figures are medians of three alternating runs; stress cases have one
+trial per binary, with app-only RSS sampled every 25 ms. Bulk cases improved at
+a modest memory cost, but single-chat improvement is not established and a
+five-second complete-history target has not been achieved. A separate matched
+decoder trial did not justify retaining a custom deserializer, so it was removed.
+
+The final native app build, 123 document tests and six RPC server tests passed.
+Snapshot sharing, unchanged wire format and copy-on-application were also covered
+by model and engine tests during the preceding validation. The known picker
+failures described in `cleanup-audit.md` and the baseline plugin-form mouse-focus
+test failure remain unresolved; this is not a claim of a green full UI suite.
+Raw results and binary identities are retained under
+`.context/latency-rebalance/throughput/`.

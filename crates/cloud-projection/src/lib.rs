@@ -168,7 +168,7 @@ pub fn encode(mut head: Head, key: &TranscriptKey) -> Result<Vec<Upload>> {
     let upload = loop {
         let start = all.len() - count;
         head.transcript.frame = TranscriptFrame::Reset {
-            reset: all[start..].to_vec(),
+            reset: all[start..].to_vec().into(),
         };
         head.transcript.replay_baseline = Some(TranscriptBaseline::capture(&all[start..]));
         head.older_message_sequence = (start > 0).then_some(start as i64);
@@ -307,7 +307,7 @@ mod tests {
             conversations: vec![chat],
             transcript: TranscriptUpdate {
                 frame: TranscriptFrame::Reset {
-                    reset: entries.clone(),
+                    reset: entries.clone().into(),
                 },
                 context_usage: None,
                 replay_baseline: None,
@@ -330,9 +330,10 @@ mod tests {
         assert_eq!(decoded.older_message_sequence, Some(86));
         assert!(decoded.queue_paused);
         assert_eq!(decoded.queue, head.queue);
-        let TranscriptFrame::Reset { reset: mut actual } = decoded.transcript.frame else {
+        let TranscriptFrame::Reset { reset: actual } = decoded.transcript.frame else {
             panic!()
         };
+        let mut actual = std::sync::Arc::unwrap_or_clone(actual);
         for upload in &uploads[1..] {
             let page: Page = key
                 .open(

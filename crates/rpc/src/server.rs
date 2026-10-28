@@ -16,7 +16,7 @@ use crate::{ClientFrame, RpcError, RpcReply, RpcService, RpcStreamItem, ServerFr
 
 // Bound initial transcript materialization per connection, separately from
 // long-lived watches. A queued request must wait before opening its document.
-const HISTORY_OPEN_CONCURRENCY: usize = 4;
+const HISTORY_OPEN_CONCURRENCY: usize = 5;
 // Full-history frames can each contain megabytes; hundreds of queued frames
 // defeat admission control even after their request tasks finish sending.
 const SOCKET_OUTPUT_CAPACITY: usize = 8;
@@ -101,8 +101,12 @@ async fn handle_request(
     let send = |frame: ServerFrame| {
         let out = out.clone();
         async move {
+            let permit = out.reserve().await.map_err(|_| RpcError::Closed)?;
             match serde_json::to_string(&frame) {
-                Ok(json) => out.send(json).await.map_err(|_| RpcError::Closed),
+                Ok(json) => {
+                    permit.send(json);
+                    Ok(())
+                }
                 Err(err) => {
                     tracing::error!(error = %err, "rpc: failed to serialize server frame");
                     Err(RpcError::Closed)
@@ -151,9 +155,14 @@ async fn handle_request(
     }
     while let Some(item) = stream.next().await {
         let pending = item.initialization_pending;
+        // Poll first: idle subscriptions must never hold output capacity.
+        let Ok(permit) = out.reserve().await else {
+            return;
+        };
         let json = match item.encode(id) {
             Ok(json) => json,
             Err(err) => {
+                drop(permit);
                 tracing::error!(error = %err, "rpc: failed to serialize stream item");
                 let _ = send(ServerFrame {
                     id,
@@ -164,9 +173,7 @@ async fn handle_request(
                 return;
             }
         };
-        if out.send(json).await.is_err() {
-            return;
-        }
+        permit.send(json);
         // An opening preview retains its slot through full hydration. Idle
         // established watches must not monopolize history-opening admission.
         if !pending {
@@ -454,6 +461,70 @@ mod tests {
         opening_preview_case(true).await;
     }
 
+    struct CountedPayload(Arc<AtomicUsize>);
+    impl serde::Serialize for CountedPayload {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            serializer.serialize_str("history")
+        }
+    }
+    struct BufferedHistory {
+        encoded: Arc<AtomicUsize>,
+        polled: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl RpcService for BufferedHistory {
+        async fn handle(
+            &self,
+            _method: &str,
+            _params: serde_json::Value,
+        ) -> Result<RpcReply, RpcError> {
+            let encoded = self.encoded.clone();
+            let polled = self.polled.clone();
+            Ok(RpcReply::TypedStream(
+                futures::stream::once(async move {
+                    polled.notify_one();
+                    RpcStreamItem::new(CountedPayload(encoded))
+                })
+                .chain(futures::stream::pending())
+                .boxed(),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn full_output_waits_before_encoding_and_cancellation_still_works() {
+        let encoded = Arc::new(AtomicUsize::new(0));
+        let polled = Arc::new(tokio::sync::Notify::new());
+        let (output, mut replies) = mpsc::channel(1);
+        output.send("occupied".into()).await.unwrap();
+        let (input, incoming) = mpsc::channel(4);
+        let task = tokio::spawn(serve_connection(
+            Arc::new(BufferedHistory {
+                encoded: encoded.clone(),
+                polled: polled.clone(),
+            }),
+            output,
+            incoming,
+        ));
+        input.send(history_request(1, false, true)).await.unwrap();
+        within(polled.notified()).await;
+        assert_eq!(
+            encoded.load(Ordering::SeqCst),
+            0,
+            "a blocked socket must not allocate encoded history frames"
+        );
+        assert_eq!(within(replies.recv()).await.unwrap(), "occupied");
+        assert_eq!(next_reply(&mut replies).await["item"], "history");
+        assert_eq!(encoded.load(Ordering::SeqCst), 1);
+        input
+            .send(serde_json::json!({"id":1,"cancel":true}).to_string())
+            .await
+            .unwrap();
+        drop(input);
+        within(task).await.unwrap();
+    }
+
     struct FailingPayload;
     impl serde::Serialize for FailingPayload {
         fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
@@ -479,7 +550,7 @@ mod tests {
     }
     #[tokio::test]
     async fn typed_encoding_failure_replies_and_releases_history_admission() {
-        let (output, mut replies) = mpsc::channel(16);
+        let (output, mut replies) = mpsc::channel(1);
         let (input, incoming) = mpsc::channel(16);
         let task = tokio::spawn(serve_connection(
             Arc::new(EncodingFailureService),

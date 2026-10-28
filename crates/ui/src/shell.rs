@@ -4582,7 +4582,7 @@ impl Shell {
                         serde_json::from_str(value.get("text")?.as_str()?).ok()?;
                     let update = zuse_doc::TranscriptUpdate {
                         replay_baseline: Some(zuse_doc::TranscriptBaseline::capture(&entries)),
-                        frame: zuse_doc::TranscriptFrame::Reset { reset: entries },
+                        frame: zuse_doc::TranscriptFrame::Reset { reset: entries.into() },
                         context_usage: None,
                     };
                     let prepared = crate::transcript::TranscriptPreparation::default()
@@ -4591,7 +4591,7 @@ impl Shell {
                     let zuse_doc::TranscriptFrame::Reset { reset } = update.frame else {
                         unreachable!()
                     };
-                    Some((reset, prepared))
+                    Some((std::sync::Arc::unwrap_or_clone(reset), prepared))
                 })
                 .await;
             state.update(cx, |s, cx| {

@@ -1862,7 +1862,9 @@ fn doc_message_updates(
                 // connection used to deep-copy the entire transcript here.
                 let current = rx.borrow_and_update().clone();
                 let frame = match prev.as_ref() {
-                    None => TranscriptFrame::reset(&current.entries),
+                    None => TranscriptFrame::Reset {
+                        reset: current.entries.clone(),
+                    },
                     Some(prev) => diff_transcript(&prev.entries, &current.entries),
                 };
                 let replay_baseline = match prev.as_ref() {
@@ -6032,6 +6034,33 @@ mod context_usage_tests {
     use super::*;
     use futures::StreamExt;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn opening_reset_shares_the_published_entries() {
+        let entries = Arc::new(vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "turn", "role": "assistant", "createdAt": 0, "deviceId": "host",
+                "parts": [{"kind": "text", "id": "part", "text": "Unicode λ"}]
+            }))
+            .unwrap(),
+        ]);
+        let (_tx, rx) = watch::channel(crate::doc_host::TranscriptSnapshot {
+            entries: entries.clone(),
+            replay_baseline: Arc::new(zuse_doc::TranscriptBaseline::default()),
+        });
+        let doc = Arc::new(zuse_doc::SessionDoc::init("shared-opening").unwrap());
+        let mut stream = doc_message_updates(rx, doc);
+        let update = stream.next().await.unwrap();
+        let zuse_doc::TranscriptFrame::Reset { reset } = update.frame else {
+            panic!("expected full opening reset")
+        };
+        assert_eq!(
+            entries.as_ptr(),
+            reset.as_ptr(),
+            "opening must not clone the full transcript"
+        );
+        assert_eq!(update.replay_baseline.unwrap().entries.len(), 1);
+    }
 
     #[tokio::test]
     async fn replay_cutoff_travels_with_coalesced_backfill_and_live_content() {
