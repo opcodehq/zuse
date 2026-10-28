@@ -1,5 +1,9 @@
 # Native workflow speed follow-up — 2026-10-28
 
+The subsequent [log-tail candidate and expanded speed measurement](harness-tail-speed-2026-10-28.md)
+retains its initial 12-pair result and reports all 16 pairs after a fixed fourth
+repetition. The measurements below remain historical for this source version.
+
 The [preceding full comparison](harness-followup-2026-10-28.md) showed Sonnet
 completion at 12/12 but slower median elapsed time. This follow-up changes the
 schema-owned workflow guidance and measures it again; it does not claim a win

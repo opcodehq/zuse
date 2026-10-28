@@ -160,3 +160,8 @@ The [later speed follow-up](harness-speed-2026-10-28.md) brought the same
 follow-up allocation to 293/300, with Sonnet at 12/12 but still slower than the
 reference. New roots receive ordered edit/verification guidance; existing roots
 keep their saved instruction snapshot.
+
+The [subsequent tail-candidate measurement](harness-tail-speed-2026-10-28.md)
+used 119/150 separately authorized requests and retains both its initial and
+expanded results. The model did not invoke tail mode in that live suite; no
+causal speed benefit from this option is claimed.

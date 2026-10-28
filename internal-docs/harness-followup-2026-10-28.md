@@ -1,5 +1,9 @@
 # Repeated native harness comparison — 2026-10-28
 
+The [latest expanded Sonnet measurements](harness-tail-speed-2026-10-28.md)
+report both their initial and confirmation samples, with source and accounting
+separate from this earlier full two-model suite.
+
 The later [workflow speed follow-up](harness-speed-2026-10-28.md) records a
 new Sonnet 12-pair comparison after additional guidance changes: 11.44s native
 versus 10.17s reference. The full Opus results below predate that guidance; two
