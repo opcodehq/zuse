@@ -1610,7 +1610,7 @@ enum ShellEscapeOutcome {
 
 /// When the shell next has render-only clock pixels to repaint, as of `now`:
 /// every second while the selected chat is Working (the trailer's elapsed
-/// timer and its 7s flavour word), else the next wall-clock minute for
+/// timer), else the next wall-clock minute for
 /// relative "5m"/"2h" labels. State transitions (staleness, device presence,
 /// send grace) arrive as AppState notifications instead — see
 /// [`AppState::watch_clock_transitions`]. Nothing else ticks: AwaitingInput
@@ -2278,7 +2278,7 @@ pub struct Shell {
     session_info_shown: bool,
     /// The card opened over a transcript too narrow to show it beside.
     session_info_overlay: bool,
-    /// The card's sections the user folded shut (by section key).
+    /// The card's sections the user toggled away from their default (by key).
     session_info_folded: std::collections::HashSet<&'static str>,
     /// Whether the card showed at the toggle's press (see
     /// `note_session_info_press`).
@@ -8422,20 +8422,6 @@ impl Shell {
         let shows_metadata = branch.is_some() || change_request.is_some();
         let queued = queued && !undelivered;
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
-        // Subagents running under this chat show as a "● N" pill beside the
-        // row's own activity indicator, never in place of it: the pill takes
-        // the time stamp's spot (compact) or leads the status (regular), and
-        // keeps showing after the parent's own turn has settled.
-        let running_subagents = self.state.read(cx).running_subagents_for(&id, Utc::now());
-        let subagent_pill = |suffix: &str| {
-            (running_subagents > 0).then(|| {
-                crate::running_pill::running_pill(
-                    format!("{row_id}-subagents-{suffix}"),
-                    running_subagents,
-                    theme,
-                )
-            })
-        };
         let compact_status = sidebar.then(|| {
             let glyph = if working {
                 loaders::mini_glyph_spinner(
@@ -8570,7 +8556,6 @@ impl Shell {
                         .flex_row()
                         .items_center()
                         .gap(px(6.0))
-                        .children(subagent_pill("label"))
                         .child(
                             div()
                                 .flex()
@@ -8595,7 +8580,6 @@ impl Shell {
                     .gap(px(6.0))
                     .text_size(crate::typography::text_xs())
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .children(subagent_pill("idle"))
                     .child(time_ago.clone())
                     .into_any_element(),
             }
@@ -8856,9 +8840,6 @@ impl Shell {
             let text_hint = compact_jump_label
                 .as_ref()
                 .is_some_and(|label| label.chars().count() > 3);
-            let pill = (!show_legend && !show_archive)
-                .then(|| subagent_pill("compact"))
-                .flatten();
             let archive_id = id.clone();
             let trailing_info: AnyElement = if show_archive {
                 icon(if archived {
@@ -8870,8 +8851,6 @@ impl Shell {
                 .flex_none()
                 .text_color(theme.text_muted)
                 .into_any_element()
-            } else if let Some(pill) = pill {
-                pill
             } else if let (false, false, Some((additions, deletions))) =
                 (show_legend, two_line, diff_stat)
             {
@@ -9278,11 +9257,6 @@ impl Shell {
                             let text_hint = compact_jump_label
                                 .as_ref()
                                 .is_some_and(|label| label.chars().count() > 3);
-                            // Running subagents take the time stamp's place; the
-                            // legend and the hover archive still win.
-                            let pill = (!show_legend && !show_archive)
-                                .then(|| subagent_pill("compact"))
-                                .flatten();
                             let archive_id = id.clone();
                             el.children(change_request.clone().map(|summary| {
                                 if preview {
@@ -9314,7 +9288,6 @@ impl Shell {
                                             COMPACT_JUMP_HINT_WIDTH,
                                         ))
                                     })
-                                    // A running-subagents pill can be wider than the plain time.
                                     .when(!text_hint, |el| el.min_w(px(30.0)))
                                     // Fixed height so swapping the time text for the
                                     // archive glyph never resizes the slot.
@@ -9360,8 +9333,6 @@ impl Shell {
                                         .flex_none()
                                         .text_color(theme.text_muted)
                                         .into_any_element()
-                                    } else if let Some(pill) = pill {
-                                        pill
                                     } else {
                                         div()
                                             .whitespace_nowrap()
@@ -12557,8 +12528,8 @@ impl Shell {
         .into_any_element()
     }
 
-    /// Working indicator strip: gradient spinner + rotating flavour word (7s,
-    /// seeded per chat) + elapsed, staleness-gated via [`Indicator`]; falls back
+    /// Working indicator strip: working mark + status + elapsed,
+    /// staleness-gated via [`Indicator`]; falls back
     /// to a "Sending…" bridge and then the engine mode line.
     fn render_status_strip(&mut self, composer_width: f32, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();

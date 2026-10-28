@@ -101,9 +101,25 @@ fn row_meta(theme: &Theme) -> gpui::Div {
         .text_color(theme.text_muted)
 }
 
-/// The quiet space between the card's groups (it has no dividers).
-fn group_gap() -> gpui::Div {
-    div().h(px(6.0)).flex_none()
+/// The faint rule between the workspace rows and the session's activity:
+/// a hairline that fades out toward both edges.
+fn fade_rule(theme: &Theme) -> gpui::Div {
+    let ink = theme.text.opacity(0.15);
+    let half = |from: gpui::Hsla, to: gpui::Hsla| {
+        div().flex_1().h_full().bg(gpui::linear_gradient(
+            90.,
+            gpui::linear_color_stop(from, 0.0),
+            gpui::linear_color_stop(to, 1.0),
+        ))
+    };
+    div()
+        .flex_none()
+        .mx(px(10.0))
+        .my(px(6.0))
+        .h(px(1.0))
+        .flex()
+        .child(half(ink.opacity(0.0), ink))
+        .child(half(ink, ink.opacity(0.0)))
 }
 
 /// A spawned subagent of this chat, from its spawn chip.
@@ -353,12 +369,16 @@ impl Shell {
         };
 
         // ── Where it runs: the device (a remote one shows whether it is
-        // reachable), the project, and the branch with its checkout kind.
+        // reachable; its tooltip names the project folder) and the branch.
         let device_row = info_row(
             &theme,
             row_glyph(if local { icons::LAPTOP } else { icons::MONITOR }, &theme),
             device,
         )
+        .id("session-info-device")
+        .when_some(project.map(|(_, path)| path), |row, path| {
+            row.tooltip(crate::settings::widgets::text_tooltip(path))
+        })
         .when(!local, |row| {
             row.child(
                 row_meta(&theme).child(div().size(px(6.0)).rounded_full().bg(if online {
@@ -368,21 +388,8 @@ impl Shell {
                 })),
             )
         });
-        let project_row = match project {
-            Some((name, path)) => info_row(
-                &theme,
-                self.render_project_icon(&chat.id, 16.0, false, cx),
-                name,
-            )
-            .id("session-info-project")
-            .tooltip(crate::settings::widgets::text_tooltip(path))
-            .into_any_element(),
-            None => info_row(&theme, row_glyph(icons::HOME, &theme), "No project".into())
-                .into_any_element(),
-        };
-        // The branch carries its checkout as trailing meta; without a branch
-        // the checkout keeps a row of its own.
-        let worktree = checkout.as_ref().map(|(worktree, _)| *worktree);
+        // Without a branch the checkout keeps a row of its own.
+        let git = checkout.is_some();
         let checkout_path = checkout.as_ref().map(|(_, path)| path.clone());
         let branch_row = match branch {
             Some(branch) => Some(
@@ -391,13 +398,6 @@ impl Shell {
                     .tooltip(crate::settings::widgets::text_tooltip(
                         checkout_path.clone().unwrap_or(branch),
                     ))
-                    .when_some(worktree, |row, worktree| {
-                        row.child(row_meta(&theme).child(if worktree {
-                            "Worktree"
-                        } else {
-                            "Local"
-                        }))
-                    })
                     .into_any_element(),
             ),
             None => checkout.map(|(worktree, path)| {
@@ -416,7 +416,7 @@ impl Shell {
 
         // ── What it changed: the checkout's diff (opens the review) and the
         // branch's pull request.
-        let changes_row = diff_stat.map(|(additions, deletions)| {
+        let changes_row = git.then(|| {
             action_row(&theme, "session-info-changes")
                 .debug_selector(|| "session-info-changes".into())
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -427,8 +427,12 @@ impl Shell {
                     icons::GIT_COMPARE,
                     &theme,
                 )))
-                .child(div().flex_1().min_w_0().truncate().child("Changes"))
-                .child(sidebar_diff_stat(additions, deletions, 1.0, &theme).text_size(px(11.0)))
+                .child(div().flex_1().min_w_0().truncate().child("Branch changes"))
+                .when_some(diff_stat, |row, (additions, deletions)| {
+                    row.child(
+                        sidebar_diff_stat(additions, deletions, 1.0, &theme).text_size(px(11.0)),
+                    )
+                })
         });
         // The branch's pull request: its state glyph and title, with the
         // number as meta. The row opens it.
@@ -486,7 +490,6 @@ impl Shell {
         // ── The project's run actions.
         let actions = self.render_session_info_actions(&theme, cx);
 
-        let has_changes = changes_row.is_some() || pull_request_row.is_some();
         let body = div()
             .id("session-info-body")
             .max_h(px(max_height.max(120.0)))
@@ -495,14 +498,15 @@ impl Shell {
             .flex()
             .flex_col()
             .child(device_row)
-            .child(project_row)
             .children(branch_row)
-            .when(has_changes, |body| body.child(group_gap()))
             .children(changes_row)
             .children(pull_request_row)
-            .when(!agents_section.is_empty(), |body| body.child(group_gap()))
-            .children(agents_section)
-            .child(group_gap())
+            // The session's activity sits under a rule, apart from the
+            // workspace it runs in.
+            .when(!agents_section.is_empty(), |body| {
+                body.child(fade_rule(&theme)).children(agents_section)
+            })
+            .child(fade_rule(&theme))
             .child(side_chat)
             .children(actions)
             .child(
@@ -561,16 +565,20 @@ impl Shell {
 
     /// A collapsible section's header: an ordinary icon row whose chevron
     /// folds the rows beneath it. Returns the row and whether it is open.
+    /// `session_info_folded` records the sections toggled away from
+    /// `default_open`.
+    #[allow(clippy::too_many_arguments)]
     fn session_info_section(
         &mut self,
         key: &'static str,
+        default_open: bool,
         glyph: AnyElement,
         label: &'static str,
         meta: Option<SharedString>,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> (AnyElement, bool) {
-        let open = !self.session_info_folded.contains(key);
+        let open = default_open != self.session_info_folded.contains(key);
         let row = action_row(
             theme,
             SharedString::from(format!("session-info-section-{key}")),
@@ -629,6 +637,7 @@ impl Shell {
         };
         let (header, open) = self.session_info_section(
             "agents",
+            true,
             row_glyph(icons::TOOL_AGENT, theme),
             "Agents",
             Some(meta.into()),
@@ -726,6 +735,7 @@ impl Shell {
         let count = snapshot.actions.len();
         let (header, open) = self.session_info_section(
             "actions",
+            false,
             row_glyph(icons::ACTION_PLAY, theme),
             "Actions",
             (count > 0).then(|| SharedString::from(count.to_string())),

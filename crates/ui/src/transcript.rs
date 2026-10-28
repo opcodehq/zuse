@@ -412,10 +412,33 @@ fn is_spawn_link(item: &ToolItem) -> bool {
 /// render as their own always-open row. Thinking alone needs no header: the
 /// "Thinking" chip already folds its text, and a "Thinking" summary over it
 /// nested one accordion inside another.
+///
+/// Several subagents from one stretch of a turn fold under a single
+/// "N subagents" header too; a lone one stays its own row.
 fn tool_group_collapses(tools: &[ToolItem]) -> bool {
     tools
         .iter()
         .any(|t| !is_agent_tool(t) && t.kind != ToolItemKind::Thought)
+        || tools.iter().filter(|t| is_agent_tool(t)).count() > 1
+}
+
+/// A subagent's lifecycle from its spawn chip; chips written before the
+/// status field existed fall back to the call's own resolution.
+fn agent_status(tool: &ToolItem) -> SubagentStatus {
+    match tool.subagent_status {
+        Some(status) => status,
+        None if tool.is_error => SubagentStatus::Failed,
+        None if tool.resolved => SubagentStatus::Done,
+        None => SubagentStatus::Running,
+    }
+}
+
+/// True while any subagent in the group still works: its header stays open
+/// and shimmers until they all settle.
+fn agents_running(tools: &[ToolItem]) -> bool {
+    tools
+        .iter()
+        .any(|t| is_agent_tool(t) && agent_status(t) == SubagentStatus::Running)
 }
 
 /// Column budget for soft-wrapping thought text into detail lines. The
@@ -2075,6 +2098,36 @@ pub fn tool_group_summary(tools: &[ToolItem]) -> String {
         .iter()
         .filter(|t| t.kind == ToolItemKind::Note)
         .count();
+    // A group of subagents counts agents and how many still run
+    // ("3 subagents · 1 of 3 running", "3 subagents · 2 done · 1 failed").
+    if calls > 1
+        && tools
+            .iter()
+            .all(|t| t.kind != ToolItemKind::Call || is_agent_tool(t))
+    {
+        let statuses: Vec<SubagentStatus> = tools
+            .iter()
+            .filter(|t| is_agent_tool(t))
+            .map(agent_status)
+            .collect();
+        let count = |status| statuses.iter().filter(|s| **s == status).count();
+        let running = count(SubagentStatus::Running);
+        let mut summary = format!("{calls} subagents");
+        if running > 0 {
+            summary.push_str(&format!(" · {running} of {calls} running"));
+        } else {
+            for (status, word) in [
+                (SubagentStatus::Done, "done"),
+                (SubagentStatus::Failed, "failed"),
+            ] {
+                let n = count(status);
+                if n > 0 {
+                    summary.push_str(&format!(" · {n} {word}"));
+                }
+            }
+        }
+        return summary;
+    }
     let mut summary = match (calls, thoughts, notes) {
         (0, 0, 0) => String::new(),
         (0, 0, 1) => "Wrote a note".into(),
@@ -2295,43 +2348,6 @@ fn format_kb(bytes: u64) -> String {
 // ---------------------------------------------------------------------------
 // Working indicator flavour (pure; rendered by the shell strip)
 // ---------------------------------------------------------------------------
-
-/// Rotating flavour vocabulary (21 words / 7s, seeded per chat).
-pub const FLAVOUR_WORDS: [&str; 21] = [
-    "Zuseing",
-    "Thinking",
-    "Pondering",
-    "Scheming",
-    "Brewing",
-    "Weaving",
-    "Tinkering",
-    "Musing",
-    "Composing",
-    "Sifting",
-    "Untangling",
-    "Distilling",
-    "Sketching",
-    "Plotting",
-    "Riffing",
-    "Combobulating",
-    "Percolating",
-    "Marinating",
-    "Noodling",
-    "Puzzling",
-    "Conjuring",
-];
-pub const FLAVOUR_ROTATE_SECS: i64 = 7;
-
-/// The flavour word for a seed at an elapsed time.
-pub fn flavour_word(seed: u64, elapsed_secs: i64) -> &'static str {
-    let step = (elapsed_secs.max(0) / FLAVOUR_ROTATE_SECS) as u64;
-    FLAVOUR_WORDS[((seed.wrapping_add(step)) % FLAVOUR_WORDS.len() as u64) as usize]
-}
-
-/// A stable per-chat seed.
-pub fn flavour_seed(chat_id: &str) -> u64 {
-    fnv1a(chat_id.as_bytes())
-}
 
 /// The working trailer's "Sending…" bridge: true while an in-flight send is
 /// fresher than the session row's turn start — the row still carries the
@@ -7346,7 +7362,7 @@ impl Transcript {
         // `turn` (the turn's start, ms) keys the rolling word and timer, so a
         // new turn's labels appear fresh instead of rolling from the last
         // turn's final values.
-        let (sending, queued, elapsed_secs, seed, turn) = if let Some(doc_id) = &self.doc_override {
+        let (sending, queued, elapsed_secs, turn) = if let Some(doc_id) = &self.doc_override {
             // A subagent doc has no Session row — `indicator_for` would read
             // the PARENT chat's live state into this tab. Liveness rides the
             // doc itself instead: the sink's assistant entry streams until
@@ -7364,7 +7380,7 @@ impl Transcript {
                 return None;
             }
             let elapsed = ((now.timestamp_millis() - last.created_at).max(0) / 1000) as i64;
-            (false, false, elapsed, flavour_seed(doc_id), last.created_at)
+            (false, false, elapsed, last.created_at)
         } else {
             let chat_id = self.chat_id.clone()?;
             // Failed-send state first: past the grace window the trailer IS
@@ -7416,7 +7432,7 @@ impl Transcript {
                     .map_or(0, |t| t.timestamp_millis());
                 (sending, queued, elapsed, turn)
             };
-            (sending, queued, elapsed, flavour_seed(&chat_id), turn)
+            (sending, queued, elapsed, turn)
         };
         if self.compact_mode && !sending && !queued && elapsed_secs > 0 {
             let entry_id = if let Some(doc_id) = &self.doc_override {
@@ -7438,12 +7454,22 @@ impl Transcript {
                 self.compact_last_elapsed.insert(entry_id, elapsed_secs);
             }
         }
+        // Who is working, by name: the chat's agent ("Claude Code is
+        // working"); a subagent tab reads its parent chat's agent.
+        let agent = self
+            .chat_id
+            .as_deref()
+            .and_then(|id| self.state.read(cx).chats.iter().find(|chat| chat.id == id))
+            .and_then(|chat| chat.config.as_ref())
+            .map_or("Agent", |config| {
+                crate::pickers::harness_display_name(config.harness)
+            });
         let word = if queued {
-            "Queued — will send automatically"
+            "Queued — will send automatically".to_owned()
         } else if sending {
-            "Sending"
+            "Sending…".to_owned()
         } else {
-            flavour_word(seed, elapsed_secs)
+            format!("{agent} is working")
         };
         let theme = Theme::of(cx).clone();
         Some(
@@ -7460,7 +7486,6 @@ impl Transcript {
                     theme.text,
                 ))
                 .child(
-                    // The flavour word rotates every 7s; roll it as it turns.
                     div()
                         .text_size(crate::typography::text_xs())
                         .text_color(if queued {
@@ -7470,11 +7495,7 @@ impl Transcript {
                         })
                         .child(crate::roll_text::roll_text(
                             format!("working-word-{}-{turn}", cx.entity_id()),
-                            SharedString::from(if queued {
-                                word.to_string()
-                            } else {
-                                format!("{word}…")
-                            }),
+                            SharedString::from(word),
                             cx.reduce_motion(),
                         )),
                 )
@@ -8244,7 +8265,9 @@ impl Transcript {
         let effective_auto_open = auto_open || (arrival_pending && !self.compact_mode);
         #[cfg(feature = "browser-fixture")]
         let effective_auto_open = effective_auto_open || self.fixture_open_groups;
-        let open = !collapses || fold.open.unwrap_or(effective_auto_open);
+        // A subagent group stays open while any of its agents still works.
+        let live_agents = agents_running(tools);
+        let open = !collapses || fold.open.unwrap_or(effective_auto_open || live_agents);
         // Compact shells only change `open` through `toggle_fold`, which
         // already seeds `from` with the body's measured height — the
         // rendered-height reset below must not clobber it with the shell's
@@ -8266,8 +8289,10 @@ impl Transcript {
         // fold — any unresolved chip (a running tool, a live thought) keeps it
         // pulsing until the turn's work settles. Compute this before the
         // collapsed-body skip, which may empty `tools`.
-        let active =
-            collapses && (auto_open || (self.compact_mode && tools.iter().any(|t| !t.resolved)));
+        let active = collapses
+            && (auto_open
+                || live_agents
+                || (self.compact_mode && tools.iter().any(|t| !t.resolved)));
         if self.compact_mode && active {
             self.compact_live_entries.insert(row_id.clone());
         }
@@ -10094,12 +10119,7 @@ fn subagent_header_row(
     cx: &mut gpui::App,
 ) -> gpui::Div {
     let (_, description) = tool_chip_content(&tool.call);
-    let status = match tool.subagent_status {
-        Some(status) => status,
-        None if tool.is_error => SubagentStatus::Failed,
-        None if tool.resolved => SubagentStatus::Done,
-        None => SubagentStatus::Running,
-    };
+    let status = agent_status(tool);
     let running = matches!(status, SubagentStatus::Running);
     let failed = tool.is_error || matches!(status, SubagentStatus::Failed);
     let title: SharedString = if description.is_empty() {
@@ -10510,8 +10530,14 @@ fn subagent_chip(
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> AnyElement {
+    // Under a group header the row takes the tree's height, so the fold
+    // measures it like any other tool row.
     div()
-        .h(px(CHIP_HEIGHT))
+        .h(px(if rail {
+            TOOL_TREE_ROW_HEIGHT
+        } else {
+            CHIP_HEIGHT
+        }))
         .w_full()
         .flex_none()
         .flex()
@@ -10520,7 +10546,7 @@ fn subagent_chip(
         .when(rail, |row| {
             row.child(
                 div()
-                    .ml(px(12.0))
+                    .ml(px(ACTIVITY_TRUNK_X))
                     .h_full()
                     .w(px(1.0))
                     .flex_none()
@@ -13476,8 +13502,10 @@ mod tests {
             panic!("consecutive agents share a group")
         };
         assert_eq!(tools.len(), 2);
-        assert!(!tool_group_collapses(tools));
+        // Two agents fold under one "2 subagents" header.
+        assert!(tool_group_collapses(tools));
         assert!(tools.iter().all(is_agent_tool));
+        assert_eq!(tool_group_summary(tools), "2 subagents · 2 of 2 running");
     }
 
     #[test]
@@ -16650,15 +16678,6 @@ mod tests {
             tool_title_shimmer_phase(start, start + TOOL_GROUP_SHIMMER_DURATION),
             0.0
         );
-    }
-
-    #[test]
-    fn flavour_words_rotate_every_seven_seconds() {
-        let seed = flavour_seed("chat-1");
-        assert_eq!(flavour_word(seed, 0), flavour_word(seed, 6));
-        assert_ne!(flavour_word(seed, 0), flavour_word(seed, 7));
-        // Deterministic per chat; different chats usually differ in phase.
-        assert_eq!(flavour_word(seed, 3), flavour_word(seed, 3));
     }
 
     #[test]

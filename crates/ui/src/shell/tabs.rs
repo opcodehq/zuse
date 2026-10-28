@@ -1026,13 +1026,6 @@ impl Shell {
             content_width,
         } = self.titlebar_trailing_layout(on_canvas, cx);
 
-        let running_subagents = {
-            let state = self.state.read(cx);
-            state
-                .selected_chat
-                .as_deref()
-                .map_or(0, |chat| state.running_subagents_for(chat, Utc::now()))
-        };
         let trailing: Option<gpui::AnyElement> = if on_canvas {
             None
         } else {
@@ -1146,18 +1139,6 @@ impl Shell {
                                     ),
                                     ShortcutId::ToggleChanges.label(),
                                     cx.listener(|this, _, _, cx| this.toggle_right_pane(cx)),
-                                )
-                                // Subagents open as tabs in this pane: mark its
-                                // toggle so running ones are findable while closed.
-                                .when(
-                                    running_subagents > 0,
-                                    |button| {
-                                        crate::running_pill::mark_files_button(
-                                            button,
-                                            running_subagents,
-                                            &theme,
-                                        )
-                                    },
                                 ),
                             ),
                     )

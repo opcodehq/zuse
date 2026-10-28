@@ -2323,13 +2323,6 @@ impl AppState {
         self.sessions.iter().find(|s| s.chat_id == chat_id)
     }
 
-    /// Subagents running under `chat_id` right now (the engine's count on its
-    /// session row; 0 once that row goes stale). Every device can ask, opened
-    /// chat or not.
-    pub fn running_subagents_for(&self, chat_id: &str, now: DateTime<Utc>) -> u32 {
-        running_subagents(self.session_for(chat_id), now)
-    }
-
     /// Staleness-checked status dot for a chat row. A send in flight reads as
     /// Working (see [`Self::display_status_for`]).
     pub fn indicator_for(&self, chat_id: &str, now: DateTime<Utc>) -> Indicator {

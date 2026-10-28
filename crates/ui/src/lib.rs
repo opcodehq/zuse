@@ -68,7 +68,6 @@ pub mod rail;
 mod recovery;
 mod roll_text;
 pub mod rounded_clip;
-pub mod running_pill;
 pub mod settings;
 pub mod shell;
 pub mod sound;

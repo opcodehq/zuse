@@ -5777,6 +5777,26 @@ pub(crate) fn normalize_model_rows(harness: HarnessId, models: Vec<Model>) -> Ve
         .collect()
 }
 
+/// The agent's product name, as status lines and update notices say it.
+pub(crate) fn harness_display_name(harness: HarnessId) -> &'static str {
+    match harness {
+        HarnessId::ClaudeCode => "Claude Code",
+        HarnessId::Codex => "Codex",
+        HarnessId::Cursor => "Cursor",
+        HarnessId::Devin => "Devin",
+        HarnessId::Grok => "Grok",
+        HarnessId::Hermes => "Hermes",
+        HarnessId::Pi => "Pi",
+        HarnessId::Opencode => "OpenCode",
+        HarnessId::Antigravity => "Antigravity",
+        HarnessId::Gemini => "Gemini CLI",
+        HarnessId::Kiro => "Kiro CLI",
+        HarnessId::Zuse => "Zuse",
+        HarnessId::Mock => "Mock",
+        HarnessId::CustomAcp(_) => "ACP agent",
+    }
+}
+
 pub(crate) fn harness_brand_icon(harness: HarnessId) -> (&'static str, Option<gpui::Hsla>) {
     match harness {
         HarnessId::Zuse => (crate::icons::ZUSE_LOGO, None),

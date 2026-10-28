@@ -90,25 +90,6 @@ fn visible_rows(
         .collect()
 }
 
-fn agent_name(harness: HarnessId) -> &'static str {
-    match harness {
-        HarnessId::ClaudeCode => "Claude Code",
-        HarnessId::Codex => "Codex",
-        HarnessId::Cursor => "Cursor",
-        HarnessId::Devin => "Devin",
-        HarnessId::Grok => "Grok",
-        HarnessId::Hermes => "Hermes",
-        HarnessId::Pi => "Pi",
-        HarnessId::Opencode => "OpenCode",
-        HarnessId::Antigravity => "Antigravity",
-        HarnessId::Gemini => "Gemini CLI",
-        HarnessId::Kiro => "Kiro CLI",
-        HarnessId::Zuse => "Zuse",
-        HarnessId::Mock => "Mock",
-        HarnessId::CustomAcp(_) => "ACP agent",
-    }
-}
-
 fn active(status: &HarnessUpdateStatus) -> bool {
     matches!(
         status.phase,
@@ -318,7 +299,7 @@ impl Shell {
                 .role(gpui::Role::Button)
                 .aria_label(format!(
                     "{label} · {} · {}",
-                    agent_name(harness),
+                    crate::pickers::harness_display_name(harness),
                     row.device_name
                 ))
                 .tab_index(if enabled { 0 } else { -1 })
@@ -389,7 +370,7 @@ impl Shell {
             if expanded { 1.0 } else { 0.0 },
         );
         let theme = Theme::of(cx).for_settings_surface();
-        let name = agent_name(status.harness);
+        let name = crate::pickers::harness_display_name(status.harness);
         let all_updated = statuses
             .iter()
             .all(|row| row.status.phase == Phase::Updated);
@@ -618,7 +599,7 @@ impl Shell {
                         .unwrap_or_else(|| label.clone());
                     let tooltip = Some(format!(
                         "{} · {}\n{extra}",
-                        agent_name(status.harness),
+                        crate::pickers::harness_display_name(status.harness),
                         row.device_name
                     ));
                     let row_action =
@@ -667,7 +648,7 @@ impl Shell {
                                         .line_height(crate::typography::ui_rems(16.0))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .truncate()
-                                        .child(agent_name(status.harness)),
+                                        .child(crate::pickers::harness_display_name(status.harness)),
                                 )
                                 .when(device_count > 1, |el| {
                                     el.child(
