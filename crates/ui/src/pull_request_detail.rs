@@ -5,6 +5,8 @@ mod code;
 mod handoff;
 #[path = "pull_request_interactions.rs"]
 mod interactions;
+#[path = "pull_request_summary.rs"]
+mod summary;
 use crate::{
     settings::{self, PullRequestDestination, widgets},
     state::AppState,
@@ -17,6 +19,7 @@ use gpui::{
 #[cfg(test)]
 use std::time::Duration;
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Instant};
+pub(crate) use summary::property_row;
 use zuse_protocol::change_request_assessment::{CiState, Facts, check_failed, check_status};
 use zuse_protocol::{ChangeRequestDetail, ChangeRequestListItem};
 use zuse_rpc::methods;
@@ -191,10 +194,18 @@ struct CodeRow {
     spans: Vec<zuse_syntax::HighlightSpan>,
 }
 
-fn code_rows(patch: &str) -> (Vec<CodeRow>, Vec<(String, usize)>) {
+/// Patch rows, each file's path and first row, and each file's status.
+fn code_rows(
+    patch: &str,
+) -> (
+    Vec<CodeRow>,
+    Vec<(String, usize)>,
+    Vec<crate::changes::FileStatus>,
+) {
     use crate::changes::LineKind;
     let mut rows = Vec::new();
     let mut files = Vec::new();
+    let mut statuses = Vec::new();
     let mut parsed = crate::changes::parse_patch(patch);
     // Directory order, so each folder appears once in the tree and the
     // stream reads in the same order as the tree.
@@ -209,6 +220,7 @@ fn code_rows(patch: &str) -> (Vec<CodeRow>, Vec<(String, usize)>) {
         let highlights = zuse_syntax::language_for_path(&file.path)
             .and_then(|language| crate::changes::excerpt_highlights(&file, language));
         files.push((file.path.clone(), rows.len()));
+        statuses.push(file.status);
         rows.push(CodeRow {
             role: RowRole::File,
             text: file.path.clone().into(),
@@ -251,7 +263,7 @@ fn code_rows(patch: &str) -> (Vec<CodeRow>, Vec<(String, usize)>) {
             }));
         }
     }
-    (rows, files)
+    (rows, files, statuses)
 }
 
 struct ParsedDiff {
@@ -261,6 +273,8 @@ struct ParsedDiff {
     pairs: Vec<Vec<crate::changes::LinePair>>,
     /// Per-file (additions, deletions), counted from the patch itself.
     stats: Vec<(u64, u64)>,
+    /// Per-file added, modified, deleted, or renamed.
+    statuses: Vec<crate::changes::FileStatus>,
     /// Widest code line, in display columns, across the whole patch.
     columns: usize,
     gutter: f32,
@@ -269,7 +283,7 @@ struct ParsedDiff {
 impl ParsedDiff {
     fn new(patch: String) -> Arc<Self> {
         use crate::changes::LineKind;
-        let (rows, files) = code_rows(&patch);
+        let (rows, files, statuses) = code_rows(&patch);
         let stats = files
             .iter()
             .enumerate()
@@ -297,6 +311,7 @@ impl ParsedDiff {
             rows,
             files,
             stats,
+            statuses,
             columns,
         })
     }
@@ -319,6 +334,8 @@ pub(crate) struct PullRequestCache {
     entries: Vec<((Option<String>, String), DetailSnapshot)>,
     /// Unsent comments, with the reason the last send failed.
     drafts: std::collections::HashMap<(Option<String>, String), (String, Option<String>)>,
+    /// Files marked viewed, by path, kept across closing and reopening.
+    viewed: std::collections::HashMap<(Option<String>, String), std::collections::HashSet<String>>,
     /// A post belongs to the window/profile, not to a particular detail view.
     submissions: std::collections::HashMap<(Option<String>, String), Entity<CommentSubmission>>,
 }
@@ -381,6 +398,8 @@ struct CodeReview {
     stream: Rc<Vec<code::StreamRow>>,
     ranges: Vec<std::ops::Range<usize>>,
     collapsed: std::collections::HashSet<usize>,
+    /// Paths the reader marked viewed; they survive a refreshed patch.
+    viewed: std::collections::HashSet<String>,
     /// A file picked from the tree stays selected until the reader scrolls;
     /// the last files can be too short to reach the top of the viewport.
     jumped: Option<usize>,
@@ -396,6 +415,7 @@ impl Default for CodeReview {
             stream: Default::default(),
             ranges: Vec::new(),
             collapsed: Default::default(),
+            viewed: Default::default(),
             jumped: None,
             tree_scroll: gpui::ScrollHandle::new(),
         }
@@ -429,6 +449,7 @@ pub struct PullRequestDetailPage {
     diff_refresh_owed: bool,
     tab: Tab,
     checks_expanded: bool,
+    description_collapsed: bool,
     tab_slide: crate::motion::IndicatorSlide,
     tab_focus: [gpui::FocusHandle; 3],
     /// The file tree is one Tab stop; arrow keys move between files.
@@ -441,7 +462,6 @@ pub struct PullRequestDetailPage {
     file_search_subscription: Option<Subscription>,
     file_query: String,
     files_expanded: bool,
-    code_pane_width: Option<f32>,
     /// The page's own width, measured after layout (a frame late).
     page_width: Option<f32>,
     scroll: widgets::PageScroll,
@@ -507,6 +527,7 @@ impl PullRequestDetailPage {
             diff_refresh_owed: false,
             tab: Tab::Summary,
             checks_expanded: false,
+            description_collapsed: false,
             tab_slide: crate::motion::IndicatorSlide::at(tab_slot(Tab::Summary), Instant::now()),
             tab_focus: [cx.focus_handle(), cx.focus_handle(), cx.focus_handle()],
             tree_focus: cx.focus_handle().tab_stop(true),
@@ -525,7 +546,6 @@ impl PullRequestDetailPage {
             file_search_subscription: None,
             file_query: String::new(),
             files_expanded: false,
-            code_pane_width: None,
             page_width: None,
             scroll: widgets::PageScroll::default(),
             comment_input: cx.new(|cx| {
@@ -615,6 +635,14 @@ impl PullRequestDetailPage {
                 page.install_diff(diff, cx);
             }
         }
+        if let Some(viewed) = page
+            .cache
+            .borrow()
+            .viewed
+            .get(&(page.target.clone(), page.url.clone()))
+        {
+            page.review.viewed = viewed.clone();
+        }
         let draft = page
             .cache
             .borrow()
@@ -663,12 +691,30 @@ impl PullRequestDetailPage {
         self.loading
     }
 
-    /// The pane's toolbar row: glyph, title and the pull request's actions.
+    /// The pane's toolbar row: the repository and number on the left; the
+    /// state, star and the pull request's actions on the right. The title
+    /// itself leads the page below.
     pub(crate) fn toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         let url = self.url.clone();
         let copy_url = self.url.clone();
         let (number, title) = self.identity();
+        let repository = handoff::repository(&self.url);
+        let state = self
+            .detail
+            .as_ref()
+            .map(|detail| (detail.state.clone(), detail.is_draft))
+            .or_else(|| {
+                self.preview
+                    .as_ref()
+                    .map(|preview| (format!("{:?}", preview.state), preview.is_draft))
+            });
+        let star_url = self
+            .detail
+            .as_ref()
+            .map(|detail| detail.url.clone())
+            .filter(|url| !url.is_empty())
+            .unwrap_or_else(|| self.url.clone());
         div()
             .w_full()
             .min_w_0()
@@ -691,22 +737,32 @@ impl PullRequestDetailPage {
                     .flex()
                     .items_center()
                     .gap(px(6.0))
-                    .child(
-                        crate::icons::icon(crate::icons::PULL_REQUEST)
-                            .size(px(14.0))
-                            .flex_none()
-                            .text_color(theme.text_muted),
-                    )
+                    .text_size(crate::typography::text_xs())
+                    .whitespace_nowrap()
                     .child(
                         div()
+                            .flex_shrink(1.0)
                             .min_w_0()
                             .truncate()
-                            .text_size(crate::typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .child(repository),
+                    )
+                    .children(number.map(|number| {
+                        div()
+                            .flex_none()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.text)
-                            .child(title),
-                    ),
+                            .child(format!("#{number}"))
+                    })),
             )
+            .children(state.map(|(state, draft)| {
+                div()
+                    .mr(px(4.0))
+                    .child(summary::state_pill(&state, draft, &theme))
+            }))
+            .when(self.detail.is_some(), |el| {
+                el.child(crate::pull_requests::star_button(&star_url, &theme, cx).size(px(24.0)))
+            })
             .child(
                 action("pr-detail-refresh", "Refresh pull request", &theme)
                     .when(self.loading, |el| el.opacity(0.4))
@@ -1006,8 +1062,14 @@ impl PullRequestDetailPage {
     }
 
     fn install_diff(&mut self, diff: Arc<ParsedDiff>, cx: &mut Context<Self>) {
+        // Several files open as a list to unfold one at a time; a lone file
+        // shows its diff straight away.
+        self.review.collapsed = if diff.files.len() > 1 {
+            (0..diff.files.len()).collect()
+        } else {
+            Default::default()
+        };
         self.diff = Some(diff);
-        self.review.collapsed.clear();
         self.review.jumped = None;
         self.rebuild_stream(cx);
     }
@@ -1207,6 +1269,177 @@ impl PullRequestDetailPage {
     }
 }
 
+/// Seed `cache` with a synthetic pull request (details, description,
+/// activity, and its patch) so the review fixture opens it without an
+/// engine. Returns its URL.
+#[cfg(feature = "browser-fixture")]
+pub(crate) fn fixture_seed_cache(cache: &Rc<RefCell<PullRequestCache>>) -> String {
+    use zuse_protocol::{
+        ChangeRequestActor, ChangeRequestCheck, ChangeRequestComment, ChangeRequestFile,
+    };
+    let url = "https://github.com/opcodehq/fieldnotes/pull/2942".to_owned();
+    let actor = |login: &str| ChangeRequestActor {
+        login: login.into(),
+    };
+    let file = |path: &str, header: &str, body: &str| {
+        format!("diff --git a/{path} b/{path}\n{header}--- a/{path}\n+++ b/{path}\n{body}")
+    };
+    let patch = [
+        file(
+            "apps/mobile/lib/trpc-fetch.ts",
+            "new file mode 100644\n",
+            "@@ -0,0 +1,9 @@\n+const AGREEMENT_PATHS = new Set([\n+  'investor.subscription.create',\n+  'investor.subscription.revise',\n+]);\n+\n+export function requestTimeout(url: URL): number {\n+  const paths = url.pathname.split('/trpc/')[1]?.split(',') ?? [];\n+  return paths.some((path) => AGREEMENT_PATHS.has(path)) ? 60_000 : 8_000;\n+}\n",
+        ),
+        file(
+            "apps/mobile/lib/deal-engagement.ts",
+            "",
+            "@@ -12,7 +12,9 @@ export function engagementFor(deal: Deal) {\n   const subscription = deal.subscription;\n-  if (subscription?.status === 'pending') return 'resume';\n+  if (subscription?.status === 'pending' || subscription?.status === 'funded') {\n+    return deal.isOpen ? 'resume' : 'closed';\n+  }\n   return 'invest';\n }\n",
+        ),
+        file(
+            "apps/mobile/providers/trpc-provider.tsx",
+            "",
+            "@@ -20,12 +20,6 @@ export function TrpcProvider({ children }: Props) {\n   const client = useMemo(() => createClient(), []);\n-  const timeout = 8_000;\n-  const controller = new AbortController();\n-  const timer = setTimeout(() => controller.abort(), timeout);\n-  useEffect(() => () => clearTimeout(timer), [timer]);\n-  // Every request shares one deadline.\n-  const signal = controller.signal;\n   return <Provider client={client}>{children}</Provider>;\n }\n",
+        ),
+        file(
+            "apps/mobile/components/deal-subscribe/use-signed-agreement-handoff.ts",
+            "new file mode 100644\n",
+            "@@ -0,0 +1,8 @@\n+export function useSignedAgreementHandoff(input: HandoffInput) {\n+  const applied = useRef<HandoffKey | null>(null);\n+  useEffect(() => {\n+    if (!input.enabled || !input.agreementKey) return;\n+    if (applied.current?.agreementKey === input.agreementKey) return;\n+    input.onHandoff();\n+  }, [input]);\n+}\n",
+        ),
+        file(
+            "apps/mobile/components/screens/deal-detail-screen.tsx",
+            "",
+            "@@ -48,6 +48,8 @@ export function DealDetailScreen({ deal }: Props) {\n   const engagement = engagementFor(deal);\n+  const resuming = engagement === 'resume';\n+  const showPass = !resuming;\n   return (\n     <Screen title={deal.name}>\n-      <InvestButton deal={deal} />\n+      <InvestButton deal={deal} label={resuming ? 'Continue investment' : 'Invest'} />\n",
+        ),
+        file(
+            "docs/legacy-signing.md",
+            "deleted file mode 100644\n",
+            "@@ -1,3 +0,0 @@\n-# Legacy signing\n-\n-Agreements were signed in the web view only.\n",
+        ),
+    ]
+    .concat();
+    let check = |name: &str, conclusion: &str| ChangeRequestCheck {
+        name: name.into(),
+        conclusion: conclusion.into(),
+        details_url: "https://github.com/opcodehq/fieldnotes/actions/runs/1".into(),
+        ..Default::default()
+    };
+    let comment = |login: &str, body: &str, state: &str, at: &str| ChangeRequestComment {
+        author: actor(login),
+        body: body.into(),
+        state: state.into(),
+        created_at: at.into(),
+        ..Default::default()
+    };
+    let detail = ChangeRequestDetail {
+        title: "Fix mobile investment signing handoff and tax field prompts".into(),
+        body: "Fix native investment checkout after agreement preparation exceeded the mobile client's eight-second timeout: the server saved the application, but the client showed a canceled-fetch error.\n\n### Behavior and review points\n\n- Give subscription creation and revision **60 seconds** for document preparation. Other requests keep their eight-second deadline.\n- Offer **Continue investment** for pending or funded subscriptions while keeping read-only access gates.\n- Route directly to `deposit` once per saved agreement.\n\n```ts\nreturn paths.some((path) => AGREEMENT_PATHS.has(path))\n  ? AGREEMENT_PREPARATION_TIMEOUT_MS\n  : REQUEST_TIMEOUT_MS;\n```\n".into(),
+        url: url.clone(),
+        number: 2942,
+        author: actor("swarajbachu"),
+        base_ref_name: "main".into(),
+        head_ref_name: "fix/tax-form-field-prompts".into(),
+        base_ref_oid: "1f0c9a7e2b3d4c5e6f708192a3b4c5d6e7f80912".into(),
+        head_ref_oid: "8e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5".into(),
+        state: "OPEN".into(),
+        review_decision: "APPROVED".into(),
+        mergeable: "MERGEABLE".into(),
+        additions: 29,
+        deletions: 13,
+        files: [
+            ("apps/mobile/lib/trpc-fetch.ts", 9, 0),
+            ("apps/mobile/lib/deal-engagement.ts", 3, 1),
+            ("apps/mobile/providers/trpc-provider.tsx", 0, 6),
+            ("apps/mobile/components/deal-subscribe/use-signed-agreement-handoff.ts", 8, 0),
+            ("apps/mobile/components/screens/deal-detail-screen.tsx", 3, 1),
+            ("docs/legacy-signing.md", 0, 3),
+        ]
+        .into_iter()
+        .map(|(path, additions, deletions)| ChangeRequestFile {
+            path: path.into(),
+            additions,
+            deletions,
+        })
+        .collect(),
+        status_check_rollup: vec![
+            check("lint", "SUCCESS"),
+            check("typecheck", "SUCCESS"),
+            check("unit (mobile)", "SUCCESS"),
+            check("unit (worker)", "SUCCESS"),
+            check("e2e (ios)", ""),
+            check("build (android)", "SUCCESS"),
+            check("preview deploy", "SUCCESS"),
+        ],
+        comments: vec![comment(
+            "swarajbachu",
+            "Rebased on main; the timeout split is ready for another look.",
+            "",
+            "2026-10-26T09:30:00Z",
+        )],
+        reviews: vec![
+            comment(
+                "mira-chen",
+                "Looks good. The resume path reads well.",
+                "APPROVED",
+                "2026-10-27T15:10:00Z",
+            ),
+            comment(
+                "devon-park",
+                "Can we cover the funded case in a test?",
+                "COMMENTED",
+                "2026-10-27T11:00:00Z",
+            ),
+        ],
+        review_threads: Some(Vec::new()),
+        viewer_login: Some("swarajbachu".into()),
+        ..Default::default()
+    };
+    let snapshot = DetailSnapshot {
+        body: super::pull_request_media::parse_description(&detail.body),
+        activity: detail
+            .activity_comments()
+            .map(|comment| super::pull_request_media::parse_description(&comment.body))
+            .collect(),
+        detail,
+        fetched: Instant::now(),
+        diff: Some(ParsedDiff::new(patch)),
+        diff_refresh_owed: false,
+    };
+    cache.borrow_mut().put(None, url.clone(), snapshot);
+    url
+}
+
+#[cfg(feature = "browser-fixture")]
+impl PullRequestDetailPage {
+    /// `summary`, `code` (a file list), `code-open` (the first files
+    /// unfolded, one viewed), or `activity`.
+    pub fn fixture_review(&mut self, variant: &str, cx: &mut Context<Self>) {
+        let tab = match variant {
+            v if v.starts_with("code") => Tab::Code,
+            "activity" => Tab::Activity,
+            _ => Tab::Summary,
+        };
+        self.tab_slide = crate::motion::IndicatorSlide::at(tab_slot(tab), Instant::now());
+        self.tab = tab;
+        if variant == "summary-checks" {
+            self.checks_expanded = true;
+        }
+        if variant == "code-open" {
+            if let Some(path) = self
+                .parsed_diff()
+                .files
+                .get(2)
+                .map(|(path, _)| path.clone())
+            {
+                self.review.viewed.insert(path);
+            }
+            self.review.collapsed.remove(&0);
+            self.review.collapsed.remove(&1);
+            self.rebuild_stream(cx);
+        }
+        cx.notify();
+    }
+}
+
 #[cfg(feature = "pull-request-fixture")]
 impl PullRequestDetailPage {
     /// 0 Summary, 1 Code, 2 Activity.
@@ -1296,26 +1529,19 @@ fn action(id: &'static str, label: &'static str, theme: &Theme) -> gpui::Statefu
             | "pr-copy-url"
             | "pr-copy-patch"
             | "pr-copy-path"
-            | "pr-copy-checkout"
             | "pr-files"
             | "pr-fold-all"
             | "pr-detail-refresh"
-            | "pr-previous-file"
-            | "pr-next-file"
             | "pr-split"
     );
     let glyph = match id {
         "pr-split" => Some(crate::icons::SPLIT_COLUMNS),
-        "pr-previous-file" => Some(crate::icons::ALT_ARROW_UP),
-        "pr-next-file" => Some(crate::icons::ALT_ARROW_DOWN),
         "pr-fold-all" => Some(crate::icons::FOLD_VERTICAL),
         "pr-copy-url" if label == "Link copied" => Some(crate::icons::CHECK),
-        "pr-copy-url" | "pr-copy-patch" | "pr-copy-path" | "pr-copy-checkout" => {
-            Some(crate::icons::COPY)
-        }
+        "pr-copy-url" | "pr-copy-patch" | "pr-copy-path" => Some(crate::icons::COPY),
         "pr-detail-refresh" | "pr-retry" | "pr-retry-diff" => Some(crate::icons::REFRESH),
         "pr-external" => Some(crate::icons::ARROW_UP_RIGHT),
-        "pr-files" => Some(crate::icons::FILE_TREE),
+        "pr-files" => Some(crate::icons::MAGNIFER),
         _ => None,
     };
     widgets::ghost_action(theme)
@@ -1441,170 +1667,6 @@ fn status_chip(raw: &str, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-/// Space between the Summary's stacked cards; the header sits 2× further.
-const CARD_GAP: f32 = 12.0;
-
-/// Title and metadata line; shared by the loaded page and its placeholder.
-fn detail_header(
-    title: &str,
-    author: &str,
-    repository: String,
-    number: u64,
-    fetched: Option<Instant>,
-    theme: &Theme,
-) -> gpui::Div {
-    div()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .child(
-            // `page_header` keeps one line; a PR title wraps instead.
-            div()
-                .id("pr-detail-title")
-                .debug_selector(|| "pr-detail-title".into())
-                .px(px(8.0))
-                .min_w_0()
-                .text_size(crate::typography::text_xl())
-                .line_height(crate::typography::ui_rems(26.0))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text_strong)
-                .child(title.to_owned()),
-        )
-        .child(
-            div()
-                .id("pr-detail-meta")
-                .debug_selector(|| "pr-detail-meta".into())
-                .flex_none()
-                .mt(px(12.0))
-                .px(px(8.0))
-                .text_size(crate::typography::text_xs())
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .min_w_0()
-                        .text_color(theme.text_muted)
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(super::pull_request_media::avatar(
-                            author,
-                            "pr-author".into(),
-                            20.0,
-                            theme,
-                        ))
-                        .child(if author.is_empty() {
-                            "Deleted account".to_owned()
-                        } else {
-                            author.to_owned()
-                        }),
-                )
-                .child(meta_item(
-                    crate::icons::FOLDER_WITH_FILES,
-                    repository,
-                    theme,
-                ))
-                .child(meta_item(
-                    crate::icons::PULL_REQUEST,
-                    number.to_string(),
-                    theme,
-                ))
-                .when_some(fetched, |el, fetched| {
-                    let age = if fetched.elapsed().as_secs() < 60 {
-                        "just now".into()
-                    } else {
-                        format!("{}m ago", fetched.elapsed().as_secs() / 60)
-                    };
-                    el.child(meta_item(
-                        crate::icons::CLOCK_CIRCLE,
-                        format!("Loaded {age}"),
-                        theme,
-                    ))
-                }),
-        )
-}
-
-/// One muted icon-and-text item of the header's metadata line.
-fn meta_item(glyph: &'static str, text: String, theme: &Theme) -> gpui::Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(4.0))
-        .text_color(theme.text_muted)
-        .child(
-            crate::icons::icon(glyph)
-                .size(px(13.0))
-                .flex_none()
-                .text_color(theme.text_muted),
-        )
-        .child(text)
-}
-
-fn field(label: &str, value: String, first: bool, theme: &Theme) -> AnyElement {
-    let content = if matches!(label, "Status" | "Review" | "CI") {
-        status_chip(&value, theme)
-    } else if label == "Changes" {
-        div()
-            .flex()
-            .flex_wrap()
-            .gap(px(6.0))
-            .children(value.split_whitespace().map(|word| {
-                div()
-                    .text_color(if word.starts_with('+') {
-                        theme.success_muted
-                    } else if word.starts_with('−') {
-                        theme.danger_muted
-                    } else {
-                        theme.text_muted
-                    })
-                    .child(word.to_owned())
-            }))
-            .into_any_element()
-    } else {
-        // Wraps rather than truncates: long branch names would hide the base.
-        div()
-            .min_w_0()
-            .font_family(theme.font_mono.clone())
-            .text_size(crate::typography::text_xs())
-            .child(value)
-            .into_any_element()
-    };
-    field_row(label, content, first, theme)
-}
-
-pub(crate) fn field_row(
-    label: &str,
-    content: AnyElement,
-    first: bool,
-    theme: &Theme,
-) -> AnyElement {
-    let id = format!("pr-field-{label}");
-    widgets::card_row(theme, first)
-        .id(SharedString::from(id.clone()))
-        .debug_selector(move || id.clone())
-        .min_h(px(44.0))
-        .py(px(8.0))
-        .child(
-            div()
-                .w(px(80.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .child(widgets::row_title(theme, label)),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(120.0))
-                .flex()
-                .items_center()
-                .child(content),
-        )
-        .into_any_element()
-}
-
 impl crate::popover::ScrollRailHost for PullRequestDetailPage {
     fn rail_bar(&mut self) -> &mut crate::popover::MenuScrollbarState {
         self.scroll.rail_bar()
@@ -1634,9 +1696,9 @@ impl Render for PullRequestDetailPage {
                 .when(narrow, |el| el.px(px(NARROW_PAD_X)))
                 .when(empty_activity, |el| el.min_h_full())
                 .when(self.tab == Tab::Code, |el| {
-                    el.max_w_full().px(px(24.0)).h_full().min_h_0()
+                    el.max_w_full().px_0().h_full().min_h_0()
                 })
-                .pt(px(24.0))
+                .pt(px(if self.tab == Tab::Code { 0.0 } else { 20.0 }))
                 .pb(px(match self.tab {
                     // The comment dock sits below the scroll, not over it.
                     Tab::Activity => 32.0,
@@ -1657,324 +1719,15 @@ impl Render for PullRequestDetailPage {
                     );
             }
             if let Some(detail) = &self.detail {
-                let repository = self
-                    .url
-                    .split('/')
-                    .skip(3)
-                    .take(2)
-                    .collect::<Vec<_>>()
-                    .join("/");
-                column = column
-                    .when(self.tab != Tab::Code, |column| {
-                        column.child(
-                            detail_header(
-                                &detail.title,
-                                &detail.author.login,
-                                repository,
-                                detail.number,
-                                self.fetched,
-                                &theme,
-                            )
+                column = column.when(self.tab != Tab::Code, |column| {
+                    column.child(
+                        summary::detail_header(self.header_facts(detail), &theme)
                             .when(empty_activity, |el| el.flex_none()),
-                        )
-                    })
-                    .when(self.tab == Tab::Summary, |el| {
-                        el.child(
-                            widgets::section_card(&theme)
-                                .id("pr-overview")
-                                .debug_selector(|| "pr-overview".into())
-                                .mt(px(24.0))
-                                .child(field(
-                                    "Status",
-                                    if detail.is_draft {
-                                        "Draft".into()
-                                    } else {
-                                        detail.state.clone()
-                                    },
-                                    true,
-                                    &theme,
-                                ))
-                                .child(field(
-                                    "Review",
-                                    if detail.review_decision.is_empty() {
-                                        "No review decision".into()
-                                    } else {
-                                        detail.review_decision.clone()
-                                    },
-                                    false,
-                                    &theme,
-                                ))
-                                .child(field(
-                                    "Branch",
-                                    format!("{} → {}", detail.head_ref_name, detail.base_ref_name),
-                                    false,
-                                    &theme,
-                                ))
-                                .child(field(
-                                    "Changes",
-                                    format!(
-                                        "{} {} · +{} −{}",
-                                        detail.files.len(),
-                                        if detail.files.len() == 1 {
-                                            "file"
-                                        } else {
-                                            "files"
-                                        },
-                                        detail.additions,
-                                        detail.deletions
-                                    ),
-                                    false,
-                                    &theme,
-                                )),
-                        )
-                    });
+                    )
+                });
                 match self.tab {
                     Tab::Summary => {
-                        let mut checks = widgets::section_card(&theme)
-                            .mt_0()
-                            .id("pr-checks-card")
-                            .debug_selector(|| "pr-checks-card".into());
-                        checks = checks.child(
-                            div()
-                                .id("pr-checks-toggle")
-                                .debug_selector(|| "pr-checks-toggle".into())
-                                .role(gpui::Role::Button)
-                                .tab_index(0)
-                                .aria_label(format!(
-                                    "Checks, {}, {}",
-                                    Facts::from_detail(detail)
-                                        .assess()
-                                        .ci
-                                        .total_count
-                                        .max(detail.status_check_rollup.len() as u64),
-                                    status_style(ci_status(detail)).0
-                                ))
-                                .aria_expanded(self.checks_expanded)
-                                .rounded_t(px(12.0))
-                                .when(!self.checks_expanded, |el| el.rounded_b(px(12.0)))
-                                .px(px(16.0))
-                                .py(px(10.0))
-                                .flex()
-                                .flex_wrap()
-                                .items_center()
-                                .gap(px(8.0))
-                                .cursor_pointer()
-                                .hover(|style| style.bg(theme.glass_hover()))
-                                .child(
-                                    crate::icons::icon(if self.checks_expanded {
-                                        crate::icons::ALT_ARROW_DOWN
-                                    } else {
-                                        crate::icons::ALT_ARROW_RIGHT
-                                    })
-                                    .size(px(14.0))
-                                    .flex_none()
-                                    .text_color(theme.text_muted),
-                                )
-                                .child(div().flex_1().child(format!(
-                                        "Checks · {}",
-                                        Facts::from_detail(detail)
-                                            .assess()
-                                            .ci
-                                            .total_count
-                                            .max(detail.status_check_rollup.len() as u64)
-                                    )))
-                                .child(status_chip(ci_status(detail), &theme))
-                                .on_click(cx.listener(|page, _, _, cx| {
-                                    page.checks_expanded = !page.checks_expanded;
-                                    cx.notify();
-                                })),
-                        );
-                        if self.checks_expanded && detail.status_check_rollup.is_empty() {
-                            checks = checks.child(
-                                div()
-                                    .p(px(16.0))
-                                    .text_color(theme.text_muted)
-                                    .child(assessment_ci_empty_copy(detail)),
-                            );
-                        }
-                        for (index, check) in detail
-                            .status_check_rollup
-                            .iter()
-                            .enumerate()
-                            .filter(|_| self.checks_expanded)
-                        {
-                            let name = if check.name.is_empty() {
-                                &check.context
-                            } else {
-                                &check.name
-                            };
-                            let status = [&check.conclusion, &check.state, &check.status]
-                                .into_iter()
-                                .find(|v| !v.is_empty())
-                                .map(|v| v.replace('_', " ").to_lowercase())
-                                .unwrap_or_else(|| "Pending".into());
-                            // Status integrations set these links, so only
-                            // web pages open: never file:, smb: or app schemes.
-                            let link = if check.details_url.is_empty() {
-                                &check.target_url
-                            } else {
-                                &check.details_url
-                            };
-                            let link = url::Url::parse(link)
-                                .ok()
-                                .filter(|url| {
-                                    url.scheme() == "https"
-                                        && url.username().is_empty()
-                                        && url.password().is_none()
-                                })
-                                .map(String::from)
-                                .unwrap_or_default();
-                            checks = checks.child(
-                                widgets::card_row(&theme, false)
-                                    .mx_0()
-                                    .px(px(16.0))
-                                    .min_h(px(36.0))
-                                    .py(px(4.0))
-                                    .flex_nowrap()
-                                    .when(index + 1 == detail.status_check_rollup.len(), |el| {
-                                        el.rounded_b(px(12.0))
-                                    })
-                                    .id(SharedString::from(format!("pr-check-{index}")))
-                                    .debug_selector(move || format!("pr-check-{index}"))
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "pr-check-name-{index}"
-                                            )))
-                                            .debug_selector(move || {
-                                                format!("pr-check-name-{index}")
-                                            })
-                                            .flex_1()
-                                            .min_w_0()
-                                            .child(name.clone()),
-                                    )
-                                    .child(div().flex_none().child(status_chip(&status, &theme)))
-                                    .when(!link.is_empty(), |el| {
-                                        el.cursor_pointer()
-                                            .role(gpui::Role::Link)
-                                            .tab_index(0)
-                                            .aria_label(format!("Open {name}"))
-                                            .hover(|style| style.bg(theme.glass_hover()))
-                                            .on_click(move |_, _, cx| cx.open_url(&link))
-                                    }),
-                            );
-                        }
-                        let assessment = Facts::from_detail(detail).assess();
-                        let assessment_card = widgets::section_card(&theme)
-                            .mt(px(CARD_GAP))
-                            .id("pr-assessment")
-                            .debug_selector(|| "pr-assessment".into())
-                            .child(
-                                widgets::card_row(&theme, true)
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(6.0))
-                                            .child(widgets::row_title(&theme, "Current assessment"))
-                                            .child(
-                                                div()
-                                                    .text_size(crate::typography::text_xs())
-                                                    .text_color(theme.text_muted)
-                                                    .child(if assessment.blockers.is_empty() {
-                                                        if assessment.missing.is_empty() {
-                                                            "No blockers reported".to_owned()
-                                                        } else {
-                                                            "Assessment incomplete".to_owned()
-                                                        }
-                                                    } else {
-                                                        assessment
-                                                            .blockers
-                                                            .iter()
-                                                            .map(|blocker| blocker.label())
-                                                            .collect::<Vec<_>>()
-                                                            .join(" · ")
-                                                    }),
-                                            )
-                                            .children(assessment.actions.first().map(|action| {
-                                                div()
-                                                    .text_size(crate::typography::text_xs())
-                                                    .text_color(theme.text)
-                                                    .child(format!("Next: {}", action.label()))
-                                            }))
-                                            .children(assessment.missing.iter().map(|missing| {
-                                                div()
-                                                    .text_size(crate::typography::text_xs())
-                                                    .text_color(theme.text_muted)
-                                                    .child(missing.label())
-                                            }))
-                                            .child(
-                                                div()
-                                                    .id("pr-head-commit")
-                                                    .min_w_0()
-                                                    .truncate()
-                                                    .tooltip(widgets::text_tooltip(
-                                                        if detail.head_ref_oid.is_empty() {
-                                                            "Current commit unavailable".to_owned()
-                                                        } else {
-                                                            detail.head_ref_oid.clone()
-                                                        },
-                                                    ))
-                                                    .text_size(crate::typography::text_xs())
-                                                    .font_family(theme.font_mono.clone())
-                                                    .text_color(theme.text_muted)
-                                                    .child(if detail.head_ref_oid.is_empty() {
-                                                        "Commit unavailable".to_owned()
-                                                    } else {
-                                                        format!(
-                                                            "Commit {}",
-                                                            detail
-                                                                .head_ref_oid
-                                                                .chars()
-                                                                .take(7)
-                                                                .collect::<String>()
-                                                        )
-                                                    }),
-                                            ),
-                                    )
-                                    .child(crate::pull_requests::star_button(
-                                        if detail.url.is_empty() {
-                                            &self.url
-                                        } else {
-                                            &detail.url
-                                        },
-                                        &theme,
-                                        cx,
-                                    )),
-                            );
-                        column = column
-                            .child(assessment_card)
-                            .child(checks.mt(px(CARD_GAP)))
-                            .child(self.handoff_card(detail, &theme, cx));
-                        let description = div()
-                            .p(px(16.0))
-                            .min_h(px(60.0))
-                            .when(detail.body.is_empty(), |el| {
-                                el.text_color(theme.text_muted)
-                                    .child("No description provided.")
-                            })
-                            .when_some(
-                                self.body.as_ref().filter(|_| !detail.body.is_empty()),
-                                |el, body| {
-                                    el.child(rich_text(
-                                        body,
-                                        format!("{}description", self.selection_prefix),
-                                        &self.url,
-                                        &theme,
-                                        window,
-                                        cx.weak_entity(),
-                                    ))
-                                },
-                            );
-                        column = column.child(
-                            widgets::section_card(&theme)
-                                .id("pr-description")
-                                .debug_selector(|| "pr-description".into())
-                                .mt(px(CARD_GAP))
-                                .child(description),
-                        );
+                        column = column.child(self.summary_body(detail, &theme, window, cx));
                     }
                     Tab::Code => {
                         if let Some(error) = &self.diff_error {
@@ -1997,12 +1750,11 @@ impl Render for PullRequestDetailPage {
                                 &comment.created_at
                             }
                         });
-                        // The thread keeps the same 24px under the header as the
-                        // Summary's first card.
+                        // The thread starts 20px under the header's hairline.
                         let mut thread = div()
                             .id("pr-activity-thread")
                             .debug_selector(|| "pr-activity-thread".into())
-                            .mt(px(24.0))
+                            .mt(px(20.0))
                             // Authors line up with the title and metadata above;
                             // your own replies stay flush with the composer.
                             .pl(px(8.0))
@@ -2247,12 +1999,21 @@ impl Render for PullRequestDetailPage {
                 // the pull request arrives. The board's row supplies the header.
                 if self.tab != Tab::Code {
                     column = column.child(match &self.preview {
-                        Some(preview) => detail_header(
-                            &preview.title,
-                            &preview.author.login,
-                            preview.repository.clone(),
-                            preview.number,
-                            None,
+                        Some(preview) => summary::detail_header(
+                            summary::HeaderFacts {
+                                title: preview.title.clone(),
+                                author: preview.author.login.clone(),
+                                age: Some(format!(
+                                    "updated {}",
+                                    crate::pull_requests::relative_time(
+                                        preview.updated_at,
+                                        chrono::Utc::now()
+                                    )
+                                )),
+                                checkout: None,
+                                refs: None,
+                                changes: Some((None, preview.additions, preview.deletions)),
+                            },
                             &theme,
                         )
                         .into_any_element(),
@@ -2281,7 +2042,6 @@ impl Render for PullRequestDetailPage {
                     });
                 }
                 column = column.child(crate::pull_request_skeleton::summary(
-                    CARD_GAP,
                     cx.entity_id(),
                     &theme,
                     cx,
@@ -3298,7 +3058,7 @@ mod tests {
     #[test]
     fn pull_request_code_rows_preserve_sides_and_file_jump_offsets() {
         let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,2 +1,2 @@\n context\n-old\n+new\n";
-        let (rows, files) = code_rows(patch);
+        let (rows, files, _) = code_rows(patch);
         assert_eq!(files, vec![("a.rs".into(), 0)]);
         let added = rows
             .iter()
@@ -3316,7 +3076,7 @@ mod tests {
 
     #[test]
     fn pull_request_diff_reuses_syntax_highlighting() {
-        let (rows, _) = code_rows(
+        let (rows, ..) = code_rows(
             "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-fn old() {}\n+fn new() {}\n",
         );
         assert!(
@@ -3390,6 +3150,11 @@ mod tests {
             let cached = page.diff.clone().unwrap();
             page.select_tab(Tab::Code, cx);
             assert_eq!(page.review.ranges.len(), 3, "every file stays in the stream");
+            assert_eq!(
+                page.review.stream.len(),
+                3,
+                "several files open as a list of folded rows"
+            );
             for index in [2, 0, 1] {
                 page.select_code_file(index, cx);
                 assert_eq!(page.active_file(), Some(index));
@@ -3398,7 +3163,24 @@ mod tests {
             page.select_code_file(99, cx);
             assert_eq!(page.active_file(), Some(1));
         });
+        let click = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+            let bounds = cx.debug_bounds(selector).unwrap();
+            cx.simulate_mouse_down(
+                bounds.center(),
+                gpui::MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            cx.simulate_mouse_up(
+                bounds.center(),
+                gpui::MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            cx.run_until_parked();
+        };
         cx.simulate_resize(gpui::size(px(1200.0), px(850.0)));
+        cx.run_until_parked();
+        // The picker's search narrows the files it lists.
+        click(cx, "pr-files");
         page.update(cx, |page, cx| {
             page.file_search
                 .update(cx, |input, cx| input.set_text("NESTED", cx));
@@ -3413,6 +3195,8 @@ mod tests {
         page.update(cx, |page, cx| {
             page.file_search
                 .update(cx, |input, cx| input.set_text("", cx));
+            page.files_expanded = false;
+            cx.notify();
         });
         for (width, height) in [(320.0, 600.0), (900.0, 400.0), (1200.0, 850.0)] {
             cx.simulate_resize(gpui::size(px(width), px(height)));
@@ -3429,81 +3213,22 @@ mod tests {
                 "toolbar and stream share an edge"
             );
             let scroll = cx.debug_bounds("pr-code-scroll").unwrap();
-            // Rows run flush to the card's 1px border; its rounded clip
-            // handles the corners.
-            assert_eq!(scroll.left(), viewport.left() + px(1.0));
-            assert_eq!(scroll.right(), viewport.right() - px(1.0));
+            // Rows run edge to edge under the toolbar's hairline.
+            assert_eq!(scroll.left(), viewport.left());
+            assert_eq!(scroll.right(), viewport.right());
             assert_eq!(scroll.top(), viewport.top() + px(1.0));
-            assert_eq!(scroll.bottom(), viewport.bottom() - px(1.0));
             let header = cx.debug_bounds("pr-file-header-0").unwrap();
             assert_eq!(header.size.height, px(crate::changes::FILE_HEADER_HEIGHT));
-            if width >= 900.0 {
-                let browser = cx.debug_bounds("pr-file-browser").unwrap();
-                assert!(
-                    browser.right() < viewport.left(),
-                    "files stay beside the diff"
-                );
-                assert_eq!(
-                    browser.top(),
-                    toolbar.top(),
-                    "tree header aligns with the toolbar"
-                );
-                let search = cx.debug_bounds("pr-file-search").unwrap();
-                assert_eq!(search.size.height, px(crate::surface_chrome::CONTROL_SIZE));
-                let files = cx.debug_bounds("pr-file-list").unwrap();
-                assert!(files.top() >= search.bottom() && files.size.height > px(40.0));
-                assert!(
-                    files.bottom() > viewport.bottom(),
-                    "the tree runs to the window edge while the diff clears the navigation"
-                );
-                assert!(cx.debug_bounds("pr-files").is_none());
-            } else {
-                assert!(
-                    cx.debug_bounds("pr-file-browser").is_none(),
-                    "compact stream keeps its width"
-                );
-                let files = cx.debug_bounds("pr-files").unwrap();
-                cx.simulate_mouse_down(
-                    files.center(),
-                    gpui::MouseButton::Left,
-                    gpui::Modifiers::default(),
-                );
-                cx.simulate_mouse_up(
-                    files.center(),
-                    gpui::MouseButton::Left,
-                    gpui::Modifiers::default(),
-                );
-                cx.run_until_parked();
-                let picker = cx.debug_bounds("pr-file-picker").unwrap();
-                assert!(picker.top() >= toolbar.bottom() && picker.right() <= px(width));
-                let file = cx.debug_bounds("pr-file-2").unwrap();
-                cx.simulate_mouse_down(
-                    file.center(),
-                    gpui::MouseButton::Left,
-                    gpui::Modifiers::default(),
-                );
-                cx.simulate_mouse_up(
-                    file.center(),
-                    gpui::MouseButton::Left,
-                    gpui::Modifiers::default(),
-                );
-                cx.run_until_parked();
-                page.read_with(cx, |page, _| {
-                    assert_eq!(page.active_file(), Some(2));
-                    assert!(!page.files_expanded, "picking a file closes the picker");
-                });
-            }
-            let toggle = cx.debug_bounds("pr-split").unwrap();
-            cx.simulate_mouse_down(
-                toggle.center(),
-                gpui::MouseButton::Left,
-                gpui::Modifiers::default(),
-            );
-            cx.simulate_mouse_up(
-                toggle.center(),
-                gpui::MouseButton::Left,
-                gpui::Modifiers::default(),
-            );
+            click(cx, "pr-files");
+            let picker = cx.debug_bounds("pr-file-picker").unwrap();
+            assert!(picker.top() >= toolbar.bottom() && picker.right() <= px(width));
+            click(cx, "pr-file-2");
+            page.read_with(cx, |page, _| {
+                assert_eq!(page.active_file(), Some(2));
+                assert!(!page.files_expanded, "picking a file closes the picker");
+                assert!(!page.review.collapsed.contains(&2), "a picked file unfolds");
+            });
+            click(cx, "pr-split");
             page.update(cx, |page, cx| page.select_code_file(0, cx));
             cx.run_until_parked();
             page.read_with(cx, |page, _| assert!(page.review.split));
@@ -3514,49 +3239,16 @@ mod tests {
             assert!(right.right() <= viewport.right());
             assert!((left.size.width - right.size.width).abs() < px(1.0));
             assert!(left.right() <= right.left());
-            cx.simulate_mouse_down(
-                toggle.center(),
-                gpui::MouseButton::Left,
-                gpui::Modifiers::default(),
-            );
-            cx.simulate_mouse_up(
-                toggle.center(),
-                gpui::MouseButton::Left,
-                gpui::Modifiers::default(),
-            );
-            cx.run_until_parked();
+            click(cx, "pr-split");
             page.read_with(cx, |page, _| assert!(!page.review.split));
-            for selector in [
-                "pr-copy-patch",
-                "pr-previous-file",
-                "pr-next-file",
-                "pr-split",
-                "pr-fold-all",
-            ] {
+            for selector in ["pr-files", "pr-copy-patch", "pr-split", "pr-fold-all"] {
                 let control = cx.debug_bounds(selector).unwrap();
                 assert!(
-                    control.left() >= px(24.0) && control.right() <= px(width - 24.0),
+                    control.left() >= px(0.0) && control.right() <= px(width),
                     "{selector}: {control:?}"
                 );
             }
         }
-        let file = cx.debug_bounds("pr-file-2").unwrap();
-        cx.simulate_mouse_down(
-            file.center(),
-            gpui::MouseButton::Left,
-            gpui::Modifiers::default(),
-        );
-        cx.simulate_mouse_up(
-            file.center(),
-            gpui::MouseButton::Left,
-            gpui::Modifiers::default(),
-        );
-        cx.run_until_parked();
-        page.read_with(cx, |page, _| assert_eq!(page.active_file(), Some(2)));
-        assert!(
-            cx.debug_bounds("pr-file-browser").is_some(),
-            "wide file navigator remains available after selection"
-        );
         page.update(cx, |page, cx| page.select_code_file(0, cx));
         cx.run_until_parked();
         let header = cx.debug_bounds("pr-file-header-0").unwrap();
@@ -3592,6 +3284,21 @@ mod tests {
         );
         cx.run_until_parked();
         page.read_with(cx, |page, _| assert_eq!(page.review.stream.len(), 3));
+        click(cx, "pr-file-header-viewed-1");
+        page.read_with(cx, |page, _| {
+            // Root files lead, so the second row is `c.rs`.
+            assert!(page.review.viewed.contains("c.rs"));
+            assert_eq!(
+                page.cache
+                    .borrow()
+                    .viewed
+                    .get(&(page.target.clone(), page.url.clone())),
+                Some(&page.review.viewed),
+                "viewed files outlive the view"
+            );
+        });
+        click(cx, "pr-file-header-viewed-1");
+        page.read_with(cx, |page, _| assert!(page.review.viewed.is_empty()));
     }
 
     #[gpui::test]
@@ -3954,9 +3661,13 @@ mod tests {
         });
         let check = cx.debug_bounds("pr-check-0").unwrap();
         let check_name = cx.debug_bounds("pr-check-name-0").unwrap();
-        let card = cx.debug_bounds("pr-checks-card").unwrap();
-        assert_eq!(check.left(), card.left());
-        assert_eq!(check_name.left() - check.left(), px(16.0));
+        let toggle = cx.debug_bounds("pr-checks-toggle").unwrap();
+        // The toggle's hover fill reaches 6px left of the value column.
+        assert!(
+            check.left() >= toggle.left() && check.left() - toggle.left() <= px(8.0),
+            "checks line up under the summary: {check:?} {toggle:?}"
+        );
+        assert!(check_name.left() > check.left());
         assert!(check.size.height <= px(40.0));
         assert!(check_name.top() > check.top() && check_name.bottom() < check.bottom());
         for scale in [16.0, 20.0] {
@@ -4022,8 +3733,8 @@ mod tests {
             );
             assert_eq!(
                 viewport.size.width,
-                px(width - 48.0 - if width - 48.0 >= 760.0 { 276.0 } else { 0.0 }),
-                "Code shares available width with the file navigator"
+                px(width),
+                "the file list runs the pane's full width"
             );
             assert!(nav.size.width <= px(width));
             assert_eq!(nav.size.height, px(NAV_HEIGHT));
@@ -4091,12 +3802,12 @@ mod tests {
             let column = cx.debug_bounds("pr-content-column").unwrap();
             let composer = cx.debug_bounds("pr-comment-surface").unwrap();
             let nav = cx.debug_bounds("pr-detail-nav").unwrap();
-            let meta = cx.debug_bounds("pr-detail-meta").unwrap();
+            let divider = cx.debug_bounds("pr-detail-divider").unwrap();
             let thread = cx.debug_bounds("pr-activity-thread").unwrap();
             assert_eq!(
-                thread.top() - meta.bottom(),
-                px(24.0),
-                "header gap matches Summary"
+                thread.top() - divider.bottom(),
+                px(20.0),
+                "the thread starts under the header's hairline"
             );
             let mine = cx.debug_bounds("pr-message-0").unwrap();
             let other = cx.debug_bounds("pr-message-1").unwrap();

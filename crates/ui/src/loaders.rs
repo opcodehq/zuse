@@ -270,6 +270,62 @@ fn mini_spinner_cells(
         }))
 }
 
+/// The working mark: the Zuse silhouette as a faint outline with a bright
+/// segment travelling around it, for a turn's live status row. Like the
+/// mini spinner it repaints from its own cached view, so the transcript
+/// around it stays still. Reduced motion shows the whole mark at rest.
+pub fn working_mark(key: impl Into<SharedString>, size: f32, tint: gpui::Hsla) -> impl IntoElement {
+    WorkingMark {
+        key: key.into(),
+        size,
+        tint,
+    }
+}
+
+#[derive(IntoElement)]
+struct WorkingMark {
+    key: SharedString,
+    size: f32,
+    tint: gpui::Hsla,
+}
+
+impl RenderOnce for WorkingMark {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let view = window.with_global_id(self.key.into(), |id, window| {
+            window.with_element_state(id, |previous: Option<Entity<WorkingMarkView>>, _| {
+                let view = previous.unwrap_or_else(|| {
+                    cx.new(|_| WorkingMarkView {
+                        size: self.size,
+                        tint: self.tint,
+                    })
+                });
+                view.update(cx, |view, cx| {
+                    if view.size != self.size || view.tint != self.tint {
+                        view.size = self.size;
+                        view.tint = self.tint;
+                        cx.notify();
+                    }
+                });
+                (view.clone(), view)
+            })
+        });
+        view.cached(gpui::StyleRefinement::default().size(px(self.size)))
+    }
+}
+
+struct WorkingMarkView {
+    size: f32,
+    tint: gpui::Hsla,
+}
+
+impl Render for WorkingMarkView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let length = if cx.reduce_motion() { 1.0 } else { 0.32 };
+        let head = motion::pulse_delta(&motion::WORKING_TRACE, cx.entity_id(), cx);
+        zuse_viewport::branding::trace_glyph(self.size, 1.4, self.tint, head, length)
+    }
+}
+
 /// A rounded fill that breathes on the zuse pulse clock between `floor` and
 /// `peak` opacity, filling whatever positioned box it is placed in. Like [`pulse_dot`] it repaints from its own cached
 /// view, so the surrounding chrome stays still.

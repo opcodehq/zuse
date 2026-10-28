@@ -173,7 +173,7 @@ fn main() -> anyhow::Result<()> {
             for route in routes {
                 let _ = window.update(cx, |shell, window, cx| {
                     shell.fixture_review_route(&route, cx);
-                    if route.ends_with("model-picker") { shell.fixture_open_model_picker(window, cx); } else if route.ends_with("-menu") { shell.fixture_open_menu(&route, window, cx); } else if route.starts_with("panel/") || route.starts_with("main/") { shell.fixture_open_panel(&route, window, cx); }
+                    if route.ends_with("model-picker") { shell.fixture_open_model_picker(window, cx); } else if route.ends_with("-menu") { shell.fixture_open_menu(&route, window, cx); } else if route.starts_with("panel/") || route.starts_with("main/") { shell.fixture_open_panel(&route, window, cx); } else if let Some(variant) = route.strip_prefix("pr-") { shell.fixture_open_pull_request(variant, window, cx); }
                 });
                 pause(cx, 700).await;
                 let name = route.replace('/', "-");

@@ -409,9 +409,13 @@ fn is_spawn_link(item: &ToolItem) -> bool {
 }
 
 /// Ordinary tool groups fold behind a summary header; agent/spawn chips
-/// render as their own always-open row.
+/// render as their own always-open row. Thinking alone needs no header: the
+/// "Thinking" chip already folds its text, and a "Thinking" summary over it
+/// nested one accordion inside another.
 fn tool_group_collapses(tools: &[ToolItem]) -> bool {
-    tools.iter().any(|t| !is_agent_tool(t))
+    tools
+        .iter()
+        .any(|t| !is_agent_tool(t) && t.kind != ToolItemKind::Thought)
 }
 
 /// Column budget for soft-wrapping thought text into detail lines. The
@@ -7450,12 +7454,10 @@ impl Transcript {
                 .gap(px(Theme::SPACE_SM))
                 .pt(px(Theme::SPACE_LG))
                 .text_size(crate::typography::text_xs())
-                .child(crate::loaders::gradient_spinner(
-                    "working-indicator",
-                    &theme,
-                    2.5,
-                    cx.entity_id(),
-                    cx,
+                .child(crate::loaders::working_mark(
+                    format!("working-mark-{}", cx.entity_id()),
+                    14.0,
+                    theme.text,
                 ))
                 .child(
                     // The flavour word rotates every 7s; roll it as it turns.
@@ -8656,6 +8658,14 @@ impl Transcript {
                 .into_any_element();
         }
 
+        // Native subagents run inside the chat's own provider: its mark
+        // names them better than a generic agent glyph.
+        let agent_brand = self
+            .chat_id
+            .as_deref()
+            .and_then(|id| self.state.read(cx).chats.iter().find(|chat| chat.id == id))
+            .and_then(|chat| chat.config.as_ref())
+            .map(|config| crate::pickers::harness_brand_icon(config.harness));
         let chips = div()
             .pt(px(CHIPS_TOP_PAD))
             .flex()
@@ -8690,6 +8700,7 @@ impl Transcript {
                             });
                         }),
                         collapses,
+                        agent_brand,
                         theme,
                         cx.entity_id(),
                         cx,
@@ -8729,6 +8740,7 @@ impl Transcript {
                         .toggled_at
                         .is_some_and(|at| at.elapsed() < FOLD_TWEEN_WINDOW);
                 let toggle_key = key.clone();
+                let flat_thought = !collapses && tool.kind == ToolItemKind::Thought;
                 let mut card = div()
                     .my(px((base_row_height - CHIP_CARD_HEIGHT) / 2.0))
                     .when(collapses, |el| el.ml(px(ACTIVITY_TEXT_GAP)))
@@ -8757,6 +8769,16 @@ impl Transcript {
                                 entry.toggled_at = Some(Instant::now());
                                 cx.notify();
                             }))
+                            // A lone thought has no task tree to carry its
+                            // icon, so the header leads with it.
+                            .when(flat_thought, |header| {
+                                header.gap(px(ACTIVITY_TEXT_GAP)).child(
+                                    crate::icons::icon(crate::icons::TOOL_THINKING)
+                                        .flex_none()
+                                        .size(px(ACTIVITY_ICON_SIZE))
+                                        .text_color(theme.text_muted),
+                                )
+                            })
                             .child(chip_header(
                                 tool,
                                 open,
@@ -8776,14 +8798,19 @@ impl Transcript {
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .overflow_hidden();
+                        .overflow_hidden()
+                        .when(flat_thought, |panel| {
+                            panel.ml(px(ACTIVITY_ICON_SIZE + ACTIVITY_TEXT_GAP))
+                        });
                     if let Some(invocation) = invocation.as_deref() {
                         panel = panel
                             .child(
                                 div()
                                     .h(px(DETAIL_SEPARATOR))
                                     .flex_none()
-                                    .when(!collapses, |line| line.bg(crate::theme::hairline(0.06))),
+                                    .when(!collapses && is_agent_tool(tool), |line| {
+                                        line.bg(crate::theme::hairline(0.06))
+                                    }),
                             )
                             .child(detail_body(invocation, None, &format!("{key}-call"), theme));
                     }
@@ -8798,7 +8825,9 @@ impl Transcript {
                                 div()
                                     .h(px(DETAIL_SEPARATOR))
                                     .flex_none()
-                                    .when(!collapses, |line| line.bg(crate::theme::hairline(0.06))),
+                                    .when(!collapses && is_agent_tool(tool), |line| {
+                                        line.bg(crate::theme::hairline(0.06))
+                                    }),
                             )
                             .child(detail_body(
                                 detail,
@@ -9773,7 +9802,7 @@ fn chip_header_row(
     cx: &mut gpui::App,
 ) -> gpui::Div {
     if is_agent_tool(tool) {
-        return subagent_header_row(tool, trail, theme, view, cx);
+        return subagent_header_row(tool, trail, None, theme, view, cx);
     }
     let (label, detail) = chip_label(tool);
     let file_path = match &tool.call {
@@ -10059,6 +10088,7 @@ fn chip_diff_stats(tool: &ToolItem) -> Option<(u64, u64)> {
 fn subagent_header_row(
     tool: &ToolItem,
     trail: Option<ChipTrail>,
+    brand: Option<(&'static str, Option<gpui::Hsla>)>,
     theme: &Theme,
     view: gpui::EntityId,
     cx: &mut gpui::App,
@@ -10133,11 +10163,14 @@ fn subagent_header_row(
         .text_size(px(TOOL_LABEL_SIZE))
         .line_height(px(TOOL_LABEL_LINE_HEIGHT))
         .child(glyph)
-        .child(
-            crate::icons::icon(crate::icons::TOOL_AGENT)
+        .child(match brand {
+            Some((path, tint)) => crate::icons::icon(path)
+                .size(px(14.0))
+                .text_color(tint.unwrap_or(theme.text_muted)),
+            None => crate::icons::icon(crate::icons::TOOL_AGENT)
                 .size(px(14.0))
                 .text_color(theme.text_muted),
-        )
+        })
         .child(
             div()
                 .flex_none()
@@ -10472,6 +10505,7 @@ fn subagent_chip(
     id: SharedString,
     on_open: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     rail: bool,
+    brand: Option<(&'static str, Option<gpui::Hsla>)>,
     theme: &Theme,
     view: gpui::EntityId,
     cx: &mut gpui::App,
@@ -10508,11 +10542,10 @@ fn subagent_chip(
                 .cursor_pointer()
                 .hover(|s| s.bg(crate::theme::ink(0.05)))
                 .on_click(on_open)
-                .child(chip_header_row(
+                .child(subagent_header_row(
                     tool,
                     Some(ChipTrail::OpenArrow),
-                    false,
-                    None,
+                    brand,
                     theme,
                     view,
                     cx,

@@ -1256,9 +1256,6 @@ impl Shell {
                     .children(cloud_info)
                     .children(open_in)
                     .children(session_info_toggle)
-                    .when(self.workspace_gutter() > 0. && !on_canvas && !takeover, |view| {
-                        view.child(self.render_pull_requests_button(&theme, cx))
-                    })
                     .children(terminal_toggle),
             )
             .children(trailing);
@@ -1489,16 +1486,16 @@ impl Shell {
                 (
                     "thread-review",
                     "Review the sync protocol",
-                    HarnessId::Codex,
+                    zuse_protocol::HarnessId::Codex,
                     30,
                 ),
                 (
                     "thread-copy",
                     "Tidy onboarding copy",
-                    HarnessId::ClaudeCode,
+                    zuse_protocol::HarnessId::ClaudeCode,
                     2,
                 ),
-                ("thread-tests", "Add snapshot tests", HarnessId::Codex, 1),
+                ("thread-tests", "Add snapshot tests", zuse_protocol::HarnessId::Codex, 1),
             ] {
                 let mut chat = base.clone();
                 chat.id = id.into();

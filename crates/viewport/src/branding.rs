@@ -31,6 +31,53 @@ pub fn trace_loader(diameter: f32, color: Hsla, progress: f32) -> Div {
     div().size(px(diameter)).child(painted)
 }
 
+/// The silhouette cropped to `size` with a fixed `stroke`, for inline status
+/// rows where the boot loader's proportional stroke would vanish. A faint
+/// full outline carries a bright segment of `length` (fraction of the loop)
+/// whose head sits at `head`; the outline is closed, so the segment wraps.
+pub fn trace_glyph(size: f32, stroke: f32, color: Hsla, head: f32, length: f32) -> Div {
+    // Bounds of `OUTLINE`, so the mark fills the box instead of its middle.
+    const CENTER: (f32, f32) = (0.503507, 0.500751);
+    const SPAN: f32 = 0.353363;
+    let painted = canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let scale = (size - stroke) / SPAN;
+            let origin = bounds.center();
+            let at = |(x, y): (f32, f32)| {
+                origin + point(px((x - CENTER.0) * scale), px((y - CENTER.1) * scale))
+            };
+            let segments = (OUTLINE.len() - 1) as f32;
+            // A point `t` loops along the outline, interpolated between samples.
+            let along = |t: f32| {
+                let pos = t.rem_euclid(1.) * segments;
+                let ix = (pos.floor() as usize).min(OUTLINE.len() - 2);
+                let a = at(OUTLINE[ix]);
+                let b = at(OUTLINE[ix + 1]);
+                a + (b - a) * (pos - ix as f32)
+            };
+            let mut paint = |from: f32, to: f32, tint: Hsla| {
+                let steps = (((to - from) * segments).ceil() as usize).max(1);
+                let mut path = PathBuilder::stroke(px(stroke));
+                path.move_to(along(from));
+                for step in 1..=steps {
+                    path.line_to(along(from + (to - from) * step as f32 / steps as f32));
+                }
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, tint);
+                }
+            };
+            paint(0., 1., color.opacity(0.18));
+            if length > 0. {
+                paint(head - length.min(1.), head, color);
+            }
+        },
+    )
+    .size(px(size))
+    .into_any_element();
+    div().size(px(size)).flex_none().child(painted)
+}
+
 const OUTLINE: &[(f32, f32)] = &[
     (0.456938, 0.324641),
     (0.447596, 0.327148),

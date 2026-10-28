@@ -2278,6 +2278,8 @@ pub struct Shell {
     session_info_shown: bool,
     /// The card opened over a transcript too narrow to show it beside.
     session_info_overlay: bool,
+    /// The card's sections the user folded shut (by section key).
+    session_info_folded: std::collections::HashSet<&'static str>,
     /// Whether the card showed at the toggle's press (see
     /// `note_session_info_press`).
     session_info_pressed_open: Option<bool>,
@@ -2787,6 +2789,7 @@ impl Shell {
             session_info_tween: None,
             session_info_shown: false,
             session_info_overlay: false,
+            session_info_folded: Default::default(),
             session_info_pressed_open: None,
             session_info_docked: false,
             session_info_last_reserve: 0.0,
@@ -10546,7 +10549,9 @@ impl Shell {
                     .min_w_0()
                     .child(self.sidebar_controls.clone()),
             )
-            .when(self.workspace_gutter() == 0., |view| view.child(pull_requests))
+            // Pull requests span every chat, so the entry lives here rather
+            // than in a chat's top bar.
+            .child(pull_requests)
             .child(settings)
             .into_any_element()
     }
@@ -12609,12 +12614,10 @@ impl Shell {
                 .child(SharedString::from("Run failed"))
                 .into_any_element(),
             Indicator::None if sending => strip
-                .child(loaders::gradient_spinner(
-                    "sending-indicator",
-                    &theme,
-                    2.5,
-                    cx.entity_id(),
-                    cx,
+                .child(loaders::working_mark(
+                    format!("sending-indicator-{}", cx.entity_id()),
+                    14.0,
+                    theme.text,
                 ))
                 .child(
                     div()
@@ -19192,6 +19195,25 @@ impl Shell {
         }
         cx.notify();
     }
+    /// `pr-<variant>` opens a synthetic pull request beside the chat:
+    /// `summary`, `summary-checks`, `code`, `code-open`, or `activity`.
+    pub fn fixture_open_pull_request(
+        &mut self,
+        variant: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let url = crate::pull_request_detail::fixture_seed_cache(&self.pull_request_cache);
+        self.open_chat_pull_request(url.clone(), None, window, cx);
+        let page = self
+            .chat_pull_requests
+            .values()
+            .find(|tab| tab.url == url)
+            .map(|tab| tab.page.clone());
+        if let Some(page) = page {
+            page.update(cx, |page, cx| page.fixture_review(variant, cx));
+        }
+    }
     pub fn fixture_review_route(&mut self, route: &str, cx: &mut Context<Self>) {
         // `<route>:<variant>` seeds fixture data (plugins, providers, the ACP
         // dialog) for pages that otherwise wait on an engine.
@@ -19278,6 +19300,21 @@ impl Shell {
                         chat.checkout_id = source.checkout_id;
                         chat.cwd = Some("/tmp/worktrees/fieldnotes/quiet-owl".into());
                     }
+                    cx.notify();
+                });
+            }
+            // `:transcript-working` runs a turn, so the live status row shows.
+            if variant == "transcript-working" {
+                self.state.update(cx, |state, cx| {
+                    state.apply_sessions(vec![zuse_protocol::Session {
+                        last_completed_turn: None,
+                        running_subagents: 1,
+                        chat_id: "browser-fixture".into(),
+                        device_id: "local".into(),
+                        status: zuse_protocol::SessionStatus::Working,
+                        started_at: Some(Utc::now() - chrono::Duration::seconds(42)),
+                        updated_at: Utc::now(),
+                    }]);
                     cx.notify();
                 });
             }
@@ -19409,6 +19446,7 @@ impl Shell {
                 "a2",
                 "assistant",
                 vec![
+                    serde_json::json!({"kind":"reasoning","id":"r3","text":"Session expiry and cookie flags are independent. Two parallel audits will be faster than reading both paths myself."}),
                     tool(
                         "s1",
                         serde_json::json!({"kind":"unknown","name":"Agent: audit session expiry"}),

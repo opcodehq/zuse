@@ -31,14 +31,14 @@ clock-circle	Clock01Icon
 close	Cancel01Icon
 close-circle	CancelCircleIcon
 cloud	CloudIcon
-collapse-arrows	Minimize01Icon
+collapse-arrows	ArrowShrink01Icon
 command	CommandIcon
 copy	Copy01Icon
 danger-triangle	Alert02Icon
 document	File01Icon
 document-add	FileAddIcon
 drag-handle	DragDropVerticalIcon
-expand-arrows	Maximize01Icon
+expand-arrows	ArrowExpand01Icon
 eye	ViewIcon
 eye-closed	ViewOffIcon
 fast-tier	FlashIcon
