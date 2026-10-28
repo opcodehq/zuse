@@ -1,5 +1,9 @@
 # Native tool workflow follow-up
 
+The subsequent [2026-10-28 repeated comparison](harness-followup-2026-10-28.md)
+now supplies the full 12-runs-per-model live rerun. The targeted probes below
+remain historical and are not substituted for that suite.
+
 Cloud VM, 2026-10-27. This follows the fixed suite in
 [harness-reference-evaluation.md](harness-reference-evaluation.md), rather than
 replacing its 12-runs-per-model results with a smaller sample.

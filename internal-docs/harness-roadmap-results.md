@@ -34,8 +34,9 @@ transport and process managers. It has no desktop UI, model turn, external MCP
 server or application callback projection. The reference server also has
 additional daemon services; these are different feature surfaces. This supports
 a narrow idle-core resource comparison, not active-workload superiority or a
-claim that live completion rates improved. The previously measured live latency
-and capped completion results are unchanged pending a new evaluated live budget.
+claim that live completion rates improved. These idle measurements did not reevaluate live completion. The subsequent
+[2026-10-28 live rerun](harness-followup-2026-10-28.md) records the new completion,
+latency, resource and usage results under a separately authorized allowance.
 
 ## Implemented behavior
 
@@ -51,7 +52,8 @@ and capped completion results are unchanged pending a new evaluated live budget.
 
 See [configuration and limitations](harness-native-capabilities.md). No model or
 effort downgrade, default context reduction, live cache-warming traffic or extra
-model request was introduced. The global live ledger remains 300/300.
+model request was introduced. The original global live ledger remains 300/300. A later explicitly authorized
+follow-up used 201/300 additional requests; its complete results are linked above.
 
 ## Validation
 

@@ -1,5 +1,9 @@
 # Headless harness reference evaluation
 
+**Historical suite.** The [2026-10-28 full rerun](harness-followup-2026-10-28.md)
+records current-code results: native Opus completed 12/12 under the unchanged
+six-request cap. The earlier 7/12 result below is retained as historical evidence.
+
 Cloud Linux VM only, 2026-10-27. The earlier kernel microbenchmark compares the
 old and new implementations of this project's kernel. It is not an external
 harness comparison. This evaluation runs a published reference CLI and the

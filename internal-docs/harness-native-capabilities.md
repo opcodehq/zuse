@@ -146,4 +146,6 @@ Existing recovered roots retain their saved instructions. No default context
 reduction, model downgrade or cache-warming traffic is introduced. New live
 speed, completion-rate and cost claims require a separately authorized request
 budget and matched acceptance tasks; the existing global 300-request ledger is
-exhausted and remains unchanged.
+exhausted and remains unchanged. The subsequently authorized
+[2026-10-28 full live rerun](harness-followup-2026-10-28.md) used its own 201/300
+follow-up allowance and publishes the current measured outcomes.
