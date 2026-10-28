@@ -524,6 +524,7 @@ async fn cancellation_during_an_edit_lock_prevents_late_filesystem_commits() {
 }
 
 struct KernelHost {
+    batched: bool,
     requests: AtomicUsize,
     events: Mutex<Vec<Event>>,
 }
@@ -543,32 +544,36 @@ impl Host for KernelHost {
     }
     async fn model(&self, input: ModelInput) -> Result<ModelOutput, Error> {
         let turn = self.requests.fetch_add(1, Ordering::SeqCst);
-        let calls = match turn {
-            0 => vec![Call {
+        let sequence = [
+            Call {
                 id: "write".into(),
                 name: "write_file".into(),
                 input: json!({"path":"result.txt","content":"native result\n","expected_hash":null}),
-            }],
-            1 => vec![Call {
+            },
+            Call {
                 id: "read".into(),
                 name: "read_file".into(),
                 input: json!({"path":"result.txt"}),
-            }],
-            2 => vec![Call {
+            },
+            Call {
                 id: "command".into(),
                 name: "exec_command".into(),
-                input: json!({"command":"cat result.txt","yield_time_ms":1000}),
-            }],
-            _ => {
-                assert!(
-                    input
-                        .messages
-                        .iter()
-                        .filter(|m| m.role == Role::Tool)
-                        .any(|m| m.content.to_string().contains("native result"))
-                );
-                vec![]
-            }
+                input: json!({"command":"test \"$(cat result.txt)\" = 'native result' && printf 'verified native result\\n'","yield_time_ms":1000}),
+            },
+        ];
+        let calls = if self.batched && turn == 0 {
+            sequence.to_vec()
+        } else if !self.batched && turn < sequence.len() {
+            vec![sequence[turn].clone()]
+        } else {
+            assert!(
+                input
+                    .messages
+                    .iter()
+                    .filter(|m| m.role == Role::Tool)
+                    .any(|m| m.content.to_string().contains("verified native result"))
+            );
+            vec![]
         };
         let text = if calls.is_empty() {
             "Completed native task"
@@ -597,66 +602,84 @@ impl Host for KernelHost {
 }
 #[tokio::test]
 async fn native_tools_run_through_the_durable_kernel_and_root_owned_host_composition() {
-    let root = tempfile::tempdir().unwrap();
-    let checkout = root.path().join("checkout");
-    std::fs::create_dir(&checkout).unwrap();
-    let application = Arc::new(KernelHost {
-        requests: AtomicUsize::new(0),
-        events: Mutex::new(vec![]),
-    });
-    let app = application.clone();
-    let cwd = checkout.clone();
-    let locks = root.path().join("harness/file-locks");
-    let engine = Engine::open_native_with(
-        root.path(),
-        "root",
-        Options::new("chatgpt/fixture"),
-        move |directory| async move {
-            let mut processes = ProcessOptions::new(
-                "root".into(),
-                directory.join("artifacts"),
-                Arc::new(Notices),
-            )?;
-            processes.command_host = env!("CARGO_BIN_EXE_zuse-command-host").into();
-            let tools = Arc::new(
-                NativeTools::open(NativeOptions {
-                    extensions: None,
-                    cwd,
-                    lock_directory: locks,
-                    processes,
-                    runtime_mode: Arc::new(|| RuntimeMode::FullAccess),
-                    callbacks: None,
-                    ripgrep: "rg".into(),
-                })
-                .await?,
-            );
-            tools.attach(app)
-        },
-    )
-    .await
-    .unwrap();
-    engine
-        .send("Write, read, and inspect a local result.".into(), vec![])
+    for batched in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let checkout = root.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let application = Arc::new(KernelHost {
+            batched,
+            requests: AtomicUsize::new(0),
+            events: Mutex::new(vec![]),
+        });
+        let app = application.clone();
+        let cwd = checkout.clone();
+        let locks = root.path().join("harness/file-locks");
+        let engine = Engine::open_native_with(
+            root.path(),
+            "root",
+            Options::new("chatgpt/fixture"),
+            move |directory| async move {
+                let mut processes = ProcessOptions::new(
+                    "root".into(),
+                    directory.join("artifacts"),
+                    Arc::new(Notices),
+                )?;
+                processes.command_host = env!("CARGO_BIN_EXE_zuse-command-host").into();
+                let tools = Arc::new(
+                    NativeTools::open(NativeOptions {
+                        extensions: None,
+                        cwd,
+                        lock_directory: locks,
+                        processes,
+                        runtime_mode: Arc::new(|| RuntimeMode::FullAccess),
+                        callbacks: None,
+                        ripgrep: "rg".into(),
+                    })
+                    .await?,
+                );
+                tools.attach(app)
+            },
+        )
         .await
         .unwrap();
-    let state = engine.snapshot().await;
-    assert_eq!(state.tools.len(), 3);
-    assert!(
-        state
-            .tools
-            .values()
-            .all(|receipt| matches!(receipt.status, ReceiptStatus::Completed))
-    );
-    assert_eq!(
-        std::fs::read_to_string(checkout.join("result.txt")).unwrap(),
-        "native result\n"
-    );
-    assert!(application.events.lock().unwrap().iter().any(
-        |event| matches!(event,Event::Completed{summary,..} if summary=="Completed native task")
-    ));
-    engine.close().await.unwrap();
-    let recovered = RootStore::acquire(root.path(), "root").unwrap();
-    assert_eq!(recovered.load().unwrap().unwrap().tools.len(), 3);
+        engine
+            .send("Write, read, and inspect a local result.".into(), vec![])
+            .await
+            .unwrap();
+        let state = engine.snapshot().await;
+        assert_eq!(state.tools.len(), 3);
+        assert!(
+            state
+                .tools
+                .values()
+                .all(|receipt| matches!(receipt.status, ReceiptStatus::Completed))
+        );
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("result.txt")).unwrap(),
+            "native result\n"
+        );
+        assert!(application.events.lock().unwrap().iter().any(
+            |event| matches!(event,Event::Completed{summary,..} if summary=="Completed native task")
+        ));
+        assert_eq!(
+            application.requests.load(Ordering::SeqCst),
+            if batched { 2 } else { 4 }
+        );
+        let results = application
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                Event::ToolResult { call_id, .. } => Some(call_id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(results, ["write", "read", "command"]);
+        engine.close().await.unwrap();
+        let recovered = RootStore::acquire(root.path(), "root").unwrap();
+        assert_eq!(recovered.load().unwrap().unwrap().tools.len(), 3);
+    }
 }
 
 #[tokio::test]
