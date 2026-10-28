@@ -149,3 +149,8 @@ budget and matched acceptance tasks; the existing global 300-request ledger is
 exhausted and remains unchanged. The subsequently authorized
 [2026-10-28 full live rerun](harness-followup-2026-10-28.md) used its own 201/300
 follow-up allowance and publishes the current measured outcomes.
+
+The [later speed follow-up](harness-speed-2026-10-28.md) brought the same
+follow-up allocation to 293/300, with Sonnet at 12/12 but still slower than the
+reference. New roots receive ordered edit/verification guidance; existing roots
+keep their saved instruction snapshot.

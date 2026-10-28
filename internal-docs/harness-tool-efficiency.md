@@ -1,5 +1,8 @@
 # Native tool workflow follow-up
 
+The [latest workflow speed measurements](harness-speed-2026-10-28.md) record
+ordered edit/verification guidance, reduced round trips and the remaining speed gap.
+
 The subsequent [2026-10-28 repeated comparison](harness-followup-2026-10-28.md)
 now supplies the full 12-runs-per-model live rerun. The targeted probes below
 remain historical and are not substituted for that suite.
