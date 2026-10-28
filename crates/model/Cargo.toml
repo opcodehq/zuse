@@ -7,7 +7,7 @@ publish.workspace = true
 
 [dependencies]
 zuse-protocol.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 thiserror.workspace = true
 similar.workspace = true

@@ -58,7 +58,7 @@ pub struct ModelInput {
     pub agent_id: String,
     pub model: String,
     pub reasoning: Option<String>,
-    pub messages: Vec<Message>,
+    pub messages: Messages,
     pub tools: Tools,
     pub cancel: CancellationToken,
     pub text: Arc<dyn Fn(String) + Send + Sync>,

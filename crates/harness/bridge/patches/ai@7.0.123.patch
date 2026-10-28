@@ -1,0 +1,71 @@
+diff --git a/dist/index.js b/dist/index.js
+index 4724448f9971b760a97b59c5f51417139bb1cb65..aa1330338f18695d5bd1c3e0c25db551859da91d 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -2326,7 +2326,7 @@ const systemModelMessageSchema = z.object({
+ });
+ const userModelMessageSchema = z.object({
+ 	role: z.literal("user"),
+-	content: z.union([z.string(), z.array(z.union([
++	content: z.union([z.string(), z.array(z.discriminatedUnion("type", [
+ 		textPartSchema,
+ 		imagePartSchema,
+ 		filePartSchema
+@@ -2335,7 +2335,7 @@ const userModelMessageSchema = z.object({
+ });
+ const assistantModelMessageSchema = z.object({
+ 	role: z.literal("assistant"),
+-	content: z.union([z.string(), z.array(z.union([
++	content: z.union([z.string(), z.array(z.discriminatedUnion("type", [
+ 		textPartSchema,
+ 		customPartSchema,
+ 		filePartSchema,
+@@ -2349,10 +2349,10 @@ const assistantModelMessageSchema = z.object({
+ });
+ const toolModelMessageSchema = z.object({
+ 	role: z.literal("tool"),
+-	content: z.array(z.union([toolResultPartSchema, toolApprovalResponseSchema])),
++	content: z.array(z.discriminatedUnion("type", [toolResultPartSchema, toolApprovalResponseSchema])),
+ 	providerOptions: providerMetadataSchema.optional()
+ });
+-const modelMessageSchema = z.union([
++const modelMessageSchema = z.discriminatedUnion("role", [
+ 	systemModelMessageSchema,
+ 	userModelMessageSchema,
+ 	assistantModelMessageSchema,
+diff --git a/src/prompt/message.ts b/src/prompt/message.ts
+index 00560af0f9305f2c4c97b265448ce6d30465ce43..f5e69a3b2a977d9ec0f688c48a003a50877904c6 100644
+--- a/src/prompt/message.ts
++++ b/src/prompt/message.ts
+@@ -30,7 +30,7 @@ export const userModelMessageSchema: ZodType<UserModelMessage> = z.object({
+   role: z.literal('user'),
+   content: z.union([
+     z.string(),
+-    z.array(z.union([textPartSchema, imagePartSchema, filePartSchema])),
++    z.array(z.discriminatedUnion('type', [textPartSchema, imagePartSchema, filePartSchema])),
+   ]),
+   providerOptions: providerMetadataSchema.optional(),
+ });
+@@ -41,7 +41,7 @@ export const assistantModelMessageSchema: ZodType<AssistantModelMessage> =
+     content: z.union([
+       z.string(),
+       z.array(
+-        z.union([
++        z.discriminatedUnion('type', [
+           textPartSchema,
+           customPartSchema,
+           filePartSchema,
+@@ -58,11 +58,11 @@ export const assistantModelMessageSchema: ZodType<AssistantModelMessage> =
+ 
+ export const toolModelMessageSchema: ZodType<ToolModelMessage> = z.object({
+   role: z.literal('tool'),
+-  content: z.array(z.union([toolResultPartSchema, toolApprovalResponseSchema])),
++  content: z.array(z.discriminatedUnion('type', [toolResultPartSchema, toolApprovalResponseSchema])),
+   providerOptions: providerMetadataSchema.optional(),
+ });
+ 
+-export const modelMessageSchema: ZodType<ModelMessage> = z.union([
++export const modelMessageSchema: ZodType<ModelMessage> = z.discriminatedUnion('role', [
+   systemModelMessageSchema,
+   userModelMessageSchema,
+   assistantModelMessageSchema,

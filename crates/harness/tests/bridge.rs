@@ -22,7 +22,7 @@ fn input(
         agent_id: model.into(),
         model: model.into(),
         reasoning: None,
-        messages: vec![Message::text(Role::User, "test")],
+        messages: vec![Message::text(Role::User, "test").into()],
         tools: Tools::new(),
         cancel,
         text,
@@ -100,6 +100,30 @@ globalThis.fetch=async(url,init)=>{
     .unwrap();
     assert_eq!(both.0.unwrap().text, "first");
     assert_eq!(both.1.unwrap().text, "second");
+    let replies = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        futures::future::try_join_all((0..125).map(|index| {
+            let bridge = bridge.clone();
+            async move {
+                let model = format!("concurrent-{index}");
+                let reply = bridge
+                    .request(
+                        input(&model, CancellationToken::new(), Arc::new(|_| {})),
+                        credential(),
+                    )
+                    .await?;
+                assert_eq!(reply.text, model);
+                Ok::<_, Error>(reply)
+            }
+        })),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(replies.len(), 125);
+    let mut invalid = input("invalid", CancellationToken::new(), Arc::new(|_| {}));
+    Arc::make_mut(&mut invalid.messages[0]).content = serde_json::Value::Null;
+    assert!(bridge.request(invalid, credential()).await.is_err());
     let started = Arc::new(tokio::sync::Notify::new());
     let signal = started.clone();
     let cancel = CancellationToken::new();
@@ -118,6 +142,21 @@ globalThis.fetch=async(url,init)=>{
     tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
         .await
         .unwrap();
+    // A provider stream can stay open while another prompt is prepared and sent.
+    assert_eq!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            bridge.request(
+                input("while-slow", CancellationToken::new(), Arc::new(|_| {})),
+                credential()
+            )
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .text,
+        "while-slow"
+    );
     cancel.cancel();
     assert!(matches!(pending.await.unwrap(), Err(Error::Interrupted)));
     assert_eq!(

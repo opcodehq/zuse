@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --experimental-strip-types model.test.ts"
+    "test": "node --experimental-strip-types --test model.test.ts schema.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "4.0.82",
@@ -14,5 +14,8 @@
   },
   "devDependencies": {
     "esbuild": "0.25.12"
+  },
+  "patchedDependencies": {
+    "ai@7.0.123": "patches/ai@7.0.123.patch"
   }
 }

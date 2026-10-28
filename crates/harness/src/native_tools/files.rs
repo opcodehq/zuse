@@ -321,10 +321,10 @@ impl CheckoutFiles {
         let previous = expected
             .map(|_| Self::read_at(&parent, &name, true))
             .transpose()?;
-        if let (Some(expected), Some((bytes, _))) = (expected, &previous) {
-            if digest(bytes) != expected {
-                return Err(message("Stale file hash. Read the file again."));
-            }
+        if let (Some(expected), Some((bytes, _))) = (expected, &previous)
+            && digest(bytes) != expected
+        {
+            return Err(message("Stale file hash. Read the file again."));
         }
         let content = previous.as_ref().map_or(Ok(""), |(bytes, _)| {
             std::str::from_utf8(bytes).map_err(|_| message("Expected UTF-8 text"))

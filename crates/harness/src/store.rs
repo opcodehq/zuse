@@ -1,7 +1,8 @@
 //! Atomic private checkpoints. A damaged journal is preserved, never reset.
 use crate::{Checkpoint, Error};
+use serde::Serialize;
 use std::{
-    io::Write,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
 };
 pub struct FileStore {
@@ -35,30 +36,38 @@ impl FileStore {
             std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
                 .map_err(|_| Error::Storage)?;
         }
-        let temp = directory.join(format!(".checkpoint-{}.tmp", uuid::Uuid::new_v4()));
-        let result = (|| {
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(&temp).map_err(|_| Error::Storage)?;
-            serde_json::to_writer(&mut file, state).map_err(|_| Error::Storage)?;
-            file.flush()
-                .and_then(|_| file.sync_all())
-                .map_err(|_| Error::Storage)?;
-            std::fs::rename(&temp, &self.path).map_err(|_| Error::Storage)?;
-            #[cfg(unix)]
-            std::fs::File::open(directory)
-                .and_then(|f| f.sync_all())
-                .map_err(|_| Error::Storage)?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(temp);
-        }
-        result
+        save_json(&self.path, state)
     }
+}
+
+/// One private, atomic commit path for checkpoints and process metadata.
+/// The caller owns creation and permissions of its private parent directory.
+pub(crate) fn save_json(path: &Path, value: &impl Serialize) -> Result<(), Error> {
+    let directory = path.parent().ok_or(Error::Storage)?;
+    let temp = directory.join(format!(".journal-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file =
+            BufWriter::with_capacity(64 * 1024, options.open(&temp).map_err(|_| Error::Storage)?);
+        serde_json::to_writer(&mut file, value).map_err(|_| Error::Storage)?;
+        file.flush()
+            .and_then(|_| file.get_ref().sync_all())
+            .map_err(|_| Error::Storage)?;
+        std::fs::rename(&temp, path).map_err(|_| Error::Storage)?;
+        #[cfg(unix)]
+        std::fs::File::open(directory)
+            .and_then(|f| f.sync_all())
+            .map_err(|_| Error::Storage)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
 }

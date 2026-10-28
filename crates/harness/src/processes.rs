@@ -181,38 +181,9 @@ fn artifact(directory: &Path, id: &str) -> PathBuf {
 async fn persist(entry: &Entry, directory: &Path) -> Result<(), Error> {
     let _gate = entry.persistence.lock().await;
     let record = lock(&entry.record).clone();
-    let directory = directory.to_path_buf();
     // Small metadata commits finish in one poll so cancellation cannot leave
     // a detached filesystem writer running after root ownership is released.
-    (|| {
-        use std::io::Write;
-        let path = directory.join(format!("{}.json", record.id));
-        let temp = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
-        let result = (|| {
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(&temp).map_err(|_| Error::Storage)?;
-            serde_json::to_writer(&mut file, &record).map_err(|_| Error::Storage)?;
-            file.flush()
-                .and_then(|_| file.sync_all())
-                .map_err(|_| Error::Storage)?;
-            std::fs::rename(&temp, &path).map_err(|_| Error::Storage)?;
-            #[cfg(unix)]
-            std::fs::File::open(&directory)
-                .and_then(|f| f.sync_all())
-                .map_err(|_| Error::Storage)?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(temp);
-        }
-        result
-    })()
+    crate::store::save_json(&directory.join(format!("{}.json", record.id)), &record)
 }
 async fn deliver(entry: &Entry, options: &ProcessOptions) {
     let _gate = entry.delivery.lock().await;
@@ -567,11 +538,13 @@ impl Processes {
                 &options,
                 &mut child,
                 output,
-                spec,
-                input.notify_on_output,
-                shutdown.clone(),
-                cancel,
-                started_tx,
+                Launch {
+                    spec,
+                    marker: input.notify_on_output,
+                    shutdown: shutdown.clone(),
+                    cancel,
+                    started: started_tx,
+                },
             )
             .await;
             if result.is_err() {
@@ -622,12 +595,11 @@ impl Processes {
         let count = file.read(&mut bytes).await.map_err(|_| Error::Storage)?;
         bytes.truncate(count);
         let record = lock(&entry.record).clone();
-        if cursor + (bytes.len() as u64) < size || record.status == ProcessStatus::Running {
-            if let Err(error) = std::str::from_utf8(&bytes) {
-                if error.error_len().is_none() {
-                    bytes.truncate(error.valid_up_to());
-                }
-            }
+        if (cursor + (bytes.len() as u64) < size || record.status == ProcessStatus::Running)
+            && let Err(error) = std::str::from_utf8(&bytes)
+            && error.error_len().is_none()
+        {
+            bytes.truncate(error.valid_up_to());
         }
         Ok(ProcessOutput {
             process: record,
@@ -749,17 +721,28 @@ async fn await_done(entry: Arc<Entry>) {
         }
     }
 }
-async fn run_process(
-    entry: &Entry,
-    options: &ProcessOptions,
-    child: &mut Child,
-    mut output: File,
+struct Launch {
     spec: supervisor::Specification,
     marker: Option<String>,
     shutdown: CancellationToken,
     cancel: CancellationToken,
     started: watch::Sender<bool>,
+}
+
+async fn run_process(
+    entry: &Entry,
+    options: &ProcessOptions,
+    child: &mut Child,
+    mut output: File,
+    launch: Launch,
 ) -> Result<(), Error> {
+    let Launch {
+        spec,
+        marker,
+        shutdown,
+        cancel,
+        started,
+    } = launch;
     let spec = serde_json::to_value(spec).map_err(|_| failed("Invalid command specification"))?;
     write_control(&entry.input, spec).await?;
     let mut started = Some(started);
@@ -827,22 +810,20 @@ async fn run_process(
                     .await
                     .map_err(|_| Error::Storage)?;
                 lock(&entry.record).bytes += accepted.len() as u64;
-                if let Some(marker) = &marker {
-                    if !lock(&entry.record).ready {
-                        tail.extend_from_slice(accepted);
-                        if tail
-                            .windows(marker.len())
-                            .any(|part| part == marker.as_bytes())
-                        {
-                            lock(&entry.record).ready = true;
-                            persist(entry, &options.directory).await?;
-                            // Delivery runs on the outbox worker, independently of
-                            // output drainage and the supervisor lease heartbeat.
-                        }
-                        let keep = marker.len().saturating_sub(1);
-                        if tail.len() > keep {
-                            tail.drain(..tail.len() - keep);
-                        }
+                if let Some(marker) = marker.as_ref().filter(|_| !lock(&entry.record).ready) {
+                    tail.extend_from_slice(accepted);
+                    if tail
+                        .windows(marker.len())
+                        .any(|part| part == marker.as_bytes())
+                    {
+                        lock(&entry.record).ready = true;
+                        persist(entry, &options.directory).await?;
+                        // Delivery runs on the outbox worker, independently of
+                        // output drainage and the supervisor lease heartbeat.
+                    }
+                    let keep = marker.len().saturating_sub(1);
+                    if tail.len() > keep {
+                        tail.drain(..tail.len() - keep);
                     }
                 }
                 if bytes.len() > remaining {
