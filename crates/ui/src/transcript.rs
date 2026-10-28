@@ -2098,8 +2098,8 @@ pub fn tool_group_summary(tools: &[ToolItem]) -> String {
         .iter()
         .filter(|t| t.kind == ToolItemKind::Note)
         .count();
-    // A group of subagents counts agents and how many still run
-    // ("3 subagents · 1 of 3 running", "3 subagents · 2 done · 1 failed").
+    // A group of subagents says how its agents stand ("1 of 3 running",
+    // "2 done · 1 failed"); the header's avatar stack shows how many.
     if calls > 1
         && tools
             .iter()
@@ -2112,21 +2112,20 @@ pub fn tool_group_summary(tools: &[ToolItem]) -> String {
             .collect();
         let count = |status| statuses.iter().filter(|s| **s == status).count();
         let running = count(SubagentStatus::Running);
-        let mut summary = format!("{calls} subagents");
         if running > 0 {
-            summary.push_str(&format!(" · {running} of {calls} running"));
-        } else {
-            for (status, word) in [
-                (SubagentStatus::Done, "done"),
-                (SubagentStatus::Failed, "failed"),
-            ] {
-                let n = count(status);
-                if n > 0 {
-                    summary.push_str(&format!(" · {n} {word}"));
-                }
-            }
+            return format!("{running} of {calls} running");
         }
-        return summary;
+        return [
+            (SubagentStatus::Done, "done"),
+            (SubagentStatus::Failed, "failed"),
+        ]
+        .into_iter()
+        .filter_map(|(status, word)| {
+            let n = count(status);
+            (n > 0).then(|| format!("{n} {word}"))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
     }
     let mut summary = match (calls, thoughts, notes) {
         (0, 0, 0) => String::new(),
@@ -8251,6 +8250,10 @@ impl Transcript {
         // Compact mode is the exception: EVERYTHING sits under the one work
         // accordion, spawn chips included.
         let collapses = self.compact_mode || tool_group_collapses(tools);
+        // Several subagents get the delegation header: their provider marks
+        // stacked, how they stand, and the chevron trailing.
+        let agent_group = !self.compact_mode && tools.len() > 1 && tools.iter().all(is_agent_tool);
+        let agent_count = tools.len();
         let arrival_pending = !cx.reduce_motion()
             && self.tool_group_reveals.get(row_id).is_some_and(|reveal| {
                 reveal.starts.iter().flatten().any(|start| {
@@ -8584,7 +8587,25 @@ impl Transcript {
             summary.clone(),
             reduce_motion,
         );
+        // Native subagents run inside the chat's own provider: its mark
+        // names them better than a generic agent glyph.
+        let agent_brand = self
+            .chat_id
+            .as_deref()
+            .and_then(|id| self.state.read(cx).chats.iter().find(|chat| chat.id == id))
+            .and_then(|chat| chat.config.as_ref())
+            .map(|config| crate::pickers::harness_brand_icon(config.harness));
         let toggle_id = row_id.clone();
+        let chevron = |slot: gpui::Div| {
+            slot.child(
+                crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
+                    .size(px(14.0))
+                    .with_transformation(gpui::Transformation::rotate(gpui::radians(
+                        -std::f32::consts::FRAC_PI_2 * (1.0 - disclosure_progress),
+                    )))
+                    .text_color(theme.text_muted),
+            )
+        };
         // A quiet summary sits above the activity rail; its chevron occupies
         // the same gutter as the rounded task-tree elbows below it.
         let header = div()
@@ -8611,25 +8632,21 @@ impl Transcript {
                 this.toggle_fold(toggle_id.clone(), viewport_height, effective_auto_open, cx);
                 cx.notify();
             }))
-            .child(
-                div()
-                    // Keep the title adjacent to its disclosure affordance.
-                    .w(px(22.0))
-                    .h(px(18.0))
-                    .flex_none()
-                    .relative()
-                    .child(
-                        crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
-                            .absolute()
-                            .left(px(ACTIVITY_TRUNK_X - 7.0))
-                            .top(px(2.0))
-                            .size(px(14.0))
-                            .with_transformation(gpui::Transformation::rotate(gpui::radians(
-                                -std::f32::consts::FRAC_PI_2 * (1.0 - disclosure_progress),
-                            )))
-                            .text_color(theme.text_muted),
-                    ),
-            )
+            .map(|header| {
+                if agent_group {
+                    header.child(agent_avatar_stack(agent_count, agent_brand, theme))
+                } else {
+                    header.child(chevron(
+                        div()
+                            // Keep the title adjacent to its disclosure affordance.
+                            .w(px(22.0))
+                            .h(px(18.0))
+                            .flex_none()
+                            .pl(px(ACTIVITY_TRUNK_X - 7.0))
+                            .pt(px(2.0)),
+                    ))
+                }
+            })
             .child(
                 div()
                     .min_w_0()
@@ -8649,7 +8666,10 @@ impl Transcript {
                             tool_group_title(summary.clone(), shimmer_phase, theme)
                         }),
                     }),
-            );
+            )
+            .when(agent_group, |header| {
+                header.child(chevron(div().flex_none()))
+            });
 
         if compact_shell {
             let view = cx.entity_id();
@@ -8683,14 +8703,6 @@ impl Transcript {
                 .into_any_element();
         }
 
-        // Native subagents run inside the chat's own provider: its mark
-        // names them better than a generic agent glyph.
-        let agent_brand = self
-            .chat_id
-            .as_deref()
-            .and_then(|id| self.state.read(cx).chats.iter().find(|chat| chat.id == id))
-            .and_then(|chat| chat.config.as_ref())
-            .map(|config| crate::pickers::harness_brand_icon(config.harness));
         let chips = div()
             .pt(px(CHIPS_TOP_PAD))
             .flex()
@@ -8724,7 +8736,12 @@ impl Transcript {
                                 frozen,
                             });
                         }),
-                        collapses,
+                        collapses.then_some(TreePlace {
+                            has_predecessor: ix > 0,
+                            continues: ix + 1 < tools.len(),
+                            reveal: connector_reveal,
+                            continuation_reveal,
+                        }),
                         agent_brand,
                         theme,
                         cx.entity_id(),
@@ -10183,10 +10200,12 @@ fn subagent_header_row(
         .text_size(px(TOOL_LABEL_SIZE))
         .line_height(px(TOOL_LABEL_LINE_HEIGHT))
         .child(glyph)
+        // The provider's mark in the row's own ink, not its brand color:
+        // several agents read as one quiet column.
         .child(match brand {
-            Some((path, tint)) => crate::icons::icon(path)
+            Some((path, _)) => crate::icons::icon(path)
                 .size(px(14.0))
-                .text_color(tint.unwrap_or(theme.text_muted)),
+                .text_color(theme.text),
             None => crate::icons::icon(crate::icons::TOOL_AGENT)
                 .size(px(14.0))
                 .text_color(theme.text_muted),
@@ -10360,72 +10379,90 @@ fn activity_rail(
     row_height: f32,
     theme: &Theme,
 ) -> gpui::Div {
-    let color = theme.hairline(0.12);
     let tint = if tool.is_error {
         theme.danger
     } else {
         theme.text_muted
     };
+    let (_, branch_reveal) = tool_connector_parts(reveal, has_predecessor);
+    activity_connectors(
+        has_predecessor,
+        continues,
+        reveal,
+        continuation_reveal,
+        row_height,
+        ACTIVITY_GUTTER_WIDTH,
+        theme,
+    )
+    .child(
+        crate::icons::icon(match tool.kind {
+            ToolItemKind::Thought => crate::icons::TOOL_THINKING,
+            ToolItemKind::Note => crate::icons::PEN,
+            ToolItemKind::Call => tool_icon_path(&tool.call),
+        })
+        .absolute()
+        .left(px(ACTIVITY_ICON_LEFT))
+        .top(px(row_height / 2.0 - ACTIVITY_ICON_SIZE / 2.0))
+        .size(px(ACTIVITY_ICON_SIZE))
+        .opacity(branch_reveal)
+        .text_color(tint),
+    )
+}
+
+/// The task tree's trunk and rounded elbow for one row, `width` wide; the
+/// caller places the row's own glyph after it.
+fn activity_connectors(
+    has_predecessor: bool,
+    continues: bool,
+    reveal: f32,
+    continuation_reveal: f32,
+    row_height: f32,
+    width: f32,
+    theme: &Theme,
+) -> gpui::Div {
+    let color = theme.hairline(0.12);
     let (incoming_reveal, branch_reveal) = tool_connector_parts(reveal, has_predecessor);
-    div()
-        .relative()
-        .w(px(ACTIVITY_GUTTER_WIDTH))
-        .flex_none()
-        .child(
-            canvas(
-                move |_, _, _| (),
-                move |bounds, _, window, _| {
-                    let x = bounds.origin.x + px(ACTIVITY_TRUNK_X);
-                    let branch_y = bounds.origin.y + px(row_height / 2.0);
-                    let bend_y = branch_y - px(ACTIVITY_BEND_RADIUS);
-                    // Union the ribbons before painting. Stroke tessellation
-                    // blends intersections twice, even in a single path.
-                    let mut tree = PathBuilder::fill().with_style(gpui::PathStyle::Fill(
-                        gpui::FillOptions::default().with_fill_rule(gpui::FillRule::NonZero),
-                    ));
-                    if incoming_reveal > 0.0 {
-                        let mut bottom = point(
-                            x,
-                            bounds.origin.y
-                                + px((row_height / 2.0 - ACTIVITY_BEND_RADIUS) * incoming_reveal),
-                        );
-                        if incoming_reveal >= 1.0 && continues && continuation_reveal > 0.0 {
-                            let continuation_height = (f32::from(bounds.size.height)
-                                - (row_height / 2.0 - ACTIVITY_BEND_RADIUS))
-                                .max(0.0);
-                            bottom =
-                                point(x, bend_y + px(continuation_height * continuation_reveal));
-                        }
-                        activity_ribbon(&mut tree, &[point(x, bounds.origin.y), bottom]);
+    div().relative().w(px(width)).flex_none().child(
+        canvas(
+            move |_, _, _| (),
+            move |bounds, _, window, _| {
+                let x = bounds.origin.x + px(ACTIVITY_TRUNK_X);
+                let branch_y = bounds.origin.y + px(row_height / 2.0);
+                let bend_y = branch_y - px(ACTIVITY_BEND_RADIUS);
+                // Union the ribbons before painting. Stroke tessellation
+                // blends intersections twice, even in a single path.
+                let mut tree = PathBuilder::fill().with_style(gpui::PathStyle::Fill(
+                    gpui::FillOptions::default().with_fill_rule(gpui::FillRule::NonZero),
+                ));
+                if incoming_reveal > 0.0 {
+                    let mut bottom = point(
+                        x,
+                        bounds.origin.y
+                            + px((row_height / 2.0 - ACTIVITY_BEND_RADIUS) * incoming_reveal),
+                    );
+                    if incoming_reveal >= 1.0 && continues && continuation_reveal > 0.0 {
+                        let continuation_height = (f32::from(bounds.size.height)
+                            - (row_height / 2.0 - ACTIVITY_BEND_RADIUS))
+                            .max(0.0);
+                        bottom = point(x, bend_y + px(continuation_height * continuation_reveal));
                     }
-                    if branch_reveal > 0.0 {
-                        let points: Vec<_> = activity_branch_points(branch_reveal)
-                            .into_iter()
-                            .map(|p| point(x + px(p.x), bend_y + px(p.y)))
-                            .collect();
-                        activity_ribbon(&mut tree, &points);
-                    }
-                    if let Ok(path) = tree.build() {
-                        window.paint_path(path, color);
-                    }
-                },
-            )
-            .absolute()
-            .inset_0(),
+                    activity_ribbon(&mut tree, &[point(x, bounds.origin.y), bottom]);
+                }
+                if branch_reveal > 0.0 {
+                    let points: Vec<_> = activity_branch_points(branch_reveal)
+                        .into_iter()
+                        .map(|p| point(x + px(p.x), bend_y + px(p.y)))
+                        .collect();
+                    activity_ribbon(&mut tree, &points);
+                }
+                if let Ok(path) = tree.build() {
+                    window.paint_path(path, color);
+                }
+            },
         )
-        .child(
-            crate::icons::icon(match tool.kind {
-                ToolItemKind::Thought => crate::icons::TOOL_THINKING,
-                ToolItemKind::Note => crate::icons::PEN,
-                ToolItemKind::Call => tool_icon_path(&tool.call),
-            })
-            .absolute()
-            .left(px(ACTIVITY_ICON_LEFT))
-            .top(px(row_height / 2.0 - ACTIVITY_ICON_SIZE / 2.0))
-            .size(px(ACTIVITY_ICON_SIZE))
-            .opacity(branch_reveal)
-            .text_color(tint),
-        )
+        .absolute()
+        .inset_0(),
+    )
 }
 
 /// A clockwise ribbon contour. Nonzero fill unions intersecting contours,
@@ -10520,43 +10557,116 @@ fn tool_chip(
 /// No accordion — an inline body would only repeat the subagent's own
 /// transcript. The group guide rail is omitted for agent-only rows (no
 /// collapse header for it to hang from).
+/// Provider tiles shown over a subagent group, overlapping like avatars.
+const AGENT_AVATAR_MAX: usize = 3;
+const AGENT_AVATAR_SIZE: f32 = 20.0;
+
+/// A subagent group's avatar stack: one tile per agent (up to
+/// [`AGENT_AVATAR_MAX`], then "+N"), each the provider's mark; the ring in
+/// the page tone separates the overlapping tiles.
+fn agent_avatar_stack(
+    count: usize,
+    brand: Option<(&'static str, Option<gpui::Hsla>)>,
+    theme: &Theme,
+) -> gpui::Div {
+    let tile = || {
+        div()
+            .size(px(AGENT_AVATAR_SIZE))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.0))
+            .border_2()
+            .border_color(theme.bg)
+            .bg(theme.element_hover)
+    };
+    let shown = count.min(AGENT_AVATAR_MAX);
+    let tiles = shown + usize::from(count > AGENT_AVATAR_MAX);
+    // Overlapping tiles: each after the first adds its width less the
+    // overlap. Sized explicitly so negative margins never shrink the slot.
+    let width = AGENT_AVATAR_SIZE + (tiles - 1) as f32 * (AGENT_AVATAR_SIZE - 6.0);
+    div()
+        .w(px(width))
+        .flex_none()
+        .flex()
+        .items_center()
+        .children((0..shown).map(|ix| {
+            tile().when(ix > 0, |tile| tile.ml(px(-6.0))).child(
+                crate::icons::icon(brand.map_or(crate::icons::TOOL_AGENT, |(path, _)| path))
+                    .size(px(12.0))
+                    .text_color(theme.text),
+            )
+        }))
+        .when(count > AGENT_AVATAR_MAX, |stack| {
+            stack.child(
+                tile()
+                    .ml(px(-6.0))
+                    .text_size(px(10.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text_muted)
+                    .child(SharedString::from(format!("+{}", count - AGENT_AVATAR_MAX))),
+            )
+        })
+}
+
+/// Where a spawn row sits in its group's task tree: whether a row precedes
+/// it, whether one follows, and the connectors' reveal progress.
+#[derive(Clone, Copy)]
+struct TreePlace {
+    has_predecessor: bool,
+    continues: bool,
+    reveal: f32,
+    continuation_reveal: f32,
+}
+
+/// Width of a spawn row's tree gutter: trunk and elbow, no tool glyph (the
+/// row leads with its own status mark).
+const AGENT_TREE_WIDTH: f32 = ACTIVITY_BRANCH_END_X + 2.0;
+
+#[allow(clippy::too_many_arguments)]
 fn subagent_chip(
     tool: &ToolItem,
     id: SharedString,
     on_open: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-    rail: bool,
+    tree: Option<TreePlace>,
     brand: Option<(&'static str, Option<gpui::Hsla>)>,
     theme: &Theme,
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> AnyElement {
-    // Under a group header the row takes the tree's height, so the fold
-    // measures it like any other tool row.
+    // Under a group header the row hangs off the task tree at the tree's
+    // height, so the fold measures it like any other tool row.
+    let row_height = if tree.is_some() {
+        TOOL_TREE_ROW_HEIGHT
+    } else {
+        CHIP_HEIGHT
+    };
     div()
-        .h(px(if rail {
-            TOOL_TREE_ROW_HEIGHT
-        } else {
-            CHIP_HEIGHT
-        }))
+        .h(px(row_height))
         .w_full()
         .flex_none()
         .flex()
         .flex_row()
         .items_center()
-        .when(rail, |row| {
+        .when_some(tree, |row, place| {
             row.child(
-                div()
-                    .ml(px(ACTIVITY_TRUNK_X))
-                    .h_full()
-                    .w(px(1.0))
-                    .flex_none()
-                    .bg(crate::theme::ink(0.08)),
+                activity_connectors(
+                    place.has_predecessor,
+                    place.continues,
+                    place.reveal,
+                    place.continuation_reveal,
+                    row_height,
+                    AGENT_TREE_WIDTH,
+                    theme,
+                )
+                .h_full()
+                .flex_none(),
             )
         })
         .child(
             div()
                 .id(id)
-                .when(rail, |el| el.ml(px(12.0)))
                 .h(px(CHIP_CARD_HEIGHT))
                 .min_w_0()
                 .max_w_full()
@@ -13505,7 +13615,7 @@ mod tests {
         // Two agents fold under one "2 subagents" header.
         assert!(tool_group_collapses(tools));
         assert!(tools.iter().all(is_agent_tool));
-        assert_eq!(tool_group_summary(tools), "2 subagents · 2 of 2 running");
+        assert_eq!(tool_group_summary(tools), "2 of 2 running");
     }
 
     #[test]
