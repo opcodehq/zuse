@@ -40,7 +40,8 @@
       "physical_requests": 42,
       "median_seconds": 11.442728193499988,
       "median_peak_rss_mib": 20.146484375,
-      "median_peak_pss_mib": 9.1708984375
+      "median_peak_pss_mib": 9.1708984375,
+      "mean_seconds": 11.974247585000057
     },
     "reference": {
       "completed": 12,
@@ -48,9 +49,13 @@
       "physical_requests": 41,
       "median_seconds": 10.172249053000087,
       "median_peak_rss_mib": 57.42578125,
-      "median_peak_pss_mib": 49.2568359375
+      "median_peak_pss_mib": 49.2568359375,
+      "mean_seconds": 12.19138894925004
     },
-    "speed_goal_met": false
+    "speed_goal_met": false,
+    "native_faster_pairs": 6,
+    "matched_pairs": 12,
+    "median_paired_time_ratio": 1.0268195956282484
   },
   "runs": [
     {

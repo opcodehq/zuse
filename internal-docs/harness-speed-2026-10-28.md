@@ -48,7 +48,10 @@ this contemporaneous reference median. Its observed median improved 18.1%
 from the preceding native 13.98s, and physical requests decreased 49 to 42.
 The earlier reference median was 10.58s; it also varied between suites. These
 numbers support fewer round trips and an observed improvement, not isolated
-causality or an overall speed win.
+causality or an overall speed win. Mean task time was 11.97s native / 12.19s
+reference, and each harness was faster in six of 12 matched pairs. The median
+paired native/reference ratio was 1.027. These mixed summaries reinforce that
+this is not a clear speed win; the preselected median speed gate remains red.
 
 All 24 runs pass code acceptance and protected-file checks. Every physical
 response is HTTP 200 with the requested served model; no capped or failed run
