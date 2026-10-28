@@ -1,5 +1,5 @@
 //! One account affinity and health authority for roots and their children.
-use crate::{Error, Message, ModelInput, ModelOutput};
+use crate::{Error, Message, Messages, ModelInput, ModelOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -187,14 +187,23 @@ fn requires_portable(message: &Message, connection: &str, model: &str) -> bool {
                     .any(|p| p["type"] == "reasoning" || p.get("providerOptions").is_some())
             }))
 }
-pub fn portable_history(messages: &[Message]) -> Vec<Message> {
+pub fn portable_history(messages: &[Message]) -> Messages {
     messages
         .iter()
         .cloned()
         .map(|mut m| {
-            m.metadata.remove("providerOptions");
-            m.metadata.remove("zuseOrigin");
-            if let Some(parts) = m.content.as_array_mut() {
+            let private_metadata =
+                m.metadata.contains_key("providerOptions") || m.metadata.contains_key("zuseOrigin");
+            let private_content = m.content.as_array().is_some_and(|parts| {
+                parts.iter().any(|part| {
+                    part["type"] == "reasoning" || part.get("providerOptions").is_some()
+                })
+            });
+            if private_metadata {
+                m.metadata.remove("providerOptions");
+                m.metadata.remove("zuseOrigin");
+            }
+            if private_content && let Some(parts) = m.content.as_array_mut() {
                 parts.retain(|p| p["type"] != "reasoning");
                 for part in parts {
                     if let Some(map) = part.as_object_mut() {

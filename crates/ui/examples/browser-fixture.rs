@@ -246,7 +246,7 @@ fn main() -> anyhow::Result<()> {
                         {"id":"fixture-user","role":"user","parts":[{"id":"text","kind":"text","text":"Build a calm, thoughtful workspace for Fieldnotes. Let’s preview the landing page beside this conversation."}],"createdAt":1788900000000_i64,"deviceId":"local"},
                         {"id":"fixture-assistant","role":"assistant","parts":[{"id":"text","kind":"text","text":"The first layout is ready to review.\n\nIt uses warm neutrals, generous spacing, and a simple hierarchy. The workspace cards stay readable as the preview gets narrower.\n\nOpen **Browser** from the sidebar’s **+** menu to keep the page beside your work."}],"createdAt":1788900001000_i64,"deviceId":"local","status":"complete"}
                     ])).unwrap();
-                    s.receive_transcript_frame(zuse_doc::TranscriptFrame::Reset { reset: entries }, cx).unwrap();
+                    s.receive_transcript_frame(zuse_doc::TranscriptFrame::Reset { reset: entries.into() }, cx).unwrap();
                 });
                 let (first_id, first) = window.update(cx, |shell, w, cx| shell.fixture_open_browser(None, w, cx))?;
                 pause(cx, 500).await;

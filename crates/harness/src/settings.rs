@@ -50,7 +50,9 @@ impl Scheduling {
         Ok(settings)
     }
     pub fn apply(&self, options: &mut Options) -> Result<(), Error> {
-        if !(1..=16).contains(&self.parallel_reads) || !(1..=32).contains(&self.children) {
+        if !(1..=16).contains(&self.parallel_reads)
+            || !(1..=crate::state::MAX_RUNNING_CHILDREN).contains(&self.children)
+        {
             return Err(Error::Tool(
                 "parallelReads must be 1..16 and children 1..32".into(),
             ));

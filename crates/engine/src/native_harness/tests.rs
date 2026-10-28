@@ -20,7 +20,7 @@ struct Seen {
     agent: String,
     model: String,
     tools: Vec<String>,
-    messages: Vec<Message>,
+    messages: zuse_harness::Messages,
 }
 struct ModelFixture {
     replies: Mutex<VecDeque<ModelOutput>>,

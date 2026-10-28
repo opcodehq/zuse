@@ -134,7 +134,7 @@ fn send(
     delivery_id: Option<String>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let root = engine.snapshot().await.root_id;
+        let root = engine.root_id().await;
         let result = std::panic::AssertUnwindSafe(async {
             match delivery_id {
                 Some(id) => {

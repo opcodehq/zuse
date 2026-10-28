@@ -62,7 +62,7 @@ pub struct ModelInput {
     pub agent_id: String,
     pub model: String,
     pub reasoning: Option<String>,
-    pub messages: Arc<Vec<Message>>,
+    pub messages: Arc<Messages>,
     pub tools: Arc<Tools>,
     pub purpose: RequestPurpose,
     /// Zero for the first broker attempt; includes retries and account fallback.

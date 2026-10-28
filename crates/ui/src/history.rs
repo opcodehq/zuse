@@ -9,7 +9,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use zuse_protocol::presentation::git_history::{
-    GraphLayout, GraphRow, GraphSegment, SegmentShape, layout_graph,
+    GraphLayout, GraphRow, GraphSegment, SegmentShape, compact_commits_to_visible,
+    git_history_matches, layout_graph,
 };
 
 use base64::Engine as _;
@@ -20,7 +21,6 @@ use gpui::{
     SharedString, Subscription, Task, Window, canvas, container_query, div, img, list, point,
     prelude::*, px,
 };
-use zuse_engine::repos::git_history_matches;
 use zuse_protocol::{
     GitHistoryCommit, GitHistoryComparison, GitHistoryPage, GitHistoryRef, GitHistoryRefKind,
 };
@@ -657,122 +657,6 @@ fn collapse_branch_runs(
     }
 
     (compact_commits_to_visible(commits, &visible), hidden_counts)
-}
-
-/// Retain a subset in its original topological order and contract parent
-/// edges across omitted commits. Search uses this to keep a coherent graph
-/// without pretending that a fuzzy match is a new ancestry boundary.
-fn compact_commits_to_visible(
-    commits: &[GitHistoryCommit],
-    visible: &HashSet<String>,
-) -> Vec<GitHistoryCommit> {
-    let by_sha: HashMap<_, _> = commits
-        .iter()
-        .map(|commit| (commit.sha.as_str(), commit))
-        .collect();
-
-    fn nearest_visible_parents(
-        sha: &str,
-        visible: &HashSet<String>,
-        by_sha: &HashMap<&str, &GitHistoryCommit>,
-        memo: &mut HashMap<String, Vec<String>>,
-    ) -> Vec<String> {
-        if visible.contains(sha) || !by_sha.contains_key(sha) {
-            return vec![sha.to_string()];
-        }
-        if let Some(cached) = memo.get(sha) {
-            return cached.clone();
-        }
-
-        struct Frame {
-            sha: String,
-            next_parent: usize,
-            resolved: Vec<String>,
-            seen: HashSet<String>,
-        }
-
-        impl Frame {
-            fn new(sha: String) -> Self {
-                Self {
-                    sha,
-                    next_parent: 0,
-                    resolved: Vec::new(),
-                    seen: HashSet::new(),
-                }
-            }
-
-            fn extend(&mut self, parents: &[String]) {
-                for parent in parents {
-                    if self.seen.insert(parent.clone()) {
-                        self.resolved.push(parent.clone());
-                    }
-                }
-            }
-        }
-
-        let mut visiting = HashSet::from([sha.to_string()]);
-        let mut stack = vec![Frame::new(sha.to_string())];
-        loop {
-            let next_parent = {
-                let frame = stack.last_mut().expect("history traversal frame");
-                let parents = &by_sha[frame.sha.as_str()].parent_shas;
-                (frame.next_parent < parents.len()).then(|| {
-                    let parent = parents[frame.next_parent].clone();
-                    frame.next_parent += 1;
-                    parent
-                })
-            };
-
-            let Some(parent) = next_parent else {
-                let frame = stack.pop().expect("history traversal frame");
-                visiting.remove(&frame.sha);
-                let resolved = frame.resolved;
-                memo.insert(frame.sha, resolved.clone());
-                if let Some(caller) = stack.last_mut() {
-                    caller.extend(&resolved);
-                    continue;
-                }
-                return resolved;
-            };
-
-            let resolved = if visible.contains(&parent) || !by_sha.contains_key(parent.as_str()) {
-                Some(vec![parent.clone()])
-            } else if let Some(cached) = memo.get(&parent) {
-                Some(cached.clone())
-            } else if visiting.contains(&parent) {
-                Some(Vec::new())
-            } else {
-                None
-            };
-
-            if let Some(resolved) = resolved {
-                stack
-                    .last_mut()
-                    .expect("history traversal frame")
-                    .extend(&resolved);
-            } else {
-                visiting.insert(parent.clone());
-                stack.push(Frame::new(parent));
-            }
-        }
-    }
-
-    let mut memo = HashMap::new();
-    commits
-        .iter()
-        .filter(|commit| visible.contains(&commit.sha))
-        .cloned()
-        .map(|mut commit| {
-            let mut seen = HashSet::new();
-            commit.parent_shas = commit
-                .parent_shas
-                .iter()
-                .flat_map(|parent| nearest_visible_parents(parent, visible, &by_sha, &mut memo))
-                .filter(|parent| seen.insert(parent.clone()))
-                .collect();
-            commit
-        })
-        .collect()
 }
 
 fn responsive_graph_geometry(

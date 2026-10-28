@@ -11181,7 +11181,7 @@ mod tests {
             };
             let update = zuse_doc::TranscriptUpdate {
                 replay_baseline: Some(zuse_doc::TranscriptBaseline::capture(&entries)),
-                frame: zuse_doc::TranscriptFrame::Reset { reset: entries },
+                frame: zuse_doc::TranscriptFrame::Reset { reset: entries.into() },
                 context_usage: None,
             };
             let start = Instant::now();

@@ -1,7 +1,6 @@
 //! Alternate presentation of the same model and option mutations.
 use super::*;
 
-pub(super) const COMPACT_WIDTH: f32 = 380.0;
 pub(super) const COMPACT_ROW_HEIGHT: f32 = 32.0;
 const COMPACT_LIST_ROWS: usize = 7;
 const THUMB_INSET: f32 = 12.0;

@@ -42,18 +42,6 @@ use zuse_rpc::methods;
 /// pagination plumbing).
 const MAX_REF_ROWS: usize = 300;
 
-/// Both sides of the composer handoff share one leading-aligned workspace
-/// cluster. Available width belongs after the pair, never between its labels.
-fn workspace_footer_row() -> gpui::Div {
-    div()
-        .w_full()
-        .min_w_0()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(4.0))
-}
-
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::motion;
 use crate::popover::{self, Loadable, MenuKey};
@@ -868,11 +856,6 @@ pub struct Pickers {
     refs: Loadable<Vec<RepoRef>>,
     /// Space id the `refs` slot belongs to (invalidated on space change).
     refs_space: Option<String>,
-    /// The previous project's resolved ref, shown ONLY by the checkout and
-    /// branch chip labels until this project's refs land — so a project
-    /// switch never blinks them through "Select ref". Never read by the
-    /// popover or the send plan.
-    held_ref: Option<RepoRef>,
     /// Highlighted row in the open list (keyboard nav).
     active: usize,
     workspace_keyboard: bool,
@@ -1022,7 +1005,6 @@ impl Pickers {
                 this.workspace_ready = workspace_ready;
                 this.setting_menu = None;
                 this.setting_bounds = None;
-                this.held_ref = this.selected_ref().cloned().or(this.held_ref.take());
                 this.refs_task = None;
                 this.config.branch = None;
                 this.config.checkout = Self::remembered_checkout(&state, &this.defaults, cx);
@@ -1156,7 +1138,6 @@ impl Pickers {
             revalidating: HashSet::new(),
             refs: Loadable::Idle,
             refs_space: None,
-            held_ref: None,
             active: 0,
             workspace_keyboard: false,
             workspace_ready,
@@ -2098,7 +2079,6 @@ impl Pickers {
                 .call(methods::LIST_REFS, serde_json::Value::Object(params))
                 .await;
             this.update(cx, |pickers, cx| {
-                pickers.held_ref = None;
                 pickers.refs = match result {
                     Ok(value) => match serde_json::from_value::<Vec<RepoRef>>(value) {
                         Ok(refs) => Loadable::Ready(refs),
@@ -2723,15 +2703,6 @@ impl Pickers {
             .or_else(|| self.selected_ref().map(|r| r.name.clone()))
     }
 
-    /// The ref the checkout and branch chips name: the resolved one, else —
-    /// while a project switch's refs load — the previous project's.
-    fn display_ref(&self) -> Option<&RepoRef> {
-        match self.refs {
-            Loadable::Idle | Loadable::Loading => self.selected_ref().or(self.held_ref.as_ref()),
-            _ => self.selected_ref(),
-        }
-    }
-
     /// The existing worktree the picked ref is materialized in, if any.
     fn selected_ref_worktree(&self) -> Option<String> {
         self.selected_ref().and_then(|r| r.worktree_path.clone())
@@ -2765,21 +2736,6 @@ impl Pickers {
         match self.config.checkout {
             CheckoutKind::NewWorktree => "Worktree",
             CheckoutKind::Local => "Local",
-        }
-    }
-
-    /// Label of the ref trigger: `From <ref>` only when a NEW worktree will be
-    /// created off it (t3code `getBranchTriggerLabel`); the bare name otherwise.
-    fn ref_label(&self) -> SharedString {
-        let name = self
-            .config
-            .branch
-            .clone()
-            .or_else(|| self.display_ref().map(|row| row.name.clone()));
-        match (self.config.checkout, name) {
-            (_, None) => SharedString::from("Select ref"),
-            (CheckoutKind::NewWorktree, Some(name)) => SharedString::from(format!("From {name}")),
-            (CheckoutKind::Local, Some(name)) => SharedString::from(name),
         }
     }
 
@@ -3354,10 +3310,6 @@ impl Pickers {
                 height: 320.0,
                 below: false,
             })
-    }
-
-    fn list_budget(&self, chrome: f32) -> f32 {
-        (self.menu_geometry().height - chrome).clamp(0.0, 224.0)
     }
 
     fn measure_trigger(&self, kind: PickerKind, cx: &Context<Self>) -> impl IntoElement {
@@ -3953,11 +3905,6 @@ impl Pickers {
             .into_any_element()
     }
 
-    fn search_box(&self, theme: &Theme) -> AnyElement {
-        popover::search_input_frame(theme, self.search.clone().into_any_element())
-            .into_any_element()
-    }
-
     fn retry_row(
         &self,
         id: &'static str,
@@ -4028,150 +3975,6 @@ impl Pickers {
         if self.menu_bar.set_list_hovered(*hovered) {
             cx.notify();
         }
-    }
-
-    /// The ref picker (t3code BranchToolbarBranchSelector): search on top,
-    /// rows with right-aligned muted `current`/`worktree` tags, and a
-    /// "Showing X of Y refs" footer when the list is capped.
-    fn render_branch_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::of(cx).for_popup();
-        if self.state.read(cx).selected_space_row().is_none() {
-            return div()
-                .p(px(Theme::SPACE_SM))
-                .text_size(crate::typography::text_xs())
-                .text_color(theme.text_faint)
-                .child(SharedString::from("No project selected"))
-                .into_any_element();
-        }
-        let rows = self.filtered_ref_rows(cx);
-        let total = rows.len();
-        let shown = total.min(MAX_REF_ROWS);
-        // Existing session: the highlighted row is the SESSION's branch and a
-        // pick switches the checkout (see `pick_ref`); a new chat highlights
-        // the draft pick.
-        let session_branch = self
-            .state
-            .read(cx)
-            .selected_chat_row()
-            .and_then(|c| c.branch.clone());
-        let switching = self.switching.clone();
-        let scrollbar = popover::rail(self, "branch-scrollbar", &theme, cx);
-        let body: AnyElement = match &self.refs {
-            Loadable::Loading | Loadable::Idle => {
-                popover::skeleton_rows("branch-skeleton", &theme, 4, cx.entity_id(), cx)
-            }
-            Loadable::Error(message) => {
-                let message = message.clone();
-                self.retry_row("branch-retry", &message, PickerKind::Branch, &theme, cx)
-            }
-            Loadable::Ready(_) if rows.is_empty() => div()
-                .p(px(Theme::SPACE_SM))
-                .text_size(crate::typography::text_xs())
-                .text_color(theme.text_faint)
-                .child(SharedString::from("No refs found."))
-                .into_any_element(),
-            Loadable::Ready(_) => {
-                let active = self.active;
-                let selected = session_branch.or_else(|| self.config.branch.clone());
-                popover::menu_scroll_host("branch-list-host")
-                    .on_hover(cx.listener(Self::on_menu_list_hover))
-                    .child(popover::faded_menu_list(
-                        &self.menu_scroll,
-                        popover::menu_scroll_list("branch-list", &self.menu_scroll)
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.0))
-                            .max_h(px(self.list_budget(144.0)))
-                            .children(rows.into_iter().take(MAX_REF_ROWS).enumerate().map(
-                                |(ix, row)| {
-                                    let label: SharedString = row.name.clone().into();
-                                    let is_selected =
-                                        selected.as_deref() == Some(row.name.as_str());
-                                    // Right-aligned muted tag (t3code `text-[10px]
-                                    // text-muted-foreground/45`): current beats worktree.
-                                    let tag: Option<&'static str> = if row.current {
-                                        Some("current")
-                                    } else if row.worktree_path.is_some() {
-                                        Some("worktree")
-                                    } else {
-                                        None
-                                    };
-                                    let is_switching =
-                                        switching.as_deref() == Some(row.name.as_str());
-                                    popover::picker_row(
-                                        &theme,
-                                        is_selected,
-                                        ix == active,
-                                        format!("branch-row-{ix}"),
-                                    )
-                                    .id(("branch-row", ix))
-                                    .when(switching.is_some(), |el| el.opacity(0.55))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.pick_ref(row.clone(), cx);
-                                    }))
-                                    .child(div().flex_1().min_w_0().truncate().child(label))
-                                    .when(is_switching, |el| {
-                                        el.child(
-                                            div()
-                                                .flex_none()
-                                                .text_size(crate::typography::text_xs())
-                                                .text_color(theme.text_muted)
-                                                .child(SharedString::from("switching…")),
-                                        )
-                                    })
-                                    .when_some(
-                                        tag,
-                                        |el, tag| {
-                                            el.child(
-                                                div()
-                                                    .flex_none()
-                                                    .text_size(crate::typography::text_xs())
-                                                    .text_color(theme.text_muted)
-                                                    .child(SharedString::from(tag)),
-                                            )
-                                        },
-                                    )
-                                },
-                            )),
-                    ))
-                    .children(scrollbar)
-                    .into_any_element()
-            }
-        };
-        let mut popover = div()
-            .flex()
-            .flex_col()
-            .child(self.search_box(&theme))
-            .child(body);
-        // Mid-session switch failure (dirty tree, ref checked out elsewhere):
-        // git's own message, under a hairline.
-        if let Some(error) = &self.switch_error {
-            popover = popover.child(
-                popover::menu_section().child(
-                    div()
-                        .px(px(Theme::SPACE_SM))
-                        .py(px(4.0))
-                        .text_size(crate::typography::text_xs())
-                        .text_color(theme.danger.opacity(0.9))
-                        .child(SharedString::from(error.clone())),
-                ),
-            );
-        }
-        if total > shown {
-            popover = popover.child(
-                popover::menu_section().child(
-                    div()
-                        .px(px(Theme::SPACE_SM))
-                        .py(px(4.0))
-                        .text_size(crate::typography::text_xs())
-                        .text_color(theme.text_faint)
-                        .child(SharedString::from(format!(
-                            "Showing {shown} of {total} refs"
-                        ))),
-                ),
-            );
-        }
-        popover.into_any_element()
     }
 
     /// Model picker with a provider rail beside a scoped search.
@@ -6161,22 +5964,6 @@ fn fast_mode_values(option: &zuse_protocol::ModelOption) -> Option<(&str, &str)>
     Some((on, off))
 }
 
-/// Attach the (single) open popover below a selector trigger.
-fn attach_overlay_below(
-    chip: gpui::Stateful<gpui::Div>,
-    overlay: &mut Option<(PickerKind, AnyElement)>,
-    kind: PickerKind,
-    id: &'static str,
-    closing: (Option<std::time::Instant>, bool),
-) -> gpui::Stateful<gpui::Div> {
-    if overlay.as_ref().is_some_and(|(k, _)| *k == kind)
-        && let Some((_, element)) = overlay.take()
-    {
-        return chip.child(popover::anchored_menu_below(id, element, closing.0));
-    }
-    chip
-}
-
 /// Attach the model menu to the trigger's trailing edge.
 fn attach_overlay_end(
     chip: gpui::Stateful<gpui::Div>,
@@ -7241,59 +7028,6 @@ mod tests {
     }
 
     #[gpui::test]
-    fn workspace_footer_pair_keeps_its_leading_edge_and_gap(cx: &mut gpui::TestAppContext) {
-        struct Fixture {
-            width: f32,
-            bounds: std::rc::Rc<std::cell::RefCell<Vec<gpui::Bounds<gpui::Pixels>>>>,
-        }
-        impl gpui::Render for Fixture {
-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                let chip = |width| {
-                    let measured = self.bounds.clone();
-                    gpui::canvas(
-                        move |bounds, _, _| measured.borrow_mut().push(bounds),
-                        |_, _, _, _| {},
-                    )
-                    .w(px(width))
-                    .h(px(20.0))
-                    .flex_none()
-                };
-                div().w(px(self.width)).child(
-                    workspace_footer_row()
-                        .px(px(10.0))
-                        .child(chip(120.0))
-                        .child(chip(90.0))
-                        .child(div().flex_1().min_w_0())
-                        .child(chip(60.0)),
-                )
-            }
-        }
-        let bounds = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let handle = cx.add_window(|_, _| Fixture {
-            width: 320.0,
-            bounds: bounds.clone(),
-        });
-        let mut first_left = None;
-        for width in [320.0, 680.0, 1000.0, 320.0] {
-            handle
-                .update(cx, |fixture, _, cx| {
-                    fixture.width = width;
-                    cx.notify();
-                })
-                .unwrap();
-            bounds.borrow_mut().clear();
-            cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
-                .unwrap();
-            let measured = bounds.borrow();
-            let pair = &measured[measured.len() - 3..];
-            assert_eq!(pair[0].left(), *first_left.get_or_insert(pair[0].left()));
-            assert!((f32::from(pair[1].left() - pair[0].right()) - 4.0).abs() < 0.1);
-            assert_eq!(pair[0].top(), pair[1].top());
-            assert!((f32::from(pair[2].right() - pair[0].left()) - (width - 20.0)).abs() < 0.1);
-        }
-    }
-
-    #[gpui::test]
     fn picker_completion_and_dismissal_have_distinct_focus_behavior(cx: &mut gpui::TestAppContext) {
         use std::cell::Cell;
         use std::rc::Rc;
@@ -7540,7 +7274,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn project_switch_holds_the_ref_labels_until_refs_land(cx: &mut gpui::TestAppContext) {
+    fn project_switch_clears_ref_actions_until_current_refs_land(cx: &mut gpui::TestAppContext) {
         let state = cx.new(|_| {
             let mut state = AppState::new();
             state.local_device_id = Some("local".into());
@@ -7549,7 +7283,7 @@ mod tests {
             state
         });
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
-        pickers.update(cx, |pickers, cx| {
+        pickers.update(cx, |pickers, _cx| {
             pickers.config.checkout = CheckoutKind::Local;
             pickers.defaults.workspace_by_project.insert(
                 "b".into(),
@@ -7560,25 +7294,24 @@ mod tests {
                 repo_ref("feature", true, Some("/wt/feature")),
             ]);
             pickers.refs_space = Some("a".into());
-            assert_eq!(pickers.ref_label(), SharedString::from("feature"));
+            assert_eq!(pickers.effective_ref_name().as_deref(), Some("feature"));
             assert_eq!(pickers.checkout_label(), "Local");
         });
         state.update(cx, |state, cx| state.select_space(Some("b".into()), cx));
         cx.run_until_parked();
         pickers.update(cx, |pickers, cx| {
-            // The chips keep naming the last ref while b's refs load...
+            // Ref actions must wait for the new project's own refs to load.
             assert!(matches!(pickers.refs, Loadable::Idle));
-            assert_eq!(pickers.ref_label(), SharedString::from("feature"));
+            assert_eq!(pickers.effective_ref_name(), None);
             assert_eq!(pickers.checkout_label(), "Local");
-            // ...but nothing that acts on refs sees a's rows.
+            // Nothing that acts on refs sees the previous project's rows.
             assert!(pickers.filtered_ref_rows(cx).is_empty());
             assert_eq!(
                 pickers.checkout_plan(cx),
                 CheckoutPlan::CurrentCheckout { branch: None }
             );
             pickers.refs = Loadable::Ready(vec![repo_ref("trunk", true, None)]);
-            pickers.held_ref = None; // as the refs load does on landing
-            assert_eq!(pickers.ref_label(), SharedString::from("trunk"));
+            assert_eq!(pickers.effective_ref_name().as_deref(), Some("trunk"));
             assert_eq!(pickers.checkout_label(), "Local");
         });
     }

@@ -38,6 +38,9 @@ parallel reads, child admission, local skills, syntax outlines and lazy external
 
 ## Commands and evidence
 
+See [harness performance](harness-performance.md) for repeatable concurrent-session
+workloads, resource sampling and the limits of these measurements.
+
 ```sh
 cargo test -p zuse-harness --all-targets
 cargo test -p zuse-engine --lib native_

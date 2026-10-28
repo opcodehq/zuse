@@ -89,7 +89,7 @@ impl Publisher {
                 conversations: chats.clone(),
                 transcript: zuse_doc::TranscriptUpdate {
                     frame: zuse_doc::TranscriptFrame::Reset {
-                        reset: doc.read_entries()?,
+                        reset: doc.read_entries()?.into(),
                     },
                     context_usage: doc.context_usage(),
                     replay_baseline: None,

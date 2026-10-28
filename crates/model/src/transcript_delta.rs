@@ -11,6 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::parts::MessagePart;
 use crate::schema::SessionMessageEntry;
@@ -105,7 +106,8 @@ impl TranscriptBaseline {
 #[serde(untagged)]
 pub enum TranscriptFrame {
     Reset {
-        reset: Vec<SessionMessageEntry>,
+        // Share immutable host snapshots; applying an owned reset reuses its Vec.
+        reset: Arc<Vec<SessionMessageEntry>>,
     },
     Delta {
         #[serde(default)]
@@ -145,7 +147,7 @@ pub struct TextAppend {
 impl TranscriptFrame {
     pub fn reset(entries: &[SessionMessageEntry]) -> Self {
         Self::Reset {
-            reset: entries.to_vec(),
+            reset: entries.to_vec().into(),
         }
     }
 
@@ -366,7 +368,7 @@ pub fn apply_transcript_frame(
 ) -> Result<(), TranscriptDesync> {
     match frame {
         TranscriptFrame::Reset { reset } => {
-            *current = reset;
+            *current = Arc::unwrap_or_clone(reset);
             Ok(())
         }
         TranscriptFrame::Delta {
@@ -441,6 +443,35 @@ mod tests {
     use super::*;
     use crate::parts::MessagePart;
     use crate::schema::MessageRole;
+
+    #[test]
+    fn shared_reset_keeps_wire_format_and_preserves_snapshot_on_apply() {
+        let entries = Arc::new(vec![entry("turn", "Unicode λ")]);
+        let frame = TranscriptFrame::Reset {
+            reset: entries.clone(),
+        };
+        let wire = serde_json::to_value(&frame).unwrap();
+        assert_eq!(wire, serde_json::json!({"reset": entries.as_ref()}));
+        let mut current = Vec::new();
+        apply_transcript_frame(&mut current, frame).unwrap();
+        current[0].id = "changed".into();
+        assert_eq!(
+            entries[0].id, "turn",
+            "a viewport must not mutate the published snapshot"
+        );
+
+        let decoded: TranscriptFrame = serde_json::from_value(wire).unwrap();
+        let TranscriptFrame::Reset { reset } = &decoded else {
+            panic!("expected reset")
+        };
+        let allocation = reset.as_ptr();
+        apply_transcript_frame(&mut current, decoded).unwrap();
+        assert_eq!(
+            current.as_ptr(),
+            allocation,
+            "an owned reset should transfer its allocation"
+        );
+    }
 
     fn entry(id: &str, text: &str) -> SessionMessageEntry {
         SessionMessageEntry {

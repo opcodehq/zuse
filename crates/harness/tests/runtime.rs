@@ -85,6 +85,7 @@ impl Host for Fixture {
             || self.mode.load(Ordering::Relaxed) == 10 && state.model == "unsaved-model"
             || self.mode.load(Ordering::Relaxed) == 11 && !state.cancelled_notifications.is_empty()
             || self.mode.load(Ordering::Relaxed) == 12 && state.notifications.contains("first")
+            || self.mode.load(Ordering::Relaxed) == 13
         {
             return Err(Error::Storage);
         }
@@ -389,14 +390,69 @@ async fn request_budget_is_shared_and_requires_explicit_continuation() {
 }
 
 #[tokio::test]
+async fn unchanged_model_updates_runtime_limits_without_rewriting_history() {
+    let f = Fixture::new(vec![
+        output("tool", vec![call("edit-1", "edit", json!({}))]),
+        output("finished", vec![]),
+    ]);
+    let e = engine(f.clone()).await;
+    assert_eq!(e.root_id().await, "root");
+    let mut options = Options::new("model");
+    options.max_requests = 1;
+    f.mode.store(13, Ordering::Relaxed);
+    e.reconfigure(options).await.unwrap();
+    f.mode.store(0, Ordering::Relaxed);
+    e.send("work".into(), vec![]).await.unwrap();
+    let state = e.snapshot().await;
+    assert_eq!(state.requests, 1);
+    assert_eq!(state.agent("root").unwrap().status, Status::Interrupted);
+    assert_eq!(f.executions.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
 async fn checkpoint_graph_corruption_is_rejected_without_resetting_history() {
     let f = Fixture::new(vec![]);
     let e = engine(f.clone()).await;
-    let state = e.snapshot().await;
+    let mut state = e.snapshot().await;
+    state
+        .agent_mut("root")
+        .unwrap()
+        .history
+        .push(Message::text(Role::User, "Buffered checkpoint: λ\n".repeat(10_000)).into());
     let directory = tempfile::tempdir().unwrap();
     let store =
         zuse_harness::store::FileStore::new(directory.path().join("session/checkpoint.json"));
     store.save(&state).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&store.load().unwrap().unwrap()).unwrap(),
+        serde_json::to_vec(&state).unwrap(),
+    );
+    assert_eq!(
+        std::fs::read_dir(store.path().parent().unwrap())
+            .unwrap()
+            .count(),
+        1
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(store.path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(store.path().parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
     let mut broken = state.clone();
     broken.agents.push(broken.agents[0].clone());
     assert!(matches!(store.save(&broken), Err(Error::InvalidCheckpoint)));
@@ -411,21 +467,24 @@ async fn compaction_preserves_original_task_and_full_history_with_a_durable_boun
     let f = Fixture::new(vec![output("continued safely", vec![])]);
     let initial = engine(f.clone()).await;
     let mut state = initial.snapshot().await;
-    state.agent_mut("root").unwrap().history.push(Message::text(
-        Role::User,
-        "Finish the complete request; retain pending work.",
-    ));
+    state.agent_mut("root").unwrap().history.push(
+        Message::text(
+            Role::User,
+            "Finish the complete request; retain pending work.",
+        )
+        .into(),
+    );
     for _ in 0..20 {
         state
             .agent_mut("root")
             .unwrap()
             .history
-            .push(Message::text(Role::User, "old context ".repeat(100)));
+            .push(Message::text(Role::User, "old context ".repeat(100)).into());
         state
             .agent_mut("root")
             .unwrap()
             .history
-            .push(Message::text(Role::Assistant, "prior outcome ".repeat(100)));
+            .push(Message::text(Role::Assistant, "prior outcome ".repeat(100)).into());
     }
     let original_len = state.agent("root").unwrap().history.len();
     *lock(&f.store) = Some(state);

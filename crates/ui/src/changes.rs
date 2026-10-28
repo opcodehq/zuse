@@ -1987,26 +1987,6 @@ impl Changes {
         }
     }
 
-    fn discard_request(&self, cx: &App) -> Option<DiscardWorkingTreeRequest> {
-        if self.scope != DiffScope::WorkingTree {
-            return None;
-        }
-        let diff = self.resolved(cx)?;
-        if diff.truncated || (diff.files.is_empty() && diff.patch.trim().is_empty()) {
-            return None;
-        }
-        let chat = self.state.read(cx).selected_chat_row()?;
-        if chat.archived {
-            return None;
-        }
-        Some(DiscardWorkingTreeRequest {
-            chat_id: chat.id.clone(),
-            checkout_id: diff.checkout_id,
-            expected_checksum: diff.checksum,
-            target_device_id: self.desired_target(cx),
-            file_count: diff.files.len(),
-        })
-    }
 
     /// Scope discriminant folded into the parse key, so a scope or base
     /// switch re-parses even when checksums collide.

@@ -3,6 +3,28 @@
 2026-10-26. Worktree: `/home/vercel-sandbox/worktrees/lightweight-harness`.
 Baseline: `7689394`. All implementation and measurements run on the cloud Linux VM.
 
+## Integration with main
+
+The 2026-10-28 merge incorporates main at `492734e`, including the application,
+RPC and transcript changes. The native transport and journal remain the production
+path. History payloads keep their copy-on-write representation; main's borrowed
+context accounting, unchanged-configuration fast path, bounded agent validation
+and buffered checkpoint/process-metadata writes are retained without introducing
+a second message ownership layer. Delivery and peer-notification acknowledgements
+still follow durable receipt publication.
+
+The direct replay workload is sampled by `scripts/benchmark-harness.py`; the
+native root workload uses `scripts/benchmark-kernel.py`. Historical bridge
+measurements remain labeled in the performance report. Live comparison results
+refer to their recorded source revisions, not this merge.
+
+Merge validation on the cloud VM passed 356 RPC/document/model/protocol tests,
+24 selected native engine tests, the direct replay sampler smoke checks and the
+61-request local HTTP evaluator (zero external model requests). The engine
+compiles. Full UI compilation requires the WebKitGTK 4.1 development SDK, which
+is unavailable on this Amazon Linux VM. Workspace-wide formatting still reports
+existing differences in main; branch-specific files have no formatting differences.
+
 ## Runtime and storage
 
 Rust owns scheduling, permissions, account affinity, renewal, cancellation and
@@ -145,7 +167,7 @@ cargo clippy -p zuse-harness --all-targets -- -D warnings \
   -A clippy::too_many_arguments
 python3 scripts/test-harness-evaluation.py \
   --binary target/release/examples/harness-evaluate --output .context/offline-evaluation
-python3 scripts/benchmark-harness.py \
+python3 scripts/benchmark-kernel.py \
   --binary target/release/examples/kernel-bench \
   --baseline /path/to/pinned-original-kernel-bench \
   --output .context/kernel-comparison.json
