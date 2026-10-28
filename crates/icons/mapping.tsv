@@ -131,3 +131,6 @@ project-archive	ArchiveIcon
 project-unarchive	ArchiveArrowUpIcon
 chat-import	ChatDownload01Icon
 wifi	Wifi01Icon
+summary-background	ComputerTerminal01Icon
+summary-agents	AiNetworkIcon
+task-stopped	MinusSignIcon

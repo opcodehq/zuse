@@ -646,7 +646,7 @@ impl Shell {
         let (header, open) = self.session_info_section(
             "background",
             false,
-            row_glyph(icons::TERMINAL, theme),
+            row_glyph(icons::SUMMARY_BACKGROUND, theme),
             "Background work",
             (!running.is_empty()).then(|| format!("{} running", running.len()).into()),
             theme,
@@ -728,11 +728,14 @@ impl Shell {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.stop_background_task(&chat_id, &id, cx);
                         }))
+                        // A filled square: the stop mark, unmistakable at
+                        // this size where an outlined one reads as a checkbox.
                         .child(
-                            icon(icons::STOP)
-                                .size(px(12.0))
-                                .text_color(theme.text_muted)
-                                .group_hover(group, |style| style.text_color(theme.text)),
+                            div()
+                                .size(px(8.0))
+                                .rounded(px(2.0))
+                                .bg(theme.text_muted)
+                                .group_hover(group, |style| style.bg(theme.text)),
                         )
                         .into_any_element()
                 } else {
@@ -758,8 +761,8 @@ impl Shell {
                     }
                     // Stopped on request: a quiet dash, neither success nor failure.
                     Some(zuse_protocol::BackgroundTaskOutcome::Stopped) => {
-                        icon(icons::WINDOW_MINIMIZE)
-                            .size(px(12.0))
+                        icon(icons::TASK_STOPPED)
+                        .size(px(12.0))
                             .text_color(theme.text_muted)
                             .into_any_element()
                     }
@@ -833,7 +836,7 @@ impl Shell {
         let (header, open) = self.session_info_section(
             "agents",
             true,
-            row_glyph(icons::TOOL_AGENT, theme),
+            row_glyph(icons::SUMMARY_AGENTS, theme),
             "Agents",
             Some(meta.into()),
             theme,
