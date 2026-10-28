@@ -14,8 +14,9 @@ selected offset. The SHA-256 still covers the entire file. A prefix change outsi
 the selected tail therefore rejects an edit using the old hash.
 
 The new test first failed because the parameter did not exist, then passed after
-implementation. All 12 native-tool tests pass, covering permissions, containment,
-file hashes, cancellation, tools and ordered batches. The frozen release passes
+implementation. All 86 core/MCP tests pass, including 12 native-tool tests covering
+permissions, containment, file hashes, cancellation, tools and ordered batches.
+The separate manual disk benchmark remains ignored in the ordinary suite. The frozen release passes
 the local scripted evaluator's 12 coding runs, three smoke checks, cap handling
 and rate-limit classification: 61 local HTTP requests, zero external calls.
 Clippy passes with the previously documented inherited style allowances.
