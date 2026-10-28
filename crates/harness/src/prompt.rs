@@ -2,25 +2,25 @@
 use crate::{Compaction, Message, Messages, Role};
 use serde::Serialize;
 use serde_json::Value;
-use std::{borrow::Cow, io, sync::Arc};
+use std::{borrow::Cow, io};
 
-pub fn render(history: &[Arc<Message>], checkpoint: Option<&Compaction>) -> Messages {
+pub fn render(history: &[Message], checkpoint: Option<&Compaction>) -> Messages {
     context(history, checkpoint).map(Cow::into_owned).collect()
 }
 
 // Rendering and accounting must retain exactly the same context. Borrow the
 // history for accounting; model requests share the immutable message contents.
 fn context<'a>(
-    history: &'a [Arc<Message>],
+    history: &'a [Message],
     checkpoint: Option<&Compaction>,
-) -> impl Iterator<Item = Cow<'a, Arc<Message>>> {
+) -> impl Iterator<Item = Cow<'a, Message>> {
     let split = checkpoint.map_or(0, |c| c.covered.min(history.len()));
     let task = history[..split].iter().find(|m| m.role == Role::User);
     let summary = checkpoint.map(|c| {
-        Arc::new(Message::text(
+        Message::text(
             Role::User,
             format!("Durable context summary:\n{}", c.summary),
-        ))
+        )
     });
     history[..split]
         .iter()
@@ -31,12 +31,12 @@ fn context<'a>(
         .chain(history[split..].iter().map(Cow::Borrowed))
 }
 
-pub fn estimate_context(history: &[Arc<Message>], checkpoint: Option<&Compaction>) -> u64 {
+pub fn estimate_context(history: &[Message], checkpoint: Option<&Compaction>) -> u64 {
     context(history, checkpoint)
         .map(|m| estimate_message(&m))
         .sum()
 }
-pub fn boundary(history: &[Arc<Message>]) -> usize {
+pub fn boundary(history: &[Message]) -> usize {
     history
         .iter()
         .enumerate()
@@ -45,7 +45,7 @@ pub fn boundary(history: &[Arc<Message>]) -> usize {
         .nth(1)
         .map_or(0, |(i, _)| i)
 }
-pub fn complete_prefix(history: &[Arc<Message>]) -> Messages {
+pub fn complete_prefix(history: &[Message]) -> Messages {
     let end = history
         .iter()
         .rposition(|message| message.has_tool_calls())
@@ -73,7 +73,7 @@ pub fn limits(window: u64, cap: Option<u64>, percent: f64) -> Limits {
             .map_or(threshold, |v| v.min(threshold)),
     }
 }
-pub fn estimate(messages: &[Arc<Message>]) -> u64 {
+pub fn estimate(messages: &[Message]) -> u64 {
     messages
         .iter()
         .map(|message| estimate_message(message))
@@ -136,8 +136,13 @@ fn part_len(part: &Value, images: &mut u64) -> usize {
         return replaced_len(part, "image", 2);
     }
     if part["type"] == "tool-result"
-        && part["output"]["type"] == "content"
-        && let Some(files) = part["output"]["value"].as_array()
+        && matches!(part["output"]["type"].as_str(), Some("content" | "mixed"))
+        && let Some(files) = part["output"][if part["output"]["type"] == "mixed" {
+            "parts"
+        } else {
+            "value"
+        }]
+        .as_array()
     {
         let length = 2
             + files.len().saturating_sub(1)
@@ -158,7 +163,15 @@ fn part_len(part: &Value, images: &mut u64) -> usize {
         return replaced_len(
             part,
             "output",
-            replaced_len(&part["output"], "value", length),
+            replaced_len(
+                &part["output"],
+                if part["output"]["type"] == "mixed" {
+                    "parts"
+                } else {
+                    "value"
+                },
+                length,
+            ),
         );
     }
     json_len(part)
@@ -189,4 +202,81 @@ fn estimate_message(message: &Message) -> u64 {
         .map(|(key, value)| 1 + json_len(key) + 1 + json_len(value))
         .sum::<usize>();
     (20 + role_len + content_len + extra).div_ceil(3) as u64 + 8 + images
+}
+
+/// Backwards-compatible borrowed estimate used by native journal tooling.
+pub fn estimate_rendered(history: &[Message], checkpoint: Option<&Compaction>) -> u64 {
+    estimate_context(history, checkpoint)
+}
+
+/// Reduction remains opt-in until live task-quality evaluation passes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ContextPolicy {
+    #[default]
+    Preserve,
+    BoundedTools,
+}
+pub fn apply_policy(messages: &mut [Message], policy: ContextPolicy, agent: &str) {
+    if policy == ContextPolicy::Preserve {
+        return;
+    }
+    let boundary = messages
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, m)| m.role == Role::User)
+        .nth(1)
+        .map_or(0, |(i, _)| i);
+    for message in &mut messages[..boundary] {
+        if message.role != Role::Tool {
+            continue;
+        }
+        let Some(parts) = message.content.as_array() else {
+            continue;
+        };
+        if !parts.iter().any(|p| {
+            p["type"] == "tool-result"
+                && p["output"]["type"] == "text"
+                && p["output"]["value"]
+                    .as_str()
+                    .is_some_and(|s| s.len() > 12000)
+        }) {
+            continue;
+        }
+        for part in message.content.as_array_mut().unwrap() {
+            if part["type"] != "tool-result" || part["output"]["type"] != "text" {
+                continue;
+            }
+            let Some(text) = part["output"]["value"].as_str().filter(|s| s.len() > 12000) else {
+                continue;
+            };
+            let mut end = 12000;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            let preview = format!(
+                "{}\n[Older output shortened from {} bytes. Use read_tool_output with agent_id={} call_id={} to retrieve the complete retained result.]",
+                &text[..end],
+                text.len(),
+                agent,
+                part["toolCallId"].as_str().unwrap_or("")
+            );
+            part["output"]["value"] = Value::String(preview);
+        }
+    }
+}
+
+/// Evaluate the opt-in view before deciding whether a paid summary is needed.
+pub fn estimate_policy_context(
+    history: &[Message],
+    checkpoint: Option<&Compaction>,
+    policy: ContextPolicy,
+    agent: &str,
+) -> u64 {
+    if policy == ContextPolicy::Preserve {
+        return estimate_rendered(history, checkpoint);
+    }
+    let mut messages = render(history, checkpoint);
+    apply_policy(&mut messages, policy, agent);
+    estimate(&messages)
 }

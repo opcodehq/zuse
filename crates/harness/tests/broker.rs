@@ -15,6 +15,7 @@ impl RequestBudget for Budget {
 }
 struct Connections {
     calls: Mutex<Vec<String>>,
+    retries: Mutex<Vec<u32>>,
     unauthorized: bool,
 }
 #[async_trait]
@@ -33,8 +34,9 @@ impl BrokerHost for Connections {
             },
         ])
     }
-    async fn request(&self, id: &str, _: ModelInput) -> Result<ModelOutput, Error> {
+    async fn request(&self, id: &str, input: ModelInput) -> Result<ModelOutput, Error> {
         self.calls.lock().unwrap().push(id.into());
+        self.retries.lock().unwrap().push(input.retry_index);
         if id == "a" {
             return Err(Error::Model {
                 code: if self.unauthorized {
@@ -64,17 +66,21 @@ fn input(budget: Arc<Budget>) -> ModelInput {
         agent_id: "root".into(),
         model: "model".into(),
         reasoning: None,
-        messages: vec![],
-        tools: Tools::new(),
+        messages: Arc::new(vec![]),
+        tools: Arc::new(Tools::new()),
+        purpose: Default::default(),
+        retry_index: 0,
         cancel: tokio_util::sync::CancellationToken::new(),
         text: Arc::new(|_| {}),
         budget,
+        report: Arc::new(|_| {}),
     }
 }
 #[tokio::test]
 async fn quota_switch_preserves_root_affinity_for_children_and_charges_retry() {
     let host = Arc::new(Connections {
         calls: Mutex::new(vec![]),
+        retries: Mutex::new(vec![]),
         unauthorized: false,
     });
     let broker = AccountBroker::new(host.clone());
@@ -92,12 +98,14 @@ async fn quota_switch_preserves_root_affinity_for_children_and_charges_retry() {
     child.agent_id = "child".into();
     broker.request(child).await.unwrap();
     assert_eq!(*host.calls.lock().unwrap(), vec!["a", "b", "b"]);
+    assert_eq!(*host.retries.lock().unwrap(), vec![0, 1, 0]);
     assert_eq!(budget.0.load(Ordering::Relaxed), 1);
 }
 #[tokio::test]
 async fn authentication_failure_requires_reauthorization_instead_of_account_fallback() {
     let host = Arc::new(Connections {
         calls: Mutex::new(vec![]),
+        retries: Mutex::new(vec![]),
         unauthorized: true,
     });
     let broker = AccountBroker::new(host.clone());
@@ -119,9 +127,10 @@ fn portable_history_removes_account_bound_metadata_and_preserves_tool_outcomes()
     let portable = portable_history(std::slice::from_ref(&message));
     assert!(message.metadata.contains_key("providerOptions"));
     assert_eq!(message.content.as_array().unwrap().len(), 2);
-    assert!(!Arc::ptr_eq(&message, &portable[0]));
+    assert!(!std::ptr::eq(&*message.content, &*portable[0].content));
     let again = portable_history(&portable);
-    assert!(Arc::ptr_eq(&portable[0], &again[0]));
+    assert!(std::ptr::eq(&*portable[0].content, &*again[0].content));
+    assert!(std::ptr::eq(&*portable[0].metadata, &*again[0].metadata));
     let portable = serde_json::to_value(portable).unwrap();
     assert_eq!(portable[0]["content"].as_array().unwrap().len(), 1);
     assert_eq!(portable[0]["content"][0]["text"], "answer");

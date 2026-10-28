@@ -110,17 +110,29 @@ impl AccountBroker {
                 if input.cancel.is_cancelled() {
                     return Err(Error::Interrupted);
                 }
-                let portable = ModelInput {
-                    root_id: input.root_id.clone(),
-                    agent_id: input.agent_id.clone(),
-                    model: input.model.clone(),
-                    reasoning: input.reasoning.clone(),
-                    messages: portable_history(&input.messages),
-                    tools: input.tools.clone(),
-                    cancel: input.cancel.clone(),
-                    text: input.text.clone(),
-                    budget: input.budget.clone(),
-                };
+                let mut portable = input.clone();
+                portable.retry_index = physical - 1;
+                if input
+                    .messages
+                    .iter()
+                    .any(|message| requires_portable(message, &connection.id, &input.model))
+                {
+                    portable.messages = Arc::new(
+                        input
+                            .messages
+                            .iter()
+                            .map(|message| {
+                                if requires_portable(message, &connection.id, &input.model) {
+                                    portable_history(std::slice::from_ref(message))
+                                        .pop()
+                                        .unwrap()
+                                } else {
+                                    message.clone()
+                                }
+                            })
+                            .collect(),
+                    );
+                }
                 let result = tokio::select! {biased;_=input.cancel.cancelled()=>return Err(Error::Interrupted),result=self.host.request(&connection.id,portable)=>result};
                 match result {
                     Ok(result) => return Ok(result),
@@ -162,26 +174,36 @@ impl AccountBroker {
 }
 /// Never send account-bound encrypted reasoning or provider item ids to another
 /// account. Tool outcomes and user intent remain portable.
-pub fn portable_history(messages: &[Arc<Message>]) -> Messages {
+fn requires_portable(message: &Message, connection: &str, model: &str) -> bool {
+    let origin = message.metadata.get("zuseOrigin");
+    let compatible = origin.is_some_and(|o| {
+        o["connection"] == connection && o["model"] == crate::transport::model_name(model)
+    });
+    !compatible
+        && (message.metadata.contains_key("providerOptions")
+            || message.content.as_array().is_some_and(|parts| {
+                parts
+                    .iter()
+                    .any(|p| p["type"] == "reasoning" || p.get("providerOptions").is_some())
+            }))
+}
+pub fn portable_history(messages: &[Message]) -> Messages {
     messages
         .iter()
         .cloned()
         .map(|mut m| {
-            let needs_copy = m.metadata.contains_key("providerOptions")
-                || m.content.as_array().is_some_and(|parts| {
-                    parts.iter().any(|part| {
-                        part["type"] == "reasoning"
-                            || part
-                                .as_object()
-                                .is_some_and(|fields| fields.contains_key("providerOptions"))
-                    })
-                });
-            if !needs_copy {
-                return m;
+            let private_metadata =
+                m.metadata.contains_key("providerOptions") || m.metadata.contains_key("zuseOrigin");
+            let private_content = m.content.as_array().is_some_and(|parts| {
+                parts.iter().any(|part| {
+                    part["type"] == "reasoning" || part.get("providerOptions").is_some()
+                })
+            });
+            if private_metadata {
+                m.metadata.remove("providerOptions");
+                m.metadata.remove("zuseOrigin");
             }
-            let message = Arc::make_mut(&mut m);
-            message.metadata.remove("providerOptions");
-            if let Some(parts) = message.content.as_array_mut() {
+            if private_content && let Some(parts) = m.content.as_array_mut() {
                 parts.retain(|p| p["type"] != "reasoning");
                 for part in parts {
                     if let Some(map) = part.as_object_mut() {

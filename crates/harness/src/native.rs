@@ -2,7 +2,7 @@
 //!
 //! Take the OS lease before reading a root journal and keep it until the host
 //! has stopped its processes. A PID stamp is diagnostic, never lock authority.
-use crate::{store::FileStore, *};
+use crate::{journal::JournalStore, *};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
@@ -11,10 +11,19 @@ use std::{
     sync::Mutex,
 };
 
+/// Bound transient artifact/snapshot buffers across roots, not just per root.
+fn storage_admission() -> Arc<tokio::sync::Semaphore> {
+    static ADMISSION: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    ADMISSION
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
+        .clone()
+}
+
 pub struct RootStore {
     directory: PathBuf,
     root_id: String,
-    store: FileStore,
+    store: JournalStore,
+    gate: Arc<tokio::sync::Mutex<()>>,
     owner: File,
 }
 impl RootStore {
@@ -47,7 +56,8 @@ impl RootStore {
         let _ = owner.flush();
         Ok(Self {
             root_id: root_id.into(),
-            store: FileStore::new(directory.join("checkpoint.json")),
+            store: JournalStore::new(&directory).for_root(root_id),
+            gate: Arc::new(tokio::sync::Mutex::new(())),
             directory,
             owner,
         })
@@ -80,10 +90,25 @@ impl Drop for RootStore {
 }
 struct NativeHost {
     inner: Arc<dyn Host>,
-    store: Mutex<Option<RootStore>>,
+    store: Mutex<Option<Arc<RootStore>>>,
 }
+impl Drop for NativeHost {
+    fn drop(&mut self) {
+        // Large roots can leave free pages in glibc's worker arenas after their
+        // histories are dropped. Reclaim only at final host destruction, never
+        // per request or checkpoint. Other allocators/platforms retain their
+        // normal policy. This changes neither allocator configuration nor data.
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        // SAFETY: malloc_trim has no pointer arguments and is thread-safe. It
+        // releases only free pages; concurrent live allocations remain valid.
+        unsafe {
+            libc::malloc_trim(0);
+        }
+    }
+}
+
 impl NativeHost {
-    fn storage(&self) -> std::sync::MutexGuard<'_, Option<RootStore>> {
+    fn storage(&self) -> std::sync::MutexGuard<'_, Option<Arc<RootStore>>> {
         self.store.lock().unwrap_or_else(|error| error.into_inner())
     }
 }
@@ -92,11 +117,51 @@ impl Host for NativeHost {
     fn tools(&self) -> Tools {
         self.inner.tools()
     }
+    fn parallel_read(&self, name: &str) -> bool {
+        self.inner.parallel_read(name)
+    }
+    fn notifications(&self, agent: &str) -> Vec<Mail> {
+        self.inner.notifications(agent)
+    }
+    fn acknowledge_notifications(&self, agent: &str, ids: &[String]) {
+        self.inner.acknowledge_notifications(agent, ids);
+    }
     async fn load(&self) -> Result<Option<Checkpoint>, Error> {
-        self.storage().as_ref().ok_or(Error::Storage)?.load()
+        let root = self.storage().as_ref().ok_or(Error::Storage)?.clone();
+        let guard = root.gate.clone().lock_owned().await;
+        let permit = storage_admission()
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::Interrupted)?;
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            let _permit = permit;
+            root.load()
+        })
+        .await
+        .map_err(|_| Error::Storage)?
     }
     async fn save(&self, state: &Checkpoint) -> Result<(), Error> {
-        self.storage().as_ref().ok_or(Error::Storage)?.save(state)
+        let root = self.storage().as_ref().ok_or(Error::Storage)?.clone();
+        let guard = root.gate.clone().lock_owned().await;
+        let permit = storage_admission()
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::Interrupted)?;
+        if state.root_id != root.root_id {
+            return Err(Error::InvalidCheckpoint);
+        }
+        let Some(prepared) = root.store.prepare(state)? else {
+            return Ok(());
+        };
+        // The worker owns both lease and admission guard if its caller drops.
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            let _permit = permit;
+            root.store.commit(prepared)
+        })
+        .await
+        .map_err(|_| Error::Storage)?
     }
     async fn instructions(&self) -> Result<String, Error> {
         self.inner.instructions().await
@@ -123,7 +188,11 @@ impl Host for NativeHost {
         // If close is cancelled, retain ownership until the host is dropped.
         // A second runtime must not recover processes still being cleaned up.
         if result.is_ok() {
-            self.storage().take();
+            let root = self.storage().as_ref().cloned();
+            if let Some(root) = root {
+                let _drained = root.gate.lock().await;
+                self.storage().take();
+            }
         }
         result
     }
@@ -180,7 +249,7 @@ impl Engine {
     ) -> Result<Self, Error> {
         let host = Arc::new(NativeHost {
             inner: host,
-            store: Mutex::new(Some(store)),
+            store: Mutex::new(Some(Arc::new(store))),
         });
         match Self::open(root_id, options, host.clone()).await {
             Ok(engine) => Ok(engine),

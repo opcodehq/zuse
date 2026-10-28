@@ -11,8 +11,6 @@ use std::{
     time::Instant,
 };
 use zuse_harness::{store::FileStore, *};
-#[path = "workload/sdk.rs"]
-mod sdk;
 
 struct Replay {
     store: FileStore,
@@ -22,7 +20,6 @@ struct Replay {
     written: AtomicU64,
     tools: AtomicU64,
     chunks: AtomicU64,
-    transport: Option<Arc<zuse_harness::broker::AccountBroker>>,
 }
 
 #[async_trait]
@@ -54,12 +51,8 @@ impl Host for Replay {
     async fn instructions(&self) -> Result<String, Error> {
         Ok("Read the fixture and report the result.".into())
     }
-    async fn model(&self, mut input: ModelInput) -> Result<ModelOutput, Error> {
+    async fn model(&self, input: ModelInput) -> Result<ModelOutput, Error> {
         let request = self.requests.fetch_add(1, Ordering::Relaxed);
-        if let Some(transport) = &self.transport {
-            input.model = format!("local-replay-{request}");
-            return transport.request(input).await;
-        }
         let calls = if request.is_multiple_of(2) {
             vec![Call {
                 id: format!("read-{request}"),
@@ -84,8 +77,8 @@ impl Host for Replay {
         Ok(ModelOutput {
             messages: vec![Message {
                 role: Role::Assistant,
-                content: json!(content),
-                metadata: BTreeMap::new(),
+                content: json!(content).into(),
+                metadata: BTreeMap::new().into(),
             }],
             calls,
             text,
@@ -130,9 +123,11 @@ fn history<T: From<Message>>(events: usize) -> Vec<T> {
                 0 => Message::text(Role::User, format!("Task {index}: {payload}")),
                 1 => Message {
                     role: Role::Assistant,
-                    content: json!([{"type":"tool-call", "toolCallId":format!("seed-{}", index + 1),
-                        "toolName":"read_fixture", "input":{}}]),
-                    metadata: BTreeMap::new(),
+                    content:
+                        json!([{"type":"tool-call", "toolCallId":format!("seed-{}", index + 1),
+                        "toolName":"read_fixture", "input":{}}])
+                        .into(),
+                    metadata: BTreeMap::new().into(),
                 },
                 2 => Message::tool(&call, &ToolOutput::Text(payload.clone())),
                 _ => Message::text(Role::Assistant, format!("Result {index}: {payload}")),
@@ -155,11 +150,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Threads, events and rounds must be positive".into());
     }
     let profile = tempfile::tempdir()?;
-    let transport = if std::env::var_os("ZUSE_BENCHMARK_SDK").is_some() {
-        Some(sdk::create(profile.path())?)
-    } else {
-        None
-    };
     let input = profile.path().join("input.txt");
     std::fs::write(&input, "Local tool fixture. No network access.\n")?;
     let seed = Instant::now();
@@ -178,7 +168,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             written: AtomicU64::new(0),
             tools: AtomicU64::new(0),
             chunks: AtomicU64::new(0),
-            transport: transport.as_ref().map(|(_, broker)| broker.clone()),
         });
         let root_id = format!("thread-{index}");
         let state = Checkpoint {
@@ -262,14 +251,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         chunks += host.chunks.load(Ordering::Relaxed);
     }
     let elapsed = started.elapsed().as_secs_f64();
-    if let Some((bridge, _)) = &transport {
-        bridge.close().await;
-    }
     latencies.sort_by(f64::total_cmp);
     let result = json!({
         "scope":"Harness only: retained histories, concurrent replay, real file reads and durable checkpoints. Not desktop rendering or provider/network latency.",
         "threads":threads, "events_per_thread":events, "rounds":rounds,
-        "transport":if transport.is_some() {"sdk-local-replay"} else {"direct-local-replay"},
+        "transport":"direct-local-replay",
         "seed_ms":seed_ms, "initial_checkpoint_bytes":initial_bytes,
         "workload_ms":elapsed * 1000., "turns_per_second":(threads * rounds) as f64 / elapsed,
         "thread_latency_p50_ms":latencies[latencies.len() / 2],

@@ -4,9 +4,9 @@
 
 ## Runtime authority
 
-`Engine` owns a durable graph of one root and nested children, bounded to three running children and depth two. Rust schedules concurrent child requests, records mailboxes and idempotent delivery identifiers, enforces inherited read-only and plan modes, and delivers child outcomes before root synthesis. The model request budget is shared across the graph and includes compaction and broker retries. User continuation explicitly grants another turn's budget.
+`Engine` owns a durable graph of one root and nested children, bounded by profile configuration (three running children by default) and depth two. Rust schedules concurrent child requests, records mailboxes and idempotent delivery identifiers, enforces inherited read-only and plan modes, and delivers child outcomes before root synthesis. The model request budget is shared across the graph and includes compaction and broker retries. User continuation explicitly grants another turn's budget.
 
-`Host` supplies model transport, native tools, checkpoint storage, instructions and application events. Native adapters use `Engine::open_native_with`, which acquires a per-root OS lease before reading its private journal and retains it until host cleanup succeeds. Root IDs map to hashed profile directories, and journal identities must match their owner. `Engine::open` remains available for fixtures and custom hosts that supply their own ownership authority. Tool definitions and permission decisions belong to the trusted host; model input cannot grant permission or call recovery APIs. `FileStore` writes private checkpoints using temporary files, fsync and atomic replacement. Invalid graphs and damaged journals are preserved for inspection.
+`Host` supplies model transport, native tools, checkpoint storage, instructions and application events. Native adapters use `Engine::open_native_with`, which acquires a per-root OS lease before reading its private journal and retains it until host cleanup succeeds. Root IDs map to hashed profile directories, and journal identities must match their owner. `Engine::open` remains available for fixtures and custom hosts that supply their own ownership authority. Tool definitions and permission decisions belong to the trusted host; model input cannot grant permission or call recovery APIs. `JournalStore` writes sequenced, checksummed committed transitions and periodic atomic snapshots. Large immutable payloads use content-addressed artifacts. `FileStore` remains the version-one import format. Invalid graphs and damaged journals are preserved for inspection.
 
 Steering deliveries share a host admission epoch with Stop. New deliveries wait for Stop to settle; drivers discard cancelled frames even when transport delayed them past that boundary. The kernel persists cancellation tombstones for unconsumed mail, including explicit runtime termination, so reopening the journal cannot resurrect it. Consumed history remains intact. Failed cancellation persistence restores mailbox order. An unexpected stream disconnect preserves retryable mail rather than treating it as a user cancellation.
 
@@ -18,9 +18,23 @@ Compaction retains the full journal, system instructions, original task and comp
 
 `AccountBroker` owns connection health and root affinity across children. Quota exhaustion can switch eligible connections; an authentication failure pauses for reauthorization. Additional physical requests debit the same Rust budget. Account-bound reasoning and provider metadata are removed from portable requests.
 
-The SDK bridge is restricted to schema/message translation and model streaming. It neither executes tools nor schedules agents. Rust starts one lazy Node process, multiplexes concurrent requests, cancels individual requests without disrupting the others, and retires the process after idle time. Credentials cross a private pipe and are never process arguments or environment variables. Node 22 or newer is currently required; selecting and bundling the packaged runtime remains part of packaging work.
+`ModelTransport` provides native Rust Responses, Messages, GenerateContent and
+Chat Completions adapters. One shared HTTP client owns connection pools, bounded
+stream parsing and cancellation; no Node runtime or bundled SDK is required.
+Rust retains scheduling, permissions, persistence, renewal and account affinity.
+Reasoning/signatures are preserved only for a compatible model, route, account
+and authorization generation. Unsupported requested features fail before dispatch.
 
-The pinned transport uses stateless streamed requests and validates its request field allowlist. Its protocol follows the [official subscription transport requirements](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations) and [streaming event documentation](https://developers.openai.com/api/docs/guides/streaming-responses). HTTP redirects are rejected. The bridge contains pinned SDK dependencies, a reproducible build, and retained third-party notices.
+Subscription routes retain the existing account service. Explicit API connections
+are configured in `<profile>/harness/providers.json`; missing subscriptions never
+silently select an API connection. See [configuration and evaluation](harness-efficiency.md).
+The subscription request shape follows the
+[official transport requirements](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+Protocol fixtures establish offline behavior; successful live authorization is
+still an acceptance gate.
+
+See [native capabilities and configuration](harness-native-capabilities.md) for
+parallel reads, child admission, local skills, syntax outlines and lazy external MCP tools.
 
 ## Commands and evidence
 
@@ -28,18 +42,19 @@ See [harness performance](harness-performance.md) for repeatable concurrent-sess
 workloads, resource sampling and the limits of these measurements.
 
 ```sh
-cargo test -p zuse-harness
-cd crates/harness/bridge
-bun install --frozen-lockfile
-bun run test
-bun run build
+cargo test -p zuse-harness --all-targets
+cargo test -p zuse-engine --lib native_
+cargo test -p zuse-engine --lib harness_models
+cargo test -p zuse-engine --lib harness_api
+cargo build -p zuse-harness --examples --release
 ```
 
-The native-tool integration fixtures require `rg` on PATH in addition to the Node runtime used by bridge fixtures. Packaged ripgrep resolution remains part of application packaging.
-
-Rust scenarios cover unknown-outcome recovery, explicit inspected retry, failed approval persistence, committed-output replay prevention, concurrent child execution and final synthesis, read-only enforcement, steering deduplication, shared budgets, compaction, checkpoint corruption, account fallback and affinity, and a real bundled Node process with concurrent mocked streams and cancellation. The SDK protocol fixtures cover text, tool calls, usage, request validation and incomplete streams. These are component and protocol fixtures; no live paid-model request or complete application harness session is claimed.
-
-Native ownership fixtures exercise same-process and child-process exclusion, independent roots, stale PID stamps, preserved damaged journals, root identity validation, and release only after host cleanup. Application provider registration and live native session acceptance remain pending.
+Native search fixtures require `rg` on PATH. Protocol fixtures use local HTTP
+servers and require no model credentials. The suite covers fragmented streams,
+tools/images/reasoning, cache counters, disconnects, cancellation, request limits,
+account continuity, permissions, deliveries, process ownership, migration and
+crash recovery. [Efficiency evidence and limitations](harness-efficiency.md)
+separate deterministic checks from live quality/cost comparisons.
 
 ## Native commands
 
@@ -115,7 +130,7 @@ resolution remain pending.
 ## Account-backed model service
 
 `engine::harness_models::HarnessModels` connects the engine's model accounts to
-the shared `AccountBroker` and lazy SDK bridge. It discovers each account's live
+the shared `AccountBroker` and native model transport. It discovers each account's live
 model inventory, keeps provider-qualified model IDs, filters visibility and
 media-only entries, and retains reported context/compaction limits. Eligibility
 is checked per connection rather than inferred from a global model list.
@@ -123,7 +138,7 @@ is checked per connection rather than inferred from a global model list.
 Concurrent discoveries share each account's fetch. Inventory is cached for 15
 minutes, transient failures for 15 seconds, with at most 128 cache slots. Explicit
 refresh bypasses the cache. Requests reject a credential/provider mismatch before
-sending a bearer token to either inventory or SDK transport. Account authorization
+sending a bearer token to either inventory or native transport. Account authorization
 generations invalidate stale inventory and broker health after reconnect. The
 broker retains root/child affinity and emits account-switch notices without using
 an email address as the displayed account name.
@@ -176,7 +191,7 @@ provider/session integration and live chat acceptance remain pending.
 ## Application session adapter
 
 `engine::native_harness` registers Zuse in the engine provider catalog on macOS
-and Linux. It uses the shared account inventory/broker/SDK transport and the
+and Linux. It uses the shared account inventory/broker/native transport and the
 owned Rust kernel rather than launching another coding-agent CLI. The existing
 provider picker, chat stream and session engine consume its standard protocol.
 Earlier milestone notes above describe the component state at those milestones.
@@ -209,7 +224,7 @@ lease is released.
 
 The application fixtures use scripted model output, real durable journals and
 filesystem edits. Live model authorization, real Executor tenant/plugin calls,
-full UI queue/stop flows, packaged Node/ripgrep, complete instruction/skill parity,
+full UI queue/stop flows, packaged ripgrep, complete instruction/skill parity,
 provider-switch history migration, OS command sandboxing and authenticated
 unknown-outcome recovery UI workflows still require live acceptance.
 This is not full application acceptance.

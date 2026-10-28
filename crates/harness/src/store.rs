@@ -16,13 +16,13 @@ impl FileStore {
         &self.path
     }
     pub fn load(&self) -> Result<Option<Checkpoint>, Error> {
-        let bytes = match std::fs::read(&self.path) {
-            Ok(bytes) => bytes,
+        let file = match std::fs::File::open(&self.path) {
+            Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(Error::Storage),
         };
-        let state: Checkpoint =
-            serde_json::from_slice(&bytes).map_err(|_| Error::InvalidCheckpoint)?;
+        let state: Checkpoint = serde_json::from_reader(std::io::BufReader::new(file))
+            .map_err(|_| Error::InvalidCheckpoint)?;
         state.validate()?;
         Ok(Some(state))
     }

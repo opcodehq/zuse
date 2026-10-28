@@ -1,0 +1,22 @@
+[package]
+name = "zuse-harness-extensions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+[dependencies]
+zuse-harness = { path = "../harness" }
+rmcp = { version = "=3.8.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client"] }
+http = "1"
+sse-stream = "0.2.4"
+reqwest.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+libc.workspace = true
+[dev-dependencies]
+tempfile.workspace = true

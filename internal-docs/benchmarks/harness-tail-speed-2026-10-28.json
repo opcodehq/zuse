@@ -1,0 +1,3828 @@
+{
+  "date": "2026-10-28",
+  "source_commit": "498d12c84aeffb55f146ca95e6fbe06c414876e7",
+  "native_binary_sha256": "40e0881808567df2b924b49977b6b6a7aae4da415076c3766e25c0ec1e5881db",
+  "reference_binary_sha256": "43199b2ce92ad12d3b24358e953f10003799a7bbe207f59d7d87d0ca417e8ca5",
+  "reference_version": "0.99.1",
+  "fixtures": {
+    "boundary-fix": {
+      "files_sha256": "755ff2fcdd071c63f611b4f3c0d2168a29d44409f7c71a6a8a100d890add1395",
+      "prompt_sha256": "2be76a8a0b593c4f10e0c82eaab40ad7a4d4e09f6374dbe2cbe50e115ad0608d",
+      "acceptance_sha256": "7fbf2a23b5cff8efa1e26b83aba9d6e2c9904cb4e31c6fd77ec385471245fad6"
+    },
+    "multi-file-change": {
+      "files_sha256": "d0d37dfafe5eec442be54853f71328a279bbcb24bebaa63f71122f104ae3e2c5",
+      "prompt_sha256": "ab063eea196583671507f798768ad57d9935154ad5058ae5f52f377272790105",
+      "acceptance_sha256": "90e5831aec226b24ec55159aae562dcefc239a574892259273224f6b67c19043"
+    },
+    "noisy-evidence": {
+      "files_sha256": "3da8383afa3b645189582e09e0d1777d7432b8a8aaad3bc8a8979e69a8cf65e0",
+      "prompt_sha256": "625d0899ae9bfb5b030629a19d18c6a679a2084b44691a1d194c6597c143642d",
+      "acceptance_sha256": "5a3f3aa612b77775ceb6951d4588420092a79b0dc4c32e072b93a57c8461d1d9"
+    },
+    "instruction-retention": {
+      "files_sha256": "839a6f2ef978938ae4bdffb0b187c3b20ea3b78f3403851b0c3d23a6a23571c7",
+      "prompt_sha256": "eaa2779ecd952875c66c31d37b3a6539613ef3a7b97508e77dae8c73a95bc9b1",
+      "acceptance_sha256": "358a26b3b0230c182a69b9f6961020e27b920ac1b7ff849fcddfbffbe14a3504"
+    }
+  },
+  "change": "Optional read_file tail mode with full-file SHA-256. Default forward reads unchanged; no model, effort, request cap, output limit, permission, or automatic context reduction changes.",
+  "authorization": "Workspace owner explicitly authorized up to 150 additional physical model requests for another speed iteration and full Sonnet comparison, keeping medium reasoning and the six-request cap.",
+  "allocation_limit": 150,
+  "allocation_used": 119,
+  "prior_allocations_used": [
+    300,
+    293
+  ],
+  "confirmation_protocol": "One additional complete four-task repetition, reference first (repeat 3), frozen binaries and settings. Declared after the 12-pair primary result and before confirmation dispatch. All four pairs run regardless of outcome; then stop.",
+  "method": "Four fixed tasks, three initial repetitions plus one complete fixed confirmation repetition. Exact Sonnet 5.5 medium and adaptive thinking, 4096 output tokens, six-request cap, fresh profiles and alternating arm order. Same subscription account and metered proxy; reference additionally uses loopback TLS. Three native Opus regression probes are separate from comparative results. Primary result retained despite expanded median becoming lower.",
+  "summary": {
+    "primary": {
+      "native": {
+        "completed": 12,
+        "runs": 12,
+        "physical_requests": 41,
+        "median_seconds": 8.457898151999984,
+        "mean_seconds": 8.919549645333385,
+        "median_peak_rss_mib": 20.171875,
+        "median_peak_pss_mib": 9.1884765625,
+        "median_profile_kib": 32.53076171875,
+        "provider_counters": {
+          "input_tokens": {
+            "known_sum": 142,
+            "unknown_requests": 0
+          },
+          "output_tokens": {
+            "known_sum": 8874,
+            "unknown_requests": 0
+          },
+          "cache_read_input_tokens": {
+            "known_sum": 227079,
+            "unknown_requests": 0
+          },
+          "cache_creation_input_tokens": {
+            "known_sum": 46076,
+            "unknown_requests": 0
+          }
+        }
+      },
+      "reference": {
+        "completed": 12,
+        "runs": 12,
+        "physical_requests": 40,
+        "median_seconds": 8.173383232000106,
+        "mean_seconds": 9.080868182249995,
+        "median_peak_rss_mib": 52.240234375,
+        "median_peak_pss_mib": 44.0029296875,
+        "median_profile_kib": 179.19775390625,
+        "provider_counters": {
+          "input_tokens": {
+            "known_sum": 16056,
+            "unknown_requests": 0
+          },
+          "output_tokens": {
+            "known_sum": 9818,
+            "unknown_requests": 0
+          },
+          "cache_read_input_tokens": {
+            "known_sum": 860738,
+            "unknown_requests": 0
+          },
+          "cache_creation_input_tokens": {
+            "known_sum": 42868,
+            "unknown_requests": 0
+          }
+        }
+      },
+      "native_faster_pairs": 6,
+      "matched_pairs": 12,
+      "median_paired_ratio": 1.027011982340821,
+      "native_median_lower": false
+    },
+    "confirmation": {
+      "native": {
+        "completed": 4,
+        "runs": 4,
+        "physical_requests": 13,
+        "median_seconds": 7.268946906499991,
+        "mean_seconds": 7.877145199999973,
+        "median_peak_rss_mib": 21.056640625,
+        "median_peak_pss_mib": 10.26611328125,
+        "median_profile_kib": 31.31494140625,
+        "provider_counters": {
+          "input_tokens": {
+            "known_sum": 44,
+            "unknown_requests": 0
+          },
+          "output_tokens": {
+            "known_sum": 2732,
+            "unknown_requests": 0
+          },
+          "cache_read_input_tokens": {
+            "known_sum": 71227,
+            "unknown_requests": 0
+          },
+          "cache_creation_input_tokens": {
+            "known_sum": 12334,
+            "unknown_requests": 0
+          }
+        }
+      },
+      "reference": {
+        "completed": 4,
+        "runs": 4,
+        "physical_requests": 14,
+        "median_seconds": 9.195281905000115,
+        "mean_seconds": 8.702440423750033,
+        "median_peak_rss_mib": 50.908203125,
+        "median_peak_pss_mib": 42.751953125,
+        "median_profile_kib": 190.3828125,
+        "provider_counters": {
+          "input_tokens": {
+            "known_sum": 5359,
+            "unknown_requests": 0
+          },
+          "output_tokens": {
+            "known_sum": 3148,
+            "unknown_requests": 0
+          },
+          "cache_read_input_tokens": {
+            "known_sum": 310716,
+            "unknown_requests": 0
+          },
+          "cache_creation_input_tokens": {
+            "known_sum": 6809,
+            "unknown_requests": 0
+          }
+        }
+      },
+      "native_faster_pairs": 3,
+      "matched_pairs": 4,
+      "median_paired_ratio": 0.7948300758302104,
+      "native_median_lower": true
+    },
+    "expanded": {
+      "native": {
+        "completed": 16,
+        "runs": 16,
+        "physical_requests": 54,
+        "median_seconds": 7.932367390999957,
+        "mean_seconds": 8.658948534000032,
+        "median_peak_rss_mib": 20.4296875,
+        "median_peak_pss_mib": 9.28271484375,
+        "median_profile_kib": 32.2333984375,
+        "provider_counters": {
+          "input_tokens": {
+            "known_sum": 186,
+            "unknown_requests": 0
+          },
+          "output_tokens": {
+            "known_sum": 11606,
+            "unknown_requests": 0
+          },
+          "cache_read_input_tokens": {
+            "known_sum": 298306,
+            "unknown_requests": 0
+          },
+          "cache_creation_input_tokens": {
+            "known_sum": 58410,
+            "unknown_requests": 0
+          }
+        }
+      },
+      "reference": {
+        "completed": 16,
+        "runs": 16,
+        "physical_requests": 54,
+        "median_seconds": 8.43717105650012,
+        "mean_seconds": 8.986261242625005,
+        "median_peak_rss_mib": 52.189453125,
+        "median_peak_pss_mib": 43.94677734375,
+        "median_profile_kib": 179.19775390625,
+        "provider_counters": {
+          "input_tokens": {
+            "known_sum": 21415,
+            "unknown_requests": 0
+          },
+          "output_tokens": {
+            "known_sum": 12966,
+            "unknown_requests": 0
+          },
+          "cache_read_input_tokens": {
+            "known_sum": 1171454,
+            "unknown_requests": 0
+          },
+          "cache_creation_input_tokens": {
+            "known_sum": 49677,
+            "unknown_requests": 0
+          }
+        }
+      },
+      "native_faster_pairs": 9,
+      "matched_pairs": 16,
+      "median_paired_ratio": 0.9342785401834561,
+      "native_median_lower": true
+    }
+  },
+  "primary_runs": [
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "boundary-fix",
+      "repeat": 0,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 13.243629874000135,
+      "peak_tree_rss_bytes": 25665536,
+      "peak_tree_pss_bytes": 11573248,
+      "profile_bytes": 33042,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 1,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 3.147465997000154,
+          "elapsed_seconds": 3.7876299520000885,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 5436,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 51
+          },
+          "tool_calls": [
+            "grep"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 2,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.1045258560000093,
+          "elapsed_seconds": 2.4882075210000494,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 442,
+            "cache_read_input_tokens": 5436,
+            "output_tokens": 98
+          },
+          "tool_calls": [
+            "read_file",
+            "glob"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 3,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.0698741160001646,
+          "elapsed_seconds": 3.8952088930000173,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 698,
+            "cache_read_input_tokens": 5878,
+            "output_tokens": 302
+          },
+          "tool_calls": [
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 4,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.835853229999884,
+          "elapsed_seconds": 2.8415974559998176,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1130,
+            "cache_read_input_tokens": 6576,
+            "output_tokens": 154
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "boundary-fix",
+      "repeat": 0,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 8.047069866000129,
+      "peak_tree_rss_bytes": 55717888,
+      "peak_tree_pss_bytes": 46984192,
+      "profile_bytes": 182540,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 5,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.2325442050000674,
+          "elapsed_seconds": 2.1887466910000057,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 401,
+            "cache_creation_input_tokens": 21774,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 146
+          },
+          "tool_calls": [
+            "Read"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 6,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.7488615330000812,
+          "elapsed_seconds": 2.674314220000042,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 86,
+            "cache_creation_input_tokens": 547,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 465
+          },
+          "tool_calls": [
+            "Edit",
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 7,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.6899483359998158,
+          "elapsed_seconds": 2.6971765439998308,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 557,
+            "cache_creation_input_tokens": 551,
+            "cache_read_input_tokens": 22321,
+            "output_tokens": 255
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "multi-file-change",
+      "repeat": 0,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 9.755641835000006,
+      "peak_tree_rss_bytes": 21880832,
+      "peak_tree_pss_bytes": 11288576,
+      "profile_bytes": 33324,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 8,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.5651263060001384,
+          "elapsed_seconds": 2.3966998500000045,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 942,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 120
+          },
+          "tool_calls": [
+            "read_file",
+            "read_file",
+            "list_directory"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 9,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.929998704999889,
+          "elapsed_seconds": 4.797090325999989,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 599,
+            "cache_read_input_tokens": 5449,
+            "output_tokens": 510
+          },
+          "tool_calls": [
+            "write_file",
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 10,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.382689322000033,
+          "elapsed_seconds": 2.390338462000045,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1506,
+            "cache_read_input_tokens": 6048,
+            "output_tokens": 212
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "multi-file-change",
+      "repeat": 0,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 7.960096196999984,
+      "peak_tree_rss_bytes": 54296576,
+      "peak_tree_pss_bytes": 46077952,
+      "profile_bytes": 203366,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 11,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.0047329340000033,
+          "elapsed_seconds": 1.6722397579999324,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 421,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 79
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 12,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.7340682599999582,
+          "elapsed_seconds": 1.868848152000055,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 111,
+            "cache_creation_input_tokens": 500,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 254
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 13,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.8825659730000552,
+          "elapsed_seconds": 1.3920449650001956,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 92,
+            "cache_creation_input_tokens": 365,
+            "cache_read_input_tokens": 22274,
+            "output_tokens": 137
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 14,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.4148718390001704,
+          "elapsed_seconds": 2.416811902000063,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 189,
+            "cache_creation_input_tokens": 229,
+            "cache_read_input_tokens": 22639,
+            "output_tokens": 246
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "noisy-evidence",
+      "repeat": 0,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 10.603176073000213,
+      "peak_tree_rss_bytes": 21663744,
+      "peak_tree_pss_bytes": 11041792,
+      "profile_bytes": 43534,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 15,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.154965693999884,
+          "elapsed_seconds": 1.4448269469999104,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 944,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 80
+          },
+          "tool_calls": [
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 16,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.3607552660000692,
+          "elapsed_seconds": 2.528822407000007,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1540,
+            "cache_read_input_tokens": 5451,
+            "output_tokens": 290
+          },
+          "tool_calls": [
+            "exec_command",
+            "edit_file"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 17,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.5494155809999484,
+          "elapsed_seconds": 3.2430247229999623,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1066,
+            "cache_read_input_tokens": 6991,
+            "output_tokens": 211
+          },
+          "tool_calls": [
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 18,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.961583023000003,
+          "elapsed_seconds": 3.0978092589998596,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 907,
+            "cache_read_input_tokens": 8057,
+            "output_tokens": 149
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "noisy-evidence",
+      "repeat": 0,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 16.326784005999798,
+      "peak_tree_rss_bytes": 56631296,
+      "peak_tree_pss_bytes": 47372288,
+      "profile_bytes": 209465,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 19,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.0726523200000884,
+          "elapsed_seconds": 1.8747161169999345,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 423,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 108
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 20,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.671762716000103,
+          "elapsed_seconds": 1.7408067530000153,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 1498,
+            "cache_creation_input_tokens": 531,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 235
+          },
+          "tool_calls": [
+            "Bash",
+            "Write"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 21,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 4.632120880000002,
+          "elapsed_seconds": 9.800552127999936,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 363,
+            "cache_creation_input_tokens": 1733,
+            "cache_read_input_tokens": 22305,
+            "output_tokens": 405
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 22,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.3329002780001247,
+          "elapsed_seconds": 2.3378673239999443,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 101,
+            "cache_creation_input_tokens": 542,
+            "cache_read_input_tokens": 24038,
+            "output_tokens": 270
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "instruction-retention",
+      "repeat": 0,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 12.741607058,
+      "peak_tree_rss_bytes": 21684224,
+      "peak_tree_pss_bytes": 9283584,
+      "profile_bytes": 31409,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 23,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 4.632634364000069,
+          "elapsed_seconds": 5.554876608000086,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1027,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 121
+          },
+          "tool_calls": [
+            "read_file",
+            "read_file",
+            "list_directory"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 24,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.0172103419999985,
+          "elapsed_seconds": 3.286434904000089,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 663,
+            "cache_read_input_tokens": 5534,
+            "output_tokens": 416
+          },
+          "tool_calls": [
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 25,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 3.696750743000166,
+          "elapsed_seconds": 3.7016053500001362,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1285,
+            "cache_read_input_tokens": 6197,
+            "output_tokens": 272
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "instruction-retention",
+      "repeat": 0,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 9.22635106100006,
+      "peak_tree_rss_bytes": 54751232,
+      "peak_tree_pss_bytes": 46038016,
+      "profile_bytes": 183243,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 26,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.6719671749999634,
+          "elapsed_seconds": 2.6242332930000885,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 459,
+            "cache_creation_input_tokens": 3043,
+            "cache_read_input_tokens": 18804,
+            "output_tokens": 111
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 27,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.8449547230000007,
+          "elapsed_seconds": 3.7484730139999556,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 188,
+            "cache_creation_input_tokens": 570,
+            "cache_read_input_tokens": 21847,
+            "output_tokens": 469
+          },
+          "tool_calls": [
+            "Write",
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 28,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.3625134219998927,
+          "elapsed_seconds": 2.3691626380000343,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 525,
+            "cache_creation_input_tokens": 657,
+            "cache_read_input_tokens": 22417,
+            "output_tokens": 236
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "boundary-fix",
+      "repeat": 1,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 6.160084448999896,
+      "peak_tree_rss_bytes": 55877632,
+      "peak_tree_pss_bytes": 46690304,
+      "profile_bytes": 182033,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 29,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.9861699240000235,
+          "elapsed_seconds": 1.4533929599999738,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 401,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 86
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 30,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.4512638139999581,
+          "elapsed_seconds": 2.120409484999982,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 103,
+            "cache_creation_input_tokens": 487,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 396
+          },
+          "tool_calls": [
+            "Write",
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 31,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.1517370910000864,
+          "elapsed_seconds": 2.1588738810000905,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 504,
+            "cache_creation_input_tokens": 499,
+            "cache_read_input_tokens": 22261,
+            "output_tokens": 304
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "boundary-fix",
+      "repeat": 1,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 8.690332572999978,
+      "peak_tree_rss_bytes": 21004288,
+      "peak_tree_pss_bytes": 9781248,
+      "profile_bytes": 33705,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 32,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.7832186619998538,
+          "elapsed_seconds": 1.5311442369998076,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 929,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 73
+          },
+          "tool_calls": [
+            "grep"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 33,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.7354512009999326,
+          "elapsed_seconds": 1.1010424050000438,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 462,
+            "cache_read_input_tokens": 5436,
+            "output_tokens": 98
+          },
+          "tool_calls": [
+            "read_file",
+            "glob"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 34,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.647022115000027,
+          "elapsed_seconds": 2.6762407589999384,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 696,
+            "cache_read_input_tokens": 5898,
+            "output_tokens": 336
+          },
+          "tool_calls": [
+            "edit_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 35,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 3.152868249999983,
+          "elapsed_seconds": 3.1658259250000356,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1160,
+            "cache_read_input_tokens": 6594,
+            "output_tokens": 290
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "multi-file-change",
+      "repeat": 1,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 6.323847439000019,
+      "peak_tree_rss_bytes": 53166080,
+      "peak_tree_pss_bytes": 44707840,
+      "profile_bytes": 179718,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 36,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.7840391199999885,
+          "elapsed_seconds": 1.5306424409998272,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 421,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 83
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 37,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.6725606689999495,
+          "elapsed_seconds": 2.1112353930000154,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 120,
+            "cache_creation_input_tokens": 504,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 318
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 38,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.2573253429998204,
+          "elapsed_seconds": 2.264372116000004,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 75,
+            "cache_creation_input_tokens": 438,
+            "cache_read_input_tokens": 22278,
+            "output_tokens": 217
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "multi-file-change",
+      "repeat": 1,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 9.811131837000175,
+      "peak_tree_rss_bytes": 18628608,
+      "peak_tree_pss_bytes": 8712192,
+      "profile_bytes": 32571,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 39,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.6409400180000375,
+          "elapsed_seconds": 1.4676036519999798,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 942,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 120
+          },
+          "tool_calls": [
+            "read_file",
+            "read_file",
+            "list_directory"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 40,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.5878647649999493,
+          "elapsed_seconds": 4.225621191999835,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 599,
+            "cache_read_input_tokens": 5449,
+            "output_tokens": 444
+          },
+          "tool_calls": [
+            "write_file",
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 41,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 3.9273325889998887,
+          "elapsed_seconds": 3.9340153229998123,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1454,
+            "cache_read_input_tokens": 6048,
+            "output_tokens": 177
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "noisy-evidence",
+      "repeat": 1,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 8.299696598000082,
+      "peak_tree_rss_bytes": 55508992,
+      "peak_tree_pss_bytes": 46566400,
+      "profile_bytes": 206719,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 42,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.6553813049999917,
+          "elapsed_seconds": 1.5084251010000571,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 423,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 108
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 43,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.73630295199996,
+          "elapsed_seconds": 1.2218095850000736,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 1498,
+            "cache_creation_input_tokens": 531,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 109
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 44,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.3504838700000619,
+          "elapsed_seconds": 2.2875949849999415,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 114,
+            "cache_creation_input_tokens": 1607,
+            "cache_read_input_tokens": 22305,
+            "output_tokens": 266
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 45,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.637641197999983,
+          "elapsed_seconds": 2.6424014639999314,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 184,
+            "cache_creation_input_tokens": 380,
+            "cache_read_input_tokens": 23912,
+            "output_tokens": 293
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "noisy-evidence",
+      "repeat": 1,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 7.639271050999923,
+      "peak_tree_rss_bytes": 20791296,
+      "peak_tree_pss_bytes": 8854528,
+      "profile_bytes": 46320,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 46,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.588481634000118,
+          "elapsed_seconds": 1.4192759560000923,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 944,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 107
+          },
+          "tool_calls": [
+            "read_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 47,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.926882434999925,
+          "elapsed_seconds": 3.1281459330000416,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1745,
+            "cache_read_input_tokens": 5451,
+            "output_tokens": 381
+          },
+          "tool_calls": [
+            "exec_command",
+            "edit_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 48,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.7941228610000053,
+          "elapsed_seconds": 2.8026825370000097,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1933,
+            "cache_read_input_tokens": 7196,
+            "output_tokens": 237
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "instruction-retention",
+      "repeat": 1,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 7.651175414999898,
+      "peak_tree_rss_bytes": 54697984,
+      "peak_tree_pss_bytes": 46195712,
+      "profile_bytes": 183980,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 49,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.5331180309999581,
+          "elapsed_seconds": 1.196263146000092,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 459,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21847,
+            "output_tokens": 120
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 50,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.133063022999977,
+          "elapsed_seconds": 3.5295817559999705,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 196,
+            "cache_creation_input_tokens": 579,
+            "cache_read_input_tokens": 21847,
+            "output_tokens": 504
+          },
+          "tool_calls": [
+            "Write",
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 51,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.4692765079998935,
+          "elapsed_seconds": 2.4782589490000646,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 741,
+            "cache_creation_input_tokens": 700,
+            "cache_read_input_tokens": 22426,
+            "output_tokens": 302
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "instruction-retention",
+      "repeat": 1,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 7.254303835999963,
+      "peak_tree_rss_bytes": 19980288,
+      "peak_tree_pss_bytes": 9686016,
+      "profile_bytes": 31009,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 52,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.7054536390000976,
+          "elapsed_seconds": 1.528750338000009,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1027,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 121
+          },
+          "tool_calls": [
+            "read_file",
+            "read_file",
+            "list_directory"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 53,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.8957814170000802,
+          "elapsed_seconds": 3.134045211000057,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 663,
+            "cache_read_input_tokens": 5534,
+            "output_tokens": 404
+          },
+          "tool_calls": [
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 54,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.3879207169998153,
+          "elapsed_seconds": 2.399648286999991,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1241,
+            "cache_read_input_tokens": 6197,
+            "output_tokens": 265
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "boundary-fix",
+      "repeat": 2,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 6.341004498000075,
+      "peak_tree_rss_bytes": 20975616,
+      "peak_tree_pss_bytes": 12780544,
+      "profile_bytes": 33299,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 55,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.40233962399997836,
+          "elapsed_seconds": 0.7495631720000802,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 929,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 51
+          },
+          "tool_calls": [
+            "grep"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 56,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.5030799009998645,
+          "elapsed_seconds": 0.8949130559999503,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 444,
+            "cache_read_input_tokens": 5436,
+            "output_tokens": 98
+          },
+          "tool_calls": [
+            "read_file",
+            "glob"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 57,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.5776827409999896,
+          "elapsed_seconds": 2.877814074000071,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 700,
+            "cache_read_input_tokens": 5880,
+            "output_tokens": 321
+          },
+          "tool_calls": [
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 58,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.5737633230000938,
+          "elapsed_seconds": 1.5826891230001365,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1144,
+            "cache_read_input_tokens": 6580,
+            "output_tokens": 157
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "boundary-fix",
+      "repeat": 2,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 9.759269354000025,
+      "peak_tree_rss_bytes": 56332288,
+      "peak_tree_pss_bytes": 47096832,
+      "profile_bytes": 182552,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 59,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.8181857560000481,
+          "elapsed_seconds": 1.8714348490000248,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 401,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 142
+          },
+          "tool_calls": [
+            "Read"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 60,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 3.3129721699999664,
+          "elapsed_seconds": 5.266506025999888,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 86,
+            "cache_creation_input_tokens": 543,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 462
+          },
+          "tool_calls": [
+            "Edit",
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 61,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.293473474000166,
+          "elapsed_seconds": 2.3033492350000415,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 557,
+            "cache_creation_input_tokens": 548,
+            "cache_read_input_tokens": 22317,
+            "output_tokens": 271
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "multi-file-change",
+      "repeat": 2,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 8.22546373099999,
+      "peak_tree_rss_bytes": 21299200,
+      "peak_tree_pss_bytes": 9583616,
+      "profile_bytes": 38620,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 62,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.8833686559999023,
+          "elapsed_seconds": 1.6735637990000214,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 942,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 167
+          },
+          "tool_calls": [
+            "read_file",
+            "read_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 63,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.5459029789999477,
+          "elapsed_seconds": 4.702517715999875,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1276,
+            "cache_read_input_tokens": 5449,
+            "output_tokens": 510
+          },
+          "tool_calls": [
+            "write_file",
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 64,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.612755006000043,
+          "elapsed_seconds": 1.621850755999958,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1483,
+            "cache_read_input_tokens": 6725,
+            "output_tokens": 144
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "multi-file-change",
+      "repeat": 2,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 7.437836741999945,
+      "peak_tree_rss_bytes": 54517760,
+      "peak_tree_pss_bytes": 45770752,
+      "profile_bytes": 179539,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 65,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.6407864849998077,
+          "elapsed_seconds": 1.3586765499999274,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 421,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 84
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 66,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.059386072999814,
+          "elapsed_seconds": 3.498991055999795,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 120,
+            "cache_creation_input_tokens": 505,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 318
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 67,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.1035567999999785,
+          "elapsed_seconds": 2.1095860999998877,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 75,
+            "cache_creation_input_tokens": 438,
+            "cache_read_input_tokens": 22279,
+            "output_tokens": 205
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "noisy-evidence",
+      "repeat": 2,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 6.796356802999981,
+      "peak_tree_rss_bytes": 21544960,
+      "peak_tree_pss_bytes": 8519680,
+      "profile_bytes": 41593,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 68,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.431491780999977,
+          "elapsed_seconds": 0.9123774130000584,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 944,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 80
+          },
+          "tool_calls": [
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 69,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.85455704900005,
+          "elapsed_seconds": 1.4107485530000758,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1535,
+            "cache_read_input_tokens": 5451,
+            "output_tokens": 127
+          },
+          "tool_calls": [
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 70,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.3754565510000702,
+          "elapsed_seconds": 2.25521343000014,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 858,
+            "cache_read_input_tokens": 6986,
+            "output_tokens": 248
+          },
+          "tool_calls": [
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 71,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.8797322509999503,
+          "elapsed_seconds": 1.886452398999836,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 913,
+            "cache_read_input_tokens": 7844,
+            "output_tokens": 181
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "noisy-evidence",
+      "repeat": 2,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 12.756269761000112,
+      "peak_tree_rss_bytes": 50966528,
+      "peak_tree_pss_bytes": 43790336,
+      "profile_bytes": 209427,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 72,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.8878689179998673,
+          "elapsed_seconds": 1.816644985999801,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 423,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 108
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 73,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.0117867290000504,
+          "elapsed_seconds": 2.005929134000098,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 1498,
+            "cache_creation_input_tokens": 531,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 234
+          },
+          "tool_calls": [
+            "Bash",
+            "Write"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 74,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.469198864999953,
+          "elapsed_seconds": 5.651858420999815,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 356,
+            "cache_creation_input_tokens": 1732,
+            "cache_read_input_tokens": 22305,
+            "output_tokens": 363
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 75,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.6144148829998812,
+          "elapsed_seconds": 2.6244368759998906,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 96,
+            "cache_creation_input_tokens": 527,
+            "cache_read_input_tokens": 24037,
+            "output_tokens": 242
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "instruction-retention",
+      "repeat": 2,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 5.932676575000187,
+      "peak_tree_rss_bytes": 17596416,
+      "peak_tree_pss_bytes": 7958528,
+      "profile_bytes": 30797,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 76,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.4832929259998764,
+          "elapsed_seconds": 1.0083817249999356,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1027,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 121
+          },
+          "tool_calls": [
+            "read_file",
+            "read_file",
+            "list_directory"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 77,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.6610297209999771,
+          "elapsed_seconds": 2.931821280999884,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 663,
+            "cache_read_input_tokens": 5534,
+            "output_tokens": 402
+          },
+          "tool_calls": [
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 78,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.799228919000143,
+          "elapsed_seconds": 1.8043798570001854,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1238,
+            "cache_read_input_tokens": 6197,
+            "output_tokens": 228
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "instruction-retention",
+      "repeat": 2,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 9.021937299000001,
+      "peak_tree_rss_bytes": 54804480,
+      "peak_tree_pss_bytes": 46085120,
+      "profile_bytes": 183754,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 79,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.9269718900000044,
+          "elapsed_seconds": 1.8473058550000587,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 459,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21847,
+            "output_tokens": 121
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 80,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.1951848570001857,
+          "elapsed_seconds": 3.3357314880001923,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 192,
+            "cache_creation_input_tokens": 580,
+            "cache_read_input_tokens": 21847,
+            "output_tokens": 505
+          },
+          "tool_calls": [
+            "Write",
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 81,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 3.3499462170000243,
+          "elapsed_seconds": 3.3610549850000098,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 719,
+            "cache_creation_input_tokens": 697,
+            "cache_read_input_tokens": 22427,
+            "output_tokens": 241
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    }
+  ],
+  "confirmation_runs": [
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "boundary-fix",
+      "repeat": 3,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 9.900419861000046,
+      "peak_tree_rss_bytes": 48590848,
+      "peak_tree_pss_bytes": 43365376,
+      "profile_bytes": 182496,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 93,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.7174157820002165,
+          "elapsed_seconds": 2.2550422610001988,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 401,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 142
+          },
+          "tool_calls": [
+            "Read"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 94,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.8722148890001336,
+          "elapsed_seconds": 3.8059215760001734,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 86,
+            "cache_creation_input_tokens": 543,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 444
+          },
+          "tool_calls": [
+            "Write",
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 95,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 3.4595030450000195,
+          "elapsed_seconds": 3.4684844519999842,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 504,
+            "cache_creation_input_tokens": 530,
+            "cache_read_input_tokens": 22317,
+            "output_tokens": 276
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "boundary-fix",
+      "repeat": 3,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 7.137132305000023,
+      "peak_tree_rss_bytes": 21295104,
+      "peak_tree_pss_bytes": 12579840,
+      "profile_bytes": 31027,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 96,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.9079517079999277,
+          "elapsed_seconds": 1.0687767700001132,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 929,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 51
+          },
+          "tool_calls": [
+            "grep"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 97,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.8948699909999505,
+          "elapsed_seconds": 1.2136910860001535,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 446,
+            "cache_read_input_tokens": 5436,
+            "output_tokens": 75
+          },
+          "tool_calls": [
+            "read_file",
+            "list_directory"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 98,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.841659325999899,
+          "elapsed_seconds": 2.8079916009999124,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 344,
+            "cache_read_input_tokens": 5882,
+            "output_tokens": 322
+          },
+          "tool_calls": [
+            "edit_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 99,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.8194855469998856,
+          "elapsed_seconds": 1.8278265599999486,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1181,
+            "cache_read_input_tokens": 6226,
+            "output_tokens": 164
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "multi-file-change",
+      "repeat": 3,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 6.518778023999857,
+      "peak_tree_rss_bytes": 53309440,
+      "peak_tree_pss_bytes": 44926976,
+      "profile_bytes": 179429,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 100,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.5858196700000917,
+          "elapsed_seconds": 1.9091876840000168,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 421,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 79
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 101,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.9413354690000233,
+          "elapsed_seconds": 2.346610615000145,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 111,
+            "cache_creation_input_tokens": 500,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 318
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 102,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.795787897999844,
+          "elapsed_seconds": 1.8008426310000232,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 75,
+            "cache_creation_input_tokens": 429,
+            "cache_read_input_tokens": 22274,
+            "output_tokens": 150
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "multi-file-change",
+      "repeat": 3,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 9.833554681999885,
+      "peak_tree_rss_bytes": 22585344,
+      "peak_tree_pss_bytes": 10274816,
+      "profile_bytes": 32397,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 103,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.7152639999999337,
+          "elapsed_seconds": 1.556887055000061,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 942,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 120
+          },
+          "tool_calls": [
+            "read_file",
+            "read_file",
+            "list_directory"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 104,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.5410336630000074,
+          "elapsed_seconds": 6.098017291000133,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 599,
+            "cache_read_input_tokens": 5449,
+            "output_tokens": 468
+          },
+          "tool_calls": [
+            "write_file",
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 105,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.773399960000006,
+          "elapsed_seconds": 1.7879448829999092,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1464,
+            "cache_read_input_tokens": 6048,
+            "output_tokens": 155
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "noisy-evidence",
+      "repeat": 3,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 9.815918295000074,
+      "peak_tree_rss_bytes": 57716736,
+      "peak_tree_pss_bytes": 48439296,
+      "profile_bytes": 208985,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 106,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.975808238999889,
+          "elapsed_seconds": 1.8826949340000283,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 423,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 108
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 107,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.1976612650000789,
+          "elapsed_seconds": 2.218934304999948,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 1498,
+            "cache_creation_input_tokens": 531,
+            "cache_read_input_tokens": 21774,
+            "output_tokens": 235
+          },
+          "tool_calls": [
+            "Bash",
+            "Write"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 108,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.547740266000119,
+          "elapsed_seconds": 2.3563827440000296,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 361,
+            "cache_creation_input_tokens": 1733,
+            "cache_read_input_tokens": 22305,
+            "output_tokens": 204
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 109,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.5346751310000855,
+          "elapsed_seconds": 2.541483685000003,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 98,
+            "cache_creation_input_tokens": 565,
+            "cache_read_input_tokens": 24038,
+            "output_tokens": 242
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "noisy-evidence",
+      "repeat": 3,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 7.173468151999941,
+      "peak_tree_rss_bytes": 21573632,
+      "peak_tree_pss_bytes": 9066496,
+      "profile_bytes": 32972,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 110,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.6245600370000375,
+          "elapsed_seconds": 1.338858006999999,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 944,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 80
+          },
+          "tool_calls": [
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 111,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.3492161399999532,
+          "elapsed_seconds": 2.3574900969999817,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1525,
+            "cache_read_input_tokens": 5451,
+            "output_tokens": 229
+          },
+          "tool_calls": [
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 112,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 3.2417358539998986,
+          "elapsed_seconds": 3.254472033999946,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 987,
+            "cache_read_input_tokens": 6976,
+            "output_tokens": 251
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "reference",
+      "model": "claude-sonnet-5-5",
+      "case": "instruction-retention",
+      "repeat": 3,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 8.574645515000157,
+      "peak_tree_rss_bytes": 53452800,
+      "peak_tree_pss_bytes": 44730368,
+      "profile_bytes": 207408,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 113,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.6251295140000366,
+          "elapsed_seconds": 1.5427691190000132,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 459,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 21847,
+            "output_tokens": 105
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 114,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 1.0033627780001098,
+          "elapsed_seconds": 3.210532381000121,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 138,
+            "cache_creation_input_tokens": 564,
+            "cache_read_input_tokens": 21847,
+            "output_tokens": 484
+          },
+          "tool_calls": [
+            "Write",
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 115,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 0.6732910789999096,
+          "elapsed_seconds": 0.984062688999984,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 710,
+            "cache_creation_input_tokens": 622,
+            "cache_read_input_tokens": 22411,
+            "output_tokens": 82
+          },
+          "tool_calls": [
+            "Bash"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 116,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 27,
+          "http_status": 200,
+          "headers_seconds": 2.240206371000113,
+          "elapsed_seconds": 2.2464893660001053,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 74,
+            "cache_creation_input_tokens": 792,
+            "cache_read_input_tokens": 23033,
+            "output_tokens": 279
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-sonnet-5-5",
+      "case": "instruction-retention",
+      "repeat": 3,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 7.364425661000041,
+      "peak_tree_rss_bytes": 24838144,
+      "peak_tree_pss_bytes": 11254784,
+      "profile_bytes": 31736,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 117,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.6244093509999402,
+          "elapsed_seconds": 1.4443009080000593,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1027,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 121
+          },
+          "tool_calls": [
+            "read_file",
+            "read_file",
+            "list_directory"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 118,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.7180544870000176,
+          "elapsed_seconds": 2.903863422000086,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 663,
+            "cache_read_input_tokens": 5534,
+            "output_tokens": 406
+          },
+          "tool_calls": [
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 119,
+          "model": "claude-sonnet-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.857388025999853,
+          "elapsed_seconds": 2.870882133999885,
+          "served_models": [
+            "claude-sonnet-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1283,
+            "cache_read_input_tokens": 6197,
+            "output_tokens": 290
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    }
+  ],
+  "opus_probes": [
+    {
+      "arm": "native",
+      "model": "claude-opus-5-5",
+      "case": "noisy-evidence",
+      "repeat": 0,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 11.535604691000117,
+      "peak_tree_rss_bytes": 24530944,
+      "peak_tree_pss_bytes": 11335680,
+      "profile_bytes": 60508,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 82,
+          "model": "claude-opus-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.4741685469998629,
+          "elapsed_seconds": 1.5383765659998971,
+          "served_models": [
+            "claude-opus-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 5449,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 120
+          },
+          "tool_calls": [
+            "read_file",
+            "read_file",
+            "list_directory"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 83,
+          "model": "claude-opus-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.260662906999869,
+          "elapsed_seconds": 2.024087353999903,
+          "served_models": [
+            "claude-opus-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 4984,
+            "cache_read_input_tokens": 5449,
+            "output_tokens": 129
+          },
+          "tool_calls": [
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 84,
+          "model": "claude-opus-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 1.0330649500001527,
+          "elapsed_seconds": 4.467341571000134,
+          "served_models": [
+            "claude-opus-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 918,
+            "cache_read_input_tokens": 10433,
+            "output_tokens": 470
+          },
+          "tool_calls": [
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 85,
+          "model": "claude-opus-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 3.18271229700008,
+          "elapsed_seconds": 3.184441780000043,
+          "served_models": [
+            "claude-opus-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1356,
+            "cache_read_input_tokens": 11351,
+            "output_tokens": 271
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-opus-5-5",
+      "case": "instruction-retention",
+      "repeat": 0,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 4,
+      "elapsed_seconds": 21.565304092000133,
+      "peak_tree_rss_bytes": 25522176,
+      "peak_tree_pss_bytes": 11670528,
+      "profile_bytes": 43263,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 86,
+          "model": "claude-opus-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.0931541679999555,
+          "elapsed_seconds": 2.753868782000154,
+          "served_models": [
+            "claude-opus-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1025,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 121
+          },
+          "tool_calls": [
+            "read_file",
+            "read_file",
+            "list_directory"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 87,
+          "model": "claude-opus-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 5.70727430099987,
+          "elapsed_seconds": 9.49848666899993,
+          "served_models": [
+            "claude-opus-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 659,
+            "cache_read_input_tokens": 5532,
+            "output_tokens": 522
+          },
+          "tool_calls": [
+            "write_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 88,
+          "model": "claude-opus-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.6068618179999703,
+          "elapsed_seconds": 4.467371576999994,
+          "served_models": [
+            "claude-opus-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1381,
+            "cache_read_input_tokens": 6191,
+            "output_tokens": 218
+          },
+          "tool_calls": [
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 89,
+          "model": "claude-opus-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 4.534642318000124,
+          "elapsed_seconds": 4.544172374000027,
+          "served_models": [
+            "claude-opus-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 886,
+            "cache_read_input_tokens": 7572,
+            "output_tokens": 284
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    },
+    {
+      "arm": "native",
+      "model": "claude-opus-5-5",
+      "case": "boundary-fix",
+      "repeat": 0,
+      "exit_code": 0,
+      "success": true,
+      "acceptance_passed": true,
+      "protected_files_unchanged": true,
+      "physical_requests": 3,
+      "elapsed_seconds": 7.126032433999853,
+      "peak_tree_rss_bytes": 21499904,
+      "peak_tree_pss_bytes": 10577920,
+      "profile_bytes": 26937,
+      "served_model_mismatch": false,
+      "requests": [
+        {
+          "reservation": 90,
+          "model": "claude-opus-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.49703460099999575,
+          "elapsed_seconds": 1.1927667329998712,
+          "served_models": [
+            "claude-opus-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 927,
+            "cache_read_input_tokens": 4507,
+            "output_tokens": 75
+          },
+          "tool_calls": [
+            "read_file",
+            "list_directory"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 91,
+          "model": "claude-opus-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 0.7539922420000948,
+          "elapsed_seconds": 3.0852259680000316,
+          "served_models": [
+            "claude-opus-5-5"
+          ],
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 344,
+            "cache_read_input_tokens": 5434,
+            "output_tokens": 380
+          },
+          "tool_calls": [
+            "edit_file",
+            "exec_command"
+          ],
+          "read_file_tail_calls": 0
+        },
+        {
+          "reservation": 92,
+          "model": "claude-opus-5-5",
+          "effort": "medium",
+          "max_tokens": 4096,
+          "thinking_mode": "adaptive",
+          "thinking_budget": null,
+          "declared_tool_count": 25,
+          "http_status": 200,
+          "headers_seconds": 2.6584441919999335,
+          "elapsed_seconds": 2.6618077509999694,
+          "served_models": [
+            "claude-opus-5-5"
+          ],
+          "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 1196,
+            "cache_read_input_tokens": 5778,
+            "output_tokens": 286
+          },
+          "tool_calls": [],
+          "read_file_tail_calls": 0
+        }
+      ]
+    }
+  ],
+  "observed_read_file_tail_calls": 0
+}

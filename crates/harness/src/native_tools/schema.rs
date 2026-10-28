@@ -2,8 +2,17 @@
 use crate::{Error, ToolCategory, ToolDefinition, Tools};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::OnceLock};
+// Stable native-tool guidance belongs with the schemas, not provider adapters.
+pub(super) const INSTRUCTIONS: &str = "Native coding workflow:
+- Paths are checkout-relative; exec_command starts there. When the task names files, start with read_file on those paths together. Use discovery only for unknown paths or genuinely missing context.
+- Prefer native file edits. Replacing an existing file requires its fresh read_file hash as expected_hash; null creates exclusively. Bash reads do not supply edit hashes. Tool strings use ordinary JSON escaping and are decoded once.
+- After reading, return related edits FOLLOWED BY their verification calls in the SAME response whenever the verification command is already known. The kernel executes edits and commands in the listed order; a later verification sees preceding edits. This avoids a model round trip between writing and testing. Never batch an operation whose arguments require an unseen tool result, and never claim success before inspecting the actual verification result.
+- Use the repository's documented runtime and test commands. Do not guess executable aliases or unrelated test frameworks. For Python 3 checks without a project-specific launcher, prefer python3 over the optional python alias. Combine required checks in one command when practical. If a check fails, inspect and fix it; if a process is still running, use its handle to obtain the outcome.
+- Once required checks pass, finish without redundant rereads, repeated verification or unrelated cleanup. Routine final status should fit within five lines: change, verified result and unresolved issues. Honor requests for detail. Only claim checks that actually succeeded. Repository instructions and the user's requirements govern all work.";
+
 #[derive(Clone)]
 enum Shape {
+    JsonObject,
     Text(usize, usize, Option<&'static str>),
     Number(u64, u64),
     Boolean,
@@ -44,6 +53,7 @@ fn error(field: &str) -> Error {
 impl Shape {
     fn schema(&self) -> Value {
         match self {
+            Self::JsonObject => json!({"type":"object","additionalProperties":true}),
             Self::Text(min, max, format) => {
                 let mut value = json!({"type":"string","minLength":min,"maxLength":max});
                 if let Some(format) = format {
@@ -81,6 +91,7 @@ impl Shape {
     }
     fn validate(&self, value: &mut Value, path: &str) -> Result<(), Error> {
         let valid = match self {
+            Self::JsonObject => value.is_object(),
             Self::Text(min, max, format) => value.as_str().is_some_and(|text| {
                 let count = text.chars().count();
                 count >= *min
@@ -158,7 +169,15 @@ fn specifications() -> &'static BTreeMap<&'static str, Specification> {
         let edit=||vec![field("old_string",Text(1,2*1024*1024,None)),field("new_string",text()),field("replace_all",Boolean).default(json!(false))];
         let mut specs=BTreeMap::new();
         let mut add=|name,category,description,fields|{specs.insert(name,Specification {description,category,shape:Object(fields)});};
-        add("read_file",Read,"Read fresh UTF-8 lines and SHA-256. Offsets are zero-based; use the returned hash for edits.",vec![field("path",path()),field("offset",Number(0,u64::MAX)).default(json!(0)),field("limit",Number(1,2000)).default(json!(400))]);
+        add("mcp_servers",Read,"List configured external tool servers without starting processes or connections.",vec![]);
+        add("mcp_tools",ToolCategory::Network,"Discover one bounded page of a configured server's tool schemas on demand; pass its next cursor to continue.",vec![field("server",Text(1,64,None)),field("cursor",Text(1,4096,None)).optional()]);
+        add("mcp_call",ToolCategory::Network,"Invoke a configured external tool with its exact discovered arguments. Unknown outcomes pause for review rather than automatic retry.",vec![field("server",Text(1,64,None)),field("tool",Text(1,256,None)),field("arguments",JsonObject)]);
+        #[cfg(feature="structural-search")]
+        add("code_outline",Read,"Get fresh function/type symbols, signatures and line ranges for Rust, Python, JavaScript or TypeScript without reading every function body. Hash identifies the actual file version; use read_file to inspect relevant lines before editing.",vec![field("path",path()),field("limit",Number(1,512)).default(json!(128))]);
+        add("list_skills",Read,"List up to 64 project skill names and descriptions from .agents/skills. Bodies load only through read_skill; no skill scripts are executed.",vec![]);
+        add("read_skill",Read,"Load a named project's SKILL.md on demand. Follow the user and repository instruction hierarchy.",vec![field("name",Text(1,64,None))]);
+        add("read_file",Read,"Read fresh UTF-8 lines and the whole file's SHA-256 for edits. Offsets are zero-based. Set tail=true to read final lines, such as log failures, without probing the line count; offset must then be zero.",vec![field("path",path()),field("offset",Number(0,u64::MAX)).default(json!(0)),field("limit",Number(1,2000)).default(json!(400)),field("tail",Boolean).default(json!(false))]);
+        add("read_artifact",Read,"Read a retained result artifact from this conversation using a byte cursor. Accepts the artifact path returned by a tool or its file name.",vec![field("artifact",path()),field("offset",Number(0,u64::MAX)).default(json!(0)),field("max_bytes",Number(1,64000)).default(json!(16000))]);
         add("read_image",Read,"Read a checkout PNG, JPEG, GIF or WebP as image content.",vec![field("path",path())]);
         add("list_directory",Read,"List immediate directory entries including hidden names.",vec![dir()]);
         add("glob",Read,"Find files by ripgrep glob. Honors ignore rules and excludes symlink traversal.",vec![field("pattern",Text(1,512,None)),dir()]);
@@ -182,6 +201,9 @@ pub(super) fn definitions(questions: bool, plans: bool) -> Tools {
     specifications()
         .iter()
         .filter(|(name, _)| {
+            if name.starts_with("mcp_") {
+                return false;
+            }
             (**name != "request_user_input" || questions) && (**name != "update_plan" || plans)
         })
         .map(|(name, spec)| {
@@ -202,4 +224,21 @@ pub(super) fn validate(name: &str, value: &mut Value) -> Result<(), Error> {
         .ok_or_else(|| Error::Tool("Unknown native tool".into()))?
         .shape
         .validate(value, name)
+}
+
+pub(super) fn extension_definitions() -> Tools {
+    specifications()
+        .iter()
+        .filter(|(name, _)| name.starts_with("mcp_"))
+        .map(|(name, spec)| {
+            (
+                (*name).into(),
+                ToolDefinition {
+                    description: spec.description.into(),
+                    parameters: spec.shape.schema(),
+                    category: spec.category,
+                },
+            )
+        })
+        .collect()
 }

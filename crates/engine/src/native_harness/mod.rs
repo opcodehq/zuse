@@ -44,6 +44,8 @@ pub(crate) struct NativeHarness {
     models: Arc<dyn Models>,
     command_host: PathBuf,
     uploads: crate::Uploads,
+    extensions: Arc<zuse_harness_extensions::Registry>,
+    scheduling: zuse_harness::settings::Scheduling,
 }
 fn failure(error: impl std::fmt::Display) -> HarnessError {
     HarnessError::Protocol(error.to_string())
@@ -60,8 +62,12 @@ impl NativeHarness {
         models: HarnessModels,
         uploads: crate::Uploads,
     ) -> Result<Self, HarnessError> {
+        let extensions = zuse_harness_extensions::Registry::load(&profile).map_err(failure)?;
+        let scheduling = zuse_harness::settings::Scheduling::load(&profile).map_err(failure)?;
         Ok(Self {
             profile,
+            extensions,
+            scheduling,
             device_id,
             models: Arc::new(models),
             command_host: std::env::current_exe()?,
@@ -86,6 +92,7 @@ impl NativeHarness {
             failure("Connect a model account and choose one of its available models in Settings.")
         })?;
         let mut options = Options::new(&selected.id);
+        self.scheduling.apply(&mut options).map_err(failure)?;
         options.reasoning = request
             .reasoning
             .and_then(|r| serde_json::to_value(r).ok())

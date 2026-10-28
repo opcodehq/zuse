@@ -23,8 +23,8 @@ fn output(text: &str, calls: Vec<Call>) -> ModelOutput {
     ModelOutput {
         messages: vec![Message {
             role: Role::Assistant,
-            content: Value::Array(content),
-            metadata: BTreeMap::new(),
+            content: Value::Array(content).into(),
+            metadata: BTreeMap::new().into(),
         }],
         calls,
         text: text.into(),
@@ -908,4 +908,244 @@ async fn initial_delivery_waits_for_durable_admission_and_cancellation_prevents_
         Err(Error::Interrupted)
     ));
     assert_eq!(lock(&f.models).len(), 1);
+}
+
+/// Deterministic persistence workload; excludes model/network and UI costs.
+/// Run explicitly with `cargo test -p zuse-harness checkpoint_save_benchmark -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "explicit disk benchmark"]
+async fn checkpoint_save_benchmark() {
+    let runtime = engine(Fixture::new(vec![])).await;
+    let initial = runtime.snapshot().await;
+    let directory = tempfile::tempdir().unwrap();
+    let store =
+        zuse_harness::store::FileStore::new(directory.path().join("session/checkpoint.json"));
+    for exchanges in [0, 100, 1000] {
+        let mut state = initial.clone();
+        for _ in 0..exchanges {
+            let history = &mut state.agent_mut("root").unwrap().history;
+            history.push(Message::text(Role::User, "Inspect this file. ".repeat(32)));
+            history.push(Message::text(
+                Role::Assistant,
+                "Observed output. ".repeat(128),
+            ));
+        }
+        store.save(&state).unwrap();
+        let mut samples = Vec::new();
+        for _ in 0..7 {
+            let start = std::time::Instant::now();
+            store.save(&state).unwrap();
+            samples.push(start.elapsed().as_secs_f64() * 1000.);
+        }
+        samples.sort_by(f64::total_cmp);
+        let loaded = store.load().unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&loaded).unwrap(),
+            serde_json::to_value(&state).unwrap()
+        );
+        println!(
+            "exchanges={exchanges} bytes={} median_save_ms={:.3}",
+            std::fs::metadata(store.path()).unwrap().len(),
+            samples[3]
+        );
+    }
+}
+
+#[tokio::test]
+async fn transition_journal_round_trips_without_rewriting_history_and_recovers_torn_tail() {
+    use std::io::Write;
+    use zuse_harness::journal::JournalStore;
+    let runtime = engine(Fixture::new(vec![])).await;
+    let mut state = runtime.snapshot().await;
+    state
+        .agent_mut("root")
+        .unwrap()
+        .history
+        .push(Message::text(Role::User, "x".repeat(2 * 1024 * 1024)));
+    let directory = tempfile::tempdir().unwrap();
+    let store = JournalStore::new(directory.path());
+    assert!(store.load().unwrap().is_none());
+    store.save(&state).unwrap();
+    let snapshot_bytes = std::fs::read(directory.path().join("snapshot.json")).unwrap();
+    state.requests += 1;
+    store.save(&state).unwrap();
+    state
+        .agent_mut("root")
+        .unwrap()
+        .history
+        .push(Message::text(Role::Assistant, "new output"));
+    store.save(&state).unwrap();
+    assert_eq!(
+        std::fs::read(directory.path().join("snapshot.json")).unwrap(),
+        snapshot_bytes
+    );
+    let log = directory.path().join("transitions.log");
+    let committed_length = std::fs::metadata(&log).unwrap().len();
+    assert!(committed_length < 4096);
+    let reopened = JournalStore::new(directory.path());
+    assert_eq!(
+        serde_json::to_value(reopened.load().unwrap().unwrap()).unwrap(),
+        serde_json::to_value(&state).unwrap()
+    );
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&log)
+        .unwrap()
+        .write_all(&[128, 0, 0])
+        .unwrap();
+    let recovered = JournalStore::new(directory.path()).load().unwrap().unwrap();
+    assert_eq!(recovered.requests, state.requests);
+    assert_eq!(std::fs::metadata(&log).unwrap().len(), committed_length);
+    let mut corrupt = std::fs::read(&log).unwrap();
+    corrupt[20] ^= 1;
+    std::fs::write(&log, &corrupt).unwrap();
+    assert!(matches!(
+        JournalStore::new(directory.path()).load(),
+        Err(Error::InvalidCheckpoint)
+    ));
+    assert_eq!(std::fs::read(&log).unwrap(), corrupt);
+}
+
+#[tokio::test]
+async fn journal_migration_rotation_and_recovery_receipts_preserve_state() {
+    use zuse_harness::{journal::JournalStore, store::FileStore};
+    let runtime = engine(Fixture::new(vec![])).await;
+    let mut state = runtime.snapshot().await;
+    let directory = tempfile::tempdir().unwrap();
+    let legacy = directory.path().join("checkpoint.json");
+    FileStore::new(&legacy).save(&state).unwrap();
+    let original = std::fs::read(&legacy).unwrap();
+    let store = JournalStore::new(directory.path());
+    assert!(store.load().unwrap().is_some());
+    assert_eq!(
+        std::fs::read(directory.path().join("checkpoint.v1.backup.json")).unwrap(),
+        original
+    );
+    assert!(matches!(
+        FileStore::new(&legacy).load(),
+        Err(Error::InvalidCheckpoint)
+    ));
+    for _ in 0..1001 {
+        state.requests += 1;
+        store.save(&state).unwrap();
+    }
+    let snapshot: Value =
+        serde_json::from_slice(&std::fs::read(directory.path().join("snapshot.json")).unwrap())
+            .unwrap();
+    assert_eq!(snapshot["sequence"], 1000);
+    let pending = call("uncertain", "edit", json!({"path":"a"}));
+    state.agent_mut("root").unwrap().pending_calls.push(pending);
+    state.tools.insert(
+        "root:uncertain".into(),
+        Receipt {
+            status: ReceiptStatus::Started,
+            output: None,
+            signature: Some("signed".into()),
+        },
+    );
+    store.save(&state).unwrap();
+    let mut recovered = JournalStore::new(directory.path()).load().unwrap().unwrap();
+    assert!(matches!(
+        recovered.tools["root:uncertain"].status,
+        ReceiptStatus::Started
+    ));
+    recovered
+        .resolve_unknown(
+            "root",
+            "uncertain",
+            RecoveryDecision::RecordOutcome {
+                output: "inspected".to_string().into(),
+            },
+        )
+        .unwrap();
+    store.save(&recovered).unwrap();
+    assert_eq!(
+        serde_json::to_value(JournalStore::new(directory.path()).load().unwrap().unwrap()).unwrap(),
+        serde_json::to_value(recovered).unwrap()
+    );
+    assert!(!directory.path().join("checkpoint.v1.backup.json").exists());
+    assert!(matches!(
+        FileStore::new(&legacy).load(),
+        Err(Error::InvalidCheckpoint)
+    ));
+}
+
+#[tokio::test]
+async fn retained_tool_outputs_are_retrievable_without_reexecution() {
+    let f = Fixture::new(vec![
+        output(
+            "read retained output",
+            vec![call(
+                "inspect",
+                "read_tool_output",
+                json!({"call_id":"saved","offset":2,"max_bytes":4}),
+            )],
+        ),
+        output("done", vec![]),
+    ]);
+    let initial = engine(f.clone()).await;
+    let mut state = initial.snapshot().await;
+    state.tools.insert(
+        "root:saved".into(),
+        Receipt {
+            status: ReceiptStatus::Completed,
+            signature: Some("previous".into()),
+            output: Some("αbcdef".to_string().into()),
+        },
+    );
+    *lock(&f.store) = Some(state);
+    let e = engine(f.clone()).await;
+    e.send("Inspect retained output".into(), vec![])
+        .await
+        .unwrap();
+    let saved = e.snapshot().await;
+    let output = saved.tools["root:inspect"].output.as_ref().unwrap();
+    let ToolOutput::Text(text) = &**output else {
+        panic!("expected text")
+    };
+    let value: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(value["text"], "bcde");
+    assert_eq!(value["next_cursor"], 6);
+    assert_eq!(f.executions.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn unchanged_state_skips_journal_writes_but_replaced_receipts_commit() {
+    let runtime = engine(Fixture::new(vec![])).await;
+    let mut state = runtime.snapshot().await;
+    let directory = tempfile::tempdir().unwrap();
+    let store = zuse_harness::journal::JournalStore::new(directory.path());
+    store.save(&state).unwrap();
+    let snapshot = std::fs::read(directory.path().join("snapshot.json")).unwrap();
+    store.save(&state).unwrap();
+    assert!(!directory.path().join("transitions.log").exists());
+    assert_eq!(
+        std::fs::read(directory.path().join("snapshot.json")).unwrap(),
+        snapshot
+    );
+    state.tools.insert(
+        "root:receipt".into(),
+        Receipt {
+            status: ReceiptStatus::Completed,
+            signature: Some("same".into()),
+            output: Some("first".to_string().into()),
+        },
+    );
+    store.save(&state).unwrap();
+    *state
+        .tools
+        .get_mut("root:receipt")
+        .unwrap()
+        .output
+        .as_mut()
+        .unwrap() = ToolOutput::Text("replacement".into()).into();
+    store.save(&state).unwrap();
+    let recovered = zuse_harness::journal::JournalStore::new(directory.path())
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(recovered.tools["root:receipt"].output.as_ref().unwrap()).unwrap(),
+        json!("replacement")
+    );
 }

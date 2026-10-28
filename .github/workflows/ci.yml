@@ -180,16 +180,18 @@ jobs:
 
   model-transport:
     runs-on: ubuntu-24.04
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          node-version: 22
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.10
-      - run: bun install --frozen-lockfile
-        working-directory: crates/harness/bridge
-      - run: bun run test && bun run build
-        working-directory: crates/harness/bridge
-      - run: git diff --exit-code -- crates/harness/bridge/model-bridge.mjs crates/harness/bridge/THIRD_PARTY_LICENSES.txt
+          key: native-model-transport
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: cargo test --locked -p zuse-harness -p zuse-harness-extensions --all-targets
+      - run: cargo build --locked --release -p zuse-harness --example harness-evaluate
+      - run: python3 scripts/test-harness-evaluation.py --binary target/release/examples/harness-evaluate --output .context/native-transport-fixtures

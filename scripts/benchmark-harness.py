@@ -23,7 +23,7 @@ native = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(native)
 
 
-def run(binary, threads, events, rounds, output, timeout, sdk):
+def run(binary, threads, events, rounds, output, timeout):
     result_file = output.with_suffix(".workload.json")
     command = [str(binary), str(threads), str(events), str(rounds), str(result_file)]
     samples = []
@@ -32,9 +32,6 @@ def run(binary, threads, events, rounds, output, timeout, sdk):
             output.with_suffix(".log").open("w") as log:
         environment = dict(os.environ)
         environment["TMPDIR"] = temporary_root
-        environment.pop("ZUSE_BENCHMARK_SDK", None)
-        if sdk:
-            environment["ZUSE_BENCHMARK_SDK"] = "1"
         process = subprocess.Popen(
             command, stdout=log, stderr=subprocess.STDOUT, env=environment,
             start_new_session=os.name == "posix",
@@ -59,8 +56,6 @@ def run(binary, threads, events, rounds, output, timeout, sdk):
                 process.kill()
             process.wait()
     result = json.loads(result_file.read_text())
-    if sdk and result.get("transport") != "sdk-local-replay":
-        raise RuntimeError("The selected executable does not support SDK replay; rebuild the workload")
     with binary.open("rb") as stream:
         hasher = hashlib.sha256()
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -90,7 +85,6 @@ def main():
     parser.add_argument("--rounds", type=int, default=1)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=1800)
-    parser.add_argument("--sdk", action="store_true", help="Include the production broker and Node SDK with local HTTP replay")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if min(*args.threads, args.events, args.rounds, args.repeats, args.timeout) < 1:
@@ -100,7 +94,7 @@ def main():
     for threads in args.threads:
         for repeat in range(args.repeats):
             output = args.output / f"threads-{threads}-events-{args.events}-run-{repeat + 1}"
-            run(binary, threads, args.events, args.rounds, output, args.timeout, args.sdk)
+            run(binary, threads, args.events, args.rounds, output, args.timeout)
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ mod chat_persistence;
 pub mod desktop_import;
 pub mod diff_sync;
 pub mod doc_host;
+mod external_chats;
 mod fs_watch;
 mod git_workspace;
 pub mod harness_updates;
@@ -34,13 +35,13 @@ pub(crate) mod home_index;
 mod http_error;
 pub mod instance_lock;
 pub mod local_import;
-mod external_chats;
 pub mod managed_access;
 pub mod relay_access;
 pub use zuse_harness::processes::supervisor as command_host;
+mod acp_catalog;
+mod harness_api;
 pub mod harness_models;
 mod model_catalogs;
-mod acp_catalog;
 pub mod model_connections;
 #[cfg(unix)]
 mod native_harness;
@@ -380,11 +381,9 @@ impl EngineCore {
         );
         let model_connections =
             model_connections::ModelConnections::new(data_dir.to_path_buf(), account.clone());
-        let harness_models = harness_models::HarnessModels::new(
-            model_connections.clone(),
-            data_dir.join("harness/model-bridge"),
-        )
-        .map_err(|error| EngineError::Other(error.to_string()))?;
+        let harness_models =
+            harness_models::HarnessModels::new(model_connections.clone(), data_dir.join("harness"))
+                .map_err(|error| EngineError::Other(error.to_string()))?;
         #[cfg(unix)]
         registry.register(Arc::new(
             native_harness::NativeHarness::new(

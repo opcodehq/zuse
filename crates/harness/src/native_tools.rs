@@ -1,7 +1,11 @@
 //! Native coding tools share checkout containment, permissions and process ownership.
+mod coordination;
 mod files;
+#[cfg(feature = "structural-search")]
+mod outline;
 pub mod permission;
 mod schema;
+mod skills;
 use crate::{
     processes::{ProcessOptions, ProcessStart, Processes},
     *,
@@ -15,11 +19,11 @@ use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
-use tokio::sync::{OwnedRwLockReadGuard, RwLock};
+use tokio::sync::{Mutex as AsyncMutex, OwnedRwLockReadGuard, RwLock};
 
 pub struct ApprovalRequest {
     pub tool: String,
@@ -57,6 +61,27 @@ pub trait NativeCallbacks: Send + Sync {
         Err(Error::Tool("Plans are unavailable".into()))
     }
 }
+/// External capabilities are optional and lazy; the kernel retains policy and receipts.
+#[async_trait]
+pub trait Extensions: Send + Sync {
+    fn servers(&self) -> Value;
+    fn read_only(&self, _server: &str, _tool: &str) -> bool {
+        false
+    }
+    async fn tools(
+        &self,
+        server: &str,
+        cursor: Option<String>,
+        context: ToolContext,
+    ) -> Result<Value, Error>;
+    async fn call(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+        context: ToolContext,
+    ) -> Result<ToolOutput, Error>;
+}
 pub struct NativeOptions {
     pub cwd: PathBuf,
     pub lock_directory: PathBuf,
@@ -64,11 +89,13 @@ pub struct NativeOptions {
     pub runtime_mode: Arc<dyn Fn() -> RuntimeMode + Send + Sync>,
     pub callbacks: Option<Arc<dyn NativeCallbacks>>,
     pub ripgrep: PathBuf,
+    pub extensions: Option<Arc<dyn Extensions>>,
 }
 pub struct NativeTools {
     files: Arc<CheckoutFiles>,
     pub processes: Processes,
     definitions: Tools,
+    extensions: Option<Arc<dyn Extensions>>,
     directory: PathBuf,
     runtime_mode: Arc<dyn Fn() -> RuntimeMode + Send + Sync>,
     callbacks: Option<Arc<dyn NativeCallbacks>>,
@@ -76,6 +103,8 @@ pub struct NativeTools {
     lifecycle: Arc<RwLock<()>>,
     shutdown: CancellationToken,
     closed: AtomicBool,
+    approval_gate: AsyncMutex<()>,
+    coordination: coordination::Coordination,
 }
 struct CancelOnDrop {
     token: CancellationToken,
@@ -103,15 +132,21 @@ impl NativeTools {
     pub async fn open(options: NativeOptions) -> Result<Self, Error> {
         let files = Arc::new(CheckoutFiles::open(&options.cwd, options.lock_directory)?);
         let directory = options.processes.directory.clone();
-        let definitions = schema::definitions(
+        let mut definitions = schema::definitions(
             options.callbacks.as_ref().is_some_and(|c| c.questions()),
             options.callbacks.as_ref().is_some_and(|c| c.plans()),
         );
+        if options.extensions.is_some() {
+            definitions.extend(schema::extension_definitions());
+        }
         let processes = Processes::open(options.processes).await?;
+        let coordination = coordination::Coordination::new(files.root().to_owned());
         Ok(Self {
             files,
+            coordination,
             processes,
             definitions,
+            extensions: options.extensions,
             directory,
             runtime_mode: options.runtime_mode,
             callbacks: options.callbacks,
@@ -119,6 +154,7 @@ impl NativeTools {
             lifecycle: Arc::new(RwLock::new(())),
             shutdown: CancellationToken::new(),
             closed: AtomicBool::new(false),
+            approval_gate: AsyncMutex::new(()),
         })
     }
     pub fn definitions(&self) -> Tools {
@@ -133,8 +169,14 @@ impl NativeTools {
         cancel: CancellationToken,
         operation: impl FnOnce(&CheckoutFiles) -> Result<T, Error> + Send + 'static,
     ) -> Result<T, Error> {
+        static FILES: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+        let admission = FILES
+            .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(16)))
+            .clone();
+        let permit = tokio::select! {biased;_=cancel.cancelled()=>return Err(Error::Interrupted),permit=admission.acquire_owned()=>permit.map_err(|_|Error::Interrupted)?};
         let files = self.files.clone();
         tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let _lease = lease;
             check(&cancel)?;
             operation(&files)
@@ -207,15 +249,21 @@ impl NativeTools {
             context.permission_mode
         };
         let can_prompt = self.callbacks.as_ref().is_some_and(|c| c.approvals());
-        match permission::decide(
-            (self.runtime_mode)(),
-            mode,
-            self.definitions[name].category,
-            sensitive,
-            can_prompt,
-        ) {
+        let category = if name == "mcp_call"
+            && self
+                .extensions
+                .as_ref()
+                .is_some_and(|e| e.read_only(text(&input, "server"), text(&input, "tool")))
+        {
+            ToolCategory::Read
+        } else {
+            self.definitions[name].category
+        };
+        match permission::decide((self.runtime_mode)(), mode, category, sensitive, can_prompt) {
             Verdict::Deny => return Err(error("Tool permission denied")),
             Verdict::Prompt => {
+                let _approval = self.approval_gate.lock().await;
+                check(&context.cancel)?;
                 let allowed = self
                     .callbacks
                     .as_ref()
@@ -237,15 +285,121 @@ impl NativeTools {
         }
         check(&context.cancel)?;
         match name {
+            "mcp_servers" => Ok(self
+                .extensions
+                .as_ref()
+                .ok_or_else(|| error("External tools unavailable"))?
+                .servers()
+                .to_string()
+                .into()),
+            "mcp_tools" => {
+                let value = self
+                    .extensions
+                    .as_ref()
+                    .ok_or_else(|| error("External tools unavailable"))?
+                    .tools(
+                        text(&input, "server"),
+                        input
+                            .get("cursor")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        context.clone(),
+                    )
+                    .await?;
+                self.bounded(value, lease, context.cancel).await
+            }
+            "mcp_call" => {
+                self.extensions
+                    .as_ref()
+                    .ok_or_else(|| error("External tools unavailable"))?
+                    .call(
+                        text(&input, "server"),
+                        text(&input, "tool"),
+                        input["arguments"].clone(),
+                        context,
+                    )
+                    .await
+            }
+            #[cfg(feature = "structural-search")]
+            "code_outline" => {
+                let path = path.unwrap();
+                let limit = number(&input, "limit") as usize;
+                let cancel = context.cancel.clone();
+                let value = self
+                    .filesystem(lease.clone(), context.cancel.clone(), move |files| {
+                        outline::outline(files, &path, limit, &cancel)
+                    })
+                    .await?;
+                self.bounded(value, lease, context.cancel).await
+            }
+            "list_skills" | "read_skill" => {
+                let name = name.to_owned();
+                let input = input.clone();
+                let value = self
+                    .filesystem(lease.clone(), context.cancel.clone(), move |files| {
+                        if name == "list_skills" {
+                            skills::list(files)
+                        } else {
+                            skills::read(files, text(&input, "name"))
+                        }
+                    })
+                    .await?;
+                self.bounded(value, lease, context.cancel).await
+            }
+            "read_artifact" => {
+                let supplied = Path::new(text(&input, "artifact"));
+                let name = supplied
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| error("Invalid artifact"))?;
+                let stem = name
+                    .strip_suffix(".result.json")
+                    .ok_or_else(|| error("Invalid artifact"))?;
+                let uuid = uuid::Uuid::parse_str(stem).map_err(|_| error("Invalid artifact"))?;
+                if uuid.to_string() != stem {
+                    return Err(error("Invalid artifact"));
+                }
+                let path = self.directory.join(name);
+                if supplied.components().count() > 1 && supplied != path {
+                    return Err(error("Artifact belongs to another conversation"));
+                }
+                let offset = number(&input, "offset");
+                let limit = number(&input, "max_bytes") as usize;
+                self.filesystem(lease,context.cancel.clone(),move |_|{
+                    use std::{io::{Read,Seek},os::unix::fs::OpenOptionsExt};
+                    let mut file=std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK).open(path).map_err(|_|error("Artifact is unavailable"))?;
+                    let metadata=file.metadata().map_err(|_|Error::Storage)?;
+                    if !metadata.is_file()||metadata.len()>16*1024*1024||offset>metadata.len(){return Err(error("Invalid artifact cursor"));}
+                    file.seek(std::io::SeekFrom::Start(offset)).map_err(|_|Error::Storage)?;
+                    let mut bytes=Vec::new();file.take(limit as u64).read_to_end(&mut bytes).map_err(|_|Error::Storage)?;
+                    let valid=match std::str::from_utf8(&bytes){Ok(_)=>bytes.len(),Err(e)if e.error_len().is_none()=>e.valid_up_to(),Err(_)=>return Err(error("Artifact cursor is not a UTF-8 boundary"))};
+                    if valid==0&&offset<metadata.len(){return Err(error("Artifact changed or max_bytes is too small for the next UTF-8 character"));}
+                    let text=std::str::from_utf8(&bytes[..valid]).unwrap();
+                    Ok(json!({"text":text,"next_cursor":offset+valid as u64,"has_more":offset+(valid as u64)<metadata.len(),"total_bytes":metadata.len()}).to_string().into())
+                }).await
+            }
             "read_file" => {
                 let path = path.unwrap();
                 let offset = number(&input, "offset");
                 let limit = number(&input, "limit") as usize;
-                let value=self.filesystem(lease.clone(),context.cancel.clone(),move |files|{
-                    let data=files.read(&path,true)?;let content=std::str::from_utf8(&data).map_err(|_|error("Expected UTF-8 text"))?;
-                    let total=content.split('\n').count();let start=(offset.min(total as u64)) as usize;
-                    Ok(json!({"path":path,"hash":files::digest(&data),"total_lines":total,"offset":offset,"content":content.split('\n').skip(start).take(limit).collect::<Vec<_>>().join("\n"),"has_more":start.saturating_add(limit)<total}))
+                let tail = input["tail"] == true;
+                if tail && offset != 0 {
+                    return Err(error("tail=true cannot be combined with a nonzero offset"));
+                }
+                let value = self.filesystem(lease.clone(), context.cancel.clone(), move |files| {
+                    let data = files.read(&path, true)?;
+                    let content = std::str::from_utf8(&data).map_err(|_|error("Expected UTF-8 text"))?;
+                    let total = content.split('\n').count();
+                    let start = if tail { total.saturating_sub(limit) } else { offset.min(total as u64) as usize };
+                    Ok(json!({"path":path,"hash":files::digest(&data),"total_lines":total,
+                        "offset":if tail {start as u64} else {offset},
+                        "content":content.split('\n').skip(start).take(limit).collect::<Vec<_>>().join("\n"),
+                        "has_more":start.saturating_add(limit)<total,"has_before":start>0}))
                 }).await?;
+                if let (Some(path), Some(hash)) = (value["path"].as_str(), value["hash"].as_str()) {
+                    self.coordination
+                        .read(&context.agent_id, path.into(), hash.into());
+                }
                 self.bounded(value, lease, context.cancel).await
             }
             "read_image" => {
@@ -310,6 +464,10 @@ impl NativeTools {
                         )
                     })
                     .await?;
+                if let (Some(path), Some(hash)) = (value["path"].as_str(), value["hash"].as_str()) {
+                    self.coordination
+                        .changed(&context.agent_id, path.into(), hash.into());
+                }
                 Ok(ToolOutput::Text(value.to_string()))
             }
             "exec_command" => {
@@ -524,6 +682,7 @@ impl NativeTools {
     }
     pub async fn close(&self) {
         self.closed.store(true, Ordering::Release);
+        self.coordination.close();
         self.shutdown.cancel();
         let _closing = self.lifecycle.write().await;
         self.processes.close().await;
@@ -564,6 +723,24 @@ impl Host for ToolHost {
     fn tools(&self) -> Tools {
         self.definitions.clone()
     }
+    fn parallel_read(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "read_file"
+                | "read_image"
+                | "read_artifact"
+                | "list_directory"
+                | "code_outline"
+                | "list_skills"
+                | "read_skill"
+        ) && self.native.definitions.contains_key(name)
+    }
+    fn notifications(&self, agent: &str) -> Vec<Mail> {
+        self.native.coordination.notifications(agent)
+    }
+    fn acknowledge_notifications(&self, agent: &str, ids: &[String]) {
+        self.native.coordination.acknowledge(agent, ids);
+    }
     async fn load(&self) -> Result<Option<Checkpoint>, Error> {
         self.application.load().await
     }
@@ -571,7 +748,8 @@ impl Host for ToolHost {
         self.application.save(state).await
     }
     async fn instructions(&self) -> Result<String, Error> {
-        self.application.instructions().await
+        let application = self.application.instructions().await?;
+        Ok(format!("{}\n\n{}", schema::INSTRUCTIONS, application))
     }
     async fn model(&self, input: ModelInput) -> Result<ModelOutput, Error> {
         self.application.model(input).await

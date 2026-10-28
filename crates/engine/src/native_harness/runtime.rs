@@ -289,10 +289,15 @@ pub(super) async fn start(
     let command_host = harness.command_host.clone();
     let root_id = root.clone();
     let mode_source = mode.clone();
+    let extension_mode = mode.clone();
+    let extensions = harness.extensions.scope(
+        cwd.clone(),
+        Arc::new(move || format!("{:?}", *host::lock(&extension_mode))),
+    );
     let engine = Engine::open_native_owned(store, options, move |directory| async move {
         let mut processes = ProcessOptions::new(root_id, directory.join("artifacts"), notice_host)?;
         processes.command_host = command_host;
-        let mut env_command = tokio::process::Command::new("node");
+        let mut env_command = tokio::process::Command::new(&processes.command_host);
         let env_command = tokio::task::spawn_blocking(move || {
             zuse_providers::compose_login_shell_path(&mut env_command);
             env_command
@@ -311,6 +316,7 @@ pub(super) async fn start(
         processes.env = Some(environment);
         let native = Arc::new(
             NativeTools::open(NativeOptions {
+                extensions,
                 cwd: host_app.cwd.clone(),
                 lock_directory: profile.join("harness/file-locks"),
                 processes,

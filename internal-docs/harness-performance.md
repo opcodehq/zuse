@@ -33,13 +33,12 @@ to exercise repeated turns without recreating sessions.
 
 The context window is deliberately large enough to retain the seeded history in
 model requests. This tests full-history overhead; compaction correctness is covered
-by the runtime tests. The SDK bridge has a separate 125-request concurrency test.
-
-Pass `--sdk` to include the production account broker and shared Node SDK bridge.
-Its HTTP transport is replaced with deterministic local streams; no real model
-requests are sent. Process-tree sampling includes Node in this mode. Measure
-direct and SDK workloads separately, and label both. SDK mode requires a supported
-Node runtime on PATH, just like the bridge fixtures.
+by the runtime tests. The native transport has separate streaming, cancellation, accounting and
+continuation fixtures. The `workload` example retains the direct local replay
+mode. The historical `--sdk` mode and its Node bridge were retired by the native
+transport migration; the SDK measurements below describe their original source
+revision, not the current executable. `scripts/benchmark-kernel.py` separately
+samples the journal/artifact kernel matrix with `kernel-bench`.
 
 Results include total workload time, per-thread p50/p95 completion time, sampled
 peak process-tree RSS, logical checkpoint bytes written, tool and chunk counts,
@@ -69,8 +68,15 @@ measurements are not portable CI timing thresholds.
   one implementation.
 - Journals, model requests, inherited child histories and snapshots share immutable
   messages. Account portability copies only records containing private metadata.
-- The account broker creates one portable history per attempt. The SDK bridge
-  serializes borrowed request fields and consumes completed response values.
+- Native broker retries share the message vector. Compatible continuations keep
+  provider metadata; portable conversion copies only payloads with private fields.
+- Root-ID lookups do not clone a session checkpoint.
+
+### Historical SDK implementation
+
+The following mechanisms applied to the retired SDK bridge and explain its
+recorded before/after measurements. Current production uses native HTTP/SSE.
+
 - SDK admission uses one 128-request semaphore. Excess requests wait without
   expanding wire buffers; cancellation and shutdown release waiting requests.
 - The pinned SDK patch selects message schemas by `role` and content schemas by
@@ -82,9 +88,8 @@ measurements are not portable CI timing thresholds.
   Preserve the multimodal, reasoning, tool-approval and malformed-input checks.
 - Once a shared-pipe write begins, its complete JSON frame keeps the writer lock
   even if the caller is cancelled. Other requests cannot receive a truncated frame.
-- Root-ID lookups do not clone a session checkpoint.
 
-### Linux validation-dispatch measurements
+### Linux validation-dispatch measurements (historical SDK revision)
 
 On the same Linux sandbox with Node 24.22.1, a CPU profile identified construction
 of validation errors for unrelated message variants as a major SDK cost. The
