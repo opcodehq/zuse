@@ -50,7 +50,10 @@ impl Harness for Approvals {
                 if request.prompt == "reserved" {
                     approval.deny_label = permission::ALLOW_PROJECT.into();
                 }
-                let options = vec![approval.allow_label.clone(), approval.deny_label.clone()];
+                let mut options = vec![approval.allow_label.clone(), approval.deny_label.clone()];
+                if request.prompt == "native-options" {
+                    options.extend(["Allow for session".into(), "Deny for session".into()]);
+                }
                 let question = UserInputQuestion {
                     id: format!("q{index}"),
                     approval: (!content).then_some(approval),
@@ -222,6 +225,22 @@ async fn chat_grant_does_not_leak_and_content_questions_never_create_rules() {
     assert!(options.iter().all(|o| o == &["Yes", "No"]));
     let (prompts, _, _) = run(&core, cwd, SandboxLevel::WorkspaceWrite, "tool", Some("No")).await;
     assert_eq!(prompts, 2);
+    let (prompts, _, options) = run(
+        &core,
+        cwd,
+        SandboxLevel::WorkspaceWrite,
+        "native-options",
+        Some("No"),
+    )
+    .await;
+    assert_eq!(prompts, 2);
+    assert!(options.iter().all(|options| options
+        == &[
+            "Yes",
+            "No",
+            permission::ALLOW_CHAT,
+            permission::ALLOW_PROJECT
+        ]));
 }
 #[tokio::test]
 async fn forged_persistent_answers_cannot_silence_forced_or_native_review_escalations() {

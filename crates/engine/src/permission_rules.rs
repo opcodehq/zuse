@@ -444,6 +444,8 @@ impl crate::sessions::SessionsEngine {
             if mode.automatic_review() {
                 approval.force_prompt = true;
             }
+            // Persist through this host, using one-time choices on the provider wire.
+            question.options.retain(|label| label == &approval.allow_label || label == &approval.deny_label);
             let decision = self
                 .permission_rules()
                 .decide(project, chat, *mode, approval);
