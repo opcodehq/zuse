@@ -3,6 +3,8 @@
 //! Process execution and provider calls intentionally live outside this layer so
 //! remote parsing and head selector construction remain deterministic and testable.
 
+#[path = "source_control_ci.rs"]
+mod ci;
 #[path = "source_control_create.rs"]
 mod create;
 #[path = "source_control_creation_sources.rs"]
@@ -38,7 +40,7 @@ const GITHUB_RESULT_LIMIT: &str = "20";
 const GITHUB_JSON_FIELDS: &str = "number,title,url,state,baseRefName,headRefName,updatedAt,isCrossRepository,headRepositoryOwner";
 const GITHUB_SEARCH_QUERY: &str = "query($search: String!, $owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { nameWithOwner } search(query: $search, type: ISSUE, first: 50, after: $after) { issueCount pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { author { login } headRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts { totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } number title url state isDraft mergeable reviewDecision createdAt updatedAt additions deletions repository { nameWithOwner } } } } }";
 
-const GITHUB_PR_METADATA_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { viewer { login } repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts(first: 100) { nodes { ... on CheckRun { name status conclusion detailsUrl } ... on StatusContext { context state targetUrl } } totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }";
+const GITHUB_PR_METADATA_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { viewer { login } repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts(first: 100) { nodes { ... on CheckRun { name status conclusion detailsUrl databaseId startedAt completedAt } ... on StatusContext { context state targetUrl } } totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }";
 
 fn remove_nulls(value: &mut serde_json::Value) {
     match value {
@@ -1656,6 +1658,9 @@ impl GhPrMetadata {
                             context: text("context"),
                             status: text("status"),
                             conclusion: text("conclusion"),
+                            database_id: node["databaseId"].as_u64(),
+                            started_at: text("startedAt"),
+                            completed_at: text("completedAt"),
                             state: text("state"),
                             details_url: text("detailsUrl"),
                             target_url: text("targetUrl"),
@@ -2051,7 +2056,7 @@ fn to_list_item(
     })
 }
 
-fn validated_pull_request_url(raw: &str) -> Result<String, ChangeRequestError> {
+pub(crate) fn validated_pull_request_url(raw: &str) -> Result<String, ChangeRequestError> {
     let url = reqwest::Url::parse(raw).map_err(|_| ChangeRequestError::UnsupportedRepository)?;
     let parts: Vec<_> = url.path().trim_matches('/').split('/').collect();
     if url.scheme() != "https"

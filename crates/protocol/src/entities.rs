@@ -1148,6 +1148,7 @@ pub struct ChangeRequestDetail {
     pub base_ref_oid: String,
     pub head_ref_name: String,
     pub head_ref_oid: String,
+    pub head_repository: Option<ChangeRequestHeadRepository>,
     pub ci: crate::change_request_assessment::ChangeRequestCi,
     pub viewer_did_author: Option<bool>,
     pub viewer_review_requested: Option<bool>,
@@ -1199,6 +1200,12 @@ pub struct ChangeRequestReviewThread {
     pub comments: Vec<ChangeRequestComment>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestHeadRepository {
+    pub name_with_owner: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ChangeRequestActor {
@@ -1237,6 +1244,9 @@ pub struct ChangeRequestFile {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ChangeRequestCheck {
+    pub database_id: Option<u64>,
+    pub started_at: String,
+    pub completed_at: String,
     pub name: String,
     pub context: String,
     pub status: String,

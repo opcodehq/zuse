@@ -49,6 +49,7 @@ mod native_harness;
 mod native_recovery;
 mod plugin_callback;
 pub mod plugins;
+pub mod pr_watch;
 pub mod profile;
 pub mod project_actions;
 pub mod project_creation;
@@ -166,6 +167,7 @@ pub struct EngineCore {
     pub harness_models: harness_models::HarnessModels,
     pub plugins: plugins::Plugins,
     pub sessions: SessionsEngine,
+    pub pr_watches: pr_watch::PrWatches,
     pub usage: usage::Usage,
     pub doc_host: DocHost,
     pub workspace: WorkspaceHost,
@@ -420,7 +422,11 @@ impl EngineCore {
             browser_access.control().pairing_slots(),
         );
         let usage = usage::Usage::local(profile.store_root().join("journals"));
+        let pr_watches =
+            pr_watch::PrWatches::open(profile.store_root(), workspace.clone(), doc_host.clone())?;
+        pr_watches.start();
         Ok(Self {
+            pr_watches,
             usage,
             relay_access,
             browser_access,
@@ -595,6 +601,7 @@ impl EngineCore {
             self.agent_accounts.clone(),
             self.workspace_scope,
         )
+        .with_pr_watches(self.pr_watches.clone())
         .with_project_creation(self.project_creation.clone())
         .with_usage(self.usage.clone())
         .with_desktop_import(self.desktop_import_profile.clone())
@@ -637,6 +644,7 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) {
+        self.pr_watches.shutdown();
         self.managed_host.begin_close();
         self.browser_access.begin_close();
         self.relay_access.begin_close();

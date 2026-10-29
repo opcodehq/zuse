@@ -300,6 +300,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn terminal_conclusions_take_precedence_over_stale_running_status() {
+        for status in ["QUEUED", "IN_PROGRESS", "PENDING", "WAITING"] {
+            let check = ChangeRequestCheck { status: status.into(), conclusion: "FAILURE".into(), ..Default::default() };
+            assert_eq!(check_status(&check), "FAILURE");
+            assert_eq!(ChangeRequestCi::from_checks(&[check]).state, CiState::Failed);
+        }
+    }
+
+    #[test]
     fn assessment_keeps_unknown_separate_and_targets_personal_actions() {
         let head = "a".repeat(40);
         let facts = |ci, review, authored, requested| Facts {

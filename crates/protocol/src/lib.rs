@@ -28,6 +28,7 @@ pub mod methods;
 pub mod motion;
 pub mod plugins;
 pub mod presentation;
+pub mod pr_watch;
 pub mod preview;
 pub mod projectless;
 pub mod project_creation;
