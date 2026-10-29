@@ -434,7 +434,9 @@ impl Slack {
 }
 fn message_uuid(team: &str, id: &str) -> String {
     let digest = Sha256::digest(format!("slack:{team}:{id}").as_bytes());
-    uuid::Uuid::from_bytes(digest[..16].try_into().expect("16 bytes")).to_string()
+    uuid::Builder::from_random_bytes(digest[..16].try_into().expect("16 bytes"))
+        .into_uuid()
+        .to_string()
 }
 fn turn_result(head: &zuse_cloud_projection::Head, message: &str) -> Option<String> {
     let result = head.slack_results.get(message)?;
@@ -446,4 +448,20 @@ fn turn_result(head: &zuse_cloud_projection::Head, message: &str) -> Option<Stri
         zuse_protocol::DoneStatus::Interrupted => "\n\nThe task was interrupted.",
     };
     Some(zuse_protocol::slack::result_text(&result.text) + suffix)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::message_uuid;
+
+    #[test]
+    fn reply_ids_are_stable_tenant_bound_and_rfc4122_version_four() {
+        let first = message_uuid("T_A", "Ev_A");
+        assert_eq!(first, message_uuid("T_A", "Ev_A"));
+        assert_ne!(first, message_uuid("T_B", "Ev_A"));
+        assert_ne!(first, message_uuid("T_A", "Ev_A:replacement"));
+        let parsed = uuid::Uuid::parse_str(&first).unwrap();
+        assert_eq!(parsed.get_version_num(), 4);
+        assert_eq!(parsed.get_variant(), uuid::Variant::RFC4122);
+    }
 }

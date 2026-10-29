@@ -503,6 +503,8 @@ async fn slack_oauth_is_browser_bound_single_use_and_disconnect_is_member_scoped
     assert_eq!(listed["connections"][0]["teamName"], "Engineering");
     assert!(!listed.to_string().contains("xoxb"));
     assert_eq!(listed["workspaces"][0]["id"], "personal");
+    sqlx::query("INSERT INTO zuse_rust_slack_members(team_id,user_id,account_id,actor_id,organization_id,settings,revision) SELECT team_id,'U_OTHER','other-account','other-account',organization_id,settings,'other-revision' FROM zuse_rust_slack_members WHERE user_id='U_ADA'")
+        .execute(&pool).await.unwrap();
     let (status, _) = request(
         &app,
         "/v1/cloud/slack/disconnect",
@@ -514,6 +516,9 @@ async fn slack_oauth_is_browser_bound_single_use_and_disconnect_is_member_scoped
         request(&app, "/v1/cloud/slack", None).await.1["connections"],
         json!([])
     );
+    let remaining: (i64, i64) = sqlx::query_as("SELECT (SELECT COUNT(*) FROM zuse_rust_slack_members WHERE user_id='U_OTHER'),(SELECT COUNT(*) FROM zuse_rust_slack_installs)")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(remaining, (1, 1));
     drop(app);
     drop(slack);
     finish(admin, pool, schema).await;
@@ -599,6 +604,7 @@ async fn slack_followups_reuse_the_thread_and_account_changes_cannot_take_it_ove
     sqlx::raw_sql("UPDATE zuse_rust_slack_jobs SET phase='done';UPDATE zuse_rust_slack_members SET account_id='different-account',actor_id='different-account'").execute(&pool).await.unwrap();
     let mut other: Value = serde_json::from_str(THREAD).unwrap();
     other["event_id"] = json!("Ev_OTHER");
+    other["event"]["ts"] = json!("1793296910.000400");
     ingress(&slack, &other.to_string()).await;
     due(&slack).await;
     slack.work_once().await.unwrap();

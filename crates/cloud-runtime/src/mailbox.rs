@@ -632,6 +632,11 @@ mod tests {
     #[test]
     fn slack_source_requires_server_owned_ingress_marker() {
         let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("receipts.sqlite");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("PRAGMA user_version=1")
+            .unwrap();
         let key = CommandKey::parse(&B64.encode([31; 32])).unwrap();
         let mut envelope:CommandEnvelope=serde_json::from_value(json!({"protocolVersion":3,"workspaceId":"workspace","sessionId":"session","commandId":"command","kind":"messages.send","fingerprint":"","schemaVersion":1,"keyVersion":1,"destructionFence":0,"createdAt":1000,"iv":"","ciphertext":"","dependencies":[]})).unwrap();
         let plaintext=json!({"commandId":"command","sessionId":"session","clientMessageId":"message","text":"full prompt","source":{"_tag":"slack","text":"original words"}}).to_string();
@@ -639,7 +644,7 @@ mod tests {
         (envelope.iv, envelope.ciphertext) = key.encrypt(&envelope, plaintext.as_bytes()).unwrap();
         let mailbox = Mailbox {
             key,
-            receipts: Receipts::open(&root.path().join("receipts.sqlite")).unwrap(),
+            receipts: Receipts::open(&path).unwrap(),
             executor: Arc::new(NeverExec),
             workspace: "workspace".into(),
             incarnation: "storage".into(),
