@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Watch chat pull request checks in the engine, notify on new CI failures, and opt into up to three automatic repairs with failing job logs and normal pushes.
+
 ## 0.25.1 Preview 5 - 2026-10-26
 
 ### Fixed
