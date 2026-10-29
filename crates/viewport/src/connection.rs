@@ -126,6 +126,8 @@ impl WorkspaceView {
         self.file_reconcile = None;
         self.file_reconnect_needed = self.open_file.is_some();
         self.recovery_request = None;
+        self.secret_text.update(cx, |input, cx| input.set_value(String::new(), cx));
+        self.secret_editing = None;
         self.input_pending.clear();
         self.input_submitted.clear();
         self.interrupt_pull_requests();

@@ -57,6 +57,7 @@ pub mod repos;
 pub mod rpc;
 pub mod run_journal;
 pub mod sessions;
+mod secret_broker;
 pub mod source_control;
 pub mod spaces;
 pub mod terminals;

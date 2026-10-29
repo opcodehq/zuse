@@ -193,7 +193,8 @@ fn specifications() -> &'static BTreeMap<&'static str, Specification> {
         add("list_processes",Read,"List this agent's commands. The root may inspect its children's commands.",vec![]);
         add("stop_process",Execute,"Terminate a managed command and its owned process group.",vec![process()]);
         add("update_plan",Read,"Update the visible plan. At most one step may be in progress.",vec![field("steps",Array(Box::new(Object(vec![field("step",Text(1,500,None)),field("status",Choice(&["pending","in_progress","completed"]))])),0,30))]);
-        add("request_user_input",Read,"Ask the user a question and wait for an answer.",vec![field("question",Text(1,2000,None)),field("options",Array(Box::new(Text(1,300,None)),2,5)).optional()]);
+        add("request_secret",Execute,"Ask for a bearer token in a private masked card and perform one user-approved HTTPS request. The token stays out of chat and model context. Returns only HTTP status, never response bodies. Do not ask users to paste secrets in chat. No shell/file delivery. The card shows the exact method, URL and body before approval.",vec![field("label",Text(1,200,None)),field("reason",Text(1,2000,None)),field("url",Text(1,2048,None)),field("method",Choice(&["GET","POST","PUT","PATCH","DELETE"])),field("body",Text(0,16000,None)).default(json!(""))]);
+        add("request_user_input",Read,"Ask the user a question and wait for an answer. Never request credentials here; use request_secret for supported private operations.",vec![field("question",Text(1,2000,None)),field("options",Array(Box::new(Text(1,300,None)),2,5)).optional()]);
         specs
     })
 }
@@ -204,7 +205,8 @@ pub(super) fn definitions(questions: bool, plans: bool) -> Tools {
             if name.starts_with("mcp_") {
                 return false;
             }
-            (**name != "request_user_input" || questions) && (**name != "update_plan" || plans)
+            (!matches!(**name, "request_user_input" | "request_secret") || questions)
+                && (**name != "update_plan" || plans)
         })
         .map(|(name, spec)| {
             (

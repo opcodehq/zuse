@@ -165,6 +165,8 @@ pub struct WorkspaceView {
     input_submitted: std::collections::HashSet<String>,
     input_editing: Option<(String, String)>,
     input_text: Entity<input::TextInput>,
+    secret_text: Entity<input::TextInput>,
+    secret_editing: Option<String>,
     expanded_parts: std::collections::HashSet<String>,
     device_id: Option<String>,
     status: String,
@@ -510,7 +512,10 @@ impl WorkspaceView {
         let recovery_output = cx.new(|cx| {
             input::TextInput::multiline("Describe the result you inspected…", window, cx)
         });
-        let input_text = cx.new(|cx| input::TextInput::multiline("Write an answer…", window, cx));
+        let input_text = cx.new(|cx| input::TextInput::multiline("Type your own answer…", window, cx));
+        let secret_text = cx.new(|cx| input::TextInput::password("Enter bearer token…", window, cx));
+        cx.subscribe_in(&input_text, window, |this, _, _: &input::Submitted, _, cx| this.send_question_answer(cx)).detach();
+        cx.subscribe_in(&secret_text, window, |this, _, _: &input::Submitted, _, cx| this.send_question_answer(cx)).detach();
         let thread_title = cx.new(|cx| input::TextInput::new("Thread name", window, cx));
         cx.subscribe_in(
             &thread_title,
@@ -622,6 +627,8 @@ impl WorkspaceView {
             input_submitted: Default::default(),
             input_editing: None,
             input_text,
+            secret_text,
+            secret_editing: None,
             expanded_parts: Default::default(),
             device_id: None,
             status: "Connecting to your engine…".into(),

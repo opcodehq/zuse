@@ -247,6 +247,7 @@ async fn publish_steer(
 }
 
 struct Inner {
+    secret_namespace: String,
     filesystem_gate: Arc<tokio::sync::RwLock<()>>,
     filesystem_admissions: Mutex<HashMap<String, usize>>,
     voice: crate::voice::VoiceManager,
@@ -330,6 +331,7 @@ impl SessionsEngine {
         let (sessions_tx, _) = watch::channel(Vec::new());
         Self {
             inner: Arc::new(Inner {
+                secret_namespace: new_id(),
                 filesystem_gate: Arc::new(tokio::sync::RwLock::new(())),
                 filesystem_admissions: Mutex::new(HashMap::new()),
                 voice: crate::voice::VoiceManager::default(),
@@ -916,10 +918,17 @@ impl SessionsEngine {
         let request_input = {
             let pending = pending_inputs.clone();
             let engine_tx = engine_tx.clone();
+            let secret_chat = chat_id.to_owned();
+            let secret_namespace = self.inner.secret_namespace.clone();
             Box::new(move |questions: Vec<UserInputQuestion>| {
                 let (mut tx, rx) = oneshot::channel();
                 let (answer_tx, answer_rx) = oneshot::channel();
                 let request_id = new_id();
+                for question in &questions {
+                    if let Some(id) = question.id.strip_prefix("private-secret:") {
+                        crate::secret_broker::shared().bind(&secret_namespace, id, &secret_chat, &request_id);
+                    }
+                }
                 lock(&pending).insert(request_id.clone(), answer_tx);
                 let _ = engine_tx.send(AgentEvent::InputRequested {
                     request_id: request_id.clone(),
@@ -1387,6 +1396,77 @@ impl SessionsEngine {
             handle.turn.stop_background_task(task_id);
         }
         stoppable
+    }
+
+    pub(crate) fn secret_namespace(&self) -> &str { &self.inner.secret_namespace }
+
+    pub(crate) async fn private_operation(
+        &self,
+        chat_id: &str,
+        input: serde_json::Value,
+    ) -> Result<String, zuse_harness::Error> {
+        use zuse_harness::{Error, PermissionMode, ToolContext};
+        if !self.turn_in_flight(chat_id) {
+            return Err(Error::Tool("No active agent turn".into()));
+        }
+        let (pending, engine_tx, cancel, run_id, read_only) = {
+            let runs = lock(&self.inner.runs);
+            let h = runs
+                .get(chat_id)
+                .ok_or_else(|| Error::Tool("No active agent run".into()))?;
+            (
+                h.pending_inputs.clone(),
+                h.engine_tx.clone(),
+                h.interrupt_token.clone(),
+                h.run_id.clone(),
+                h.runtime_config.request.sandbox == zuse_protocol::SandboxLevel::ReadOnly,
+            )
+        };
+        if read_only {
+            return Err(Error::Tool(
+                "Private operations are unavailable in read-only mode".into(),
+            ));
+        }
+        let request_id = new_id();
+        struct Cleanup {
+            pending: PendingInputs,
+            tx: mpsc::UnboundedSender<AgentEvent>,
+            id: String,
+        }
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                if lock(&self.pending).remove(&self.id).is_some() {
+                    let _ = self.tx.send(AgentEvent::InputResolved {
+                        request_id: self.id.clone(),
+                    });
+                }
+            }
+        }
+        let _cleanup = Cleanup {
+            pending: pending.clone(),
+            tx: engine_tx.clone(),
+            id: request_id.clone(),
+        };
+        let context = ToolContext {
+            agent_id: chat_id.into(),
+            call_id: run_id,
+            cancel: cancel.clone(),
+            permission_mode: PermissionMode::Default,
+            read_only: false,
+        };
+        crate::secret_broker::execute(input, context, |question| async move {
+            let (tx, rx) = oneshot::channel();
+            let id = question.id.clone();
+            if let Some(secret_id) = id.strip_prefix("private-secret:") {
+                crate::secret_broker::shared().bind(&self.inner.secret_namespace, secret_id, chat_id, &request_id);
+            }
+            lock(&pending).insert(request_id.clone(), tx);
+            engine_tx.send(AgentEvent::InputRequested { request_id, questions: vec![question] }).map_err(|_| Error::Interrupted)?;
+            tokio::select! {
+                _ = cancel.cancelled() => Err(Error::Interrupted),
+                reply = rx => reply.map_err(|_| Error::Interrupted)?.into_iter().find(|answer| answer.question_id == id).map(|answer| answer.labels).ok_or(Error::Interrupted),
+            }
+        }).await
     }
 
     pub fn respond_input(

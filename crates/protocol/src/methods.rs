@@ -24,6 +24,9 @@ pub const SET_HARNESS_ENABLED: &str = "SetHarnessEnabled";
 pub const LIST_MODELS: &str = "ListModels";
 pub const LIST_SKILLS: &str = "ListSkills";
 pub const LIST_COMMANDS: &str = "ListCommands";
+/// Transient secret submission; never enqueue or persist its parameters.
+pub const REQUEST_PRIVATE_OPERATION: &str = "RequestPrivateOperation";
+pub const SUBMIT_PRIVATE_SECRET: &str = "SubmitPrivateSecret";
 pub const QUEUE_COMMAND: &str = "QueueCommand";
 pub const TAKE_PROJECT_ACTION_SETUP: &str = "TakeProjectActionSetup";
 /// Peer-to-peer delivery fallback: the SENDER's engine forwards a queued
