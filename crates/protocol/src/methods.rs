@@ -305,6 +305,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | LIST_ACCOUNT_DEVICES
         | CLOUD_ACCOUNT_STATUS
         | CLOUD_CONTEXT
+        | SLACK_CONNECTIONS
         | CLOUD_PROJECTS
         | CLOUD_GITHUB
         | CLOUD_PREPAID_BALANCE
@@ -460,3 +461,7 @@ pub const CLOUD_GITHUB: &str = "CloudGithubCatalog";
 pub const CLOUD_IMAGE: &str = "CloudImage";
 pub const CLOUD_IMAGE_BUILD: &str = "CloudImageBuild";
 pub const CLOUD_IMAGE_DELETE: &str = "CloudImageDelete";
+
+pub const SLACK_CONNECTIONS: &str = "SlackConnections";
+pub const SLACK_CONNECT: &str = "SlackConnect";
+pub const SLACK_DISCONNECT: &str = "SlackDisconnect";

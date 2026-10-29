@@ -170,3 +170,7 @@ An interrupted or malformed acknowledgement triggers a fresh read and discards q
 The composer’s context ring reads `contextUsage` from the selected execution host’s `WatchDocMessages` stream. The card shows reported tokens/capacity, a 38-segment meter and remaining capacity. It distinguishes zero usage from unknown usage, hides unreported or zero capacity, clamps the displayed percentage and saturates remaining capacity at zero. It never derives occupancy from cumulative billing totals or guesses a capacity from a model name.
 
 Changing conversations or execution hosts clears the previous measurement. Disconnection preserves the last reported value with an offline label; reconnecting keeps it marked as refreshing until a valid transcript update arrives. Malformed transcript updates do not replace the last valid measurement. The card is read-only and shares its GPU ring painter with the native indicators.
+
+## Slack integration
+
+The first-party Slack app runs alongside `zuse-cloud-api` behind an explicit feature flag. See [Slack setup and recovery](slack-app.md) for server-only secrets, the additive migration, manifest, runtime image compatibility and fixture tests. Settings → Cloud → Slack shares one component across native and browser hosts; each connected member chooses a Zuse workspace and prepared repository before authorizing Slack.

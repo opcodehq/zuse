@@ -511,3 +511,37 @@ async fn stale_tool_echo_stays_parked() {
 
     rig.core.sessions.shutdown().await;
 }
+
+#[tokio::test]
+async fn slack_result_is_recorded_when_the_adapter_omits_done() {
+    let rig = assemble("Slack prompt");
+    rig.core.workspace.claim_chat(CHAT, Some("/tmp")).unwrap();
+    let source = zuse_protocol::slack::MessageSource::Slack {
+        text: "Slack prompt".into(),
+        author: Some("Ada".into()),
+        channel: Some("engineering".into()),
+    };
+    let entry:zuse_doc::SessionCommandEntry=serde_json::from_value(serde_json::json!({"id":"slack-command","payload":{"kind":"run","messageId":"slack-user","request":run_request("Slack prompt")},"issuedBy":"cloud-mailbox:hmac-sha256:fixture","issuedAt":chrono::Utc::now().timestamp_millis(),"expiresAt":9_007_199_254_740_991i64,"status":"pending"})).unwrap();
+    rig.core
+        .doc_host
+        .admit_mailbox_command_with_source(CHAT, entry, Some(&source))
+        .await
+        .unwrap();
+    let handle = rig.core.doc_host.open(CHAT).unwrap();
+    assert!(handle.doc().read_entries().unwrap().iter().any(|message|message.id=="slack-user" && message.parts.iter().any(|part|matches!(part,MessagePart::MessageSource {source:actual,..} if actual==&source))));
+    rig.feed.send(session_started()).unwrap();
+    rig.feed.send(text("Fixed the test.")).unwrap();
+    wait_for(
+        || status(&rig.core) == Some(SessionStatus::Idle),
+        "Slack completion without native Done",
+    )
+    .await;
+    let result = handle
+        .doc()
+        .slack_turn_results()
+        .remove("slack-user")
+        .expect("watchdog completion receipt");
+    assert_eq!(result.status, DoneStatus::Completed);
+    assert_eq!(result.text, "Fixed the test.");
+    rig.core.shutdown().await;
+}

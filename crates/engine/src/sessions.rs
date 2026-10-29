@@ -2614,6 +2614,38 @@ fn sync_segment<'a>(
     Ok(())
 }
 
+fn record_slack_result(doc: &SessionDoc, message: &str, parts: &[MessagePart], status: DoneStatus) {
+    if !doc.read_entries().ok().is_some_and(|entries| {
+        entries.iter().any(|entry| {
+            entry.id == message
+                && entry
+                    .parts
+                    .iter()
+                    .any(|part| matches!(part, MessagePart::MessageSource { .. }))
+        })
+    }) {
+        return;
+    }
+    let full = folded_text(parts);
+    let mut text = zuse_protocol::slack::result_text(&full);
+    if text.trim().is_empty() {
+        text = "The task ended without a text result. Open Zuse for details.".into();
+    }
+    if doc
+        .record_slack_turn_result(
+            message,
+            &zuse_protocol::slack::TurnResult {
+                completed_at: now_ms(),
+                text,
+                status,
+            },
+        )
+        .is_err()
+    {
+        tracing::warn!("Slack completion receipt could not be recorded");
+    }
+}
+
 fn finish_segment<'a>(
     doc: &'a SessionDoc,
     writer: Option<SegmentWriter<'a>>,
@@ -2729,6 +2761,7 @@ async fn drive_run(
     // Captured for post-run auto-titling (the request moves into the harness).
     let harness_id = harness.id();
     let user_prompt = request.prompt.clone();
+    let mut source_message_id = resume_state.user_message_id.clone();
     let run_cwd = request.cwd.clone();
     if request.resume.is_none() {
         let _ = doc.clear_context_usage();
@@ -3273,6 +3306,7 @@ async fn drive_run(
                         && !inner.has_pending_steers(&chat_id, &run_id)
                         && !inner.continues_with_sent_message(&chat_id))
                         .then(|| entry_id.clone());
+                    if completed_turn.is_some(){record_slack_result(&doc,&source_message_id,&folded,DoneStatus::Completed);}
                     if !folded.is_empty() || writer.is_some() {
                         if let Err(err) = finish_segment(
                             doc_ref,
@@ -3797,6 +3831,7 @@ async fn drive_run(
             // A steer boundary means a real prompt owns the turn again — its
             // Done will come; the short self-continued window stands down.
             self_continued_turn = false;
+            record_slack_result(&doc, &source_message_id, &folded, DoneStatus::Interrupted);
             if let Err(err) = finish_segment(
                 doc_ref,
                 writer.take(),
@@ -3839,6 +3874,7 @@ async fn drive_run(
             // Consumed: a steer carrying the fork history delivered it to
             // this runtime's provider session.
             if let Some(steer) = &confirmed {
+                source_message_id = steer.message_id.clone();
                 turn.forget_steer(&steer.message_id);
             }
             if confirmed.is_some_and(|steer| steer.fork_history)
@@ -3919,6 +3955,7 @@ async fn drive_run(
                     *resolved = true;
                 }
             }
+            record_slack_result(&doc, &source_message_id, &folded, *status);
             // A Done landing on a PARKED session with nothing streamed (the
             // idle reaper's or an interrupt's own teardown) has no entry to
             // finalize — writing one would leave an empty aborted stub.
@@ -5213,5 +5250,61 @@ mod tests {
             ]
         );
         core.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod slack_tests {
+    use super::*;
+    #[test]
+    fn slack_terminal_result_is_correlated_and_excludes_reasoning_and_tools() {
+        let doc = SessionDoc::init("slack-chat").unwrap();
+        let source = zuse_protocol::slack::MessageSource::Slack {
+            text: "Fix it".into(),
+            author: None,
+            channel: None,
+        };
+        doc.push_message(&SessionMessageEntry {
+            id: "slack-user".into(),
+            role: MessageRole::User,
+            parts: vec![
+                MessagePart::Text {
+                    id: "t".into(),
+                    text: "Full Slack prompt".into(),
+                },
+                MessagePart::MessageSource {
+                    id: "source".into(),
+                    source,
+                },
+            ],
+            created_at: 0,
+            device_id: "runtime".into(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+            duration_ms: None,
+        })
+        .unwrap();
+        let parts = vec![
+            MessagePart::Reasoning {
+                id: "private".into(),
+                text: "Private reasoning".into(),
+            },
+            MessagePart::Text {
+                id: "result".into(),
+                text: "Fixed the test.".into(),
+            },
+        ];
+        record_slack_result(&doc, "other-user", &parts, DoneStatus::Completed);
+        assert!(
+            doc.doc()
+                .get_map("slackTurnResults")
+                .get("other-user")
+                .is_none()
+        );
+        record_slack_result(&doc, "slack-user", &parts, DoneStatus::Completed);
+        let results = serde_json::to_value(doc.slack_turn_results()).unwrap();
+        assert_eq!(results["slack-user"]["text"], "Fixed the test.");
+        assert_eq!(results["slack-user"]["status"], "completed");
+        assert!(!results.to_string().contains("Private reasoning"));
     }
 }

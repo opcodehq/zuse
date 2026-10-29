@@ -4,6 +4,7 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 
 | Capability | Status | Evidence / remaining work |
 | --- | --- | --- |
+| Slack app | source | Cloud-hosted signed ingress, encrypted durable jobs, member/workspace OAuth, idempotent cloud/mailbox admission, correlated thread result delivery and sender/channel attribution in both chats. Shared Cloud settings picker is wired through host authentication. See `slack-app.md`; fixture validation is recorded in the PR. Personal-workspace execution is implemented; organization execution remains gated by the cloud guest/broker. Live installation, provider execution, rendered acceptance, alerts and remaining original Slack surfaces are pending. |
 | Cargo monorepo and native source foundation | compiled | Engine and browser server compile checks passed |
 | Native shell, sidebar, chat, composer, settings | compiled | Current Linux production check and X11 shell/webview scenario pass; complete UI parity and physical desktop workflows remain pending |
 | Files/editor, terminal, Git/worktrees/PR panes | source | Shared native/browser Git controls now stage/unstage, commit staged changes, push/pull and create/switch branches through canonical host RPC; see `git-workspace.md`. Browser PR board, detail/discussion/checks and revision-pinned diff plus shared native/browser PR creation are implemented; see `pull-requests.md`. Complete file/terminal/PR lifecycle and rendered parity remain pending. |

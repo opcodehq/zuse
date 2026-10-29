@@ -90,3 +90,5 @@ pub mod cloud_assets;
 pub mod usage;
 
 pub mod keybindings;
+
+pub mod slack;
