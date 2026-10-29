@@ -9,6 +9,8 @@ use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 use zuse_protocol::plugins::{PluginRequest, PluginResponse, PluginTenant, PluginToolRequest};
 
+pub mod local;
+
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +33,8 @@ pub enum PluginError {
     InvalidWorkspace,
     #[error("Plugin calls require session permission.")]
     PermissionRequired,
+    #[error("{0}")]
+    Local(&'static str),
 }
 
 /// A snapshot from the account authority. Token refresh belongs to that authority.

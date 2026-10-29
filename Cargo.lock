@@ -13974,14 +13974,19 @@ version = "0.25.1"
 dependencies = [
  "async-trait",
  "futures",
+ "libc",
  "rcgen",
  "reqwest",
+ "rmcp",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-rustls",
  "tokio-util",
+ "uuid",
  "zuse-protocol",
 ]
 

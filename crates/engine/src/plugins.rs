@@ -1,4 +1,5 @@
-//! Shared hosted-plugin gateway. Identity and policy are resolved by the engine.
+//! Shared plugin gateway for hosted plugins and this computer's local stdio
+//! servers. Identity and policy are resolved by the engine.
 use crate::{
     WorkspaceHost,
     account::{Account, AccountError},
@@ -6,13 +7,17 @@ use crate::{
 use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{
-    path::Path,
+    collections::BTreeMap,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
-use zuse_plugins::{PluginClient, PluginCredential, PluginCredentials, PluginError};
+use zuse_plugins::{
+    PluginClient, PluginCredential, PluginCredentials, PluginError,
+    local::{self, LocalServers},
+};
 use zuse_protocol::{
     SandboxLevel,
-    plugins::{PluginRequest, PluginResponse, PluginReturnTo, PluginToolRequest},
+    plugins::{PluginRequest, PluginResponse, PluginReturnTo, PluginToolRequest, is_local_server},
 };
 
 #[async_trait]
@@ -39,9 +44,17 @@ pub struct Plugins {
     bindings: Arc<Mutex<Connection>>,
     callback: Arc<tokio::sync::Mutex<Option<crate::plugin_callback::PluginCallback>>>,
     client: Arc<tokio::sync::Mutex<Option<(String, PluginClient)>>>,
+    /// `None` where launching local commands is not allowed, such as hosted runtimes.
+    local_root: Option<PathBuf>,
+    local: Arc<tokio::sync::Mutex<Option<(String, Arc<LocalServers>)>>>,
 }
 impl Plugins {
-    pub fn open(root: &Path, account: Account, workspace: WorkspaceHost) -> anyhow::Result<Self> {
+    pub fn open(
+        root: &Path,
+        account: Account,
+        workspace: WorkspaceHost,
+        local_servers: bool,
+    ) -> anyhow::Result<Self> {
         let db = open_bindings(root)?;
         Ok(Self {
             account,
@@ -49,7 +62,68 @@ impl Plugins {
             bindings: Arc::new(Mutex::new(db)),
             callback: Arc::new(tokio::sync::Mutex::new(None)),
             client: Arc::new(tokio::sync::Mutex::new(None)),
+            local_root: local_servers.then(|| root.to_path_buf()),
+            local: Arc::new(tokio::sync::Mutex::new(None)),
         })
+    }
+    /// One store per account; switching accounts stops the previous account's servers.
+    async fn local(&self, subject: &str) -> Result<Arc<LocalServers>, PluginError> {
+        let root = self.local_root.as_ref().ok_or(PluginError::Local(
+            "Local MCP servers are not available on this computer.",
+        ))?;
+        let mut slot = self.local.lock().await;
+        if let Some((owner, store)) = &*slot {
+            if owner == subject {
+                return Ok(store.clone());
+            }
+        }
+        let store = Arc::new(LocalServers::new(
+            root,
+            subject,
+            Arc::new(local_environment),
+        ));
+        *slot = Some((subject.to_owned(), store.clone()));
+        Ok(store)
+    }
+    /// Local management never reaches the hosted API and only targets Personal.
+    async fn local_request(
+        &self,
+        request: &PluginRequest,
+        subject: &str,
+    ) -> Result<Option<PluginResponse>, PluginError> {
+        if !targets_local(request) {
+            return Ok(None);
+        }
+        if request.tenant_id() != Some(format!("personal:{subject}").as_str()) {
+            return Err(PluginError::Local(
+                "Local servers belong to your personal workspace.",
+            ));
+        }
+        let store = self.local(subject).await?;
+        Ok(Some(match request {
+            PluginRequest::AddLocalServer {
+                request_id,
+                name,
+                command,
+                args,
+                env,
+                ..
+            } => {
+                store
+                    .add(request_id, name, command, args.clone(), env.clone())
+                    .await?
+            }
+            PluginRequest::RemoveServer { plugin_id: id, .. }
+            | PluginRequest::Disconnect {
+                connection_id: id, ..
+            } => store.remove(id).await?,
+            PluginRequest::SetEnabled {
+                connection_id,
+                enabled,
+                ..
+            } => store.set_enabled(connection_id, *enabled).await?,
+            _ => return Ok(None),
+        }))
     }
     async fn client(&self, subject: &str) -> Result<PluginClient, PluginError> {
         let mut slot = self.client.lock().await;
@@ -72,6 +146,9 @@ impl Plugins {
     pub async fn request(&self, request: &PluginRequest) -> Result<PluginResponse, PluginError> {
         let cancel = self.account.session_cancellation();
         let credential = PluginCredentials::current(&self.account).await?;
+        if let Some(response) = self.local_request(request, &credential.subject).await? {
+            return Ok(response);
+        }
         let client = self.client(&credential.subject).await?;
         let mut request = request.clone();
         if let PluginRequest::List { tenant_id } = &mut request {
@@ -129,6 +206,25 @@ impl Plugins {
             }
             *tenants = available;
         }
+        if let PluginResponse::Snapshot {
+            tenant_id,
+            catalog,
+            connections,
+            ..
+        } = &mut response
+        {
+            if *tenant_id == format!("personal:{}", credential.subject) && self.local_root.is_some()
+            {
+                // An unreadable local file hides local rows; hosted plugins stay usable.
+                match self.local(&credential.subject).await?.snapshot().await {
+                    Ok((local_catalog, local_connections)) => {
+                        catalog.splice(0..0, local_catalog);
+                        connections.splice(0..0, local_connections);
+                    }
+                    Err(error) => tracing::warn!(%error, "local plugin servers unavailable"),
+                }
+            }
+        }
         Ok(response)
     }
     pub async fn select_workspace(
@@ -182,11 +278,103 @@ impl Plugins {
             let db = self.bindings.lock().unwrap_or_else(|e| e.into_inner());
             bind(&db, chat_id, &credential.subject)?
         };
-        let client = self.client(&credential.subject).await?;
-        Ok(client
-            .tools_in_tenant(&tenant, request, permitted, &cancel)
-            .await?)
+        // Local servers join chats bound to this account's Personal workspace.
+        let local =
+            if tenant == format!("personal:{}", credential.subject) && self.local_root.is_some() {
+                Some(self.local(&credential.subject).await?)
+            } else {
+                None
+            };
+        let hosted = async {
+            self.client(&credential.subject)
+                .await?
+                .tools_in_tenant(&tenant, request, permitted, &cancel)
+                .await
+        };
+        match request {
+            PluginToolRequest::Schema { address } | PluginToolRequest::Call { address, .. }
+                if local::owns_address(address) =>
+            {
+                let local = local.ok_or(PluginError::Local(
+                    "This local server is not available in this session.",
+                ))?;
+                Ok(local.tools(request).await?)
+            }
+            PluginToolRequest::List | PluginToolRequest::Search { .. } if local.is_some() => {
+                let local = local.as_ref().map(|local| local.tools(request));
+                let (hosted, local) = tokio::join!(hosted, async {
+                    match local {
+                        Some(local) => Some(local.await),
+                        None => None,
+                    }
+                });
+                Ok(merge(hosted, local)?)
+            }
+            _ => Ok(hosted.await?),
+        }
     }
+}
+
+fn targets_local(request: &PluginRequest) -> bool {
+    match request {
+        PluginRequest::AddLocalServer { .. } => true,
+        PluginRequest::RemoveServer { plugin_id: id, .. }
+        | PluginRequest::Disconnect {
+            connection_id: id, ..
+        }
+        | PluginRequest::SetEnabled {
+            connection_id: id, ..
+        } => is_local_server(id),
+        _ => false,
+    }
+}
+
+/// Discovery succeeds when either source answers; an error surfaces only when
+/// neither contributed a result.
+fn merge(
+    hosted: Result<serde_json::Value, PluginError>,
+    local: Option<Result<serde_json::Value, PluginError>>,
+) -> Result<serde_json::Value, PluginError> {
+    let mut results = vec![];
+    for value in [
+        hosted.as_ref().ok(),
+        local.as_ref().and_then(|r| r.as_ref().ok()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        results.extend(value.as_array().cloned().unwrap_or_default());
+    }
+    if results.is_empty() {
+        if let Err(error) = hosted {
+            return Err(error);
+        }
+        if let Some(Err(error)) = local {
+            return Err(error);
+        }
+    }
+    Ok(serde_json::Value::Array(results))
+}
+
+/// Local servers see the user's login-shell PATH, like other launched tools.
+fn local_environment() -> BTreeMap<String, String> {
+    let mut environment = local::base_environment();
+    let mut paths: Vec<PathBuf> = environment
+        .get("PATH")
+        .map(|path| std::env::split_paths(path).collect())
+        .unwrap_or_default();
+    if let Some(shell) = zuse_providers::shell_env::login_shell_path() {
+        paths.extend(std::env::split_paths(shell));
+    }
+    let mut seen = std::collections::HashSet::new();
+    paths.retain(|path| !path.as_os_str().is_empty() && seen.insert(path.clone()));
+    if let Some(path) = std::env::join_paths(paths)
+        .ok()
+        .and_then(|path| path.into_string().ok())
+    {
+        environment.insert("PATH".into(), path);
+    }
+    environment
 }
 
 fn open_bindings(root: &Path) -> anyhow::Result<Connection> {
@@ -308,5 +496,81 @@ mod tests {
             "personal:other"
         );
         assert!(bind(&db, "team-chat", "other").is_err());
+    }
+    #[test]
+    fn local_management_is_routed_by_identity_and_never_by_hosted_actions() {
+        let local = |id: &str| PluginRequest::SetEnabled {
+            tenant_id: "personal:user".into(),
+            connection_id: id.into(),
+            enabled: false,
+        };
+        assert!(targets_local(&local("local-1")));
+        assert!(!targets_local(&local("hosted-1")));
+        assert!(targets_local(&PluginRequest::RemoveServer {
+            tenant_id: "personal:user".into(),
+            plugin_id: "local-1".into(),
+        }));
+        assert!(targets_local(&PluginRequest::Disconnect {
+            tenant_id: "personal:user".into(),
+            connection_id: "local-1".into(),
+        }));
+        assert!(!targets_local(&PluginRequest::List { tenant_id: None }));
+        assert!(!targets_local(&PluginRequest::Connect {
+            tenant_id: "personal:user".into(),
+            plugin_id: "local-1".into(),
+            label: "Files".into(),
+            request_id: "r".into(),
+            return_to: None,
+            api_key: None,
+        }));
+    }
+    #[test]
+    fn discovery_merges_sources_and_reports_errors_only_without_results() {
+        let hosted = || Ok(serde_json::json!([{"address":"mail/send"}]));
+        let local = || Ok(serde_json::json!([{"address":"tools.local-1.user.local-1.echo"}]));
+        assert_eq!(
+            merge(hosted(), Some(local()))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            merge(Err(PluginError::Unavailable), Some(local())).unwrap()[0]["address"],
+            "tools.local-1.user.local-1.echo"
+        );
+        assert_eq!(
+            merge(hosted(), Some(Err(PluginError::Unavailable))).unwrap()[0]["address"],
+            "mail/send"
+        );
+        assert!(matches!(
+            merge(Err(PluginError::SignedOut), Some(Ok(serde_json::json!([])))),
+            Err(PluginError::SignedOut)
+        ));
+        assert!(matches!(
+            merge(
+                Ok(serde_json::json!([])),
+                Some(Err(PluginError::Local("x")))
+            ),
+            Err(PluginError::Local(_))
+        ));
+        assert!(
+            merge(Ok(serde_json::json!([])), None)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn local_environment_keeps_an_allowlist_and_a_usable_path() {
+        let environment = local_environment();
+        assert!(environment.contains_key("PATH"));
+        assert!(
+            environment
+                .keys()
+                .all(|key| local::base_environment().contains_key(key))
+        );
     }
 }

@@ -228,25 +228,25 @@ fn catalog() -> Vec<ToolDef> {
     for (name, description, properties, required) in [
         (
             "plugins_list",
-            "List connected hosted plugin tools for this agent's session.",
+            "List connected plugins for this agent's session, including hosted plugins and local MCP servers on this computer.",
             json!({}),
             json!([]),
         ),
         (
             "plugins_search",
-            "Search available hosted plugin tools by intent.",
+            "Search available plugin tools, hosted or local, by intent.",
             json!({"query":{"type":"string"}}),
             json!(["query"]),
         ),
         (
             "plugins_schema",
-            "Read a hosted plugin tool's argument schema before calling it.",
+            "Read a plugin tool's argument schema before calling it.",
             json!({"address":{"type":"string"}}),
             json!(["address"]),
         ),
         (
             "plugins_call",
-            "Call a connected hosted plugin tool using its exact address and schema. Calls follow the session tool policy and are never automatically retried.",
+            "Call a connected plugin tool using its exact address and schema. Calls follow the session tool policy and are never automatically retried.",
             json!({"address":{"type":"string"},"arguments":{"type":"object"}}),
             json!(["address", "arguments"]),
         ),
@@ -739,7 +739,7 @@ impl Tools {
             .origin()
             .chat_id
             .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("Hosted plugins require an agent session."))?;
+            .ok_or_else(|| anyhow::anyhow!("Plugins require an agent session."))?;
         let text = |key: &str| -> anyhow::Result<String> {
             args[key]
                 .as_str()

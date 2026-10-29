@@ -14,6 +14,14 @@ The membership lookup is optional metadata. An unavailable lookup preserves the 
 
 An uncertain workspace-selection receipt triggers a read of the saved selection, preserving the previous rows while awaiting confirmation. It does not repeat the selection action. Browser reconnect uses the same shared state; stale responses remain scoped to their original account and request.
 
+## Local stdio servers
+
+Settings → Plugins → Add MCP server offers Remote and Local in the Personal workspace. Local takes a name, a command, literal arguments (one per line) and `NAME=value` environment lines; the command field also accepts one pasted stdio JSON configuration (`{command,args,env}` or `{mcpServers:{<one entry>}}`). Organization workspaces only offer Remote.
+
+`addLocalServer` never reaches the hosted API. The engine validates the request, starts the command with a cleared environment (a small allowlist plus the user's login-shell `PATH`, then the configured variables), and saves it only after MCP initialization and `tools/list` succeed. Servers are stored per account at `<data>/local-plugins/<sha256(subject)>.json` (directory 0700, file 0600, atomic replacement). A malformed file fails closed: nothing is listed, launched or overwritten. Replayed requests are deduplicated by `requestId`, writes are serialized and each account may keep 50 servers. Snapshots carry the command line but never environment values.
+
+Local rows use `local-` identifiers. Removing, disconnecting or turning off such a row is handled by the engine and stops its process. Each enabled server runs lazily as one process group that is killed when it is turned off, removed, the account changes or the engine exits. Chats bound to the account's Personal workspace see local tools through the same `plugins_list/search/schema/call` gateway tools: discovery merges hosted and local results and stays available if one source fails, while schema and call requests for `tools.local-…` addresses go to the local process. The read-only session refusal applies before any local call, uncertain call outcomes retire the process without retrying, and hosted runtimes never launch local servers.
+
 ## Verification and remaining acceptance
 
 Three trusted-TLS contract scenarios exercise six simultaneous cross-workspace calls, scoped management/OAuth routes, membership choices, read-only policy, invalid scopes, mismatched responses, account switching during a request and cancellation without replay. Two SQLite scenarios cover migration, restart, stable workspace bindings and account isolation. Shared protocol and viewport regressions cover uncertain selection receipts and read reconciliation.

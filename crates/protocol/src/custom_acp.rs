@@ -176,7 +176,7 @@ fn encode_field(value: &str) -> String {
         value.to_owned()
     }
 }
-fn decode_field(value: &str) -> Result<String, String> {
+pub(crate) fn decode_field(value: &str) -> Result<String, String> {
     if value.starts_with('"') {
         serde_json::from_str(value).map_err(|_| "Quoted values must be valid JSON strings".into())
     } else {

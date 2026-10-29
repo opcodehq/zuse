@@ -349,7 +349,11 @@ pub fn render<T: 'static>(
                 .next()
                 .unwrap_or(url)
         })
-        .unwrap_or(&definition.domain)
+        .unwrap_or(if definition.command.is_some() {
+            "Local MCP server"
+        } else {
+            &definition.domain
+        })
         .to_owned();
     let website = format!("https://{}", definition.domain);
     let mut actions = div().flex().items_center().gap(px(4.)).when(busy, |d| {
@@ -611,7 +615,23 @@ pub fn render<T: 'static>(
             .child(div().flex_1().min_w_0().child(value))
     };
     let mut info = div().flex().flex_col().gap(px(8.));
-    if definition.custom {
+    if let Some(command) = &definition.command {
+        info = info
+            .child(info_row(
+                "Command",
+                div()
+                    .id("plugin-information-command")
+                    .truncate()
+                    .font_family("Geist Mono")
+                    .text_size(px(12.))
+                    .child(command.clone())
+                    .into_any_element(),
+            ))
+            .child(info_row(
+                "Transport",
+                div().child("Local (stdio)").into_any_element(),
+            ));
+    } else if definition.custom {
         info = info
             .child(info_row(
                 "Server URL",
@@ -669,7 +689,9 @@ pub fn render<T: 'static>(
             .into_any_element(),
     ));
     view=view.child(section("Information",div().child(info).child(div().mt(px(16.)).max_w(px(560.)).text_size(px(11.)).line_height(px(16.)).text_color(colors.muted)
-        .child(if snapshot["tenantId"].as_str().is_some_and(|id|id.starts_with("organization:")) {
+        .child(if definition.command.is_some() {
+            "Runs on this computer with your permissions. Its command and environment are stored on this computer and are not sent to Zuse servers. Turning it off stops the process."
+        } else if snapshot["tenantId"].as_str().is_some_and(|id|id.starts_with("organization:")) {
             "Connections are shared with members of this organization. Tokens stay encrypted on Zuse servers and never reach agent machines. Disconnecting stops new calls immediately."
         }else{"Connections are private to your Zuse account. Tokens stay encrypted on Zuse servers and never reach agent machines. Disconnecting stops new calls immediately."})).into_any_element()));
     view.into_any_element()

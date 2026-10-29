@@ -18,11 +18,12 @@ pub fn catalog(snapshot: &Value, query: &str, connected_only: bool) -> Vec<Plugi
             (!connected_only || connected(snapshot, &item.id))
                 && (query.is_empty()
                     || format!(
-                        "{} {} {} {}",
+                        "{} {} {} {} {}",
                         item.name,
                         item.description,
                         item.domain,
-                        item.url.as_deref().unwrap_or_default()
+                        item.url.as_deref().unwrap_or_default(),
+                        item.command.as_deref().unwrap_or_default()
                     )
                     .to_lowercase()
                     .contains(&query))
@@ -214,7 +215,10 @@ pub fn connected_count(snapshot: &Value) -> usize {
 }
 pub fn title(item: &PluginDefinition, text: Hsla, muted: Hsla, background: Hsla) -> Div {
     let subtitle = if item.custom && item.description.trim().is_empty() {
-        item.url.as_deref().unwrap_or(&item.domain)
+        item.url
+            .as_deref()
+            .or(item.command.as_deref())
+            .unwrap_or(&item.domain)
     } else {
         &item.description
     };
