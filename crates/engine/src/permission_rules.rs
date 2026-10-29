@@ -401,15 +401,11 @@ impl crate::sessions::SessionsEngine {
         let mut normalized = Vec::with_capacity(questions.len());
         for question in questions {
             let Some(approval) = &question.approval else {
-                normalized.push(
+                normalized.extend(
                     answers
                         .iter()
-                        .find(|a| a.question_id == question.id)
-                        .cloned()
-                        .unwrap_or(zuse_protocol::UserInputAnswer {
-                            question_id: question.id.clone(),
-                            labels: vec![],
-                        }),
+                        .filter(|answer| answer.question_id == question.id)
+                        .cloned(),
                 );
                 continue;
             };
@@ -489,6 +485,39 @@ mod tests {
         let rules = PermissionRules::new(dir.path().join("rules.sqlite"));
         (dir, rules)
     }
+    #[tokio::test]
+    async fn unanswered_content_questions_keep_the_original_cancellation_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = crate::SessionsEngine::new(
+            "test".into(),
+            std::sync::Arc::new(crate::RunJournal::open(dir.path()).unwrap()),
+            std::sync::Arc::new(crate::HarnessRegistry::new()),
+        );
+        let question = zuse_protocol::UserInputQuestion {
+            approval: None,
+            id: "content".into(),
+            header: "Question".into(),
+            question: "Continue?".into(),
+            options: vec!["Yes".into(), "No".into()],
+            multi_select: false,
+            prefill: None,
+            multiline: false,
+        };
+        assert!(
+            engine
+                .finish_permission_input("chat", "run", std::slice::from_ref(&question), vec![])
+                .is_empty()
+        );
+        let answer = zuse_protocol::UserInputAnswer {
+            question_id: question.id.clone(),
+            labels: vec!["Yes".into()],
+        };
+        assert_eq!(
+            engine.finish_permission_input("chat", "run", &[question], vec![answer.clone()]),
+            vec![answer]
+        );
+    }
+
     #[test]
     fn exact_matching_never_treats_commands_as_prefixes_or_patterns() {
         let (_dir, rules) = store();
