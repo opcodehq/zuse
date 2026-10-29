@@ -161,6 +161,7 @@ impl WorkspaceView {
                 self.recover_transcript(error.to_string(), cx);
                 return;
             }
+            self.clear_closed_secret(cx);
             if reset {
                 self.transcript_state.deadline = None;
                 self.transcript_state.ready = true;

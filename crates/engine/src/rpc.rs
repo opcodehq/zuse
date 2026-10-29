@@ -1609,6 +1609,7 @@ fn forward_deadline(method: &str) -> std::time::Duration {
         methods::CLONE_REPO | methods::FETCH_ALL | methods::APPLY_UPDATE => {
             Duration::from_secs(15 * 60)
         }
+        methods::REQUEST_PRIVATE_OPERATION => Duration::from_secs(11 * 60),
         methods::INSTALL_HARNESS => Duration::from_secs(15 * 60),
         // A full fleet of enabled providers is checked two at a time; each
         // provider may need both a CLI probe and a network request.
@@ -1669,6 +1670,8 @@ fn forwardable(method: &str) -> bool {
             | methods::LIST_SKILLS
             | methods::LIST_COMMANDS
             | methods::QUEUE_COMMAND
+            | methods::SUBMIT_PRIVATE_SECRET
+            | methods::REQUEST_PRIVATE_OPERATION
             | methods::TAKE_PROJECT_ACTION_SETUP
             | methods::WATCH_DOC_MESSAGES
             | methods::WATCH_CHAT_CONFIG
@@ -2463,6 +2466,74 @@ impl RpcService for EngineRpc {
             None
         };
         match method {
+            methods::REQUEST_PRIVATE_OPERATION => {
+                let chat = params["chatId"]
+                    .as_str()
+                    .ok_or_else(|| RpcError::BadParams("Missing originating chat".into()))?;
+                let result = self
+                    .sessions
+                    .private_operation(chat, params["operation"].clone())
+                    .await
+                    .map_err(|_| {
+                        RpcError::Failed(
+                            "Private operation failed, expired or was cancelled".into(),
+                        )
+                    })?;
+                RpcReply::value(&serde_json::json!({"result":result}))
+            }
+            methods::SUBMIT_PRIVATE_SECRET => {
+                // Intentionally bypass parse_params: parser errors must not include values.
+                let unavailable =
+                    || RpcError::Failed("Private secret request is unavailable or expired".into());
+                let chat = params["chatId"]
+                    .as_str()
+                    .ok_or_else(unavailable)?
+                    .to_owned();
+                let request = params["requestId"]
+                    .as_str()
+                    .ok_or_else(unavailable)?
+                    .to_owned();
+                let id = params["secretId"]
+                    .as_str()
+                    .ok_or_else(unavailable)?
+                    .to_owned();
+                if !self.sessions.turn_in_flight(&chat) {
+                    return Err(unavailable());
+                }
+                let saved = params["decline"] != true;
+                if saved {
+                    let value = params
+                        .get_mut("value")
+                        .map(serde_json::Value::take)
+                        .ok_or_else(unavailable)?;
+                    let serde_json::Value::String(value) = value else {
+                        return Err(unavailable());
+                    };
+                    crate::secret_broker::shared()
+                        .submit_routed(self.sessions.secret_namespace(), &id, &chat, &request, zeroize::Zeroizing::new(value))
+                        .map_err(|_| unavailable())?;
+                } else {
+                    crate::secret_broker::shared()
+                        .decline_routed(self.sessions.secret_namespace(), &id, &chat, &request)
+                        .map_err(|_| unavailable())?;
+                }
+                let resolved = self
+                    .sessions
+                    .respond_input(
+                        &chat,
+                        &request,
+                        vec![zuse_protocol::UserInputAnswer {
+                            question_id: format!("private-secret:{id}"),
+                            labels: vec![if saved { "saved" } else { "declined" }.into()],
+                        }],
+                    )
+                    .map_err(|_| unavailable())?;
+                if !resolved {
+                    crate::secret_broker::shared().remove(&id);
+                    return Err(unavailable());
+                }
+                RpcReply::value(&serde_json::json!({"saved":saved}))
+            }
             zuse_protocol::external_chat::LIST | zuse_protocol::external_chat::IMPORT => {
                 self.external_chats(method, params).await
             }
@@ -3075,8 +3146,17 @@ impl RpcService for EngineRpc {
             }
             methods::QUEUE_COMMAND => {
                 let p: QueueCommandParams = parse_params(params)?;
+                if let SessionCommandPayload::RespondInput { answers, .. } = &p.command {
+                    if answers.iter().any(|a| a.question_id.starts_with("private-secret:")) {
+                        return Err(RpcError::BadParams("Use the private secret card for this request".into()));
+                    }
+                }
                 if let SessionCommandPayload::Run { request, .. } = &p.command
-                    && self.project_creation.as_ref().is_some_and(|service| service.blocks_request(request)) {
+                    && self
+                        .project_creation
+                        .as_ref()
+                        .is_some_and(|service| service.blocks_request(request))
+                {
                     return Err(RpcError::Failed("Project files are not ready. Finish or retry project creation before sending.".into()));
                 }
                 let command_id = self

@@ -8,6 +8,8 @@
 //! the gpui element only feeds them measurements.
 
 mod archive;
+mod private_secrets;
+mod question_tray;
 mod permissions;
 mod skill_completion;
 
@@ -6285,6 +6287,7 @@ pub struct Composer {
     /// visible trace of a failed send (2026-08-19).
     failure_key: Option<String>,
     wizard: Option<Wizard>,
+    private_input: Option<(String, Entity<zuse_viewport::input::TextInput>)>,
     wizard_focus: FocusHandle,
     /// Requests already answered locally (suppresses the panel until the doc
     /// frame marks them resolved).
@@ -6700,6 +6703,7 @@ impl Composer {
             launching_new_chat: false,
             failure: None,
             wizard: None,
+            private_input: None,
             wizard_focus: cx.focus_handle(),
             answered_requests: HashSet::new(),
             failure_key: None,
@@ -8746,6 +8750,7 @@ impl Composer {
             // so switching away and back must not erase the one visible
             // trace of a failed send.
             self.wizard = None;
+            self.clear_private_input(cx);
             // Attachments stay stashed under their chat key (the map swap IS
             // the navigation); only the transient chrome resets.
             self.preview = None;
@@ -8805,13 +8810,14 @@ impl Composer {
                         .first()
                         .and_then(|q| q.prefill.clone())
                         .unwrap_or_default();
+                    self.clear_private_input(cx);
                     self.wizard = Some(Wizard::new(request_id, questions));
                     self.input
                         .update(cx, |input, cx| input.set_text(prefill, cx));
                     self.advance_task = None;
                     // The shared input becomes the panel's free-text override.
                     self.input.update(cx, |input, cx| {
-                        input.set_placeholder("Type your own answer, or pick an option above", cx)
+                        input.set_placeholder("Type your own answer…", cx)
                     });
                 }
             }
@@ -8832,6 +8838,7 @@ impl Composer {
                             && !self.answered_requests.contains(&wizard.request_id));
                     if released {
                         self.wizard = None;
+                        self.clear_private_input(cx);
                         self.advance_task = None;
                         let draft = self
                             .drafts
@@ -9918,17 +9925,7 @@ impl Composer {
             return;
         };
         let step = wizard.select(option_ix);
-        let has_pick = wizard.page_has_pick();
-        self.input.update(cx, |input, cx| {
-            input.set_placeholder(
-                if has_pick {
-                    "Type your own answer, or leave this blank to use the selected option"
-                } else {
-                    "Type your own answer, or pick an option above"
-                },
-                cx,
-            )
-        });
+        self.input.update(cx, |input, cx| input.set_placeholder("Type your own answer…", cx));
         match step {
             WizardStep::AutoAdvance => self.schedule_auto_advance(cx),
             WizardStep::Done(answers) => self.wizard_finish(answers, cx),
@@ -9948,6 +9945,7 @@ impl Composer {
     }
 
     fn wizard_advance(&mut self, cx: &mut Context<Self>) {
+        if self.private_question() { return; }
         let text = self.input.read(cx).text().to_string();
         let Some(wizard) = self.wizard.as_mut() else {
             return;
@@ -9976,6 +9974,7 @@ impl Composer {
 
     /// Submit RespondInput and retire the panel.
     fn wizard_finish(&mut self, answers: Vec<UserInputAnswer>, cx: &mut Context<Self>) {
+        if self.private_question() { return; }
         let Some(wizard) = self.wizard.take() else {
             return;
         };
@@ -10043,6 +10042,7 @@ impl Composer {
     }
 
     fn on_wizard_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
+        if self.private_question() { return; }
         // Keys bubbling out of the free-text input must not double-handle:
         // digits select options only while the input is empty, and Enter is the
         // input's own Submit action when it has focus.
@@ -10077,232 +10077,9 @@ impl Composer {
 
     // ---- render pieces ----
 
-    /// The agent-asked-a-question panel (zuse question-panel.tsx), rendered in
-    /// place of the composer: the same floating-pill chrome (`rounded-[26px]
-    /// border-white/[0.08] bg-white/[0.03] shadow-xl`), uppercase header +
-    /// "1/3" counter chip, option rows with number kbd chips, a free-text
-    /// override over a hairline, and Back / Next-Submit footer.
-    fn render_wizard(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let theme = Theme::of(cx).clone();
-        let Some(wizard) = self.wizard.clone() else {
-            return gpui::Empty.into_any_element();
-        };
-        let counter = wizard.counter();
-        let Some(question) = wizard.current().cloned() else {
-            return gpui::Empty.into_any_element();
-        };
-        // The answer borrows the composer's editor, but the composer's own
-        // sizing does not run while the panel shows. Without a limit of its
-        // own the editor kept a stale one-line viewport, so new lines painted
-        // below the card instead of growing it. Grow up to the composer's cap.
-        let answer_cap = TEXTAREA_MAX - TEXTAREA_PAD_V;
-        self.input.update(cx, |input, cx| {
-            if input.viewport_height != Some(answer_cap)
-                || input.settled_viewport_height != Some(answer_cap)
-                || input.resizing
-                || input.overflow_top_padding != 0.0
-            {
-                input.viewport_height = Some(answer_cap);
-                input.settled_viewport_height = Some(answer_cap);
-                input.resizing = false;
-                input.overflow_top_padding = 0.0;
-                cx.notify();
-            }
-        });
-        let page = wizard.page;
-        let last = page + 1 >= wizard.questions.len();
-        let typed_empty = self.input.read(cx).is_empty();
-        let can_advance = wizard.page_has_pick() || !typed_empty || question.multiline;
-
-        let options = question.options.iter().enumerate().map(|(ix, label)| {
-            // Selection reads on the row only while no typed override exists
-            // (typed answers win — zuse question-panel.tsx `isSel`).
-            let picked = wizard.is_picked(ix) && typed_empty;
-            div()
-                .id(("wizard-option", ix))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(12.0))
-                .px(px(14.0))
-                .py(px(10.0))
-                .rounded(px(12.0))
-                .border_1()
-                .border_color(if picked {
-                    crate::theme::ink(0.16)
-                } else {
-                    gpui::transparent_black()
-                })
-                // zuse question-panel.tsx option rows: `transition-colors`.
-                .bg(if picked {
-                    crate::theme::ink(0.09)
-                } else {
-                    motion::hover_blend(
-                        &format!("wizard-option-{ix}"),
-                        crate::theme::ink(0.025),
-                        crate::theme::ink(0.06),
-                    )
-                })
-                .on_hover(motion::hover_listener(format!("wizard-option-{ix}")))
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| this.wizard_select(ix, cx)))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(crate::typography::text_md())
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(if picked {
-                            theme.text_strong
-                        } else {
-                            theme.text
-                        })
-                        .child(SharedString::from(label.clone())),
-                )
-                .when(ix < 9, |el| {
-                    el.child(
-                        // Number kbd chip: `size-[22px] rounded-md text-[11px]`.
-                        div()
-                            .flex_none()
-                            .size(px(22.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.0))
-                            .bg(if picked {
-                                crate::theme::ink(0.16)
-                            } else {
-                                crate::theme::ink(0.05)
-                            })
-                            .text_size(crate::typography::text_xs())
-                            .text_color(if picked {
-                                theme.text
-                            } else {
-                                theme.text_muted.opacity(0.6)
-                            })
-                            .child(SharedString::from(format!("{}", ix + 1))),
-                    )
-                })
-        });
-
-        // Stands in for the composer pill, so it is the same frosted surface:
-        // without the backdrop blur the translucent fill let the transcript
-        // show through unblurred.
-        let panel = div()
-            .id("question-panel")
-            .track_focus(&self.wizard_focus)
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                this.on_wizard_key(event, window, cx)
-            }))
-            .occlude()
-            .rounded(px(COMPOSER_RADIUS))
-            .border_1()
-            .border_color(theme.composer_glass_border())
-            .bg(theme.composer_glass_bg())
-            .shadow(theme.composer_glass_shadows())
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .px(px(16.0))
-                    .pt(px(16.0))
-                    .flex()
-                    .flex_col()
-                    // Header: tracked uppercase + counter chip when paged.
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(10.0))
-                            .child(
-                                div()
-                                    .text_size(crate::typography::text_xs())
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(theme.text_muted.opacity(0.6))
-                                    .child(SharedString::from(question.header.clone())),
-                            )
-                            .when(wizard.questions.len() > 1, |el| {
-                                el.child(
-                                    div()
-                                        .h(px(20.0))
-                                        .px(px(6.0))
-                                        .flex()
-                                        .items_center()
-                                        .rounded(px(6.0))
-                                        .bg(crate::theme::ink(0.06))
-                                        .text_size(crate::typography::text_xs())
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(theme.text_muted.opacity(0.6))
-                                        .child(SharedString::from(counter)),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .mt(px(6.0))
-                            .text_size(crate::typography::text_md())
-                            .line_height(px(20.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text_strong)
-                            .child(SharedString::from(question.question.clone())),
-                    )
-                    .when(question.multi_select, |el| {
-                        el.child(
-                            div()
-                                .mt(px(4.0))
-                                .text_size(crate::typography::text_xs())
-                                .text_color(theme.text_muted.opacity(0.65))
-                                .child(SharedString::from("Select one or more options.")),
-                        )
-                    })
-                    .child(
-                        div()
-                            .mt(px(12.0))
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .children(options),
-                    )
-                    // Free-text override over a hairline (shares the composer
-                    // input entity).
-                    .child(
-                        div()
-                            .mt(px(12.0))
-                            .border_t_1()
-                            .border_color(crate::theme::hairline(0.06))
-                            .pt(px(12.0))
-                            .pb(px(4.0))
-                            .px(px(4.0))
-                            .child(self.input.clone()),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .items_center()
-                    .px(px(16.0))
-                    .pb(px(16.0))
-                    .pt(px(4.0))
-                    .child(if page > 0 {
-                        crate::popover::btn_ghost(&theme, "Back", "wizard-back")
-                            .id("wizard-back")
-                            .on_click(cx.listener(|this, _, _, cx| this.wizard_back(cx)))
-                            .into_any_element()
-                    } else {
-                        gpui::Empty.into_any_element()
-                    })
-                    .child(
-                        crate::popover::btn_primary(&theme, if last { "Submit" } else { "Next" })
-                            .id("wizard-submit")
-                            .px(px(16.0))
-                            .when(!can_advance, |el| el.opacity(0.4))
-                            .on_click(cx.listener(|this, _, _, cx| this.wizard_advance(cx))),
-                    ),
-            );
-        crate::frost::floating_glass(COMPOSER_RADIUS, 20.0, panel).into_any_element()
+    /// Questions sit in a compact tray above the answer composer.
+    fn render_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.render_question_composer(window, cx)
     }
 
     /// `refocus` returns focus to the editor afterwards. Enter/Space on the
@@ -11086,7 +10863,7 @@ impl Render for Composer {
             .pb(px(if new_chat { 12. } else { 8. }));
 
         if wizard_active {
-            let wizard = self.render_wizard(cx);
+            let wizard = self.render_wizard(window, cx);
             return container.child(motion::fade_quick("composer-wizard", div().child(wizard)));
         }
 

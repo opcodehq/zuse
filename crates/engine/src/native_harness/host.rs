@@ -96,6 +96,12 @@ impl NativeCallbacks for Callbacks {
         .await
         .map(|labels| labels.join("\n"))
     }
+    async fn secret(&self, input: Value, context: ToolContext) -> Result<String, Error> {
+        crate::secret_broker::execute(input, context.clone(), |question| {
+            self.ask(question, &context)
+        })
+        .await
+    }
     async fn plan(&self, _: Vec<PlanStep>, _: ToolContext) -> Result<(), Error> {
         Ok(())
     }

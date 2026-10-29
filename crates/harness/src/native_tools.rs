@@ -57,6 +57,9 @@ pub trait NativeCallbacks: Send + Sync {
     ) -> Result<String, Error> {
         Err(Error::Tool("Questions are unavailable".into()))
     }
+    async fn secret(&self, _: Value, _: ToolContext) -> Result<String, Error> {
+        Err(Error::Tool("Private secrets are unavailable".into()))
+    }
     async fn plan(&self, _: Vec<PlanStep>, _: ToolContext) -> Result<(), Error> {
         Err(Error::Tool("Plans are unavailable".into()))
     }
@@ -607,6 +610,15 @@ impl NativeTools {
                     .plan(steps, context)
                     .await?;
                 Ok(ToolOutput::Text("Plan updated".into()))
+            }
+            "request_secret" => {
+                let result = self
+                    .callbacks
+                    .as_ref()
+                    .ok_or_else(|| error("Private secrets are unavailable"))?
+                    .secret(input, context)
+                    .await?;
+                Ok(ToolOutput::Text(result))
             }
             "request_user_input" => {
                 let options = input["options"].as_array().map(|options| {

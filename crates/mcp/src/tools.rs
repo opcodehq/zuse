@@ -67,6 +67,14 @@ fn device_schema() -> Value {
 fn catalog() -> Vec<ToolDef> {
     let mut tools = vec![
         ToolDef {
+            name: "request_secret",
+            description: "Ask the user for a bearer token in a private masked card, then perform exactly the HTTPS operation they approve. The agent never receives the token. Returns only HTTP status, never response body. Do not ask users to paste credentials into chat. No shell/file delivery. Public HTTPS destinations only; redirects are disabled.",
+            input_schema: json!({"type":"object","additionalProperties":false,"required":["label","reason","url","method"],"properties":{
+                "label":{"type":"string","minLength":1,"maxLength":200},"reason":{"type":"string","minLength":1,"maxLength":2000},
+                "url":{"type":"string","maxLength":2048},"method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE"]},"body":{"type":"string","maxLength":16000}
+            }}),
+        },
+        ToolDef {
             name: "whoami",
             description: "Which chat and device this server speaks for, plus the engine's workspace mode. Call this first when you need to know your own chat id.",
             input_schema: json!({ "type": "object", "properties": {} }),
@@ -695,7 +703,7 @@ impl Tools {
         catalog()
             .into_iter()
             .filter(|tool| {
-                in_chat || (tool.name != SHOW_VISUAL && !tool.name.starts_with("plugins_"))
+                in_chat || (tool.name != "request_secret" && tool.name != SHOW_VISUAL && !tool.name.starts_with("plugins_"))
             })
             .collect()
     }
@@ -708,6 +716,10 @@ impl Tools {
     /// should read (surfaced as `isError`, never as a protocol error).
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         let result = match name {
+            "request_secret" => {
+                let chat = self.zuse.origin().chat_id.as_deref().ok_or("Private secrets require an originating chat")?;
+                self.zuse.call_once(zuse_rpc::methods::REQUEST_PRIVATE_OPERATION, json!({"chatId":chat,"targetDeviceId":self.zuse.origin().device_id,"operation":args})).await
+            }
             "plugins_list" | "plugins_search" | "plugins_schema" | "plugins_call" => {
                 self.plugin_tool(name, args).await
             }
@@ -1756,6 +1768,31 @@ mod tests {
         assert!(!human.has("plugins_call"));
         assert!(human.call("plugins_list", json!({})).await.is_err());
         assert_eq!(capture.0.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn private_secret_tool_is_bound_to_origin() {
+        #[derive(Default)]
+        struct Capture(Mutex<Vec<Value>>);
+        #[async_trait]
+        impl RpcService for Capture {
+            async fn handle(&self, method: &str, params: Value) -> Result<RpcReply, RpcError> {
+                assert_eq!(method, methods::REQUEST_PRIVATE_OPERATION);
+                self.0.lock().unwrap().push(params);
+                Ok(RpcReply::Value(json!({"result":"declined"})))
+            }
+        }
+        let capture = Arc::new(Capture::default());
+        let agent = Tools::new(Arc::new(Zuse::with_client(memory_client(capture.clone()), Origin {chat_id:Some("origin".into()),device_id:Some("host".into())})));
+        assert!(agent.has("request_secret"));
+        agent.call("request_secret",json!({"chatId":"other","label":"Token","reason":"Access","method":"GET","url":"https://api.github.com/user"})).await.unwrap();
+        let requests = capture.0.lock().unwrap().clone();
+        assert_eq!(requests[0]["chatId"],"origin");
+        assert_eq!(requests[0]["targetDeviceId"],"host");
+        let human = Tools::new(Arc::new(Zuse::with_client(memory_client(capture.clone()),Origin::default())));
+        assert!(!human.has("request_secret"));
+        assert!(human.call("request_secret",json!({})).await.is_err());
+        assert_eq!(capture.0.lock().unwrap().len(),1);
     }
 
     #[tokio::test]

@@ -233,6 +233,9 @@ impl WorkspaceView {
         {
             return self.archived_thread_footer(cx);
         }
+        if let Some((request, questions)) = self.pending_composer_question() {
+            return self.question_composer(&request, &questions, cx);
+        }
         let provider = self.composer_provider();
         let working = self.is_working();
         let has_draft =
@@ -660,7 +663,10 @@ impl WorkspaceView {
                                             )
                                             .into_any_element(),
                                     ),
-                                    "input" => Some(self.input_card(part, cx)),
+                                    "input" => {
+                                        let in_composer = part["resolved"] != true && self.pending_composer_question().is_some_and(|(id,_)| part["requestId"] == id);
+                                        if in_composer { None } else { Some(self.input_card(part, cx)) }
+                                    },
                                     "fork" => Some(
                                         row()
                                             .gap_2()
