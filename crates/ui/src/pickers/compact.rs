@@ -331,7 +331,7 @@ impl Pickers {
                 .text_size(crate::typography::text_xs())
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.text_muted)
-                .child(SharedString::from(popover::tracked_upper(label)))
+                .child(SharedString::from(label.to_string()))
                 .into_any_element(),
             CompactItem::Header {
                 harness,

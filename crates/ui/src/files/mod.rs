@@ -1356,7 +1356,7 @@ impl FilesSurface {
                     .text_size(crate::typography::text_xs())
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text_muted)
-                    .child(SharedString::from(crate::popover::tracked_upper(label))),
+                    .child(SharedString::from(label.to_string())),
             )
             .child(
                 header_button("files-new-file", "New File", crate::icons::DOCUMENT_ADD).on_click(

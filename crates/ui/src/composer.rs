@@ -99,7 +99,7 @@ pub(crate) fn tray_inset(surface_width: f32) -> f32 {
 pub(crate) fn context_tray_fill(theme: &Theme) -> gpui::Hsla {
     match theme.appearance {
         crate::theme::Appearance::Dark if theme.variant_id.as_ref() == "zuse-dark" => {
-            gpui::hsla(120.0 / 360.0, 0.02, 0.085, 0.96)
+            gpui::hsla(0.0, 0.0, 0.10, 0.96)
         }
         crate::theme::Appearance::Dark => crate::theme::flatten(
             gpui::hsla(0.0, 0.0, 0.0, 0.28),
@@ -10220,9 +10220,7 @@ impl Composer {
                                     .text_size(crate::typography::text_xs())
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(theme.text_muted.opacity(0.6))
-                                    .child(SharedString::from(crate::popover::tracked_upper(
-                                        &question.header,
-                                    ))),
+                                    .child(SharedString::from(question.header.clone())),
                             )
                             .when(wizard.questions.len() > 1, |el| {
                                 el.child(

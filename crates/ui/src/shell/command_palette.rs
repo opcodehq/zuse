@@ -1288,8 +1288,7 @@ impl Shell {
                 search.into_any_element(),
                 popover::kbd_hint(&theme, &crate::settings::badge_combo("mod-k")),
             ))
-            .child(tabs)
-            .child(body)
+            .child(palette_panel(&theme).child(tabs).child(body))
             .child(
                 palette_footer()
                     .child(command_key_hint(&theme, "↑ ↓", "Navigate"))
@@ -1360,28 +1359,18 @@ pub(super) fn palette_card(
     viewport: gpui::Size<Pixels>,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .track_focus(focus)
-        .w(px(560.0_f32.min(f32::from(viewport.width) - 32.0)))
-        .flex()
-        .flex_col()
-        .rounded(px(16.0))
-        .map(|el| popover::glass_surface(theme, el))
-        .text_color(theme.text)
+    cmd::card(id, focus, viewport, theme)
 }
 
 pub(super) fn palette_header(theme: &Theme, search: AnyElement, hint: gpui::Div) -> gpui::Div {
     div()
-        .min_h(px(44.0))
+        .min_h(px(50.0))
         .flex_none()
         .px(px(16.0))
         .py(px(8.0))
         .flex()
         .items_center()
         .gap(px(10.0))
-        .border_b_1()
-        .border_color(crate::theme::hairline(0.06))
         .child(popover::palette_search_icon(theme))
         .child(
             div()
@@ -1396,14 +1385,20 @@ pub(super) fn palette_header(theme: &Theme, search: AnyElement, hint: gpui::Div)
 pub(super) fn palette_footer() -> gpui::Div {
     div()
         .flex_none()
+        .min_h(px(46.0))
         .px(px(16.0))
-        .py(px(7.0))
+        .py(px(8.0))
         .border_t_1()
-        .border_color(crate::theme::hairline(0.06))
+        .border_color(crate::theme::hairline(0.07))
         .flex()
         .flex_wrap()
         .items_center()
-        .gap(px(12.0))
+        .gap(px(14.0))
+}
+
+/// The inset results panel every palette lists into.
+pub(super) fn palette_panel(theme: &Theme) -> gpui::Div {
+    cmd::panel(theme)
 }
 
 /// Mount a palette card over the scrimmed window, frosted like the composer.
@@ -1434,36 +1429,300 @@ pub(super) fn palette_overlay(
     .into_any_element()
 }
 
-/// A footer legend: the keys on a key cap (footers keep their caps, unlike
-/// the plain inline legends) and the verb after it. Arrow and return keys
+/// A footer legend: one cap per key, then the verb. Arrow and return keys
 /// are icons, which sit optically centered on the cap where font glyphs
 /// don't; other keys ("Esc") are text.
 pub(super) fn command_key_hint(theme: &Theme, keys: &str, label: &'static str) -> gpui::Div {
-    let glyph = |path: &'static str| {
-        crate::icons::icon(path)
-            .size(px(12.5))
-            .text_color(theme.text_muted)
+    let caps: Vec<cmd::Key> = match keys {
+        "↵" => vec![cmd::Key::Enter],
+        "↑ ↓" => vec![cmd::Key::Up, cmd::Key::Down],
+        "←" => vec![cmd::Key::Left],
+        _ => vec![cmd::Key::Text(SharedString::from(keys.to_string()))],
     };
-    let cap = popover::key_cap(theme);
-    let cap = match keys {
-        "↵" => cap.child(glyph(crate::icons::RETURN)),
-        "←" => cap.child(glyph(crate::icons::ARROW_LEFT)),
-        "↑ ↓" => cap
-            .child(glyph(crate::icons::ARROW_UP))
-            .child(glyph(crate::icons::ARROW_DOWN)),
-        _ => cap
-            .font_family(popover::KEY_GLYPH_FONT)
-            .text_size(crate::typography::text_xs())
-            .text_color(theme.text_muted)
-            .child(SharedString::from(keys.to_string())),
-    };
-    div().flex().items_center().gap(px(5.0)).child(cap).child(
-        div()
-            .text_size(crate::typography::text_xs())
-            .text_color(theme.text_muted)
-            .child(label),
-    )
+    cmd::hint(theme, &caps, label)
 }
+
+/// The command surface: a neutral card whose input and footer sit on a
+/// faintly lifted layer around an inset results panel.
+pub(super) mod cmd {
+    use super::*;
+    use crate::icons::{self, icon};
+    use gpui::{Div, Stateful};
+
+    pub(in crate::shell) fn dark(theme: &Theme) -> bool {
+        theme.appearance.is_dark()
+    }
+
+    /// The card's outer layer, under the input and the footer.
+    pub(in crate::shell) fn chrome(theme: &Theme) -> gpui::Hsla {
+        if dark(theme) {
+            gpui::hsla(0.0, 0.0, 0.122, 1.0)
+        } else {
+            gpui::hsla(0.0, 0.0, 0.975, 1.0)
+        }
+    }
+
+    /// The inset results panel.
+    pub(in crate::shell) fn surface(theme: &Theme) -> gpui::Hsla {
+        if dark(theme) {
+            gpui::hsla(0.0, 0.0, 0.098, 1.0)
+        } else {
+            gpui::white()
+        }
+    }
+
+    pub(in crate::shell) fn border(theme: &Theme) -> gpui::Hsla {
+        if dark(theme) {
+            gpui::hsla(0.0, 0.0, 1.0, 0.07)
+        } else {
+            gpui::hsla(0.0, 0.0, 0.0, 0.08)
+        }
+    }
+
+    /// The row highlight and key-cap fill.
+    pub(in crate::shell) fn wash(theme: &Theme) -> gpui::Hsla {
+        if dark(theme) {
+            gpui::hsla(0.0, 0.0, 1.0, 0.05)
+        } else {
+            gpui::hsla(0.0, 0.0, 0.0, 0.045)
+        }
+    }
+
+    pub(in crate::shell) fn card(
+        id: &'static str,
+        focus: &gpui::FocusHandle,
+        viewport: gpui::Size<Pixels>,
+        theme: &Theme,
+    ) -> Stateful<Div> {
+        div()
+            .id(id)
+            .track_focus(focus)
+            .w(px(576.0_f32.min(f32::from(viewport.width) - 32.0)))
+            .flex()
+            .flex_col()
+            .rounded(px(16.0))
+            .border_1()
+            .border_color(border(theme))
+            .bg(chrome(theme))
+            .shadow_lg()
+            .overflow_hidden()
+            .text_color(theme.text)
+    }
+
+    /// The input row: a leading glyph or back button, then the input.
+    pub(in crate::shell) fn header(theme: &Theme, leading: AnyElement, input: AnyElement) -> Div {
+        div()
+            .h(px(50.0))
+            .flex_none()
+            .px(px(16.0))
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .text_color(theme.text)
+            .child(leading)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(crate::typography::text_md())
+                    .child(input),
+            )
+    }
+
+    pub(in crate::shell) fn search_glyph(theme: &Theme) -> AnyElement {
+        div()
+            .size(px(22.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                icon(icons::MAGNIFER)
+                    .size(px(16.0))
+                    .text_color(theme.text_muted),
+            )
+            .into_any_element()
+    }
+
+    /// The results panel, inset into the card with its own top corners.
+    pub(in crate::shell) fn panel(theme: &Theme) -> Div {
+        div()
+            .mx(px(-1.0))
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .rounded_t(px(12.0))
+            .border_1()
+            .border_b_0()
+            .border_color(border(theme))
+            .bg(surface(theme))
+    }
+
+    pub(in crate::shell) fn list(
+        id: &'static str,
+        scroll: &gpui::ScrollHandle,
+        viewport: gpui::Size<Pixels>,
+    ) -> Stateful<Div> {
+        div()
+            .id(id)
+            .min_h_0()
+            .max_h(px((f32::from(viewport.height) - 220.0).clamp(140.0, 360.0)))
+            .overflow_y_scroll()
+            .track_scroll(scroll)
+            .p(px(8.0))
+            .flex()
+            .flex_col()
+    }
+
+    pub(in crate::shell) fn group_label(theme: &Theme, label: &str) -> Div {
+        div()
+            .px(px(8.0))
+            .pt(px(6.0))
+            .pb(px(4.0))
+            .text_size(crate::typography::text_xs())
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(theme.text_muted)
+            .child(SharedString::from(label.to_owned()))
+    }
+
+    /// One result: compact, with the highlight as a quiet wash.
+    pub(in crate::shell) fn row(
+        theme: &Theme,
+        highlighted: bool,
+        id: impl Into<gpui::ElementId>,
+    ) -> Stateful<Div> {
+        div()
+            .id(id)
+            .min_h(px(32.0))
+            .px(px(8.0))
+            .py(px(4.0))
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .rounded(px(8.0))
+            .text_size(crate::typography::text_sm())
+            .text_color(theme.text)
+            .cursor_pointer()
+            .when(highlighted, |el| el.bg(wash(theme)))
+    }
+
+    pub(in crate::shell) fn glyph(theme: &Theme, glyph: &'static str) -> gpui::Svg {
+        icon(glyph)
+            .size(px(16.0))
+            .flex_none()
+            .text_color(theme.text_muted)
+    }
+
+    pub(in crate::shell) fn detail(theme: &Theme, text: impl Into<SharedString>) -> Div {
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_size(crate::typography::text_xs())
+            .text_color(theme.text_muted.opacity(0.8))
+            .child(text.into())
+    }
+
+    pub(in crate::shell) fn trailing(theme: &Theme, text: &'static str) -> Div {
+        div()
+            .flex_none()
+            .text_size(crate::typography::text_xs())
+            .text_color(theme.text_muted.opacity(0.8))
+            .child(text)
+    }
+
+    pub(in crate::shell) fn empty(theme: &Theme, text: impl Into<SharedString>) -> Div {
+        div()
+            .py(px(20.0))
+            .px(px(16.0))
+            .flex()
+            .justify_center()
+            .text_size(crate::typography::text_sm())
+            .text_color(theme.text_muted)
+            .child(text.into())
+    }
+
+    pub(in crate::shell) fn footer(theme: &Theme) -> Div {
+        div()
+            .flex_none()
+            .h(px(46.0))
+            .px(px(16.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(12.0))
+            .border_t_1()
+            .border_color(border(theme))
+            .text_size(crate::typography::text_xs())
+            .text_color(theme.text_muted)
+    }
+
+    pub(in crate::shell) fn hints() -> Div {
+        div().flex().items_center().gap(px(14.0))
+    }
+
+    #[derive(Clone)]
+    pub(in crate::shell) enum Key {
+        Up,
+        Down,
+        Left,
+        Enter,
+        Mod,
+        Text(SharedString),
+    }
+
+    fn cap(theme: &Theme, key: Key) -> Div {
+        let cap = div()
+            .h(px(20.0))
+            .min_w(px(20.0))
+            .px(px(4.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.0))
+            .bg(wash(theme))
+            .text_size(crate::typography::text_xs())
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(theme.text_muted);
+        let glyph = |path: &'static str| icon(path).size(px(12.0)).text_color(theme.text_muted);
+        match key {
+            Key::Up => cap.child(glyph(icons::ARROW_UP)),
+            Key::Down => cap.child(glyph(icons::ARROW_DOWN)),
+            Key::Left => cap.child(glyph(icons::ARROW_LEFT)),
+            Key::Enter => cap.child(glyph(icons::RETURN)),
+            Key::Mod => {
+                cap.font_family(popover::KEY_GLYPH_FONT)
+                    .child(if cfg!(target_os = "macos") {
+                        "⌘"
+                    } else {
+                        "Ctrl"
+                    })
+            }
+            Key::Text(text) => cap.font_family(popover::KEY_GLYPH_FONT).child(text),
+        }
+    }
+
+    pub(in crate::shell) fn keys(theme: &Theme, keys: &[Key]) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(3.0))
+            .children(keys.iter().map(|key| cap(theme, key.clone())))
+    }
+
+    /// Key caps followed by what they do.
+    pub(in crate::shell) fn hint(theme: &Theme, keys_: &[Key], label: &'static str) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .text_size(crate::typography::text_xs())
+            .text_color(theme.text_muted)
+            .child(keys(theme, keys_))
+            .child(label)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

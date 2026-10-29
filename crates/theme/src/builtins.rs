@@ -240,26 +240,26 @@ fn zuse_dark() -> ThemeVariant {
         name: "Zuse Dark",
         appearance: Appearance::Dark,
         treatment: SurfaceTreatment::Opaque,
-        background: "#0b0c0b",
-        shell: "#0e0f0e",
-        raised: "#191c1a",
-        card: "#121413",
-        text: "#e8e9e7",
-        muted: "#a4a8a3",
-        faint: "#6b716a",
+        background: "#151515",
+        shell: "#1e1e1e",
+        raised: "#222222",
+        card: "#181818",
+        text: "#e8e8e8",
+        muted: "#a3a3a3",
+        faint: "#6e6e6e",
         accent: "#89ca21",
         danger: "#f87171",
         warning: "#facc15",
         success: "#34d399",
-        terminal_background: "#090909",
+        terminal_background: "#121212",
         ansi: ANSI_DARK,
         // The reference renderer's code palette (comment, keyword, string,
         // number, type, function, property, variable, punctuation, tag,
         // attribute, invalid): cyan types and sky functions over the
-        // green-black neutrals, plain text in the foreground tone.
+        // neutral greys, plain text in the foreground tone.
         syntax: [
-            "#a4a8a3", "#c084fc", "#86efac", "#fbbf24", "#67e8f9", "#7dd3fc", "#e8e9e7", "#e8e9e7",
-            "#a4a8a3", "#f87171", "#fda4af", "#f87171",
+            "#a3a3a3", "#c084fc", "#86efac", "#fbbf24", "#67e8f9", "#7dd3fc", "#e8e8e8", "#e8e8e8",
+            "#a3a3a3", "#f87171", "#fda4af", "#f87171",
         ],
         source: source(
             "zuse-dark",
@@ -270,11 +270,11 @@ fn zuse_dark() -> ThemeVariant {
         ),
     });
     zuse_code_roles(&mut palette);
-    palette.colors.solid = c("#e8e9e7");
+    palette.colors.solid = c("#e8e8e8");
     palette.colors.on_solid = palette.colors.solid.best_on_color();
-    palette.colors.border = c("#1f211f");
-    palette.colors.border_strong = c("#292e2a");
-    palette.colors.input = c("#292e2a");
+    palette.colors.border = c("#272727");
+    palette.colors.border_strong = c("#323232");
+    palette.colors.input = c("#262626");
     palette.accent.primary = c("#89ca21");
     palette.accent.strong = c("#89ca21");
     palette.accent.on = c("#0c170f");
@@ -301,11 +301,11 @@ fn zuse_light() -> ThemeVariant {
         appearance: Appearance::Light,
         treatment: SurfaceTreatment::Opaque,
         background: "#ffffff",
-        shell: "#fafafa",
+        shell: "#efefef",
         raised: "#efefef",
         card: "#ffffff",
-        text: "#5d5d5d",
-        muted: "#7f7f7f",
+        text: "#2a2a2a",
+        muted: "#737373",
         faint: "#a3a3a3",
         accent: "#81bf1d",
         danger: "#dc2626",
@@ -327,20 +327,19 @@ fn zuse_light() -> ThemeVariant {
             "MIT",
         ),
     });
-    // The design system's neutrals: strong #292929 for titles and selected
-    // labels, default #5d5d5d for body copy, subtle #7f7f7f for metadata,
-    // #f5f5f5 selected rows and #f2f2f2 hairlines on a white canvas. The
-    // subtle tone is authored, so undo the seed's 4.5:1 hardening of it.
+    // Neutrals: near-black #0f0f0f titles, #2a2a2a body copy, #737373
+    // metadata, #f0f0f0 selected rows and #e8e8e8 hairlines on a white
+    // content panel beside the grey #efefef sidebar.
     zuse_code_roles(&mut palette);
-    palette.colors.solid = c("#292929");
+    palette.colors.solid = c("#1a1a1a");
     palette.colors.on_solid = palette.colors.solid.best_on_color();
-    palette.colors.text_strong = c("#292929");
-    palette.colors.text_muted = c("#7f7f7f");
-    palette.colors.selected = c("#f5f5f5");
-    palette.colors.hover = c("#f7f7f7");
-    palette.colors.border = c("#f2f2f2");
-    palette.colors.border_strong = c("#e5e5e5");
-    palette.colors.input = c("#e5e5e5");
+    palette.colors.text_strong = c("#0f0f0f");
+    palette.colors.text_muted = c("#737373");
+    palette.colors.selected = c("#f0f0f0");
+    palette.colors.hover = c("#f4f4f4");
+    palette.colors.border = c("#e8e8e8");
+    palette.colors.border_strong = c("#dcdcdc");
+    palette.colors.input = c("#e8e8e8");
     palette.colors.overlay = c("#ffffff");
     palette.colors.dialog = c("#ffffff");
     palette.accent.primary = c("#81bf1d");

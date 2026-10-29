@@ -11,7 +11,10 @@ impl Shell {
         }
     }
 
-    pub(super) fn workspace_surface(&self, cx: &App) -> gpui::Div {
+    /// The sidebar's surface. It paints no fill of its own: the sidebar is
+    /// the window glass (translucent over the desktop where the platform
+    /// blurs it), which sets it apart from the solid conversation card.
+    pub(super) fn workspace_surface(&self, _cx: &App) -> gpui::Div {
         div()
             .flex_1()
             .min_w_0()
@@ -24,7 +27,6 @@ impl Shell {
                 0.
             }))
             .overflow_hidden()
-            .bg(Theme::of(cx).bg)
     }
 
     pub(super) fn workspace_sidebar_header(&mut self, cx: &mut Context<Self>) -> AnyElement {
