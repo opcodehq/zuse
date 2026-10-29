@@ -91,16 +91,17 @@ impl ServerDraft {
     }
 }
 
+/// The Local form starts from this editable stdio configuration.
+pub const LOCAL_CONFIG_TEMPLATE: &str = r#"{"command":"","args":[]}"#;
+pub const LOCAL_CONFIG_INVALID: &str =
+    "Enter a valid stdio MCP configuration with one command, an args array, and optional env values.";
+
 /// A local stdio server form. Environment values may be secrets, so no Debug.
 #[derive(Default)]
 pub struct LocalServerDraft {
     pub name: String,
-    /// A command, or a pasted JSON object `{command,args,env}` or `{mcpServers:{..}}`.
-    pub command: String,
-    /// One literal argument per line; quote a line as a JSON string for an empty value.
-    pub args: String,
-    /// `NAME=value` per line.
-    pub env: String,
+    /// One stdio server as `{command,args,env}` or `{"mcpServers":{<one entry>}}`.
+    pub config: String,
 }
 
 impl LocalServerDraft {
@@ -108,36 +109,11 @@ impl LocalServerDraft {
         if !tenant.starts_with("personal:") {
             return Err("Local servers can only be added to your personal workspace.");
         }
-        let command = self.command.trim();
-        let (command, args, env) = if command.starts_with('{') {
-            if !self.args.trim().is_empty() || !self.env.trim().is_empty() {
-                return Err(
-                    "Paste the JSON configuration on its own, without separate arguments or environment.",
-                );
-            }
-            pasted_config(command)?
-        } else {
-            let args = self
-                .args
-                .lines()
-                .filter(|line| !line.trim().is_empty())
-                .map(crate::custom_acp::decode_field)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| "Quoted arguments must be valid JSON strings.")?;
-            let mut env = BTreeMap::new();
-            for line in self.env.lines().filter(|line| !line.trim().is_empty()) {
-                let (key, value) = line
-                    .split_once('=')
-                    .ok_or("Enter environment variables as NAME=value, one per line.")?;
-                let value = crate::custom_acp::decode_field(value)
-                    .map_err(|_| "Quoted environment values must be valid JSON strings.")?;
-                if env.insert(key.trim().to_owned(), value).is_some() {
-                    return Err("Each environment variable can only be set once.");
-                }
-            }
-            (command.to_owned(), args, env)
-        };
         let name = self.name.trim().to_owned();
+        if name.is_empty() || name.chars().count() > 60 {
+            return Err(NAME_INVALID);
+        }
+        let (command, args, env) = parse_local_config(&self.config).ok_or(LOCAL_CONFIG_INVALID)?;
         validate_local_server(&name, &command, &args, &env)?;
         Ok(PluginRequest::AddLocalServer {
             tenant_id: tenant.into(),
@@ -150,48 +126,43 @@ impl LocalServerDraft {
     }
 }
 
+const NAME_INVALID: &str = "Enter a server name between 1 and 60 characters.";
+
 /// Accept the single-server stdio JSON commonly published with MCP servers.
-fn pasted_config(
-    text: &str,
-) -> Result<(String, Vec<String>, BTreeMap<String, String>), &'static str> {
-    const INVALID: &str = "Paste one stdio server as {\"command\", \"args\", \"env\"}.";
-    let mut value: Value = serde_json::from_str(text).map_err(|_| INVALID)?;
+fn parse_local_config(text: &str) -> Option<(String, Vec<String>, BTreeMap<String, String>)> {
+    let mut value: Value = serde_json::from_str(text).ok()?;
     if let Some(servers) = value.get("mcpServers") {
-        let servers = servers.as_object().ok_or(INVALID)?;
+        let servers = servers.as_object()?;
         if servers.len() != 1 {
-            return Err("Paste exactly one MCP server configuration.");
+            return None;
         }
-        value = servers.values().next().cloned().ok_or(INVALID)?;
+        value = servers.values().next()?.clone();
     }
-    let object = value.as_object().ok_or(INVALID)?;
+    let object = value.as_object()?;
     if object.get("type").is_some_and(|kind| kind != "stdio") {
-        return Err("Only stdio servers can run locally. Use Remote for server URLs.");
+        return None;
     }
-    let command = object
-        .get("command")
-        .and_then(Value::as_str)
-        .ok_or(INVALID)?
-        .trim()
-        .to_owned();
+    let command = object.get("command")?.as_str()?.trim().to_owned();
+    if command.is_empty() {
+        return None;
+    }
     let args = match object.get("args") {
         None => vec![],
         Some(args) => args
-            .as_array()
-            .ok_or(INVALID)?
+            .as_array()?
             .iter()
-            .map(|arg| arg.as_str().map(str::to_owned).ok_or(INVALID))
-            .collect::<Result<_, _>>()?,
+            .map(|arg| arg.as_str().map(str::to_owned))
+            .collect::<Option<_>>()?,
     };
     let env = match object.get("env") {
         None => BTreeMap::new(),
         Some(env) => env
-            .as_object()
-            .ok_or(INVALID)?
+            .as_object()?
             .iter()
-            .map(|(key, value)| Ok((key.clone(), value.as_str().ok_or(INVALID)?.to_owned())))
-            .collect::<Result<_, &'static str>>()?,
+            .map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+            .collect::<Option<_>>()?,
     };
-    Ok((command, args, env))
+    Some((command, args, env))
 }
 
 pub fn env_name(name: &str) -> bool {
@@ -211,7 +182,7 @@ pub fn validate_local_server(
     env: &BTreeMap<String, String>,
 ) -> Result<(), &'static str> {
     if name.trim().is_empty() || name.chars().count() > 60 || name.contains(['\0', '\n', '\r']) {
-        return Err("Enter a server name between 1 and 60 characters.");
+        return Err(NAME_INVALID);
     }
     if command.trim().is_empty() || command.len() > 8192 || command.contains(['\0', '\n', '\r']) {
         return Err("Enter a command or executable path.");
@@ -324,101 +295,80 @@ mod tests {
             .is_err()
         );
     }
-    #[test]
-    fn local_setup_parses_literal_lines_and_stays_personal() {
-        let request = LocalServerDraft {
-            name: " Files ".into(),
-            command: " npx ".into(),
-            args: "-y\n\n@scope/server --root ~/My Files\n\"\"\n".into(),
-            env: "TOKEN=a=b\nEMPTY=\n".into(),
+    fn local(name: &str, config: &str, tenant: &str) -> Result<PluginRequest, &'static str> {
+        LocalServerDraft {
+            name: name.into(),
+            config: config.into(),
         }
-        .request("personal:user")
-        .unwrap();
-        let value = serde_json::to_value(&request).unwrap();
-        assert_eq!(value["action"], "addLocalServer");
-        assert_eq!(value["name"], "Files");
-        assert_eq!(value["command"], "npx");
-        assert_eq!(
-            value["args"],
-            serde_json::json!(["-y", "@scope/server --root ~/My Files", ""])
-        );
-        assert_eq!(value["env"], serde_json::json!({"TOKEN":"a=b","EMPTY":""}));
-        assert!(
-            LocalServerDraft {
-                name: "Files".into(),
-                command: "npx".into(),
-                ..Default::default()
-            }
-            .request("organization:team")
-            .is_err()
-        );
+        .request(tenant)
     }
     #[test]
-    fn local_setup_accepts_one_pasted_stdio_server() {
-        for pasted in [
-            r#"{"command":"uvx","args":["server"],"env":{"KEY":"v"}}"#,
-            r#"{"mcpServers":{"files":{"type":"stdio","command":"uvx","args":["server"],"env":{"KEY":"v"}}}}"#,
+    fn local_setup_accepts_a_bare_server_or_one_wrapped_server_and_stays_personal() {
+        for config in [
+            r#"{"command":" uvx ","args":["server",""],"env":{"KEY":"a=b"}}"#,
+            r#"{"type":"stdio","command":"uvx","args":["server",""],"env":{"KEY":"a=b"}}"#,
+            r#"{"mcpServers":{"files":{"type":"stdio","command":"uvx","args":["server",""],"env":{"KEY":"a=b"}}}}"#,
         ] {
-            let PluginRequest::AddLocalServer {
-                command, args, env, ..
-            } = LocalServerDraft {
-                name: "Files".into(),
-                command: pasted.into(),
-                ..Default::default()
-            }
-            .request("personal:user")
-            .unwrap()
-            else {
-                panic!("expected a local server");
-            };
-            assert_eq!(
-                (command.as_str(), args, env["KEY"].as_str()),
-                ("uvx", vec!["server".to_owned()], "v")
-            );
+            let value = serde_json::to_value(local(" Files ", config, "personal:user").unwrap())
+                .unwrap();
+            assert_eq!(value["action"], "addLocalServer");
+            assert_eq!(value["name"], "Files");
+            assert_eq!(value["command"], "uvx");
+            assert_eq!(value["args"], serde_json::json!(["server", ""]));
+            assert_eq!(value["env"], serde_json::json!({"KEY":"a=b"}));
         }
-        for pasted in [
-            r#"{"type":"http","url":"https://tools.example"}"#,
-            r#"{"mcpServers":{"a":{"command":"x"},"b":{"command":"y"}}}"#,
-            r#"{"command":"x","args":"not a list"}"#,
-            r#"{"command":"x","env":{"KEY":1}}"#,
-            r#"{"command":""}"#,
+        let PluginRequest::AddLocalServer { args, env, .. } =
+            local("Files", r#"{"command":"node"}"#, "personal:user").unwrap()
+        else {
+            panic!("expected a local server");
+        };
+        assert!(args.is_empty() && env.is_empty());
+        assert!(local("Files", r#"{"command":"node"}"#, "organization:team").is_err());
+    }
+    #[test]
+    fn local_setup_rejects_invalid_configurations() {
+        for config in [
+            "null",
+            "{}",
             "{not json",
+            LOCAL_CONFIG_TEMPLATE,
+            r#"{"command":""}"#,
+            r#"{"command":"   "}"#,
+            r#"{"command":1}"#,
+            r#"{"command":"node","type":"http"}"#,
+            r#"{"type":"http","url":"https://tools.example"}"#,
+            r#"{"command":"node","args":"not a list"}"#,
+            r#"{"command":"node","args":[1]}"#,
+            r#"{"command":"node","env":{"TOKEN":1}}"#,
+            r#"{"command":"node","env":["TOKEN=x"]}"#,
+            r#"{"mcpServers":{}}"#,
+            r#"{"mcpServers":{"a":{"command":"x"},"b":{"command":"y"}}}"#,
+            r#"{"mcpServers":{"a":{}}}"#,
         ] {
-            assert!(
-                LocalServerDraft {
-                    name: "Files".into(),
-                    command: pasted.into(),
-                    ..Default::default()
-                }
-                .request("personal:user")
-                .is_err(),
-                "{pasted}"
+            assert_eq!(
+                local("Files", config, "personal:user").err(),
+                Some(LOCAL_CONFIG_INVALID),
+                "{config}"
             );
         }
     }
     #[test]
     fn local_setup_rejects_invalid_names_commands_and_environment_without_echoing_values() {
-        for (name, command, env) in [
-            ("", "npx", ""),
-            (&*"x".repeat(61), "npx", ""),
-            ("Files", "  ", ""),
-            ("Files", "np\0x", ""),
-            ("Files", "npx", "1BAD=secret-value"),
-            ("Files", "npx", "BAD NAME=secret-value"),
-            ("Files", "npx", "NO_EQUALS"),
-            ("Files", "npx", "KEY=a\nKEY=b"),
-            ("Files", "npx", "KEY=\"secret-value"),
+        for (name, config) in [
+            ("", r#"{"command":"npx"}"#),
+            ("  ", r#"{"command":"npx"}"#),
+            (&*"x".repeat(61), r#"{"command":"npx"}"#),
+            ("Files", r#"{"command":"np\u0000x"}"#),
+            ("Files", r#"{"command":"npx","env":{"1BAD":"secret-value"}}"#),
+            ("Files", r#"{"command":"npx","env":{"BAD NAME":"secret-value"}}"#),
+            ("Files", r#"{"command":"npx","env":{"KEY":"secret-value\u0000"}}"#),
         ] {
-            let error = LocalServerDraft {
-                name: name.into(),
-                command: command.into(),
-                env: env.into(),
-                ..Default::default()
-            }
-            .request("personal:user")
-            .err()
-            .unwrap();
-            assert!(!error.contains("secret-value"));
+            let error = local(name, config, "personal:user").err().unwrap();
+            assert!(!error.contains("secret-value"), "{config}");
         }
+        assert_eq!(
+            local("", r#"{"command":"npx"}"#, "personal:user").err(),
+            Some(NAME_INVALID)
+        );
     }
 }
