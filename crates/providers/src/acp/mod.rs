@@ -5400,7 +5400,8 @@ mod tests {
     fn saved_approval_keys_bind_tool_kind_and_complete_inputs() {
         let call = json!({"toolCallId":"first", "title":"Apply change", "kind":"edit", "rawInput":{"path":"file.rs"}, "locations":[{"path":"file.rs"}]});
         let first = permission_rule_input(&call);
-        let mut repeated = call.clone(); repeated["toolCallId"] = json!("second");
+        let mut repeated = call.clone();
+        repeated["toolCallId"] = json!("second");
         assert_eq!(first, permission_rule_input(&repeated));
         repeated["kind"] = json!("delete");
         assert_ne!(first, permission_rule_input(&repeated));

@@ -324,12 +324,18 @@ pub struct SessionsEngine {
 
 impl SessionsEngine {
     pub(crate) fn permission_failure(&self, chat: &str, run: &str, message: &str) {
-        if let Some(handle) = lock(&self.inner.runs).get(chat).filter(|handle| handle.run_id == run) {
-            let _ = handle.engine_tx.send(AgentEvent::Error { message: message.into() });
+        if let Some(handle) = lock(&self.inner.runs)
+            .get(chat)
+            .filter(|handle| handle.run_id == run)
+        {
+            let _ = handle.engine_tx.send(AgentEvent::Error {
+                message: message.into(),
+            });
         }
     }
     pub(crate) fn permission_harness(&self, chat: &str, run: &str) -> Option<HarnessId> {
-        lock(&self.inner.runs).get(chat)
+        lock(&self.inner.runs)
+            .get(chat)
             .filter(|handle| handle.run_id == run)
             .map(|handle| handle.runtime_config.harness_id)
     }

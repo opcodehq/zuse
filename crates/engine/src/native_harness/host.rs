@@ -58,9 +58,15 @@ impl NativeCallbacks for Callbacks {
         let question = UserInputQuestion {
             approval: Some({
                 let mut approval = zuse_protocol::permission::ToolApproval::new(
-                    format!("zuse:{}", request.tool), request.input.clone(), "Allow once", "Deny",
+                    format!("zuse:{}", request.tool),
+                    request.input.clone(),
+                    "Allow once",
+                    "Deny",
                 );
-                approval.force_prompt = request.path.as_ref().is_some_and(|path| permission::sensitive(path));
+                approval.force_prompt = request
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| permission::sensitive(path));
                 approval
             }),
             id: format!("{}:{}", context.agent_id, context.call_id),

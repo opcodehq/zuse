@@ -298,28 +298,37 @@ impl Composer {
                     }
                     rows.push(row(index, level).into_any_element());
                 }
-                let menu = popover::popover_card(&popup_theme)
-                    .id("composer-permission-menu")
-                    .role(Role::ListBox)
-                    .w(px(260.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(popover::menu_heading(&popup_theme, "Agent access"))
-                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                        this.permission_open = false;
-                        cx.notify();
-                    }))
-                    .children(rows)
-                    .when(self.state.read(cx).selected_chat.is_some(), |menu| {
-                        menu.child(popover::menu_separator()).child(
-                            div().id("open-permission-rules").role(Role::Button)
-                                .aria_label("Saved permission rules").px(px(10.)).py(px(8.))
-                                .text_size(crate::typography::text_xs()).text_color(popup_theme.text)
-                                .cursor_pointer().child("Saved permission rules…")
-                                .on_click(cx.listener(|this, _, _, cx| this.open_permission_inspector(cx)))
-                        )
-                    });
+                let menu =
+                    popover::popover_card(&popup_theme)
+                        .id("composer-permission-menu")
+                        .role(Role::ListBox)
+                        .w(px(260.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(popover::menu_heading(&popup_theme, "Agent access"))
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.permission_open = false;
+                            cx.notify();
+                        }))
+                        .children(rows)
+                        .when(self.state.read(cx).selected_chat.is_some(), |menu| {
+                            menu.child(popover::menu_separator()).child(
+                                div()
+                                    .id("open-permission-rules")
+                                    .role(Role::Button)
+                                    .aria_label("Saved permission rules")
+                                    .px(px(10.))
+                                    .py(px(8.))
+                                    .text_size(crate::typography::text_xs())
+                                    .text_color(popup_theme.text)
+                                    .cursor_pointer()
+                                    .child("Saved permission rules…")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.open_permission_inspector(cx)
+                                    })),
+                            )
+                        });
                 let menu = menu.when(unconfirmed, |view| {
                     view.child(
                         div()
@@ -345,9 +354,12 @@ impl Composer {
                     None,
                 ))
             })
-            .when(self.permission_inspector.as_ref().is_some_and(|inspector| self.state.read(cx).selected_chat.as_deref() == Some(&inspector.chat)), |view| {
-                view.child(self.render_permission_inspector(cx))
-            })
+            .when(
+                self.permission_inspector.as_ref().is_some_and(|inspector| {
+                    self.state.read(cx).selected_chat.as_deref() == Some(&inspector.chat)
+                }),
+                |view| view.child(self.render_permission_inspector(cx)),
+            )
     }
 }
 

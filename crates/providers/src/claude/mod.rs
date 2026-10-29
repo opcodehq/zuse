@@ -1601,7 +1601,9 @@ mod tests {
         let input = json!({"command": "x".repeat(9000), "timeout": 5000});
         let question = tool_approval_question("Bash", &input);
         assert_eq!(question.approval.unwrap().input, input);
-        let questions = parse_questions(&json!({"questions":[{"question":"Continue?", "options":[{"label":"Yes"},{"label":"No"}]}]}));
+        let questions = parse_questions(
+            &json!({"questions":[{"question":"Continue?", "options":[{"label":"Yes"},{"label":"No"}]}]}),
+        );
         assert_eq!(questions.len(), 1);
         assert!(questions[0].approval.is_none());
     }

@@ -2844,6 +2844,14 @@ fn saved_http_approval_metadata_keeps_inputs_and_drops_only_transport_identity()
     assert_eq!(a, b);
     assert_eq!(a.input["extra"]["cwd"], "/project");
     second["metadata"]["command"] = json!("different command");
-    assert_ne!(a.input, access_approval_question(&second).approval.unwrap().input);
-    assert!(access_approval_question(&json!({"id":"unknown","action":"bash"})).approval.unwrap().force_prompt);
+    assert_ne!(
+        a.input,
+        access_approval_question(&second).approval.unwrap().input
+    );
+    assert!(
+        access_approval_question(&json!({"id":"unknown","action":"bash"}))
+            .approval
+            .unwrap()
+            .force_prompt
+    );
 }

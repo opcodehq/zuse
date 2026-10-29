@@ -2307,17 +2307,32 @@ fn approval_question(method: &str, params: &Value) -> UserInputQuestion {
             let has_resource = if method.contains("commandExecution") {
                 match params.get("command") {
                     Some(Value::String(command)) => !command.trim().is_empty(),
-                    Some(Value::Array(parts)) => !parts.is_empty() && parts.iter().all(|part| part.as_str().is_some_and(|part| !part.is_empty())),
+                    Some(Value::Array(parts)) => {
+                        !parts.is_empty()
+                            && parts
+                                .iter()
+                                .all(|part| part.as_str().is_some_and(|part| !part.is_empty()))
+                    }
                     _ => false,
                 }
             } else {
-                params.get("changes").and_then(Value::as_array).is_some_and(|changes| {
-                    !changes.is_empty() && changes.iter().all(|change| change.get("path").and_then(Value::as_str).is_some_and(|path| !path.is_empty()))
-                })
+                params
+                    .get("changes")
+                    .and_then(Value::as_array)
+                    .is_some_and(|changes| {
+                        !changes.is_empty()
+                            && changes.iter().all(|change| {
+                                change
+                                    .get("path")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|path| !path.is_empty())
+                            })
+                    })
             };
-            approval.force_prompt = !has_resource || params
-                .get("additionalPermissions")
-                .is_some_and(|v| !v.is_null())
+            approval.force_prompt = !has_resource
+                || params
+                    .get("additionalPermissions")
+                    .is_some_and(|v| !v.is_null())
                 || params.get("grantRoot").is_some_and(|v| !v.is_null());
             approval
         }),
@@ -2462,20 +2477,44 @@ for line in sys.stdin:
     #[test]
     fn saved_approval_metadata_is_complete_and_excludes_transport_ids() {
         let params = json!({"threadId":"thread", "turnId":"turn", "itemId":"first", "command":"cargo test", "cwd":"/project", "reason":"routine"});
-        let first = approval_question("item/commandExecution/requestApproval", &params).approval.unwrap();
-        let mut second = params.clone(); second["itemId"] = json!("second");
-        let second = approval_question("item/commandExecution/requestApproval", &second).approval.unwrap();
+        let first = approval_question("item/commandExecution/requestApproval", &params)
+            .approval
+            .unwrap();
+        let mut second = params.clone();
+        second["itemId"] = json!("second");
+        let second = approval_question("item/commandExecution/requestApproval", &second)
+            .approval
+            .unwrap();
         assert_eq!(first, second);
         assert_eq!(first.input["command"], "cargo test");
         assert_eq!(first.input["cwd"], "/project");
-        let escalation = approval_question("item/commandExecution/requestApproval", &json!({"command":"cargo test", "additionalPermissions":{"network":true}})).approval.unwrap();
+        let escalation = approval_question(
+            "item/commandExecution/requestApproval",
+            &json!({"command":"cargo test", "additionalPermissions":{"network":true}}),
+        )
+        .approval
+        .unwrap();
         assert!(escalation.force_prompt);
         assert!(!first.force_prompt);
-        for method in ["item/commandExecution/requestApproval", "item/fileChange/requestApproval"] {
-            let incomplete = approval_question(method, &json!({"itemId":"id", "reason":"approval needed"})).approval.unwrap();
-            assert!(incomplete.force_prompt, "missing resources cannot create reusable grants");
+        for method in [
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        ] {
+            let incomplete =
+                approval_question(method, &json!({"itemId":"id", "reason":"approval needed"}))
+                    .approval
+                    .unwrap();
+            assert!(
+                incomplete.force_prompt,
+                "missing resources cannot create reusable grants"
+            );
         }
-        let file = approval_question("item/fileChange/requestApproval", &json!({"changes":[{"path":"src/lib.rs"}]})).approval.unwrap();
+        let file = approval_question(
+            "item/fileChange/requestApproval",
+            &json!({"changes":[{"path":"src/lib.rs"}]}),
+        )
+        .approval
+        .unwrap();
         assert!(!file.force_prompt);
     }
 
