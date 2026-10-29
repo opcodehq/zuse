@@ -13,8 +13,8 @@ export default function (pi) {
     if (config.mode === "read-only") return false;
     try {
       const confirmed = await ctx.ui.confirm(
-        "Allow tool execution?",
-        `${name}\n${JSON.stringify(input)}`,
+        config.ready,
+        JSON.stringify({tool: name, input}),
         {signal: ctx.signal},
       );
       return confirmed === true && !ctx.signal?.aborted;

@@ -653,6 +653,9 @@ pub struct ToolDiff {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserInputQuestion {
+    /// Present only on a provider tool-approval callback, never a content question.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<crate::permission::ToolApproval>,
     pub id: String,
     pub header: String,
     pub question: String,

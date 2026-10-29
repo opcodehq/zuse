@@ -9,6 +9,7 @@ pub(super) type Input =
 pub(super) struct Dialogs {
     pub input: Option<Arc<Input>>,
     tasks: JoinSet<()>,
+    pub approval_nonce: Option<String>,
 }
 impl Dialogs {
     pub fn request(&mut self, client: Client, frame: &Value) {
@@ -35,12 +36,31 @@ impl Dialogs {
         let title = string(frame, "title");
         let message = string(frame, "message");
         let question = UserInputQuestion {
+            approval: if method == "confirm" && self.approval_nonce.as_deref() == Some(title) {
+                serde_json::from_str::<Value>(message).ok().and_then(|v| {
+                    Some(zuse_protocol::permission::ToolApproval::new(
+                        format!("pi:{}", v["tool"].as_str()?),
+                        v.get("input")?.clone(),
+                        "Yes",
+                        "No",
+                    ))
+                })
+            } else {
+                None
+            },
             id: uuid::Uuid::new_v4().to_string(),
             header: "Pi".into(),
             question: if message.is_empty() {
                 title.into()
             } else {
-                format!("{title}\n{message}")
+                format!(
+                    "{}\n{message}",
+                    if self.approval_nonce.as_deref() == Some(title) {
+                        "Allow tool execution?"
+                    } else {
+                        title
+                    }
+                )
             },
             options: options.clone(),
             multi_select: false,
@@ -128,5 +148,49 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), sender.closed())
             .await
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use super::*;
+    #[tokio::test]
+    async fn saved_approval_authority_requires_the_owned_confirm_nonce() {
+        let (writer, _peer) = tokio::io::duplex(4096);
+        let (_peer_writer, reader) = tokio::io::duplex(4096);
+        let transport = super::super::rpc::Transport::new(writer, reader);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut dialogs = Dialogs::default();
+        dialogs.approval_nonce = Some("owned-nonce".into());
+        dialogs.input = Some(Arc::new(move |questions| {
+            tx.send(questions).unwrap();
+            let (tx, rx) = oneshot::channel();
+            let _ = tx.send(vec![]);
+            rx
+        }));
+        let message =
+            json!({"tool":"write", "input":{"path":"file.rs","content":"x".repeat(9000)}})
+                .to_string();
+        for (method, title, expected) in [
+            ("confirm", "owned-nonce", true),
+            ("confirm", "ordinary", false),
+            ("select", "owned-nonce", false),
+        ] {
+            dialogs.request(
+                transport.client.clone(),
+                &json!({"id":"i","method":method,"title":title,"message":message}),
+            );
+            let questions = rx.recv().await.unwrap();
+            assert_eq!(questions[0].approval.is_some(), expected);
+            if expected {
+                assert_eq!(
+                    questions[0].approval.as_ref().unwrap().input["content"]
+                        .as_str()
+                        .unwrap()
+                        .len(),
+                    9000
+                );
+            }
+        }
     }
 }

@@ -57,6 +57,7 @@ mod tests {
     use super::*;
     fn question(id: &str, multi: bool) -> UserInputQuestion {
         UserInputQuestion {
+            approval: None,
             id: id.into(),
             header: String::new(),
             question: String::new(),

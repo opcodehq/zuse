@@ -3343,6 +3343,41 @@ fn handle_server_request_live(
         })
         .collect();
     let question = UserInputQuestion {
+        approval: if content_question {
+            None
+        } else {
+            options
+                .iter()
+                .find(|o| o["kind"] == "allow_once")
+                .and_then(|option| {
+                    let allow = option["name"].as_str()?;
+                    let deny =
+                        options.iter().find(|o| o["kind"] == "reject_once")?["name"].as_str()?;
+                    // Unknown inputs cannot form a reusable grant.
+                    let call = params.get("toolCall")?;
+                    let input = call.get("rawInput")?;
+                    let title = call.get("title")?.as_str()?;
+                    let mut approval = zuse_protocol::permission::ToolApproval::new(
+                        format!(
+                            "acp:{}:{title}",
+                            request
+                                .harness
+                                .map(String::from)
+                                .unwrap_or_else(|| "unknown".into())
+                        ),
+                        input.clone(),
+                        allow,
+                        deny,
+                    );
+                    approval.force_prompt = input.is_null()
+                        || names
+                            .iter()
+                            .filter(|n| n.as_str() == allow || n.as_str() == deny)
+                            .count()
+                            != 2;
+                    Some(approval)
+                })
+        },
         id: new_message_id(),
         header: if content_question {
             "Agent question"

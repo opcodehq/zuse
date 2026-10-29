@@ -2210,6 +2210,7 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
                 if id.is_empty() { format!("q{ix}") } else { id }
             };
             let question = UserInputQuestion {
+                approval: None,
                 id: new_message_id(),
                 header: {
                     let h = field(["header", "title", "label"]);
@@ -2287,6 +2288,26 @@ fn approval_question(method: &str, params: &Value) -> UserInputQuestion {
         )
     };
     UserInputQuestion {
+        approval: Some({
+            let mut input = params.clone();
+            // Transport identities change on every invocation and confer no authority.
+            if let Some(fields) = input.as_object_mut() {
+                for key in ["threadId", "turnId", "itemId", "approvalId"] {
+                    fields.remove(key);
+                }
+            }
+            let mut approval = zuse_protocol::permission::ToolApproval::new(
+                format!("codex:{method}"),
+                input,
+                "Yes",
+                "No",
+            );
+            approval.force_prompt = params
+                .get("additionalPermissions")
+                .is_some_and(|v| !v.is_null())
+                || params.get("grantRoot").is_some_and(|v| !v.is_null());
+            approval
+        }),
         id: new_message_id(),
         header,
         question,
@@ -2423,6 +2444,19 @@ for line in sys.stdin:
             sandbox_policy_value(SandboxLevel::Auto),
             json!({"type":"workspaceWrite","networkAccess":false})
         );
+    }
+
+    #[test]
+    fn saved_approval_metadata_is_complete_and_excludes_transport_ids() {
+        let params = json!({"threadId":"thread", "turnId":"turn", "itemId":"first", "command":"cargo test", "cwd":"/project", "reason":"routine"});
+        let first = approval_question("item/commandExecution/requestApproval", &params).approval.unwrap();
+        let mut second = params.clone(); second["itemId"] = json!("second");
+        let second = approval_question("item/commandExecution/requestApproval", &second).approval.unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.input["command"], "cargo test");
+        assert_eq!(first.input["cwd"], "/project");
+        let escalation = approval_question("item/commandExecution/requestApproval", &json!({"command":"cargo test", "additionalPermissions":{"network":true}})).approval.unwrap();
+        assert!(escalation.force_prompt);
     }
 
     #[test]

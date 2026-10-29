@@ -635,6 +635,7 @@ fn dictation_question_takeover_stops_capture_without_losing_draft(cx: &mut TestA
                 request_id: "request".into(),
                 resolved: false,
                 questions: vec![UserInputQuestion {
+                    approval: None,
                     id: "q".into(),
                     header: "Choose".into(),
                     question: "Continue?".into(),

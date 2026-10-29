@@ -96,6 +96,8 @@ impl Composer {
         match event.keystroke.key.as_str() {
             "escape" => {
                 self.permission_open = false;
+                self.permission_inspector = None;
+                self.permission_rules_task = None;
                 window.focus(&self.input.focus_handle(cx), cx);
             }
             "enter" | "space" if !event.is_held => {
@@ -207,6 +209,8 @@ impl Composer {
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if !pending {
+                            this.permission_inspector = None;
+                            this.permission_rules_task = None;
                             this.permission_active = LEVELS
                                 .iter()
                                 .position(|level| *level == selected)
@@ -306,7 +310,16 @@ impl Composer {
                         this.permission_open = false;
                         cx.notify();
                     }))
-                    .children(rows);
+                    .children(rows)
+                    .when(self.state.read(cx).selected_chat.is_some(), |menu| {
+                        menu.child(popover::menu_separator()).child(
+                            div().id("open-permission-rules").role(Role::Button)
+                                .aria_label("Saved permission rules").px(px(10.)).py(px(8.))
+                                .text_size(crate::typography::text_xs()).text_color(popup_theme.text)
+                                .cursor_pointer().child("Saved permission rules…")
+                                .on_click(cx.listener(|this, _, _, cx| this.open_permission_inspector(cx)))
+                        )
+                    });
                 let menu = menu.when(unconfirmed, |view| {
                     view.child(
                         div()
@@ -331,6 +344,9 @@ impl Composer {
                     menu.into_any_element(),
                     None,
                 ))
+            })
+            .when(self.permission_inspector.as_ref().is_some_and(|inspector| self.state.read(cx).selected_chat.as_deref() == Some(&inspector.chat)), |view| {
+                view.child(self.render_permission_inspector(cx))
             })
     }
 }

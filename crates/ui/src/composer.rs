@@ -11,6 +11,7 @@ mod archive;
 mod private_secrets;
 mod question_tray;
 mod permissions;
+mod permission_inspector;
 mod skill_completion;
 
 use std::collections::{HashMap, HashSet};
@@ -6232,6 +6233,8 @@ pub struct Composer {
     /// ([`Pickers::render_new_thread_target_selectors`]).
     pickers: Entity<Pickers>,
     permission_open: bool,
+    permission_inspector: Option<permission_inspector::Inspector>,
+    permission_rules_task: Option<Task<()>>,
     permission_active: usize,
     permission_focus: FocusHandle,
     configuration_notice_seen: Option<(String, String)>,
@@ -6677,6 +6680,8 @@ impl Composer {
             queue_edit_attachment_draft: None,
             pickers,
             permission_open: false,
+            permission_inspector: None,
+            permission_rules_task: None,
             permission_active: 0,
             permission_focus: cx.focus_handle(),
             configuration_notice_seen: None,
@@ -15056,6 +15061,7 @@ mod tests {
 
     fn question(id: &str, options: &[&str], multi: bool) -> UserInputQuestion {
         UserInputQuestion {
+            approval: None,
             id: id.into(),
             header: "Header".into(),
             question: format!("Question {id}"),
