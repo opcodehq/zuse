@@ -66,6 +66,7 @@ use crate::theme::Theme;
 use crate::transcript::{self, ForkTarget, Transcript, TranscriptEvent};
 
 mod actions_ui;
+mod project_setup;
 mod chat_dropzone;
 #[cfg(test)]
 mod chat_dropzone_tests;
@@ -2158,6 +2159,8 @@ pub struct Shell {
     /// The add-space palette (device tabs + folder search), `Some`
     /// while open.
     add_space: Option<AddSpaceFlow>,
+    project_setup: Option<project_setup::ProjectSetup>,
+    project_parent_setup: Option<project_setup::ProjectSetup>,
     /// The New project palette's collapsed-breadcrumbs (`…`) menu.
     project_crumb_menu: popover::Popup<()>,
     command_palette: Option<command_palette::CommandPalette>,
@@ -2719,6 +2722,8 @@ impl Shell {
             section_menu_active: None,
             delete_space_confirm: None,
             add_space: None,
+            project_setup: None,
+            project_parent_setup: None,
             project_crumb_menu: popover::Popup::default(),
             command_palette: None,
             search_warm: None,

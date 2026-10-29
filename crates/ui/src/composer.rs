@@ -46,6 +46,7 @@ use crate::theme::Theme;
 
 mod chip;
 mod cloud;
+mod project_creation;
 pub(crate) mod tray;
 pub use chip::ChipKind;
 use chip::*;
@@ -1864,6 +1865,12 @@ pub fn init_with_keymap(cx: &mut App, send_behavior: ComposerSendBehavior, keyma
         palette_bindings.push(KeyBinding::new(&format!("{prefix}-z"), Undo, palette));
         palette_bindings.push(KeyBinding::new(&format!("shift-{prefix}-z"), Redo, palette));
     }
+    let mut project_bindings = input_bindings("ProjectForm");
+    project_bindings.retain(|binding| {
+        let key = binding.keystrokes().first().map(|key| key.unparse()).unwrap_or_default();
+        !matches!(key.as_str(), "tab" | "shift-tab" | "shift-enter" | "up" | "down")
+    });
+    cx.bind_keys(project_bindings);
     cx.bind_keys(palette_bindings);
     cx.bind_keys(generic_bindings);
     cx.bind_keys(message_bindings);
@@ -8891,6 +8898,7 @@ impl Composer {
         if self.cloud_launch_pending(cx) { return true; }
         if self.cached_cloud() { return false; }
         let state = self.state.read(cx);
+        if state.selected_project_creation().is_some_and(|op| op.blocks_execution()) { return true; }
         if state.configuration_blocked() {
             return true;
         }
@@ -9020,6 +9028,7 @@ impl Composer {
     /// is on), `Mutate createChat` with the `ChatConfig` + cwd, and the model /
     /// reasoning / options on the Run request itself (§1.7).
     fn send(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
+        if self.state.read(cx).selected_project_creation().is_some_and(|op| op.blocks_execution()) { return; }
         if self.pickers.read(cx).preparing_source(cx) { return; }
         if self.send_cloud(text.clone(), cx) {
             return;

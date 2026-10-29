@@ -729,6 +729,7 @@ pub struct EngineRpc {
     workspace_files: crate::WorkspaceFiles,
     terminals: Terminals,
     project_actions: ProjectActionsStore,
+    project_creation: Option<crate::project_creation::ProjectCreationService>,
     previews: Option<zuse_preview::PreviewService>,
     change_requests: CheckoutChangeRequests,
     github: GitHubCli,
@@ -790,6 +791,7 @@ impl EngineRpc {
             workspace_files,
             terminals,
             project_actions,
+            project_creation: None,
             previews: None,
             change_requests,
             github,
@@ -804,6 +806,11 @@ impl EngineRpc {
             engine_info,
             desktop_import_profile: None,
         }
+    }
+
+    pub fn with_project_creation(mut self, service: crate::project_creation::ProjectCreationService) -> Self {
+        self.project_creation = Some(service);
+        self
     }
 
     pub fn with_usage(mut self, usage: crate::usage::Usage) -> Self {
@@ -1691,6 +1698,14 @@ fn forwardable(method: &str) -> bool {
             | methods::RESOLVE_GIT_AVATARS
             | methods::FETCH_ALL
             | methods::SWITCH_REF
+            | zuse_protocol::project_creation::GITHUB_STATUS
+            | zuse_protocol::project_creation::GITHUB_REPOS
+            | zuse_protocol::project_creation::DEFAULT_PARENT
+            | zuse_protocol::project_creation::START
+            | zuse_protocol::project_creation::LIST
+            | zuse_protocol::project_creation::WATCH
+            | zuse_protocol::project_creation::CANCEL
+            | zuse_protocol::project_creation::RETRY
             | methods::LIST_FOLDERS
             | methods::GET_WORKTREE_SETTINGS
             | methods::SET_WORKTREE_SETTINGS
@@ -3059,6 +3074,10 @@ impl RpcService for EngineRpc {
             }
             methods::QUEUE_COMMAND => {
                 let p: QueueCommandParams = parse_params(params)?;
+                if let SessionCommandPayload::Run { request, .. } = &p.command
+                    && self.project_creation.as_ref().is_some_and(|service| service.blocks_request(request)) {
+                    return Err(RpcError::Failed("Project files are not ready. Finish or retry project creation before sending.".into()));
+                }
                 let command_id = self
                     .doc_host
                     .queue_command_with_transfers(&p.chat_id, p.command, p.transfers)
@@ -4488,6 +4507,42 @@ impl RpcService for EngineRpc {
                     .await
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
                 RpcReply::value(&status)
+            }
+            zuse_protocol::project_creation::GITHUB_STATUS => RpcReply::value(&self.github.project_auth_status().await),
+            zuse_protocol::project_creation::GITHUB_REPOS => {
+                let p: zuse_protocol::project_creation::GithubRepositoriesRequest = parse_params(params)?;
+                RpcReply::value(&self.github.project_repositories(p.page).await.map_err(RpcError::Failed)?)
+            }
+            zuse_protocol::project_creation::DEFAULT_PARENT => {
+                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                RpcReply::value(&service.default_parent().await)
+            }
+            zuse_protocol::project_creation::START => {
+                let p = parse_params(params)?;
+                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                let operation = service.start(p).await.map_err(RpcError::Failed)?;
+                self.workspace.create_space(&operation.id, &operation.device_id, &operation.destination, Some(operation.request.name.clone()), true)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&operation)
+            }
+            zuse_protocol::project_creation::LIST => {
+                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                RpcReply::value(&service.list())
+            }
+            zuse_protocol::project_creation::WATCH => {
+                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                Ok(RpcReply::Stream(watch_stream(service.subscribe())))
+            }
+            zuse_protocol::project_creation::CANCEL => {
+                let p: zuse_protocol::project_creation::ProjectOperationId = parse_params(params)?;
+                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                service.cancel(&p.id).map_err(RpcError::Failed)?;
+                RpcReply::value(&serde_json::json!({}))
+            }
+            zuse_protocol::project_creation::RETRY => {
+                let p: zuse_protocol::project_creation::ProjectOperationId = parse_params(params)?;
+                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                RpcReply::value(&service.retry(&p.id).await.map_err(RpcError::Failed)?)
             }
             methods::LIST_FOLDERS => {
                 let p: ListFoldersParams = parse_params(params)?;

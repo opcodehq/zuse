@@ -333,6 +333,11 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | GET_CHAT_ARCHIVE_STATUS
         | LIST_REFS
         | LIST_FOLDERS
+        | crate::project_creation::LIST
+        | crate::project_creation::WATCH
+        | crate::project_creation::DEFAULT_PARENT
+        | crate::project_creation::GITHUB_STATUS
+        | crate::project_creation::GITHUB_REPOS
         | SEARCH_FILES => true,
         PLUGINS => params["action"] == "list",
         _ => false,
