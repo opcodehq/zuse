@@ -51,6 +51,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .allow_origin(origins.as_ref().clone())
         .allow_methods(
             if state.runtime.is_some()
+                || state.store.devices.is_some()
                 || state.store.billing_writes_enabled()
                 || state.store.project_writes_enabled()
                 || state.store.image_writes_enabled()
@@ -63,12 +64,38 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .allow_headers([
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
+            header::HeaderName::from_static("dpop"),
             header::HeaderName::from_static("x-zuse-workspace"),
             header::HeaderName::from_static("x-zuse-device-id"),
         ]);
     let mut app = Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
+        .route("/v1/environments", get(environments))
+        .route(
+            "/v1/client/environment-links",
+            post(native_link).layer(DefaultBodyLimit::max(32768)),
+        )
+        .route(
+            "/v1/client/environment-link-challenges",
+            post(native_link_challenge),
+        )
+        .route(
+            "/v1/environments/{id}/heartbeat",
+            post(native_heartbeat).layer(DefaultBodyLimit::max(32768)),
+        )
+        .route(
+            "/v1/environments/{id}/connect",
+            post(native_connect).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/v1/mobile/devices",
+            post(register_native_device).layer(DefaultBodyLimit::max(8192)),
+        )
+        .route(
+            "/v1/client/dpop-token",
+            post(device_access_token).layer(DefaultBodyLimit::max(4096)),
+        )
         .route("/v1/cloud/context", get(context))
         .route(
             "/v1/cloud/launch-assets/chunk",
@@ -541,6 +568,150 @@ async fn entitlements(
 struct WorkspaceQuery {
     project_id: Option<String>,
 }
+async fn native_link(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    if !matches!(access.scope, access::Scope::Personal) {
+        return Err(ApiError::forbidden("environment_scope_not_supported"));
+    }
+    let authority = state
+        .store
+        .devices
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("device_authority_disabled"))?;
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_environment_link"))?;
+    Ok(Json(authority.link(&access.actor.account_id, &body).await?))
+}
+
+async fn native_link_challenge(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    if !matches!(access.scope, access::Scope::Personal) {
+        return Err(ApiError::forbidden("environment_scope_not_supported"));
+    }
+    let authority = state
+        .store
+        .devices
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("device_authority_disabled"))?;
+    Ok(Json(
+        authority.link_challenge(&access.actor.account_id).await?,
+    ))
+}
+
+async fn native_heartbeat(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let token = runtime_bearer(&headers)?;
+    if !token.starts_with("zenv_") {
+        return Err(ApiError::unauthorized("invalid_environment_credential"));
+    }
+    let authority = state
+        .store
+        .devices
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("device_authority_disabled"))?;
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_heartbeat"))?;
+    Ok(Json(authority.heartbeat(&id, token, &body).await?))
+}
+
+async fn native_connect(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let (_, token) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.split_once(' '))
+        .filter(|(scheme, token)| scheme.eq_ignore_ascii_case("DPoP") && !token.is_empty())
+        .ok_or_else(|| ApiError::unauthorized("missing_device_token"))?;
+    let proof = headers
+        .get("dpop")
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| ApiError::unauthorized("missing_dpop"))?;
+    let authority = state
+        .store
+        .devices
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("device_authority_disabled"))?;
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_connection_request"))?;
+    if body["requireManaged"] != true || body["wireProtocolVersion"] != 1 {
+        return Err(ApiError::bad_request("managed_protocol_required"));
+    }
+    Ok(Json(authority.connect(&id, token, proof).await?))
+}
+
+async fn register_native_device(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.split_once(' '))
+        .filter(|(scheme, token)| scheme.eq_ignore_ascii_case("DPoP") && !token.is_empty())
+        .ok_or_else(|| ApiError::unauthorized("missing_device_token"))?;
+    let proof = headers
+        .get("dpop")
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| ApiError::unauthorized("missing_dpop"))?;
+    let authority = state
+        .store
+        .devices
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("device_authority_disabled"))?;
+    let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_device"))?;
+    Ok(Json(
+        authority.register(authorization.1, proof, &body).await?,
+    ))
+}
+
+async fn device_access_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    if !matches!(access.scope, access::Scope::Personal) {
+        return Err(ApiError::forbidden("device_scope_not_supported"));
+    }
+    let proof = headers
+        .get("dpop")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| ApiError::unauthorized("missing_dpop"))?;
+    let authority = state
+        .store
+        .devices
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("device_authority_disabled"))?;
+    Ok(Json(authority.mint(&access.actor.account_id, proof).await?))
+}
+
+async fn environments(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    // Organization sharing needs its own audience policy; never infer visibility
+    // from organization membership alone.
+    if !matches!(access.scope, access::Scope::Personal) {
+        return Err(ApiError::forbidden("environment_scope_not_supported"));
+    }
+    Ok(Json(
+        json!({"environments": state.store.personal_environments(&access.actor.account_id).await?}),
+    ))
+}
+
 async fn workspaces(
     State(state): State<AppState>,
     headers: HeaderMap,

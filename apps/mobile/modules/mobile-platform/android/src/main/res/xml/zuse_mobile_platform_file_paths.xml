@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Only files the app explicitly hands to another app through a granted
+  content:// URI are readable; the provider itself is not exported.
+-->
+<paths>
+  <cache-path name="cache" path="." />
+  <files-path name="files" path="." />
+</paths>

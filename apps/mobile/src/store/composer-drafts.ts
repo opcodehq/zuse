@@ -1,0 +1,190 @@
+import {
+	FileRef,
+	type FileRef as FileRefValue,
+	SkillRef,
+	type SkillRef as SkillRefValue,
+} from "@zuse/contracts";
+import { Effect, Schema } from "effect";
+import { Atom } from "effect/unstable/reactivity";
+
+import * as FileSystem from "expo-file-system/legacy";
+
+import {
+	clearProtectedComposerAttachments,
+	deleteProtectedComposerAttachment,
+	type LocalComposerAttachment,
+} from "~/lib/composer-attachment-storage";
+import { deletePath, ensureDir, readJson, writeJson } from "~/offline/cache";
+
+import { appAtomRegistry } from "./registry";
+
+export type ComposerDraft = {
+	text: string;
+	attachments: readonly LocalComposerAttachment[];
+	goalMode: boolean;
+	fileRefs?: readonly FileRefValue[];
+	skillRefs?: readonly SkillRefValue[];
+	/** Stable launch identity survives a lost create response or app termination. */
+	cloudLaunch?: { idempotencyKey: string; messageId: string; request: string };
+};
+
+const EMPTY_DRAFT: ComposerDraft = {
+	text: "",
+	attachments: [],
+	goalMode: false,
+};
+
+const DRAFT_ROOT = `${FileSystem.documentDirectory ?? ""}zuse-composer-drafts`;
+const safeKey = (key: string): string =>
+	encodeURIComponent(key).replace(/%/g, "_").slice(0, 220);
+const draftPath = (key: string): string => `${DRAFT_ROOT}/${safeKey(key)}.json`;
+let generation = 0;
+let clearing: Promise<void> | null = null;
+const persistenceTails = new Map<string, Promise<void>>();
+
+const ComposerDraftSchema = Schema.Struct({
+	text: Schema.String,
+	attachments: Schema.Array(
+		Schema.Struct({
+			id: Schema.String,
+			uri: Schema.String,
+			name: Schema.String,
+			mimeType: Schema.String,
+			size: Schema.optional(Schema.Number),
+		}),
+	),
+	goalMode: Schema.Boolean,
+	fileRefs: Schema.optional(Schema.Array(FileRef)),
+	skillRefs: Schema.optional(Schema.Array(SkillRef)),
+	cloudLaunch: Schema.optional(
+		Schema.Struct({
+			idempotencyKey: Schema.String,
+			messageId: Schema.String,
+			request: Schema.String,
+		}),
+	),
+});
+
+const persistDraft = async (
+	key: string,
+	draft: ComposerDraft,
+): Promise<void> => {
+	await Effect.runPromise(
+		ensureDir(DRAFT_ROOT).pipe(
+			Effect.andThen(writeJson(draftPath(key), draft)),
+		),
+	);
+};
+
+const queueDraftOperation = (
+	key: string,
+	operation: () => Promise<void>,
+): void => {
+	const epoch = generation;
+	const previous = persistenceTails.get(key) ?? Promise.resolve();
+	const next = previous
+		.catch(() => undefined)
+		.then(() => (epoch === generation ? operation() : undefined))
+		.finally(() => {
+			if (persistenceTails.get(key) === next) persistenceTails.delete(key);
+		});
+	persistenceTails.set(key, next);
+};
+
+export const hydrateComposerDraft = async (
+	key: string,
+): Promise<ComposerDraft | null> => {
+	if (clearing) return null;
+	const epoch = generation;
+	if (appAtomRegistry.get(draftsBySessionAtom)[key] !== undefined)
+		return appAtomRegistry.get(draftsBySessionAtom)[key] ?? null;
+	try {
+		const parsed = await Effect.runPromise(
+			readJson(draftPath(key), (value) =>
+				Schema.decodeUnknownSync(ComposerDraftSchema)(value),
+			),
+		);
+		if (parsed === null || epoch !== generation) return null;
+		appAtomRegistry.update(draftsBySessionAtom, (drafts) => ({
+			...drafts,
+			[key]: parsed,
+		}));
+		return parsed;
+	} catch {
+		if (epoch !== generation) return null;
+		await Effect.runPromise(deletePath(draftPath(key))).catch(() => undefined);
+		return null;
+	}
+};
+
+export const draftsBySessionAtom = Atom.make<
+	Readonly<Record<string, ComposerDraft>>
+>({}).pipe(Atom.keepAlive);
+
+/** Per-session draft; notifies only when this session's draft changes. */
+export const composerDraftAtom = Atom.family((key: string) =>
+	Atom.make((get) => get(draftsBySessionAtom)[key] ?? EMPTY_DRAFT),
+);
+
+export const composerDraft = (key: string): ComposerDraft =>
+	appAtomRegistry.get(draftsBySessionAtom)[key] ?? EMPTY_DRAFT;
+
+export const setComposerDraft = (key: string, draft: ComposerDraft): void => {
+	if (clearing) return;
+	const previous = appAtomRegistry.get(draftsBySessionAtom)[key];
+	appAtomRegistry.update(draftsBySessionAtom, (drafts) => ({
+		...drafts,
+		[key]: draft,
+	}));
+	const retained = new Set(draft.attachments.map((item) => item.uri));
+	for (const attachment of previous?.attachments ?? []) {
+		if (!retained.has(attachment.uri))
+			void deleteProtectedComposerAttachment(attachment.uri);
+	}
+	queueDraftOperation(key, () => persistDraft(key, draft));
+};
+
+export const persistComposerDraft = async (
+	key: string,
+	draft: ComposerDraft,
+): Promise<void> => {
+	setComposerDraft(key, draft);
+	await persistenceTails.get(key);
+};
+
+export const clearComposerDraft = (key: string): void => {
+	const previous = appAtomRegistry.get(draftsBySessionAtom)[key];
+	appAtomRegistry.update(draftsBySessionAtom, (drafts) => {
+		if (!(key in drafts)) return drafts;
+		const next = { ...drafts };
+		delete next[key];
+		return next;
+	});
+	for (const attachment of previous?.attachments ?? [])
+		void deleteProtectedComposerAttachment(attachment.uri);
+	queueDraftOperation(key, () => Effect.runPromise(deletePath(draftPath(key))));
+};
+
+/** Invalidate reads and queued saves before draining writes and removing every draft. */
+export const clearComposerDrafts = (): Promise<void> => {
+	if (clearing) return clearing;
+	generation += 1;
+	appAtomRegistry.set(draftsBySessionAtom, {});
+	clearing = (async () => {
+		const results = await Promise.allSettled([
+			(async () => {
+				await Promise.allSettled([...persistenceTails.values()]);
+				await Effect.runPromise(deletePath(DRAFT_ROOT));
+			})(),
+			clearProtectedComposerAttachments(),
+		]);
+		if (results.some((result) => result.status === "rejected")) {
+			throw new Error(
+				"Some drafts or attachments could not be cleared. Please retry.",
+			);
+		}
+	})().finally(() => {
+		clearing = null;
+	});
+	return clearing;
+};

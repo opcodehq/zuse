@@ -1,0 +1,882 @@
+import { existsSync, readFileSync } from "node:fs";
+import { describe, expect, test } from "vitest";
+
+const source = (path: string): string =>
+	readFileSync(`${process.cwd()}/${path}`, "utf8");
+
+/** Route sources; the root layout and home screen span the files they were split into. */
+const appFile = (relativePath: string): string => {
+	if (relativePath === "_layout.tsx")
+		return source("app/_layout.tsx") + source("app/(main)/_layout.tsx");
+	if (relativePath === "index.tsx")
+		return (
+			source("app/(main)/index.tsx") +
+			source("src/components/home/home-feed.tsx") +
+			source("src/components/home/use-onboarding-gate.ts")
+		);
+	return source(`app/(main)/${relativePath}`);
+};
+
+describe("mobile UI contracts", () => {
+	test("project rows support direct hold-to-drag with rounded highlights", () => {
+		const home = appFile("index.tsx");
+		expect(home).not.toContain("setReordering");
+		expect(home).toContain("measureInWindow");
+		const drag = readFileSync(
+			`${process.cwd()}/src/components/home/project-drag-row.tsx`,
+			"utf8",
+		);
+		expect(drag).toContain("activateAfterLongPress(350)");
+		const header = readFileSync(
+			`${process.cwd()}/src/components/home/home-project-header.tsx`,
+			"utf8",
+		);
+		expect(header).toContain("rounded-xl overflow-hidden");
+		expect(drag).toContain("borderRadius: 12");
+	});
+	test("recent chats keep their project identity inline", () => {
+		const row = readFileSync(
+			`${process.cwd()}/src/components/home/home-chat-row.tsx`,
+			"utf8",
+		);
+		expect(row).toContain("item.showProject");
+		expect(row).toContain("{row.projectName}");
+		expect(row).toContain('maxWidth: "28%"');
+	});
+	test("does not classify every connection failure as offline", () => {
+		const banner = readFileSync(
+			`${process.cwd()}/src/components/connection-recovery-banner.tsx`,
+			"utf8",
+		);
+		const notice = readFileSync(
+			`${process.cwd()}/src/lib/connection-notice.ts`,
+			"utf8",
+		);
+		expect(banner).not.toContain('"Offline"');
+		expect(notice).toContain('"Connection issue"');
+	});
+	test("only the latest assistant message exposes response actions", () => {
+		const row = readFileSync(
+			`${process.cwd()}/src/components/messages/message-row.tsx`,
+			"utf8",
+		);
+		expect(row).toContain("context.lastAssistantMessageId === messageId");
+		const thread = appFile("c/[conn]/session/[sessionId].tsx");
+		expect(thread).toContain("lastAssistantMessageId:");
+		expect(thread).toContain('message.content._tag === "assistant"');
+	});
+	test("retains offline feed sources and monitors both account and paired routes", () => {
+		const home = appFile("index.tsx");
+		expect(home).toContain(
+			"eligibleConnections(connections, account !== null)",
+		);
+		const selection = home.slice(
+			home.indexOf("const feedConnections"),
+			home.indexOf("const groups"),
+		);
+		expect(selection).toContain("availableConnections(");
+		expect(selection).not.toContain('.status === "connected"');
+		expect(home).toContain("const recoveringConnection = feedConnections.find");
+	});
+	test("omits the duplicate completed-turn footer", () => {
+		const turn = readFileSync(
+			`${process.cwd()}/src/components/messages/turn-row.tsx`,
+			"utf8",
+		);
+		expect(turn).not.toContain("Worked for");
+		expect(turn).not.toContain('accessibilityLabel="Share response"');
+		expect(turn).not.toContain('accessibilityLabel="Copy response"');
+	});
+	test("lets existing chats choose reasoning and sends it with each message", () => {
+		const composer = readFileSync(
+			`${process.cwd()}/src/components/composer.tsx`,
+			"utf8",
+		);
+		const actions = readFileSync(`${process.cwd()}/src/rpc/actions.ts`, "utf8");
+		expect(composer).not.toContain("canChangeReasoning={fresh}");
+		expect(composer).toContain(
+			"setSessionModelOptions(stateKey, next.modelOptions)",
+		);
+		expect(composer).toMatch(/clientMessageId: messageId,\s*modelOptions,/);
+		expect(actions.match(/\.\.\.modelOptionsPayload\(options\)/g)).toHaveLength(
+			3,
+		);
+	});
+	test("starts cloud chats from the same New Chat screen", () => {
+		const newChat = appFile("new-chat.tsx");
+		expect(newChat).toContain("launchMobileCloudChat(");
+		expect(newChat).toContain(
+			"onSelect: () => setCloudSandbox(provider.providerId)",
+		);
+		expect(newChat).not.toContain("/new-cloud-chat");
+		expect(existsSync(`${process.cwd()}/app/(main)/new-cloud-chat.tsx`)).toBe(
+			false,
+		);
+	});
+	test("lets people remove a saved computer from Settings", () => {
+		const settings = readFileSync(
+			`${process.cwd()}/src/components/settings-screen.tsx`,
+			"utf8",
+		);
+		expect(settings).toContain('text: "Remove Computer"');
+		expect(settings).toContain("void removeConnection(key)");
+
+		expect(settings).toContain('connection.source === "paired"');
+	});
+	test("offers bounded home loading and explicit recovery actions", () => {
+		const home = appFile("index.tsx");
+		expect(home).toContain("startLoadingDeadline");
+		expect(home).toContain("showHomeRecovery ? (");
+		expect(home).toContain("Couldn’t load your chats");
+		expect(home).toContain("<Button onPress={retryHome}>Try Again</Button>");
+		expect(home).toContain('router.push("/settings")');
+		expect(home).toContain("Scan QR Code");
+		const connection = readFileSync(
+			`${process.cwd()}/src/rpc/connection.ts`,
+			"utf8",
+		);
+		expect(connection).toContain("maxAutomaticAttempts: (options) =>");
+		expect(connection).toContain(
+			"options.cloudWorkspaceId ? 2 : Number.POSITIVE_INFINITY",
+		);
+	});
+	test("declares local pairing and Expo development discovery services", () => {
+		const config = JSON.parse(
+			readFileSync(`${process.cwd()}/app.json`, "utf8"),
+		);
+		const nativeInfo = readFileSync(
+			`${process.cwd()}/ios/ZuseMobile/Info.plist`,
+			"utf8",
+		);
+		for (const service of ["_zuse._tcp", "_expo._tcp"]) {
+			expect(config.expo.ios.infoPlist.NSBonjourServices).toContain(service);
+			expect(nativeInfo).toContain(`<string>${service}</string>`);
+		}
+	});
+
+	test("keeps light surfaces light and uses adaptive native tints", () => {
+		const css = readFileSync(`${process.cwd()}/global.css`, "utf8");
+		expect(css).toContain("@variant light");
+		expect(css).toContain("@variant dark");
+		expect(css).toContain("--color-background: #f7f7f5");
+		expect(css).toContain("--color-foreground: #171716");
+		expect(css).toContain("--color-card: #ffffff");
+		expect(css).toContain("--color-card-elevated: #f0f0ed");
+		expect(css).toContain("--color-border: rgba(23, 23, 22, 0.1)");
+		expect(css).toContain("--color-input: rgba(23, 23, 22, 0.12)");
+		expect(css).toContain("--color-background: hsl(0 0% 6%)");
+		expect(css).toContain("--color-card: hsl(0 0% 12%)");
+		expect(css).toContain("--color-foreground-faint: hsl(0 0% 43%)");
+		expect(css).toContain("--color-input: rgba(255, 255, 255, 0.2)");
+		expect(css).toContain("--color-primary: hsl(83 74% 43%)");
+		expect(css).toContain("--color-primary: hsl(83 72% 46%)");
+		expect(css.match(/--color-primary-foreground: #ffffff/g)).toHaveLength(2);
+		expect(css).toContain("--color-accent: #486900");
+		expect(css).toContain("font-weight: 700");
+		expect(css).not.toContain("#007aff");
+		expect(css).not.toContain("#0a84ff");
+		expect(css).not.toContain("@media (prefers-color-scheme:");
+		expect(css).not.toContain("#34c759");
+	});
+
+	test("uses the Uniwind theme as the single live appearance source", () => {
+		const layout = appFile("_layout.tsx");
+		const thread = appFile("c/[conn]/session/[sessionId].tsx");
+		const appConfig = JSON.parse(
+			readFileSync(`${process.cwd()}/app.json`, "utf8"),
+		) as { expo: { userInterfaceStyle: string } };
+		const nativeTheme = readFileSync(`${process.cwd()}/src/theme.ts`, "utf8");
+		const glass = readFileSync(
+			`${process.cwd()}/src/components/ui/glass-surface.tsx`,
+			"utf8",
+		);
+		expect(appConfig.expo.userInterfaceStyle).toBe("automatic");
+		expect(nativeTheme).toContain(
+			'bg: { light: "#f7f7f5", dark: "hsl(0 0% 6%)" }',
+		);
+		expect(nativeTheme).toContain(
+			'fg: { light: "#171716", dark: "hsl(0 0% 93%)" }',
+		);
+		for (const source of [layout, thread, glass]) {
+			expect(source).toContain("useUniwind");
+			expect(source).not.toContain("useColorScheme");
+		}
+	});
+
+	test("presents settings as a system-backed native form sheet", () => {
+		const layout = appFile("_layout.tsx");
+		expect(layout).toContain('name="settings"');
+		expect(layout).toContain("presentation: SHEET_PRESENTATION");
+		expect(
+			readFileSync(`${process.cwd()}/src/lib/native-header.ts`, "utf8"),
+		).toContain('Platform.OS === "ios" ? "formSheet" : "card"');
+		expect(layout).toContain("sheetAllowedDetents: [0.92]");
+		expect(layout).toContain("contentStyle: readableContent");
+	});
+
+	test("reuses the model sheet from new chat", () => {
+		const newChat = appFile("new-chat.tsx");
+		const modelSheet = readFileSync(
+			`${process.cwd()}/src/components/model-sheet.ios.tsx`,
+			"utf8",
+		);
+		expect(newChat).toContain("<ComposerModeChip");
+		expect(newChat).toContain("<ModelSheetTrigger");
+		expect(newChat).toContain("<ModelSheet");
+		expect(newChat).not.toContain("<ComposerModelMenu");
+		expect(modelSheet).toContain("{showProviderPicker ? (");
+		expect(
+			readFileSync(`${process.cwd()}/src/lib/model-sheet.ts`, "utf8"),
+		).toContain(
+			"showProviderPicker: canChangeProvider && providers.length > 1",
+		);
+		expect(modelSheet).not.toContain('label="Mode"');
+		expect(modelSheet).toContain(
+			"PROVIDER_NATIVE_ASSET_NAMES[value.providerId]",
+		);
+		expect(newChat).toContain('className="mb-4 gap-1 px-1"');
+		expect(newChat).toContain("readNewChatPreferences");
+		expect(newChat).toContain("saveNewChatPreferences");
+		const savedDefaults = newChat.slice(
+			newChat.indexOf("void saveNewChatPreferences"),
+			newChat.indexOf(
+				").catch",
+				newChat.indexOf("void saveNewChatPreferences"),
+			),
+		);
+		expect(savedDefaults).toContain("connectionKey: effectiveConnectionKey");
+		expect(savedDefaults).toContain("projectId: effectiveProjectId");
+		expect(savedDefaults).toContain("sourceKind,");
+		expect(savedDefaults).not.toContain("source:");
+		expect(savedDefaults).not.toContain("branchLabel");
+		expect(newChat).toContain("const worktreeId = payload.createWorktree");
+		expect(newChat).not.toContain("listWorktrees");
+	});
+
+	test("keeps plan and attachment actions directly on the composer plus menu", () => {
+		const plusMenu = readFileSync(
+			`${process.cwd()}/src/components/composer-plus-menu.ios.tsx`,
+			"utf8",
+		);
+		const approvalMenu = readFileSync(
+			`${process.cwd()}/src/components/composer-approval-menu.ios.tsx`,
+			"utf8",
+		);
+		const actionMenus = readFileSync(
+			`${process.cwd()}/src/lib/action-menus.ts`,
+			"utf8",
+		);
+		expect(plusMenu).toContain("composerPlusMenuItems(props)");
+		expect(actionMenus).toContain('title: "Choose photos"');
+		expect(actionMenus).toContain('title: "Choose files"');
+		expect(actionMenus).toContain('title: "Add goal"');
+		expect(actionMenus).toContain('title: "Plan mode"');
+		for (const source of [plusMenu, approvalMenu]) {
+			expect(source).toContain('ignoreSafeArea="keyboard"');
+			expect(source).toContain("style={{ width: 40, height: 40 }}");
+			expect(source).not.toContain("<Host matchContents");
+		}
+	});
+
+	test("keeps attachments and unboxed mode state inside both composers", () => {
+		const newChat = appFile("new-chat.tsx");
+		const threadComposer = readFileSync(
+			`${process.cwd()}/src/components/composer.tsx`,
+			"utf8",
+		);
+		const modeChip = readFileSync(
+			`${process.cwd()}/src/components/composer-mode-chip.tsx`,
+			"utf8",
+		);
+		for (const source of [newChat, threadComposer]) {
+			expect(source).toContain("<ComposerAttachmentStrip");
+			expect(source).toContain("<ComposerInputFrame");
+			expect(source).toContain("<ComposerModeChip");
+			expect(source).toContain("<ComposerPlusMenu");
+		}
+		expect(modeChip).toContain("plan ? colors.accent : colors.fg");
+		for (const source of [newChat, threadComposer]) {
+			expect(source).toContain("<ComposerApprovalMenu");
+			expect(source).toContain("<ModelSheetTrigger");
+		}
+		expect(threadComposer).not.toContain("fileCount > 0");
+		expect(threadComposer).not.toContain("fileItemId");
+	});
+
+	test("keeps selected modes visible without forcing the composer active", () => {
+		const threadComposer = readFileSync(
+			`${process.cwd()}/src/components/composer.tsx`,
+			"utf8",
+		);
+		const expandedPolicy = threadComposer.slice(
+			threadComposer.indexOf("const expanded ="),
+			threadComposer.indexOf("const agentCount"),
+		);
+
+		expect(expandedPolicy).not.toContain("goalMode");
+		expect(expandedPolicy).not.toContain("planMode");
+		expect(threadComposer.match(/<ComposerModeChip/g)).toHaveLength(4);
+	});
+
+	test("keeps home rows lightweight while reusable project images stay cached", () => {
+		const row = readFileSync(
+			`${process.cwd()}/src/components/home/home-chat-row.tsx`,
+			"utf8",
+		);
+		const header = readFileSync(
+			`${process.cwd()}/src/components/home/home-project-header.tsx`,
+			"utf8",
+		);
+		const avatar = readFileSync(
+			`${process.cwd()}/src/components/home/use-project-avatar.ts`,
+			"utf8",
+		);
+		const logo = readFileSync(
+			`${process.cwd()}/src/components/home/project-logo.tsx`,
+			"utf8",
+		);
+		for (const source of [row, header]) {
+			expect(source).not.toContain("bg-card");
+			expect(source).not.toContain("border-border");
+		}
+		expect(row).not.toContain("useProjectAvatarUrl");
+		expect(row).not.toContain("ProjectLogo");
+		expect(row).not.toContain("hydratePrState");
+		expect(row).not.toContain("BranchStateBadge");
+		expect(row).toContain("ProviderLogo");
+		expect(header).toContain("useProjectAvatarUrl");
+		expect(header).toContain("ProjectLogo");
+		expect(avatar).toContain("hydrateProjectOrigin");
+		expect(logo).toContain('from "expo-image"');
+		expect(logo).toContain('cachePolicy="memory-disk"');
+		expect(logo).toContain('contentFit="cover"');
+		expect(logo).toContain("borderRadius: 5");
+		expect(logo).not.toContain("rounded-xl");
+		expect(logo).toContain("recyclingKey={source}");
+		expect(logo).toContain("setFailedUrl(source)");
+	});
+
+	test("keeps the camera preview active and explicitly full screen", () => {
+		const scanner = appFile("connect/scan.tsx");
+		expect(scanner).toContain("<CameraView");
+		expect(scanner).toContain("active");
+		expect(scanner).toContain("style={StyleSheet.absoluteFill}");
+		expect(scanner).toContain('permission.canAskAgain ? "Continue"');
+		expect(scanner).not.toContain('permission.canAskAgain ? "Allow camera"');
+	});
+
+	test("uses visible native header symbols with transparent targets", () => {
+		const home = appFile("index.tsx");
+		const qrIcon = home.slice(
+			home.indexOf('name={platformSymbolName("qrcode.viewfinder")}'),
+			home.indexOf(
+				"</Pressable>",
+				home.indexOf('name={platformSymbolName("qrcode.viewfinder")}'),
+			),
+		);
+		expect(home).toContain("width: 40");
+		expect(home).toContain("height: 40");
+		expect(home).not.toContain("backgroundColor");
+		expect(home).not.toContain("borderWidth");
+		expect(home).toContain('name={platformSymbolName("qrcode.viewfinder")}');
+		expect(qrIcon).toContain("size={19}");
+		expect(qrIcon).toContain("tintColor={colors.fg}");
+		expect(home).toContain('name={platformSymbolName("gearshape.fill")}');
+		expect(home).toContain("size={20}");
+		expect(home).not.toContain('color="#ffffff"');
+	});
+
+	test("gates fresh installs through a replayable end-to-end onboarding", () => {
+		const layout = appFile("_layout.tsx");
+		const home = appFile("index.tsx");
+		const onboarding = readFileSync(
+			`${process.cwd()}/src/components/onboarding/onboarding-flow.tsx`,
+			"utf8",
+		);
+		const settings = readFileSync(
+			`${process.cwd()}/src/components/settings-screen.tsx`,
+			"utf8",
+		);
+		expect(layout).toContain('name="onboarding"');
+		expect(layout).toContain('presentation: "fullScreenModal"');
+		expect(home).toContain("onboardingHydratedAtom");
+		expect(home).toContain('router.replace("/onboarding")');
+		expect(onboarding).toContain(
+			'"Connection", "Desktop", "Settings", "Connect"',
+		);
+		expect(onboarding).toContain("Zuse Is Open");
+		expect(onboarding).toContain("Cloud sandboxes");
+		expect(onboarding).toContain("Local connection");
+		expect(onboarding).toContain("You can use both");
+		expect(onboarding).toContain("Settings → Connections");
+		expect(onboarding).toContain("Restart and turn on");
+		expect(onboarding).not.toContain("Set up Zuse Serve");
+		expect(onboarding).toContain("No desktop pairing");
+		expect(onboarding).toContain(
+			'const cloudReady = step === 1 && path === "cloud"',
+		);
+		expect(onboarding).toContain("Create link");
+		expect(onboarding).toContain("Show QR");
+		expect(onboarding).toContain('router.push("/connect/scan")');
+		expect(onboarding).toContain('router.push("/connect/nearby")');
+		expect(settings).toContain('title="Getting started"');
+	});
+
+	test("offers sign-in, QR scanning, and nearby discovery in the empty state", () => {
+		const home = appFile("index.tsx");
+		const nearby = appFile("connect/nearby.tsx");
+		const nativeModule = readFileSync(
+			`${process.cwd()}/modules/local-connectivity/ios/ZuseLocalConnectivityModule.swift`,
+			"utf8",
+		);
+		const nativeInfo = readFileSync(
+			`${process.cwd()}/ios/ZuseMobile/Info.plist`,
+			"utf8",
+		);
+		expect(home).toContain('onPress={() => router.push("/connect/nearby")}');
+		expect(home).toContain("Find Nearby");
+		const emptyActions = home.slice(
+			home.indexOf("!searching && reachableConnections.length === 0"),
+		);
+		expect(emptyActions).toContain('"Sign In"');
+		expect(emptyActions).toContain("Scan QR Code");
+		expect(emptyActions.indexOf('"Sign In"')).toBeLessThan(
+			emptyActions.indexOf("Scan QR Code"),
+		);
+		expect(emptyActions).toContain('router.push("/connect/scan")');
+		expect(nearby).toContain("<ScrollView");
+		expect(nearby).toContain("useHeaderContentInset");
+		expect(nearby).toContain('contentInsetAdjustmentBehavior="never"');
+		expect(nearby).toContain("alwaysBounceVertical={false}");
+		expect(nearby).toContain("minHeight: windowHeight");
+		expect(nearby).not.toContain("flexGrow: 1");
+		expect(nearby).toContain("onLocalDiscoveryStateChanged");
+		expect(nativeModule).toContain('"onDiscoveryStateChanged"');
+		expect(nativeModule).toContain(".bonjourWithTXTRecord(");
+		expect(nativeModule).toContain(
+			"private var sessions: [UUID: ProxySession]",
+		);
+		expect(nativeModule).not.toContain("guard localConnection == nil");
+		expect(nativeInfo).toContain("<key>NSBonjourServices</key>");
+		expect(nativeInfo).toContain("<string>_zuse._tcp</string>");
+	});
+
+	test("floats the composer over the feed and centers the jump control", () => {
+		const layout = appFile("_layout.tsx");
+		const thread = appFile("c/[conn]/session/[sessionId].tsx");
+		const composer = readFileSync(
+			`${process.cwd()}/src/components/composer.tsx`,
+			"utf8",
+		);
+		expect(layout).toContain("<KeyboardProvider");
+		expect(thread).toContain("useHeaderContentInset");
+		expect(thread).not.toContain("<KeyboardGestureArea");
+		expect(thread).toContain('contentInsetAdjustmentBehavior="never"');
+		expect(thread).toContain("alignItemsAtEnd");
+		expect(thread).toContain("contentInsetEndAdjustment");
+		expect(thread).toContain("onEndVisible={onEndVisible}");
+		expect(thread).toContain("onScrollBeginDrag={startReaderGesture}");
+		expect(thread).toContain("onMomentumScrollEnd={finishReaderGesture}");
+		expect(thread).not.toContain("onMessageSubmitted");
+		expect(thread).not.toContain("useAnimatedKeyboard");
+		expect(thread).not.toContain("translateY: -keyboard.height.value");
+		expect(thread).toContain("bottom: bottomAccessoryHeight + 8");
+		expect(thread).not.toContain("Keyboard.scheduleLayoutAnimation");
+		expect(thread).not.toContain('"keyboardWillChangeFrame"');
+		expect(thread).toContain("<KeyboardStickyView");
+		expect(thread).toContain("useKeyboardChatComposerInset");
+		expect(thread).toContain("useKeyboardScrollToEnd");
+		expect(thread).not.toContain("useKeyboardState");
+		expect(thread).toContain("const composerBottomInset = insets.bottom + 10");
+		expect(thread).toContain("bottom: -insets.bottom");
+		expect(thread).toContain("sharedValues={{ isNearEnd }}");
+		expect(thread).toContain(
+			'pointerEvents={jumpAccessible ? "box-none" : "none"}',
+		);
+		expect(thread).not.toContain("jumpAnimatedProps");
+		expect(thread).not.toContain("composerExpanded");
+		expect(thread).not.toContain("TRANSCRIPT_BOTTOM_GAP");
+		expect(thread).not.toContain("reportContentInset({ bottom })");
+		expect(thread).not.toContain("useLayoutEffect");
+		expect(composer).toContain("bottomInset ?? 12");
+		expect(thread).toContain("experimental_backgroundImage");
+		expect(thread).not.toContain("BlurView");
+		expect(thread).toContain('alignItems: "center"');
+	});
+
+	test("lets UIKit provide the native header material", () => {
+		const layout = appFile("_layout.tsx");
+		expect(layout).toContain("scrollEdgeEffects:");
+		expect(layout).toContain('top: "automatic"');
+		expect(layout).not.toContain("headerBlurEffect");
+	});
+
+	test("opens and populates threads from canonical session data", () => {
+		const layout = appFile("_layout.tsx");
+		const thread = appFile("c/[conn]/session/[sessionId].tsx");
+		const threads = appFile("c/[conn]/chat/[chatId]/threads.tsx");
+		expect(layout).toContain("sheetAllowedDetents: [0.42, 0.92]");
+		expect(layout).toContain("sheetInitialDetentIndex: 0");
+		expect(thread).toContain("const chatId = detail?.session.chatId ?? null");
+		expect(threads).toContain("bundles.flatMap((bundle) => bundle.sessions)");
+		expect(threads).toContain(
+			"orderedChatSessions(allConnectionSessions, normalizedChatId)",
+		);
+		expect(threads).toContain("normalizedChatId,");
+		expect(threads).toContain("router.replace({");
+		expect(threads).not.toContain("requestAnimationFrame(() =>");
+		expect(threads).toContain('style={{ width: "100%", height: "100%" }}');
+		expect(threads).not.toContain("sheetContentHeight");
+		expect(threads).not.toContain('className="flex-1 bg-background"');
+	});
+
+	test("uses temporary send anchoring and a committed jump to the true end", () => {
+		const thread = appFile("c/[conn]/session/[sessionId].tsx");
+		const composer = readFileSync(
+			`${process.cwd()}/src/components/composer.tsx`,
+			"utf8",
+		);
+		expect(thread).toContain("<KeyboardAwareLegendList");
+		expect(thread).toContain("initialScrollAtEnd");
+		expect(thread).toContain("maintainScrollAtEnd");
+		expect(thread).toContain("maintainScrollAtEndThreshold");
+		expect(thread).toContain("maintainVisibleContentPosition");
+		expect(thread).toContain("anchoredEndSpace");
+		expect(thread).toContain("transcriptScroll.anchorIndex === null");
+		expect(thread).toContain("anchorIndex: transcriptScroll.anchorIndex");
+		expect(thread).not.toContain("settledRunwayHeight");
+		expect(thread).toContain("footerLayout: true");
+		expect(thread).toContain("scrollMessageToEnd");
+		expect(thread).toContain("keyboardOffset={insets.bottom}");
+		expect(thread).toContain('keyboardLiftBehavior="whenAtEnd"');
+		expect(thread).toContain("offset={{ closed: 0, opened: insets.bottom }}");
+		expect(thread).toContain(
+			"transcriptScroll.onMessageWillAppend(turns.length)",
+		);
+		expect(thread).toContain("onReady: transcriptScroll.onAnchorReady");
+		expect(thread).not.toContain("anchorMaxSize");
+		expect(thread).toContain("transcriptScroll.requestJump()");
+		const jumpHandler = thread.slice(
+			thread.indexOf("const jumpToLatest = () => {"),
+			thread.indexOf("const onMessageWillAppend = () => {"),
+		);
+		expect(jumpHandler).not.toContain("setJumpAccessible(false)");
+		expect(jumpHandler).not.toContain("scrollListToLatest(list");
+		expect(composer.indexOf("onMessageWillAppend?.()")).toBeLessThan(
+			composer.indexOf("addOptimisticMessage("),
+		);
+		expect(thread).not.toContain("pendingJumpToEndRef");
+		expect(thread).not.toContain("flushPendingJumpToEnd");
+		expect(thread).not.toContain("sendComposerSettledRef");
+		expect(thread).not.toContain("onMessageSubmissionFinished");
+		expect(thread).toContain("onMessageWillAppend");
+		expect(thread).toContain("onMessageAppendFailed");
+		expect(composer).toContain("onMessageAppendFailed?.()");
+		expect(composer).not.toContain(
+			"onMessageWillAppend?.();\n\t\t\tKeyboard.dismiss();",
+		);
+		expect(thread).toContain("closeKeyboard: true");
+		expect(thread).toContain("settleTranscriptTurn()");
+		expect(thread).toContain("markSessionTurnStarting(stateKey)");
+		expect(thread).toContain("markSessionTurnStartFailed(stateKey)");
+		expect(thread).toContain("scrollListToLatest");
+		expect(thread).not.toContain("transcriptScroll.onComposerBlurred()");
+		expect(thread).not.toContain("transcriptScroll.onComposerLayout()");
+		expect(thread).not.toContain("experimental_adaptiveRender");
+		expect(thread).toContain("drawDistance={800}");
+		expect(thread).toContain("scrollEventThrottle={16}");
+		expect(thread).not.toContain("scrollEventThrottle={64}");
+		expect(thread).toContain(
+			'const sessionActive = sessionRunning || sessionStatus === "booting"',
+		);
+		expect(composer).not.toContain("onExpandedChange");
+		expect(thread).toMatch(/<GlassSurface\s+pointerEvents="none"/);
+		expect(thread).toContain("hitSlop={8}");
+		expect(thread).not.toContain("<FlatList");
+		expect(thread).not.toContain("pendingEndIntent");
+		expect(thread).not.toContain("sendAnchorSpace(");
+		expect(thread).not.toContain("latestTurnTopOffset");
+	});
+
+	test("shows intentional transcript loading without a viewport-sized end runway", () => {
+		const thread = appFile("c/[conn]/session/[sessionId].tsx");
+		expect(thread).toContain("<TranscriptLoadingState");
+		expect(thread).toContain("initialTranscriptLoading");
+		expect(thread).toContain("transcriptEndRunwayHeight");
+		expect(thread).not.toContain("onLayout={onTranscriptLayout}");
+	});
+
+	test("uses an icon-only native fork menu and backgroundless standalone loaders", () => {
+		const messageRow = readFileSync(
+			`${process.cwd()}/src/components/messages/message-row.tsx`,
+			"utf8",
+		);
+		const forkMenu = readFileSync(
+			`${process.cwd()}/src/components/messages/fork-from-message-menu.ios.tsx`,
+			"utf8",
+		);
+		const threads = appFile("c/[conn]/chat/[chatId]/threads.tsx");
+		const thread = appFile("c/[conn]/session/[sessionId].tsx");
+		const recovery = readFileSync(
+			`${process.cwd()}/src/components/connection-recovery-banner.tsx`,
+			"utf8",
+		);
+		const attachment = readFileSync(
+			`${process.cwd()}/src/components/messages/attachment-media.tsx`,
+			"utf8",
+		);
+		const homeSkeleton = readFileSync(
+			`${process.cwd()}/src/components/home/home-skeleton.tsx`,
+			"utf8",
+		);
+		const loader = threads.slice(
+			threads.indexOf('accessibilityLabel="Loading selected thread"'),
+			threads.indexOf("<Stack.Toolbar", threads.indexOf("switchingThread")),
+		);
+		const transcriptLoader = thread.slice(
+			thread.indexOf("function TranscriptLoadingState"),
+			thread.indexOf("class ThreadScreenBoundary"),
+		);
+		const reconnectingLoader = recovery.slice(
+			recovery.indexOf("{recovering ? ("),
+			recovery.indexOf(") : (", recovery.indexOf("{recovering ? (")),
+		);
+		const attachmentLoader = attachment.slice(
+			attachment.indexOf("if (uri === null)"),
+			attachment.indexOf(
+				"\n\treturn (",
+				attachment.indexOf("if (uri === null)") + 1,
+			),
+		);
+		expect(messageRow).toContain("<ForkFromMessageMenu");
+		expect(messageRow).not.toContain("Fork from here</Text>");
+		expect(messageRow).toContain("createdAt={message.createdAt}");
+		expect(messageRow).toContain('accessibilityLabel="Copy response"');
+		expect(messageRow).toContain("Clipboard.setStringAsync(text)");
+		expect(messageRow).toContain("formatMessageTime(createdAt)");
+		const assistantActions = messageRow.slice(
+			messageRow.indexOf('<View className="mt-1 flex-row items-center">'),
+			messageRow.indexOf("</View>", messageRow.indexOf("<ForkFromMessageMenu")),
+		);
+		expect(assistantActions.indexOf("<ForkFromMessageMenu")).toBeLessThan(
+			assistantActions.indexOf('accessibilityLabel="Copy response"'),
+		);
+		expect(forkMenu).toContain('systemName={sf("arrow.triangle.branch")}');
+		expect(forkMenu).toContain("forkFromMessageMenuItems(props)");
+		expect(loader).not.toContain("backgroundColor");
+		expect(transcriptLoader).not.toContain("bg-");
+		expect(reconnectingLoader).not.toContain("bg-");
+		expect(attachmentLoader).not.toContain("bg-");
+		expect(homeSkeleton).not.toContain("bg-");
+	});
+
+	test("uses a synchronous composer submission gate", () => {
+		const composer = readFileSync(
+			`${process.cwd()}/src/components/composer.tsx`,
+			"utf8",
+		);
+		expect(composer).toContain("createComposerSubmitGate");
+		expect(composer).toContain("submitGateRef.current.tryRun");
+	});
+
+	test("keeps permission decisions pending with visible acknowledgement feedback", () => {
+		const accessory = readFileSync(
+			`${process.cwd()}/src/components/messages/live-permission-accessory.tsx`,
+			"utf8",
+		);
+		expect(accessory).toContain("<ActivityIndicator");
+		expect(accessory).toContain("Allowing…");
+		expect(accessory).toContain("Denying…");
+		expect(accessory).toContain(
+			"accessibilityState={{ busy: loading, disabled: busy }}",
+		);
+	});
+
+	test("uses a narrow LegendList animated-scroll completion patch", () => {
+		const keyboardIntegration = readFileSync(
+			`${process.cwd()}/../../node_modules/@legendapp/list/keyboard.js`,
+			"utf8",
+		);
+		const listPatch = readFileSync(
+			`${process.cwd()}/../../patches/@legendapp%2Flist@3.3.3.patch`,
+			"utf8",
+		);
+		const mobilePackage = readFileSync(`${process.cwd()}/package.json`, "utf8");
+		const rootPackage = readFileSync(
+			`${process.cwd()}/../../package.json`,
+			"utf8",
+		);
+
+		expect(mobilePackage).toContain('"@legendapp/list": "3.3.3"');
+		expect(rootPackage).toContain(
+			'"@legendapp/list@3.3.3": "patches/@legendapp%2Flist@3.3.3.patch"',
+		);
+		expect(listPatch).toContain("diff --git a/react-native.js");
+		expect(listPatch).toContain("diff --git a/react-native.mjs");
+		expect(listPatch).toContain(
+			"const slowTimeout = !!(scrollingTo == null ? void 0 : scrollingTo.animated)",
+		);
+		expect(listPatch).toContain("checkFinishedScrollFallback(ctx);");
+		expect(listPatch).not.toContain("keyboard.js");
+		expect(listPatch).not.toContain("keyboard.mjs");
+		expect(keyboardIntegration).toContain("KeyboardChatScrollView");
+		expect(keyboardIntegration).toContain("useKeyboardChatComposerInset");
+		expect(keyboardIntegration).toContain("useKeyboardScrollToEnd");
+		expect(keyboardIntegration).not.toContain("adjustedInsetCompensation");
+	});
+
+	test("uses stack-based files and keeps file changes inline", () => {
+		const layout = appFile("_layout.tsx");
+		const files = appFile("c/[conn]/session/[sessionId]/files.tsx");
+		const review = appFile("c/[conn]/session/[sessionId]/review.tsx");
+		const tool = appFile("c/[conn]/session/[sessionId]/tool/[itemId].tsx");
+		const file = appFile("c/[conn]/session/[sessionId]/file.tsx");
+		const thread = appFile("c/[conn]/session/[sessionId].tsx");
+		const diffList = readFileSync(
+			`${process.cwd()}/src/components/diff/review-diff-list.tsx`,
+			"utf8",
+		);
+		const turn = readFileSync(
+			`${process.cwd()}/src/components/messages/turn-row.tsx`,
+			"utf8",
+		);
+		const fileTabs = readFileSync(
+			`${process.cwd()}/src/components/files/file-tabs.tsx`,
+			"utf8",
+		);
+		const syntax = readFileSync(
+			`${process.cwd()}/src/lib/syntax-highlighting.ts`,
+			"utf8",
+		);
+		const inlineFileDiff = readFileSync(
+			`${process.cwd()}/src/components/diff/inline-file-diff.tsx`,
+			"utf8",
+		);
+		const reviewPill = readFileSync(
+			`${process.cwd()}/src/components/review-changes-pill.tsx`,
+			"utf8",
+		);
+		const sessionActions = readFileSync(
+			`${process.cwd()}/src/components/session-actions-menu.ios.tsx`,
+			"utf8",
+		);
+		expect(layout).toContain('name="c/[conn]/session/[sessionId]/files"');
+		expect(layout).toContain('name="c/[conn]/session/[sessionId]/review"');
+		expect(layout).toContain("presentation: SHEET_PRESENTATION");
+		expect(thread).toContain("onFiles={openFiles}");
+		expect(thread).toContain("onChanges={openChanges}");
+		expect(thread).toContain("<ThreadHeaderTitle");
+		expect(thread).toContain("headerTitle: () => (");
+		expect(thread).toContain("headerRight: () => (");
+		expect(sessionActions).toContain("<Menu");
+		expect(sessionActions).toContain("<SwiftMenuItems");
+		expect(sessionActions).not.toContain("ActionSheetIOS");
+		expect(thread).toContain("<ReviewChangesPill");
+		expect(files).toContain('<Stack.Toolbar placement="bottom">');
+		expect(files).toContain('placeholder="Search files"');
+		expect(files).toContain("useHeaderContentInset");
+		expect(files).toContain("paddingTop: headerHeight");
+		expect(files).not.toContain("headerTitle:");
+		expect(files).toContain(
+			"<Stack.Screen.Title>{projectName}</Stack.Screen.Title>",
+		);
+		expect(files).toContain("<FileTabs");
+		expect(fileTabs).toContain("@expo/ui/community/segmented-control");
+		expect(files).not.toContain("<ActivityIndicator");
+		expect(files).toContain("<ReviewDiffList");
+		expect(review).toContain("<ReviewDiffList");
+		// Phone-width sheets cannot fit a title beside the toolbar; the summary names the scope.
+		expect(review).toContain('headerTitle: ""');
+		expect(review).toContain("{reviewScopeLabel(scope)} · {fileCount}");
+		expect(review).toContain('<Stack.Toolbar placement="left">');
+		expect(review).toContain('<Stack.Toolbar placement="right">');
+		expect(review).toContain("<Stack.Toolbar.Menu");
+		expect(review).toContain('"arrow.up.left.and.arrow.down.right"');
+		expect(review).not.toContain("translucentNativeHeaderOptions");
+		expect(review).toContain("collapsable={false}");
+		expect(review).toContain("connectionBundlesAtom");
+		expect(review).not.toContain("bundlesByConnection[connKey] ?? []");
+		expect(tool).toContain("<ReviewDiffList");
+		expect(tool).toContain("<Stack.Screen.Title>");
+		expect(tool).toContain('<Stack.Toolbar placement="left">');
+		expect(tool).toContain('<Stack.Toolbar placement="right">');
+		expect(tool).not.toContain("headerLeft:");
+		expect(tool).not.toContain("headerTitle:");
+		expect(tool).toContain("paddingTop: headerHeight");
+		expect(review).toContain("paddingTop: headerHeight");
+		expect(file).not.toContain("useHeaderHeight");
+		expect(file).toContain('contentInsetAdjustmentBehavior="automatic"');
+		expect(file).toContain(
+			"<Stack.Screen.Title>{basename(path)}</Stack.Screen.Title>",
+		);
+		expect(file).toContain("tokenizeCodeLine");
+		expect(file).toContain("width: codeWidth");
+		expect(diffList).toContain("<SectionList");
+		expect(diffList).not.toContain("directionalLockEnabled");
+		expect(diffList).not.toContain('ellipsizeMode="clip"');
+		expect(diffList).toContain("min-h-5 flex-row items-stretch");
+		expect(diffList).toContain('contentInsetAdjustmentBehavior="never"');
+		expect(diffList).toContain("stickySectionHeadersEnabled={false}");
+		expect(diffList).toContain("onViewableItemsChanged");
+		expect(diffList).toContain("pinnedFileVisible");
+		expect(diffList).toContain("patchRowsCache");
+		expect(diffList).toContain("maintainVisibleContentPosition");
+		expect(diffList).toContain("accordionKey");
+		expect(diffList).toContain("allFilesExpanded");
+		expect(syntax).toContain("MAX_HIGHLIGHT_CACHE_ENTRIES");
+		expect(syntax).toContain("MAX_HIGHLIGHT_CHARS");
+		expect(turn).toContain("<FileIcon");
+		expect(turn).toContain("setExpandedFile");
+		expect(turn).toContain("<InlineFileDiff");
+		expect(inlineFileDiff).toContain("<DiffCodeRow");
+		expect(turn).toContain(
+			"workspaceDisplayPath(file.path, context.workspaceRoot)",
+		);
+		expect(turn).toContain("gap-2 px-3");
+		expect(turn).not.toContain("/tool/[itemId]");
+		expect(thread).toContain("workspaceRoot: detail?.project.path");
+		const messageRow = readFileSync(
+			`${process.cwd()}/src/components/messages/message-row.tsx`,
+			"utf8",
+		);
+		expect(messageRow).toContain(
+			"workspaceDisplayPath(change.path, workspaceRoot)",
+		);
+		expect(messageRow).toContain(
+			"<InlineFileDiff lines={change.lines} lineLimit={80} />",
+		);
+		expect(messageRow).toContain("<FileIcon path={change.path} size={16} />");
+		expect(messageRow).toContain("accessibilityState={{ expanded }}");
+		expect(messageRow).toContain("color: colors.accent");
+		expect(messageRow).not.toContain("stats={view.fileChangeTotals}");
+		expect(sessionActions).toContain("<Host");
+		expect(sessionActions).toContain("<Menu");
+		expect(sessionActions).toContain("color={colors.fg}");
+		expect(sessionActions).toContain("useSessionActionMenuItems(props)");
+		expect(sessionActions).not.toContain("NEON_GREEN");
+		expect(reviewPill).not.toContain("GitCompareArrows");
+		expect(files).not.toContain("translucentNativeHeaderOptions");
+		expect(file).not.toContain("translucentNativeHeaderOptions");
+	});
+
+	test("puts an explicit retry action beside connection failures", () => {
+		const home = appFile("index.tsx");
+		const sessions = appFile("c/[conn]/index.tsx");
+		const thread = appFile("c/[conn]/session/[sessionId].tsx");
+		const recoveryBanner = readFileSync(
+			`${process.cwd()}/src/components/connection-recovery-banner.tsx`,
+			"utf8",
+		);
+		for (const source of [home, sessions, thread]) {
+			expect(source).toContain("<ConnectionRecoveryBanner");
+		}
+		expect(recoveryBanner).toContain('className="h-11');
+		expect(recoveryBanner).not.toContain("text-danger");
+		expect(thread.lastIndexOf("<ConnectionRecoveryBanner")).toBeGreaterThan(
+			thread.indexOf("<KeyboardStickyView"),
+		);
+		expect(thread).not.toContain("Connection unavailable · Retry");
+		const scanner = appFile("connect/scan.tsx");
+		expect(scanner).toContain("Try again");
+	});
+});
