@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod attachment_mentions;
+pub mod branch_graph;
 pub mod change_request_assessment;
 pub mod chat_config;
 pub mod chat_mentions;

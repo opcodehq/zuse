@@ -1120,6 +1120,11 @@ pub enum RowKind {
         source_chat_id: SharedString,
         source_title: SharedString,
     },
+    /// The pull request this turn opened, followed live by
+    /// [`crate::pull_request_card::PullRequestCard`].
+    PullRequestCard {
+        opened: crate::pull_request_card::OpenedPullRequest,
+    },
 }
 
 fn generated_image_devices(owner: &str, fallback: &[String]) -> Vec<String> {
@@ -1808,6 +1813,8 @@ pub fn rows_for_entry(
                 };
                 rows_for_entry(&work_entry, pending, false, parse)
             };
+            // The card belongs to the turn, not to its folded work.
+            inner.retain(|row| !matches!(row.kind, RowKind::PullRequestCard { .. }));
             for row in &mut inner {
                 row.turn_start = false;
                 row.timestamp = None;
@@ -1849,6 +1856,44 @@ pub fn rows_for_entry(
             &mut pending_group,
             &mut group_ix,
             group_last_part_ix,
+        );
+    }
+
+    // A turn that opened a pull request shows its card after the work that
+    // opened it, before the reply.
+    if let Some(opened) = crate::pull_request_card::opened_pull_request(
+        entry.parts.iter().filter_map(|part| match part {
+            MessagePart::Tool {
+                call,
+                output,
+                resolved,
+                is_error,
+                ..
+            } => Some((call, output.as_deref(), *resolved, *is_error)),
+            _ => None,
+        }),
+        streaming,
+    ) {
+        let pos = rows
+            .iter()
+            .rposition(|row| {
+                row.compact_fold.is_some() || matches!(row.kind, RowKind::ToolGroup { .. })
+            })
+            .map_or(rows.len(), |ix| ix + 1);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&opened, &mut hasher);
+        rows.insert(
+            pos,
+            Row {
+                id: format!("{}#pr", entry.id).into(),
+                version: std::hash::Hasher::finish(&hasher),
+                turn_start: false,
+                kind: RowKind::PullRequestCard { opened },
+                entry_id: entry_id.clone(),
+                timestamp: None,
+                copy_text: None,
+                compact_fold: None,
+            },
         );
     }
 
@@ -3415,6 +3460,8 @@ pub struct Transcript {
     attachment_loads: HashMap<crate::attachments::AttachmentKey, Task<()>>,
     /// Inline `show_visual` visuals, keyed by row id.
     visuals: HashMap<SharedString, Entity<crate::visuals::VisualFrame>>,
+    /// Live pull request cards by row id, like [`Self::visuals`].
+    pull_request_cards: HashMap<SharedString, Entity<crate::pull_request_card::PullRequestCard>>,
     /// Scheduled retry wake-ups for errored sources (the 2s→15s ladder).
     attachment_retries: HashMap<(String, String), Task<()>>,
     /// Sidecar blob fetches keyed by doc ref (`chatId/partId[.diff]`,
@@ -3752,6 +3799,7 @@ impl Transcript {
             image_copy: None,
             attachment_loads: HashMap::new(),
             visuals: HashMap::new(),
+            pull_request_cards: HashMap::new(),
             attachment_retries: HashMap::new(),
             blob_details: HashMap::new(),
             blob_fetch_order: HashMap::new(),
@@ -6978,6 +7026,48 @@ impl Transcript {
         }
     }
 
+    /// Review fixtures: cards re-read their seeded data.
+    pub fn fixture_reload_pull_request_cards(&mut self, cx: &mut Context<Self>) {
+        for card in self.pull_request_cards.values() {
+            card.update(cx, |card, cx| card.reload_fixture(cx));
+        }
+    }
+
+    fn render_pull_request_card(
+        &mut self,
+        row_id: &SharedString,
+        opened: &crate::pull_request_card::OpenedPullRequest,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(chat_id) = self.chat_id.clone().filter(|_| self.doc_override.is_none()) else {
+            return gpui::Empty.into_any_element();
+        };
+        let card = match self.pull_request_cards.get(row_id) {
+            Some(card) => {
+                let card = card.clone();
+                card.update(cx, |card, cx| card.set_opened(opened, cx));
+                card
+            }
+            None => {
+                let state = self.state.clone();
+                let card = cx.new(|cx| {
+                    crate::pull_request_card::PullRequestCard::new(state, chat_id, opened, cx)
+                });
+                let id = row_id.clone();
+                cx.subscribe(
+                    &card,
+                    move |this, _, _: &crate::pull_request_card::CardLayoutChanged, cx| {
+                        this.diagram_layout_changed(std::slice::from_ref(&id), cx);
+                    },
+                )
+                .detach();
+                self.pull_request_cards.insert(row_id.clone(), card.clone());
+                card
+            }
+        };
+        div().w_full().child(card).into_any_element()
+    }
+
     fn render_visual(
         &mut self,
         row_id: &SharedString,
@@ -7811,6 +7901,9 @@ impl Transcript {
             }
             RowKind::ErrorChip { message } => error_chip(message.clone(), &theme),
             RowKind::ForkMarker { source_title, .. } => fork_marker(source_title.clone(), &theme),
+            RowKind::PullRequestCard { opened } => {
+                self.render_pull_request_card(&row.id, opened, cx)
+            }
         };
         // Diagram fences this row just requested start rendering after layout.
         self.ensure_diagram_worker(cx);

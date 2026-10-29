@@ -8948,6 +8948,29 @@ impl Composer {
         cx.notify();
     }
 
+    /// Send `text` for a control outside the editor (a pull request card's
+    /// Resolve): as if typed and submitted into an empty composer, queued
+    /// behind a running turn. A draft in progress is kept: the text goes
+    /// after it for the user to review and send.
+    pub(crate) fn send_prompt(&mut self, text: String, cx: &mut Context<Self>) {
+        let drafted = composer_has_content(
+            self.input.read(cx).text(),
+            self.staged().len() + self.staged_appshots().len(),
+            self.staged_comments(cx).len(),
+        );
+        if drafted {
+            self.input.update(cx, |input, cx| {
+                let draft = input.text().trim_end().to_owned();
+                input.set_text(format!("{draft}\n\n{text}"), cx)
+            });
+            self.focus_pending = true;
+            cx.notify();
+            return;
+        }
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
+        self.on_submit(cx);
+    }
+
     fn on_submit(&mut self, cx: &mut Context<Self>) {
         if self
             .input
@@ -11107,6 +11130,14 @@ impl Render for Composer {
         // On the new-chat canvas the rows ride inside the selector tray, above
         // its chips (one attached surface growing upward); in a thread they
         // form their own surface tucked behind the card's top edge.
+        // The chat's pull request and diff size, above everything else.
+        let chips = (!new_chat)
+            .then(|| {
+                let theme = Theme::of(cx).clone();
+                crate::pull_request_card::composer_chips(self.state.read(cx), &theme, cx)
+            })
+            .flatten();
+        let container = container.when_some(chips, |el, chips| el.child(chips));
         let embed_tray = new_chat && !self.cloud_launch_pending(cx);
         let tray_stack =
             self.render_tray_stack(show_queue_latest_shortcut, embed_tray, window, cx);

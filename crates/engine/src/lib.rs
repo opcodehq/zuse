@@ -29,6 +29,7 @@ pub mod diff_sync;
 pub mod doc_host;
 mod external_chats;
 mod fs_watch;
+mod branch_graph;
 mod git_workspace;
 pub mod harness_updates;
 pub(crate) mod home_index;

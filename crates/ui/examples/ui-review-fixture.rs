@@ -4,6 +4,8 @@
 //! ZUSE_SIDEBAR_BY_PROJECT groups by project, with a remote clone of the local repository;
 //! ZUSE_SIDEBAR_COLLAPSED=<space ids> collapses those project groups and
 //! ZUSE_SIDEBAR_FILTER=<space id> sets the project filter.
+//! ZUSE_REVIEW_PAUSE_MS holds each route before its capture (default 700);
+//! ZUSE_REVIEW_LIVE keeps presenting frames meanwhile, for screen recordings.
 //! Route variants: `main:usage` seeds queued follow-ups and context/plan usage on the
 //! worked conversation; `main:usage-open` also pins the composer's usage card open.
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
@@ -175,7 +177,23 @@ fn main() -> anyhow::Result<()> {
                     shell.fixture_review_route(&route, cx);
                     if route.ends_with("model-picker") { shell.fixture_open_model_picker(window, cx); } else if route.ends_with("-menu") { shell.fixture_open_menu(&route, window, cx); } else if route.starts_with("panel/") || route.starts_with("main/") { shell.fixture_open_panel(&route, window, cx); } else if let Some(variant) = route.strip_prefix("pr-") { shell.fixture_open_pull_request(variant, window, cx); }
                 });
-                pause(cx, 700).await;
+                // ZUSE_REVIEW_PAUSE_MS holds each route longer, for recordings.
+                let hold = std::env::var("ZUSE_REVIEW_PAUSE_MS").ok().and_then(|ms| ms.parse().ok()).unwrap_or(700);
+                if std::env::var_os("ZUSE_REVIEW_LIVE").is_some() {
+                    // Xvfb presents only forced frames: keep presenting so a
+                    // screen recording sees the motion.
+                    for _ in 0..hold / 33 {
+                        let _ = gpui::AnyWindowHandle::from(window).update(cx, |_, w, cx| {
+                            w.refresh();
+                            let arena = w.draw(cx);
+                            w.present_if_needed();
+                            arena.clear();
+                        });
+                        pause(cx, 33).await;
+                    }
+                } else {
+                    pause(cx, hold).await;
+                }
                 let name = route.replace('/', "-");
                 if let Err(error) = capture_frame(window, &output, &name, cx).await {
                     eprintln!("capture {route} failed: {error:#}");
