@@ -29,6 +29,7 @@ pub mod plugins;
 pub mod presentation;
 pub mod preview;
 pub mod projectless;
+pub mod project_creation;
 pub mod recovery;
 pub mod session_commands;
 pub mod sidebar_pins;

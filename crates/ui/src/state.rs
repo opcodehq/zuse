@@ -829,6 +829,8 @@ pub struct AppState {
     /// Account identity for cloud features, independent of device/workspace auth.
     pub cloud_account: Option<serde_json::Value>,
     pub devices: Vec<Device>,
+    pub project_creations: HashMap<String, Vec<zuse_protocol::project_creation::ProjectCreation>>,
+    project_creation_watches: HashMap<String, Task<()>>,
     // Last published device presentation. Heartbeats refresh the underlying
     // timestamps without invalidating every view when no displayed value changed.
     device_presentation: Option<Vec<(Device, bool, String)>>,
@@ -1011,6 +1013,8 @@ impl AppState {
             auth: None,
             cloud_account: None,
             devices: Vec::new(),
+            project_creations: HashMap::new(),
+            project_creation_watches: HashMap::new(),
             device_presentation: None,
             session_presence_presentation: Vec::new(),
             connectivity: zuse_protocol::Connectivity::default(),
@@ -1111,9 +1115,82 @@ impl AppState {
             .filter(|path| !path.trim().is_empty())
     }
 
+    /// Creation state belongs to the conversation's project, or the new-thread canvas.
+    pub fn selected_project_creation(
+        &self,
+    ) -> Option<&zuse_protocol::project_creation::ProjectCreation> {
+        let space = if let Some(chat) = self.selected_chat_row() {
+            let id = chat.space_id.as_ref()?;
+            self.spaces.iter().find(|space| &space.id == id)?
+        } else {
+            self.selected_space_row()?
+        };
+        self.project_creations
+            .get(&space.device_id)?
+            .iter()
+            .find(|op| op.destination == space.path)
+    }
+
+    pub fn watch_project_creations(&mut self, device: String, cx: &mut Context<Self>) {
+        if self.project_creation_watches.contains_key(&device) {
+            return;
+        }
+        let Some(engine) = self.engine.clone() else {
+            return;
+        };
+        let local = self.local_device_id.clone();
+        let target = device.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let params = if local.as_deref() == Some(target.as_str()) {
+                serde_json::json!({})
+            } else {
+                serde_json::json!({"targetDeviceId": target})
+            };
+            loop {
+                match engine
+                    .client()
+                    .subscribe_scoped(zuse_protocol::project_creation::WATCH, params.clone())
+                    .await
+                {
+                    Ok(mut stream) => {
+                        while let Some(value) = stream.recv().await {
+                            if let Ok(operations) = serde_json::from_value::<
+                                Vec<zuse_protocol::project_creation::ProjectCreation>,
+                            >(value)
+                            {
+                                if this
+                                    .update(cx, |state, cx| {
+                                        if state.project_creations.get(&target) != Some(&operations)
+                                        {
+                                            state
+                                                .project_creations
+                                                .insert(target.clone(), operations);
+                                            cx.notify();
+                                        }
+                                    })
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Err(zuse_rpc::RpcError::UnknownMethod(_)) => return,
+                    Err(_) => {}
+                }
+                if this.update(cx, |_, _| {}).is_err() {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
+            }
+        });
+        self.project_creation_watches.insert(device, task);
+    }
+
     /// Device to address terminal RPCs at, when it isn't this engine.
-    /// Canvas keys (`space-canvas:{space}`) resolve through the space row
-    /// (or the project-less device pick).
+    /// Canvas keys resolve through the project row or the projectless device pick.
     pub fn terminal_target_device(&self, session_key: &str) -> Option<String> {
         let device = if let Some(space_id) = session_key.strip_prefix(CANVAS_PANEL_PREFIX) {
             if space_id.is_empty() {
@@ -2541,6 +2618,8 @@ impl AppState {
         self.engine = None;
         self.chat_configuration = Default::default();
         self.watch_tasks.clear();
+        self.project_creation_watches.clear();
+        self.project_creations.clear();
         self.transcript_task = None;
         self.change_request_tasks.clear();
         self.change_requests = ChangeRequestClientState::default();
@@ -2759,6 +2838,8 @@ impl AppState {
     /// Methods the engine doesn't serve yet (chats/devices/auth land with the
     /// workspace doc in M4) fail their subscribe and are skipped gracefully.
     fn attach_engine(&mut self, handle: EngineHandle, cx: &mut Context<Self>) {
+        self.project_creation_watches.clear();
+        self.project_creations.clear();
         self.reset_configuration_transport();
         self.cloud_account = None;
         // The attachment notification precedes the first connectivity frame.
@@ -2776,6 +2857,7 @@ impl AppState {
         }
         self.initial_cloud_chat = handle.inner.initial_chat();
         self.engine = Some(handle.clone());
+        self.watch_project_creations(engine_info.device_id.clone(), cx);
         let mut watch_tasks = Vec::with_capacity(10);
         if let Some(task) = spawn_deferred_engine_watch(cx, handle.clone()) {
             watch_tasks.push(task);
@@ -2976,6 +3058,7 @@ impl AppState {
     /// watch server-side. Selecting a chat also lands in its space and marks it
     /// seen (a global-list click must switch the tab strip too).
     pub fn select_chat(&mut self, chat_id: Option<String>, cx: &mut Context<Self>) {
+        if let Some(device) = chat_id.as_ref().and_then(|id| self.chats.iter().find(|c| &c.id == id)).map(|c| c.device_id.clone()) { self.watch_project_creations(device, cx); }
         if let Some(id) = &chat_id
             && !self.is_unsaved_side_chat(id)
         {
@@ -3134,6 +3217,7 @@ impl AppState {
     /// `Some` clears a "Don't work in a project" opt-out and re-aims the
     /// device pick at the project's host; `None` IS that opt-out.
     pub fn select_space(&mut self, space_id: Option<String>, cx: &mut Context<Self>) {
+        if let Some(device) = space_id.as_ref().and_then(|id| self.space_row(id)).map(|s| s.device_id.clone()) { self.watch_project_creations(device, cx); }
         match &space_id {
             Some(id) => {
                 self.no_project = false;

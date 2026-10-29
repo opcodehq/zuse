@@ -50,6 +50,7 @@ mod plugin_callback;
 pub mod plugins;
 pub mod profile;
 pub mod project_actions;
+pub mod project_creation;
 pub mod registry;
 pub mod repos;
 pub mod rpc;
@@ -171,6 +172,7 @@ pub struct EngineCore {
     pub workspace_files: WorkspaceFiles,
     pub terminals: Terminals,
     pub project_actions: ProjectActionsStore,
+    pub project_creation: project_creation::ProjectCreationService,
     pub previews: zuse_preview::PreviewService,
     pub change_requests: CheckoutChangeRequests,
     pub diff_sync: CheckoutDiffSync,
@@ -307,7 +309,11 @@ impl EngineCore {
             WorkspaceFiles::new(repos.clone(), workspace.clone(), device_id.clone());
         let terminals = Terminals::new();
         let project_actions = ProjectActionsStore::open(profile.store_root())?;
+        let project_creation = project_creation::ProjectCreationService::open(
+            profile.store_root(), device_id.clone(),
+        ).map_err(EngineError::Other)?;
         doc_host.set_project_action_runtime(project_actions.clone(), terminals.clone());
+        doc_host.set_project_creation(project_creation.clone());
         let previews = zuse_preview::PreviewService::new(
             profile.store_root().join("previews.json"),
             device_id.clone(),
@@ -425,6 +431,7 @@ impl EngineCore {
             workspace_files,
             terminals,
             project_actions,
+            project_creation,
             previews,
             change_requests,
             diff_sync,
@@ -580,6 +587,7 @@ impl EngineCore {
             self.agent_accounts.clone(),
             self.workspace_scope,
         )
+        .with_project_creation(self.project_creation.clone())
         .with_usage(self.usage.clone())
         .with_desktop_import(self.desktop_import_profile.clone())
         .with_visuals(self.visuals.clone())
@@ -629,6 +637,7 @@ impl EngineCore {
         // not release another queued command while credentials are draining.
         self.doc_host.pause_all_queues();
         self.account.retire();
+        self.project_creation.shutdown().await;
         let reconcile = self
             .cloud_mirror_reconcile
             .lock()

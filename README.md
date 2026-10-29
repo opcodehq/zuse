@@ -79,6 +79,19 @@ The import preserves projects, active and archived chats, conversation tabs, mes
 
 Sign in with the same Zuse account to access your hosted plugins. Electron-only preferences and local plugin definitions are retained in the private backup; command-based Electron plugins are not yet supported in GPUI. The review and completion screens report unavailable attachments and settings that could not be applied.
 
+## Projects
+
+Choose **New project** to open a folder, clone a repository, or create an Empty,
+Next.js, or Turborepo project. Projects go on this computer; when another paired
+computer is online, the dialog offers it as well. Recent projects and folder search
+are available without waiting for GitHub.
+
+GitHub repository browsing and optional private repository creation use `gh auth login`
+on the execution host. Next.js and Turborepo starters require Bun there. Cloning and
+scaffolding run in the background: you can compose a prompt while progress appears
+above the composer, then send once the files are ready. Failed operations offer retry;
+a publishing failure preserves the local project.
+
 ## Paired access
 
 In the browser workspace, open **Settings → Devices**, name the device and create an invitation. Share its private link with that device. Opening it imports paired access and clears the secret from the address bar. The tab retains access across reloads; revoke it from the host's pairing list to disconnect it. Paired chat, settings and file uploads use encrypted RPC.

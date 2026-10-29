@@ -363,6 +363,44 @@ pub struct GitHubCli {
 }
 
 impl GitHubCli {
+    pub async fn project_auth_status(
+        &self,
+    ) -> zuse_protocol::project_creation::GithubProjectStatus {
+        let result = self
+            .runner
+            .run(ProcessRequest {
+                args: vec![
+                    "auth".into(),
+                    "status".into(),
+                    "--hostname".into(),
+                    "github.com".into(),
+                ],
+                ..github_request()
+            })
+            .await;
+        zuse_protocol::project_creation::GithubProjectStatus {
+            installed: !matches!(result, Err(ProcessRunError::Spawn(io::ErrorKind::NotFound))),
+            authenticated: result.is_ok_and(|output| output.success),
+        }
+    }
+
+    pub async fn project_repositories(
+        &self,
+        page: u32,
+    ) -> Result<zuse_protocol::project_creation::GithubProjectRepositories, String> {
+        if !(1..=1000).contains(&page) {
+            return Err("Invalid repository page".into());
+        }
+        let output = self.runner.run(ProcessRequest { args: vec!["api".into(), "--method".into(), "GET".into(), format!("user/repos?affiliation=owner,collaborator,organization_member&sort=updated&per_page=50&page={page}")], ..github_request() }).await.map_err(|e| classify_run_error(e).to_string())?;
+        if !output.success {
+            return Err(classify_github_failure(&output.stderr).to_string());
+        }
+        if output.stdout_truncated {
+            return Err("GitHub repository response is too large".into());
+        }
+        crate::project_creation::decode_github_repositories(&output.stdout, page)
+    }
+
     /// Shared across RPC clients on this engine. Simultaneous identical reads
     /// share one provider call; distinct reads run side by side. The read runs
     /// detached, so it completes and is cached even when every caller has gone
@@ -4784,5 +4822,81 @@ printf '%s\n' '[{"number":90,"title":"Host-resolved pull request","url":"https:/
                 .count(),
             2
         );
+    }
+}
+
+#[cfg(test)]
+mod project_repository_tests {
+    use super::*;
+    struct Runner {
+        response: std::sync::Mutex<Option<Result<ProcessOutput, ProcessRunError>>>,
+    }
+    #[async_trait]
+    impl ProcessRunner for Runner {
+        async fn run(&self, request: ProcessRequest) -> Result<ProcessOutput, ProcessRunError> {
+            assert_eq!(request.program, "gh");
+            assert!(
+                request
+                    .env
+                    .contains(&("GH_HOST".into(), "github.com".into()))
+            );
+            assert!(request.timeout <= Duration::from_secs(20));
+            self.response.lock().unwrap().take().unwrap()
+        }
+    }
+    fn github(response: Result<ProcessOutput, ProcessRunError>) -> GitHubCli {
+        GitHubCli::with_runner(Arc::new(Runner {
+            response: std::sync::Mutex::new(Some(response)),
+        }))
+    }
+    fn output(success: bool, bytes: &[u8]) -> ProcessOutput {
+        ProcessOutput {
+            success,
+            stdout: bytes.to_vec(),
+            stderr: Vec::new(),
+            stdout_truncated: false,
+        }
+    }
+    #[tokio::test]
+    async fn project_auth_distinguishes_missing_cli_and_signed_out() {
+        let missing = github(Err(ProcessRunError::Spawn(io::ErrorKind::NotFound)))
+            .project_auth_status()
+            .await;
+        assert!(!missing.installed);
+        assert!(!missing.authenticated);
+        let signed_out = github(Ok(output(false, b""))).project_auth_status().await;
+        assert!(signed_out.installed);
+        assert!(!signed_out.authenticated);
+    }
+    #[tokio::test]
+    async fn project_repositories_report_empty_errors_and_pagination() {
+        assert!(
+            github(Ok(output(true, b"[]")))
+                .project_repositories(1)
+                .await
+                .unwrap()
+                .repositories
+                .is_empty()
+        );
+        assert!(
+            github(Ok(output(false, b"")))
+                .project_repositories(1)
+                .await
+                .is_err()
+        );
+        assert!(
+            github(Ok(output(true, b"malformed")))
+                .project_repositories(1)
+                .await
+                .is_err()
+        );
+        let row = serde_json::json!({"full_name":"org/repo","description":null,"ssh_url":"git@github.com:org/repo.git","clone_url":"https://github.com/org/repo.git","private":true});
+        let bytes = serde_json::to_vec(&vec![row; 50]).unwrap();
+        let page = github(Ok(output(true, &bytes)))
+            .project_repositories(2)
+            .await
+            .unwrap();
+        assert_eq!(page.next_page, Some(3));
+        assert_eq!(page.repositories.len(), 50);
     }
 }

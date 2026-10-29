@@ -2735,7 +2735,7 @@ enum CrumbTarget {
     More,
 }
 
-fn device_glyph(platform: &str) -> &'static str {
+pub(super) fn device_glyph(platform: &str) -> &'static str {
     match platform {
         "macos" | "darwin" => icons::LAPTOP,
         "web" => icons::GLOBAL,
@@ -6019,20 +6019,14 @@ impl Shell {
     // ---- add-space flow ----
 
     pub(super) fn open_add_space_on_device(&mut self, device_id: &str, cx: &mut Context<Self>) {
-        let device = self
-            .state
-            .read(cx)
-            .devices
-            .iter()
-            .find(|device| device.id == device_id)
-            .cloned();
-        self.open_add_space(cx);
-        if let Some(device) = device {
-            self.add_space_pick_device(device, cx);
-        }
+        self.open_project_setup(Some(device_id.to_owned()), cx);
     }
 
     pub(super) fn open_add_space(&mut self, cx: &mut Context<Self>) {
+        self.open_project_setup(None, cx);
+    }
+
+    pub(super) fn open_add_space_browser(&mut self, cx: &mut Context<Self>) {
         self.release_home_folder_search(cx);
         self.command_palette = None;
         self.project_crumb_menu = popover::Popup::default();
@@ -6087,6 +6081,12 @@ impl Shell {
 
     /// Close the new-project picker, releasing the host's home index.
     pub(super) fn close_add_space(&mut self, cx: &mut Context<Self>) {
+        if let Some(setup) = self.project_parent_setup.take() {
+            self.release_home_folder_search(cx);
+            self.resume_project_setup(setup, cx);
+            return;
+        }
+        self.project_setup = None;
         self.release_home_folder_search(cx);
         self.add_space = None;
         cx.notify();
@@ -6183,7 +6183,7 @@ impl Shell {
     }
 
     /// Selecting a device advances to its locations.
-    fn add_space_pick_device(&mut self, device: Device, cx: &mut Context<Self>) {
+    pub(super) fn add_space_pick_device(&mut self, device: Device, cx: &mut Context<Self>) {
         let Some(flow) = self.add_space.as_mut() else {
             return;
         };
@@ -6210,7 +6210,7 @@ impl Shell {
         cx.notify();
     }
 
-    fn add_space_goto_location(
+    pub(super) fn add_space_goto_location(
         &mut self,
         name: String,
         path: Option<String>,
@@ -6237,6 +6237,10 @@ impl Shell {
     }
 
     fn add_space_back_to(&mut self, step: ProjectStep, cx: &mut Context<Self>) {
+        if step == ProjectStep::Devices && self.project_parent_setup.is_some() {
+            self.close_add_space(cx);
+            return;
+        }
         self.release_home_folder_search(cx);
         let Some(flow) = self.add_space.as_mut() else {
             return;
@@ -6652,6 +6656,12 @@ impl Shell {
             return;
         };
         let path = listing.path.clone();
+        if let Some(setup) = self.project_parent_setup.take() {
+            setup.parent.update(cx, |input, cx| input.set_text(path, cx));
+            self.release_home_folder_search(cx);
+            self.resume_project_setup(setup, cx);
+            return;
+        }
         let git_detected = flow.browser_repo;
         // Same (device, folder) already has a space → just switch to it. The
         // engine dedupes this case too (a createSpace for a duplicate pair
@@ -6889,6 +6899,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if self.project_setup.is_some() { return self.render_project_setup(viewport, window, cx); }
         let theme = Theme::of(cx).for_popup();
         let flow = self.add_space.as_mut()?;
         if std::mem::take(&mut flow.focus_pending) {
@@ -7385,6 +7396,7 @@ impl Shell {
             crate::settings::badge_combo(if valid { combo } else { id.default_combo() })
         };
         let can_add = !busy && listing.is_some();
+        let add_label = if self.project_parent_setup.is_some() { "Choose folder" } else { "Add project" };
         let footer = command_palette::palette_footer()
             .child(command_palette::command_key_hint(&theme, "↑ ↓", "Navigate"))
             .child(command_palette::command_key_hint(
@@ -7417,7 +7429,7 @@ impl Shell {
                         .mr(px(-8.0))
                         .rounded(px(8.0))
                         .role(gpui::Role::Button)
-                        .aria_label("Add project")
+                        .aria_label(add_label)
                         .when(can_add, |el| {
                             el.cursor_pointer()
                                 .hover(|s| s.bg(crate::theme::card_selected_bg()))
@@ -7434,7 +7446,7 @@ impl Shell {
                                 .text_size(crate::typography::text_xs())
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(theme.text_strong)
-                                .child(if busy { "Adding…" } else { "Add project" }),
+                                .child(if busy { "Adding…" } else { add_label }),
                         ),
                 )
             });
@@ -7901,7 +7913,7 @@ mod project_flow_tests {
             )
         });
         shell.update(cx, |shell, cx| {
-            shell.open_add_space(cx);
+            shell.open_add_space_browser(cx);
             assert_eq!(shell.add_space.as_ref().unwrap().step, ProjectStep::Devices);
             assert!(shell.add_space.as_ref().unwrap().device.is_none());
             let search = shell.add_space.as_ref().unwrap().search.clone();
@@ -8056,7 +8068,7 @@ mod home_folder_search_tests {
                     state.devices = vec![picked.clone()];
                     state.set_test_engine(engine);
                 });
-                shell.open_add_space(cx);
+                shell.open_add_space_browser(cx);
                 shell.add_space_pick_device(picked, cx);
             })
             .unwrap();

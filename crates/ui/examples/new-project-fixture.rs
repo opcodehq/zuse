@@ -74,7 +74,12 @@ fn main() -> anyhow::Result<()> {
             app_owns_titlebar_drag: true,
             ..Default::default()
         }, |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx))).unwrap();
+        let project_fixture_mode = std::env::var("ZUSE_PROJECT_FIXTURE_MODE").ok();
         cx.spawn(async move |cx| {
+            if let Some(mode) = project_fixture_mode {
+                cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+                window.update(cx, |shell, _, cx| shell.fixture_open_project_setup(&mode, cx)).unwrap();
+            }
             loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
                 if window.update(cx, |shell, _, cx| shell.fixture_project_responses(cx)).is_err() { break; }

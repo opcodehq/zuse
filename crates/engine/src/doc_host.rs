@@ -255,6 +255,7 @@ struct DocHostInner {
     /// Worktree materialization for Run commands (see `set_repos`).
     repos: OnceLock<crate::repos::Repos>,
     project_action_runtime: OnceLock<(ProjectActionsStore, Terminals)>,
+    project_creation: OnceLock<crate::project_creation::ProjectCreationService>,
     /// Cancels every worker spawned through `spawn_worker` — the loops'
     /// own exit conditions (weak handle death, closed channels) don't cover
     /// runtime replacement, where Edge-capable tasks must stop doing
@@ -1042,6 +1043,7 @@ impl DocHost {
                 workspace: OnceLock::new(),
                 repos: OnceLock::new(),
                 project_action_runtime: OnceLock::new(),
+                project_creation: OnceLock::new(),
                 shutdown: CancellationToken::new(),
                 edge_disconnected: AtomicBool::new(false),
                 tasks: TaskTracker::new(),
@@ -1219,6 +1221,10 @@ impl DocHost {
     /// Run commands carrying a [`zuse_protocol::WorktreeSpec`].
     pub fn set_repos(&self, repos: crate::repos::Repos) {
         let _ = self.inner.repos.set(repos);
+    }
+
+    pub fn set_project_creation(&self, service: crate::project_creation::ProjectCreationService) {
+        let _ = self.inner.project_creation.set(service);
     }
 
     pub fn set_project_action_runtime(
@@ -5679,6 +5685,9 @@ impl DocHost {
                 request,
                 message_id,
             } => {
+                if self.inner.project_creation.get().is_some_and(|service| service.blocks_request(request)) {
+                    return Err(EngineError::Other("Project files are not ready. Finish or retry project creation before sending.".into()));
+                }
                 let mut request = request.clone();
                 // Queued-attachment refs (`pending://`) resolve to this
                 // host's absolute paths before anything persists or
