@@ -4,7 +4,7 @@
 use serde_json::Value;
 use zuse_protocol::{AgentEvent, DoneStatus, HarnessId, TodoItem, TodoStatus, ToolCall};
 
-use super::wire::{ContentBlock, Frame};
+use super::wire::{ContentBlock, Frame, SystemFrame};
 
 /// Human-readable text for the CLI's assistant-level error codes. These arrive
 /// as a terse `error` field on an `assistant` frame — usually with NO text
@@ -143,6 +143,39 @@ pub(crate) fn decode_tool_use(name: &str, input: &Value) -> ToolCall {
     }
 }
 
+/// The CLI tool that launches a native workflow run (always in the background).
+const WORKFLOW_TOOL_USE: &str = "Workflow";
+
+/// A launched workflow run: its reported name and the last snapshot sent,
+/// so an unchanged `task_progress` emits nothing.
+#[derive(Default)]
+struct WorkflowRun {
+    name: Option<String>,
+    last: Option<zuse_protocol::WorkflowProgress>,
+}
+
+/// A background task's terminal `task_notification` status, or `None` for a
+/// non-terminal notification shape.
+fn task_done_status(status: Option<&str>) -> Option<DoneStatus> {
+    match status.unwrap_or("") {
+        "completed" | "complete" | "succeeded" | "success" => Some(DoneStatus::Completed),
+        "failed" | "errored" | "error" => Some(DoneStatus::Errored),
+        "killed" | "cancelled" | "canceled" | "stopped" | "interrupted" => {
+            Some(DoneStatus::Interrupted)
+        }
+        _ => None,
+    }
+}
+
+fn settled(status: DoneStatus) -> AgentEvent {
+    AgentEvent::Done {
+        status,
+        result: None,
+        error: None,
+        session_id: None,
+    }
+}
+
 fn new_message_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -203,6 +236,14 @@ pub(crate) struct Normalizer {
     /// which then opened as an empty, never-created subagent doc (user
     /// report 2026-08-20).
     agent_spawn_tools: std::collections::HashSet<String>,
+    /// Native workflow launches (`Workflow` tool_use id → launch input),
+    /// recorded from their own assistant frames. Each progress refresh
+    /// re-emits the input so the chip keeps its source.
+    workflow_inputs: std::collections::HashMap<String, Value>,
+    /// Workflow task ids (`task_started.task_id`) → launching tool_use id.
+    workflow_tasks: std::collections::HashMap<String, String>,
+    /// Started workflow runs by launching tool_use id.
+    workflow_runs: std::collections::HashMap<String, WorkflowRun>,
     /// Rotates at each assistant-frame close and at each steer; SessionStarted
     /// carries the first value so folds can attribute deltas from the start.
     assistant_message_id: String,
@@ -218,6 +259,9 @@ impl Normalizer {
             agent_tasks: std::collections::HashMap::new(),
             agent_tool_spawns: std::collections::HashMap::new(),
             agent_spawn_tools: std::collections::HashSet::new(),
+            workflow_inputs: std::collections::HashMap::new(),
+            workflow_tasks: std::collections::HashMap::new(),
+            workflow_runs: std::collections::HashMap::new(),
             assistant_message_id: new_message_id(),
             session_id: None,
         }
@@ -269,6 +313,7 @@ impl Normalizer {
             };
             if !(text.contains("\"Agent\"")
                 || text.contains("\"Task\"")
+                || text.contains("\"Workflow\"")
                 || text.contains("agentId"))
             {
                 continue;
@@ -300,6 +345,18 @@ impl Normalizer {
                         {
                             norm.agent_spawn_tools.insert(id.to_owned());
                         }
+                        if block.get("type").and_then(Value::as_str) == Some("tool_use")
+                            && block.get("name").and_then(Value::as_str) == Some(WORKFLOW_TOOL_USE)
+                            && let Some(id) = block
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .filter(|id| !id.is_empty())
+                        {
+                            norm.workflow_inputs.insert(
+                                id.to_owned(),
+                                block.get("input").cloned().unwrap_or(Value::Null),
+                            );
+                        }
                     }
                 }
                 Some("user") => {
@@ -326,6 +383,95 @@ impl Normalizer {
         norm
     }
 
+    /// The launching tool_use id a workflow task frame refers to, if it is
+    /// one: by task id once `task_started` paired them, else by the frame's
+    /// own tool id when that names a known launch.
+    fn workflow_tool(&self, f: &SystemFrame) -> Option<String> {
+        f.task_id
+            .as_deref()
+            .and_then(|task| self.workflow_tasks.get(task))
+            .cloned()
+            .or_else(|| {
+                f.tool_use_id
+                    .as_deref()
+                    .filter(|tool| {
+                        self.workflow_runs.contains_key(*tool)
+                            || self.workflow_inputs.contains_key(*tool)
+                    })
+                    .map(str::to_owned)
+            })
+    }
+
+    /// The refreshed chip call for a workflow run.
+    fn workflow_refresh(&self, tool: &str) -> AgentEvent {
+        let run = self.workflow_runs.get(tool);
+        AgentEvent::WorkflowProgress {
+            tool_use_id: tool.to_owned(),
+            call: ToolCall::workflow_run(
+                self.workflow_inputs.get(tool),
+                run.and_then(|r| r.name.as_deref()),
+                run.and_then(|r| r.last.as_ref()),
+            ),
+        }
+    }
+
+    /// Native workflow task frames. A run launches through the `Workflow`
+    /// tool (always in the background), reports its phases and agents on
+    /// `task_progress`, and settles on `task_notification` — the run's chip
+    /// is refreshed in place ([`AgentEvent::WorkflowProgress`]) and settled
+    /// like a background subagent (a tagged `Done`). `None` when the frame
+    /// is not a workflow's.
+    fn normalize_workflow(&mut self, f: &SystemFrame) -> Option<Vec<AgentEvent>> {
+        match f.subtype.as_str() {
+            "task_started" => {
+                let tool = f.tool_use_id.as_deref().filter(|t| !t.is_empty());
+                let is_workflow = f.task_type.as_deref() == Some("local_workflow")
+                    || tool.is_some_and(|t| self.workflow_inputs.contains_key(t));
+                if !is_workflow {
+                    return None;
+                }
+                let Some(tool) = tool.map(str::to_owned) else {
+                    return Some(Vec::new());
+                };
+                if let Some(task) = f.task_id.as_deref().filter(|t| !t.is_empty()) {
+                    self.workflow_tasks.insert(task.to_owned(), tool.clone());
+                }
+                let run = self.workflow_runs.entry(tool.clone()).or_default();
+                if let Some(name) = f.workflow_name.as_deref().filter(|n| !n.trim().is_empty()) {
+                    run.name = Some(name.to_owned());
+                }
+                Some(vec![self.workflow_refresh(&tool)])
+            }
+            "task_progress" => {
+                let tool = self.workflow_tool(f)?;
+                let Some(progress) = f
+                    .workflow_progress
+                    .as_ref()
+                    .and_then(super::workflow::reduce_progress)
+                else {
+                    return Some(Vec::new());
+                };
+                let run = self.workflow_runs.entry(tool.clone()).or_default();
+                if run.last.as_ref() == Some(&progress) {
+                    return Some(Vec::new());
+                }
+                run.last = Some(progress);
+                Some(vec![self.workflow_refresh(&tool)])
+            }
+            "task_notification" => {
+                let tool = self.workflow_tool(f)?;
+                let Some(status) = task_done_status(f.status.as_deref()) else {
+                    return Some(Vec::new());
+                };
+                self.workflow_inputs.remove(&tool);
+                self.workflow_runs.remove(&tool);
+                self.workflow_tasks.retain(|_, t| *t != tool);
+                Some(vec![tag(&tool, settled(status))])
+            }
+            _ => None,
+        }
+    }
+
     /// Rotate the assistant message id for a steer boundary; returns
     /// (previous, next) for the `Steered` event.
     pub fn rotate_for_steer(&mut self) -> (String, String) {
@@ -338,6 +484,9 @@ impl Normalizer {
     pub fn normalize(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
         match frame {
             Frame::System(f) => {
+                if let Some(events) = self.normalize_workflow(&f) {
+                    return events;
+                }
                 // A background subagent's completion arrives as an UNTAGGED
                 // `task_notification` carrying the spawning tool's id — the
                 // wire's only terminal signal for it (live-verified 2.1.228:
@@ -364,24 +513,11 @@ impl Normalizer {
                     if !self.agent_spawn_tools.contains(parent) {
                         return Vec::new();
                     }
-                    let status = match f.status.as_deref().unwrap_or("") {
-                        "completed" | "complete" | "succeeded" | "success" => DoneStatus::Completed,
-                        "failed" | "errored" | "error" => DoneStatus::Errored,
-                        "killed" | "cancelled" | "canceled" | "stopped" | "interrupted" => {
-                            DoneStatus::Interrupted
-                        }
-                        // Non-terminal notification shapes: nothing to close.
-                        _ => return Vec::new(),
+                    // Non-terminal notification shapes: nothing to close.
+                    let Some(status) = task_done_status(f.status.as_deref()) else {
+                        return Vec::new();
                     };
-                    return vec![tag(
-                        parent,
-                        AgentEvent::Done {
-                            status,
-                            result: None,
-                            error: None,
-                            session_id: None,
-                        },
-                    )];
+                    return vec![tag(parent, settled(status))];
                 }
                 // An AGENT task starting (subagent_type present — subagent-
                 // owned shell tasks carry the same subtype without it):
@@ -511,6 +647,9 @@ impl Normalizer {
                 for b in f.message.blocks() {
                     if b.kind == "tool_use" && matches!(b.name.as_str(), "Agent" | "Task") {
                         self.agent_spawn_tools.insert(b.id.clone());
+                    }
+                    if b.kind == "tool_use" && b.name == WORKFLOW_TOOL_USE {
+                        self.workflow_inputs.insert(b.id.clone(), b.input.clone());
                     }
                 }
                 let mut out: Vec<AgentEvent> = f
@@ -642,16 +781,29 @@ impl Normalizer {
                     );
                     return out;
                 }
-                f.message
+                let mut out = Vec::new();
+                for b in f
+                    .message
                     .blocks()
                     .filter(|b: &ContentBlock| b.kind == "tool_result")
-                    .map(|b| AgentEvent::ToolResult {
+                {
+                    let is_error = b.is_error.unwrap_or(false);
+                    out.push(AgentEvent::ToolResult {
                         id: b.tool_use_id.clone(),
-                        is_error: b.is_error.unwrap_or(false),
+                        is_error,
                         output: crate::tool_output::text(&b.content),
                         diff: None,
-                    })
-                    .collect()
+                    });
+                    // A rejected workflow launch never starts a task, so no
+                    // notification will settle it: settle it here.
+                    if is_error
+                        && !self.workflow_runs.contains_key(&b.tool_use_id)
+                        && self.workflow_inputs.remove(&b.tool_use_id).is_some()
+                    {
+                        out.push(tag(&b.tool_use_id, settled(DoneStatus::Errored)));
+                    }
+                }
+                out
             }
 
             // A claude.ai plan window was hit. A hard `rejected` blocks the
@@ -1470,5 +1622,206 @@ mod context_tests {
                 ..
             }
         )));
+    }
+
+    fn run_frames(norm: &mut Normalizer, frames: &[&str]) -> Vec<AgentEvent> {
+        frames
+            .iter()
+            .flat_map(|raw| {
+                let frame = crate::claude::wire::parse_frame(raw).expect("frame parses");
+                norm.normalize(frame, false)
+            })
+            .collect()
+    }
+
+    fn workflow_refreshes(events: &[AgentEvent]) -> Vec<(&str, &ToolCall)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::WorkflowProgress { tool_use_id, call } => {
+                    Some((tool_use_id.as_str(), call))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rejected_workflow_launch_settles_instead_of_running_forever() {
+        let events = run_frames(
+            &mut Normalizer::new(),
+            &[
+                r#"{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"rejected-workflow","name":"Workflow","input":{"name":"audit"}}]}}"#,
+                r#"{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"rejected-workflow","content":"Invalid workflow script","is_error":true}]}}"#,
+            ],
+        );
+        assert!(matches!(
+            &events[0],
+            AgentEvent::ToolCall { id, call } if id == "rejected-workflow" && call.is_workflow_run()
+        ));
+        assert!(events.contains(&AgentEvent::ToolResult {
+            id: "rejected-workflow".into(),
+            is_error: true,
+            output: Some("Invalid workflow script".into()),
+            diff: None,
+        }));
+        assert_eq!(
+            events.last(),
+            Some(&tag("rejected-workflow", settled(DoneStatus::Errored)))
+        );
+        // An accepted launch's (non-error) result settles nothing.
+        let events = run_frames(
+            &mut Normalizer::new(),
+            &[
+                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"wf","name":"Workflow","input":{"name":"audit"}}]}}"#,
+                r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"wf","content":"Started"}]}}"#,
+            ],
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Subagent { .. }))
+        );
+    }
+
+    #[test]
+    fn running_workflow_refreshes_with_its_phase_and_agent_snapshot() {
+        use zuse_protocol::WorkflowAgentState;
+        let progress = |tick: u32, state: &str, extra: &str| {
+            format!(
+                r#"{{"type":"system","subtype":"task_progress","task_id":"task-1","tool_use_id":"workflow-1","description":"Map: map:files","usage":{{"total_tokens":10,"tool_uses":1,"duration_ms":5}},"workflow_progress":[{{"type":"workflow_phase","index":1,"title":"Map"}},{{"type":"workflow_agent","index":1,"label":"map:files","phaseIndex":1,"phaseTitle":"Map","state":"{state}","startedAt":100,"promptPreview":"List files","lastProgressAt":{tick},"tokens":{tokens}{extra}}},{{"type":"workflow_log","message":"ignored"}}]}}"#,
+                tokens = tick * 10
+            )
+        };
+        let frames = [
+            r#"{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"workflow-1","name":"Workflow","input":{"script":"export const meta = { name: 'audit' };"}}]}}"#.to_owned(),
+            r#"{"type":"system","subtype":"task_started","task_id":"task-1","tool_use_id":"workflow-1","task_type":"local_workflow","workflow_name":"audit","description":"Audit"}"#.to_owned(),
+            progress(1, "progress", ""),
+            progress(2, "progress", ""),
+            progress(3, "done", r#","durationMs":40,"resultPreview":"3 files""#),
+        ];
+        let frames: Vec<&str> = frames.iter().map(String::as_str).collect();
+        let events = run_frames(&mut Normalizer::new(), &frames);
+        let refreshes = workflow_refreshes(&events);
+        // task_started names the run; two distinct snapshots follow — the
+        // repeated one (only counters moved) is deduped.
+        assert_eq!(refreshes.len(), 3, "{refreshes:?}");
+        let (id, started) = refreshes[0];
+        assert_eq!(id, "workflow-1");
+        assert_eq!(started.workflow_name(), Some("audit"));
+        assert_eq!(started.workflow_progress(), None);
+
+        let (_, first) = refreshes[1];
+        assert!(first.is_workflow_run());
+        let ToolCall::Unknown {
+            input: Some(input), ..
+        } = first
+        else {
+            panic!("{first:?}")
+        };
+        // The launch input rides along, so the chip keeps its source.
+        assert_eq!(input["script"], "export const meta = { name: 'audit' };");
+        assert_eq!(input["workflow_name"], "audit");
+        let snapshot = first.workflow_progress().expect("snapshot");
+        assert_eq!(snapshot.phases.len(), 1);
+        assert_eq!(snapshot.phases[0].title, "Map");
+        let agent = &snapshot.agents[0];
+        assert_eq!(
+            (agent.index, agent.label.as_str(), agent.state),
+            (1, "map:files", WorkflowAgentState::Running)
+        );
+        assert_eq!(
+            (agent.phase_index, agent.phase_title.as_deref()),
+            (Some(1), Some("Map"))
+        );
+        assert_eq!(agent.started_at, Some(100));
+        assert_eq!(agent.prompt_preview.as_deref(), Some("List files"));
+
+        let done = refreshes[2].1.workflow_progress().expect("snapshot");
+        assert_eq!(done.agents[0].state, WorkflowAgentState::Done);
+        assert_eq!(done.agents[0].duration_ms, Some(40));
+        assert_eq!(done.agents[0].result_preview.as_deref(), Some("3 files"));
+        // Progress never opens a subagent transcript.
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Subagent { .. }))
+        );
+    }
+
+    #[test]
+    fn workflow_keeps_identity_and_source_through_background_completion() {
+        let events = run_frames(
+            &mut Normalizer::new(),
+            &[
+                r#"{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"workflow-1","name":"Workflow","input":{"script":"export const meta = { name: 'audit', phases: [] };","resumeFromRunId":"prior-run"}}]}}"#,
+                r#"{"type":"system","subtype":"task_started","task_id":"run-1","tool_use_id":"workflow-1","task_type":"local_workflow","workflow_name":"audit","description":"Audit the project"}"#,
+                // Settles by task id alone.
+                r#"{"type":"system","subtype":"task_notification","task_id":"run-1","status":"failed","summary":"Build failed","usage":{"duration_ms":2000,"total_tokens":1,"tool_uses":1}}"#,
+                // A straggler after the settle is not a workflow's any more.
+                r#"{"type":"system","subtype":"task_progress","task_id":"run-1","tool_use_id":"workflow-1","workflow_progress":[{"type":"workflow_phase","index":1,"title":"Map"}]}"#,
+            ],
+        );
+        assert!(matches!(
+            &events[0],
+            AgentEvent::ToolCall { id, call } if id == "workflow-1" && call.is_workflow_run()
+        ));
+        let refreshes = workflow_refreshes(&events);
+        assert_eq!(refreshes.len(), 1);
+        let ToolCall::Unknown {
+            input: Some(input), ..
+        } = refreshes[0].1
+        else {
+            panic!("{refreshes:?}")
+        };
+        assert_eq!(input["resumeFromRunId"], "prior-run");
+        assert_eq!(input["workflow_name"], "audit");
+        assert_eq!(
+            events.last(),
+            Some(&tag("workflow-1", settled(DoneStatus::Errored)))
+        );
+    }
+
+    #[test]
+    fn background_shell_task_frames_are_never_workflow_traffic() {
+        let events = run_frames(
+            &mut Normalizer::new(),
+            &[
+                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_bash","name":"Bash","input":{"command":"sleep 5","run_in_background":true}}]}}"#,
+                r#"{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_bash","task_type":"local_bash"}"#,
+                r#"{"type":"system","subtype":"task_progress","task_id":"b1","tool_use_id":"toolu_bash","workflow_progress":[{"type":"workflow_phase","index":1,"title":"x"}]}"#,
+                r#"{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"toolu_bash","status":"completed"}"#,
+            ],
+        );
+        assert_eq!(events.len(), 2, "{events:?}"); // the call + context bookkeeping only
+        assert!(workflow_refreshes(&events).is_empty());
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Subagent { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn resumed_session_restores_workflow_launches() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("projects/p");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("session-w.jsonl"),
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_wf","name":"Workflow","input":{"name":"audit"}}]}}"#,
+        )
+        .unwrap();
+        let mut norm = Normalizer::for_resume(root.path(), "session-w").await;
+        let events = run_frames(
+            &mut norm,
+            &[
+                r#"{"type":"system","subtype":"task_notification","tool_use_id":"toolu_wf","status":"completed"}"#,
+            ],
+        );
+        assert_eq!(
+            events,
+            vec![tag("toolu_wf", settled(DoneStatus::Completed))]
+        );
     }
 }

@@ -84,6 +84,7 @@ pub(crate) mod tool_images;
 pub mod transcript;
 pub mod typography;
 pub mod visuals;
+mod workflow_board;
 pub mod voice;
 pub(crate) mod site_links;
 mod workspace_links;

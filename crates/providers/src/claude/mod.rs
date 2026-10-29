@@ -46,6 +46,7 @@ pub mod catalog;
 mod discovery;
 mod normalize;
 mod wire;
+mod workflow;
 
 /// Translate saved native rows with the same tool/reasoning decoder as live traffic.
 pub fn history_decoder() -> impl FnMut(&serde_json::Value) -> Vec<AgentEvent> {

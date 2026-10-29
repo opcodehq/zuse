@@ -793,7 +793,8 @@ impl SessionDoc {
                             _ => None,
                         })
                         .and_then(|j| serde_json::from_value::<zuse_protocol::ToolCall>(j).ok())
-                        .is_some_and(|c| c.is_subagent_spawn());
+                        // Background workflow runs settle the same way.
+                        .is_some_and(|c| c.is_subagent_spawn() || c.is_workflow_run());
                     if !is_spawn {
                         return Ok(false);
                     }
@@ -809,6 +810,74 @@ impl SessionDoc {
                     self.doc.commit();
                     return Ok(true);
                 }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Replace a tool part's call in place, wherever its entry sits — the
+    /// path for calls that change after their segment finished (a background
+    /// workflow run's progress snapshot). The call passes the render-parts
+    /// privacy policy first. Only a call of the same genus is replaced (a
+    /// workflow run by a workflow run, an Exec by an Exec, …), so a mis-keyed
+    /// update can never turn one kind of chip into another. An unchanged
+    /// call writes nothing, keeping repeated snapshots out of the oplog.
+    /// `Ok(true)` when the doc changed.
+    pub fn update_tool_call(
+        &self,
+        part_id: &str,
+        call: &zuse_protocol::ToolCall,
+    ) -> Result<bool, DocError> {
+        let call = crate::sanitize_tool_call(call);
+        let Ok(next) = serde_json::to_value(&call) else {
+            return Ok(false);
+        };
+        let messages = self.doc.get_list("messages");
+        for i in (0..messages.len()).rev() {
+            let Some(loro::ValueOrContainer::Container(loro::Container::Map(entry))) =
+                messages.get(i)
+            else {
+                continue;
+            };
+            let Some(loro::ValueOrContainer::Container(loro::Container::List(parts))) =
+                entry.get("parts")
+            else {
+                continue;
+            };
+            for j in 0..parts.len() {
+                let Some(loro::ValueOrContainer::Container(loro::Container::Map(part))) =
+                    parts.get(j)
+                else {
+                    continue;
+                };
+                let is_tool = matches!(
+                    part.get("kind"),
+                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == "tool"
+                );
+                let id_matches = matches!(
+                    part.get("id"),
+                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == part_id
+                );
+                if !(is_tool && id_matches) {
+                    continue;
+                }
+                let current = part.get("call").and_then(|v| match v {
+                    loro::ValueOrContainer::Value(v) => serde_json::to_value(v).ok(),
+                    _ => None,
+                });
+                let same_genus = current
+                    .as_ref()
+                    .and_then(|j| serde_json::from_value::<zuse_protocol::ToolCall>(j.clone()).ok())
+                    .is_some_and(|existing| {
+                        std::mem::discriminant(&existing) == std::mem::discriminant(&call)
+                            && existing.is_workflow_run() == call.is_workflow_run()
+                    });
+                if !same_genus || current.as_ref() == Some(&next) {
+                    return Ok(false);
+                }
+                part.insert("call", loro_value_from_json(&next))?;
+                self.doc.commit();
+                return Ok(true);
             }
         }
         Ok(false)
@@ -1890,6 +1959,99 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn update_tool_call_refreshes_a_finished_workflow_chip_once() {
+        use zuse_protocol::{
+            ToolCall, WorkflowAgentProgress, WorkflowAgentState, WorkflowProgress,
+        };
+        let doc = SessionDoc::init("c1").unwrap();
+        let tool = |id: &str, call: ToolCall| MessagePart::Tool {
+            id: id.into(),
+            call,
+            is_error: false,
+            resolved: true,
+            output: None,
+            diff: None,
+            output_ref: None,
+            output_bytes: None,
+            diff_ref: None,
+            diff_stats: None,
+            subagent_ref: None,
+            subagent_status: None,
+            subagent_tail: None,
+        };
+        let w = SegmentWriter::begin(&doc, "e1", "dev", 1).unwrap();
+        w.finish(
+            &[
+                tool("wf", ToolCall::workflow_run(None, Some("audit"), None)),
+                tool(
+                    "bash",
+                    ToolCall::Exec {
+                        command: "ls".into(),
+                    },
+                ),
+            ],
+            MessageStatus::Complete,
+        )
+        .unwrap();
+        let progress = WorkflowProgress {
+            phases: vec![],
+            agents: vec![WorkflowAgentProgress {
+                index: 0,
+                label: "scan".into(),
+                state: WorkflowAgentState::Running,
+                phase_index: None,
+                phase_title: None,
+                model: None,
+                started_at: Some(5),
+                duration_ms: None,
+                prompt_preview: None,
+                result_preview: None,
+                error: None,
+            }],
+        };
+        let next = ToolCall::workflow_run(
+            Some(&serde_json::json!({ "script": "secret body" })),
+            Some("audit"),
+            Some(&progress),
+        );
+        assert!(doc.update_tool_call("wf", &next).unwrap());
+        // The same snapshot again writes nothing.
+        let before = doc.export_snapshot().unwrap().len();
+        assert!(!doc.update_tool_call("wf", &next).unwrap());
+        assert_eq!(doc.export_snapshot().unwrap().len(), before);
+        // Never across genus, never for an unknown id.
+        assert!(!doc.update_tool_call("bash", &next).unwrap());
+        assert!(!doc.update_tool_call("missing", &next).unwrap());
+        // And a workflow chip takes subagent lifecycle like a spawn.
+        assert!(
+            doc.update_subagent_chip("wf", None, Some("done"), None)
+                .unwrap()
+        );
+
+        let entries = doc.read_entries().unwrap();
+        match &entries[0].parts[0] {
+            MessagePart::Tool {
+                call,
+                subagent_status,
+                ..
+            } => {
+                assert_eq!(call.workflow_progress(), Some(progress));
+                assert_eq!(*subagent_status, Some(crate::SubagentStatus::Done));
+                // The script never enters the doc.
+                assert!(!serde_json::to_string(call).unwrap().contains("secret body"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            &entries[0].parts[1],
+            MessagePart::Tool {
+                call: ToolCall::Exec { .. },
+                ..
+            }
+        ));
     }
 
     #[test]

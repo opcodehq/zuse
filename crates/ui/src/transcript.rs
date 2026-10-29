@@ -441,6 +441,34 @@ fn agents_running(tools: &[ToolItem]) -> bool {
         .any(|t| is_agent_tool(t) && agent_status(t) == SubagentStatus::Running)
 }
 
+/// A workflow run's lifecycle from its chip. Chips from before runs
+/// reported progress (no status, no snapshot) read by their own resolution.
+fn workflow_run_status(tool: &ToolItem) -> crate::workflow_board::RunStatus {
+    use crate::workflow_board::RunStatus;
+    match tool.subagent_status {
+        Some(SubagentStatus::Done) => RunStatus::Done,
+        Some(SubagentStatus::Failed) => RunStatus::Failed,
+        Some(SubagentStatus::Running) => RunStatus::Working,
+        None if tool.is_error => RunStatus::Failed,
+        None if tool.resolved && tool.call.workflow_progress().is_none() => RunStatus::Done,
+        None => RunStatus::Working,
+    }
+}
+
+/// A workflow row's diff key: the whole call (name + snapshot) and its
+/// lifecycle, so every progress refresh re-splices the board.
+fn workflow_row_version(tool: &ToolItem) -> u64 {
+    let mut bytes = serde_json::to_vec(&tool.call).unwrap_or_default();
+    bytes.push(tool.is_error as u8 | (tool.resolved as u8) << 1);
+    bytes.push(match tool.subagent_status {
+        None => 0,
+        Some(SubagentStatus::Running) => 1,
+        Some(SubagentStatus::Done) => 2,
+        Some(SubagentStatus::Failed) => 3,
+    });
+    fnv1a(&bytes)
+}
+
 /// Column budget for soft-wrapping thought text into detail lines. The
 /// detail body is preformatted (no element wrapping), so the wrap happens
 /// here — conservative enough to fit the card at typical transcript widths.
@@ -1102,6 +1130,11 @@ pub enum RowKind {
         /// [`Row::compact_fold`], not chips.
         compact_shell: bool,
     },
+    /// A native workflow run: its own board row (phases × agent tiles),
+    /// never folded into a tool group.
+    WorkflowRun {
+        tool: Arc<ToolItem>,
+    },
     InputChip {
         /// First question's header (chat-view.tsx `InputChip`: the resolved
         /// chip shows it; unresolved shows "Awaiting your answer…" — which
@@ -1549,6 +1582,31 @@ pub fn rows_for_entry(
                     kind: ToolItemKind::Call,
                     images: crate::tool_images::image_paths(call, output.as_deref()),
                 };
+                if call.is_workflow_run() {
+                    // A workflow run is its own board row, in both modes: a
+                    // background run must stay visible while it works.
+                    if !compact {
+                        flush_group(
+                            &mut rows,
+                            &mut pending_group,
+                            &mut group_ix,
+                            group_last_part_ix,
+                        );
+                    }
+                    rows.push(Row {
+                        id: format!("{}#{}", entry.id, item.part_id).into(),
+                        version: workflow_row_version(&item),
+                        turn_start: false,
+                        kind: RowKind::WorkflowRun {
+                            tool: Arc::new(item),
+                        },
+                        entry_id: entry_id.clone(),
+                        timestamp: None,
+                        copy_text: None,
+                        compact_fold: None,
+                    });
+                    continue;
+                }
                 if compact {
                     // Compact mode keeps ONE group for the whole turn —
                     // agent chips fold in with everything else, so the genus
@@ -1917,7 +1975,8 @@ pub fn rows_for_entry(
 
 fn is_compact_work_part(ix: usize, part: &MessagePart, reply_start: Option<usize>) -> bool {
     match part {
-        MessagePart::Tool { .. } => true,
+        // Workflow runs keep their own board row outside the work fold.
+        MessagePart::Tool { call, .. } => !call.is_workflow_run(),
         MessagePart::Reasoning { text, .. } => !text.trim().is_empty(),
         MessagePart::Text { text, .. } => {
             !text.trim().is_empty() && reply_start.is_none_or(|start| ix < start)
@@ -2187,6 +2246,18 @@ pub fn tool_group_summary(tools: &[ToolItem]) -> String {
 }
 
 fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Theme) -> AnyElement {
+    shimmer_title(text, shimmer_phase, theme.text_muted, theme.text, theme)
+}
+
+/// [`tool_group_title`] in any pair of tones: the line rests in `base` and
+/// the sweep peaks at `peak`.
+fn shimmer_title(
+    text: SharedString,
+    shimmer_phase: Option<f32>,
+    base: gpui::Hsla,
+    peak: gpui::Hsla,
+    theme: &Theme,
+) -> AnyElement {
     let Some(shimmer_phase) = shimmer_phase else {
         // Keep the ordinary inherited hover color when the group is settled
         // (and when reduced motion turns the active shimmer off).
@@ -2199,8 +2270,6 @@ fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Them
     // CSS `background-clip: text` without duplicating accessible text.
     let overlay_text = text.clone();
     let overlay_font = gpui::font(theme.font_sans_fixed.clone());
-    let base = theme.text_muted;
-    let peak = theme.text;
     let overlay = canvas(
         move |bounds, window, _| {
             let probe = window.text_system().shape_line(
@@ -3270,6 +3339,9 @@ pub struct Transcript {
     /// Entrance state follows stable groups through completion so fast calls
     /// finish revealing. Replay rows have no entrance timestamps.
     tool_group_reveals: HashMap<SharedString, ToolGroupReveal>,
+    /// Workflow boards' interaction state (selected tile, expanded columns,
+    /// script disclosure), by row id.
+    workflow_boards: HashMap<SharedString, crate::workflow_board::BoardState>,
     last_replay_baseline: Option<Arc<zuse_doc::TranscriptBaseline>>,
     /// Parsed historical prefixes, used to seed text before a coalesced live
     /// suffix is painted. The wire watermark contains lengths, not text.
@@ -3728,6 +3800,7 @@ impl Transcript {
             tree_cache: HashMap::new(),
             folds: HashMap::new(),
             tool_group_reveals: HashMap::new(),
+            workflow_boards: HashMap::new(),
             last_replay_baseline: None,
             historical_markdown: HashMap::new(),
             tool_details: HashMap::new(),
@@ -6875,6 +6948,100 @@ impl Transcript {
         self.diagram_layout_changed(&rows, cx);
     }
 
+    /// A workflow run's board (see [`crate::workflow_board`]).
+    fn render_workflow_run(
+        &mut self,
+        row_id: &SharedString,
+        tool: &ToolItem,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::workflow_board::{BoardProps, RunStatus};
+        let run = workflow_run_status(tool);
+        let progress = tool.call.workflow_progress();
+        let script_path = match &tool.call {
+            ToolCall::Unknown {
+                input: Some(input), ..
+            } => input
+                .get("scriptPath")
+                .and_then(serde_json::Value::as_str)
+                .map(|path| SharedString::from(path.to_owned())),
+            _ => None,
+        };
+        let brand = self
+            .chat_id
+            .as_deref()
+            .and_then(|id| self.state.read(cx).chats.iter().find(|chat| chat.id == id))
+            .and_then(|chat| chat.config.as_ref())
+            .map(|config| crate::pickers::harness_brand_icon(config.harness).0);
+        let list_width = f32::from(self.list.viewport_bounds().size.width);
+        let column = if list_width > 0.0 {
+            self.content_width
+                .min((list_width - self.right_reserve).max(1.0))
+        } else {
+            self.content_width
+        };
+        let working = run == RunStatus::Working;
+        let reduce_motion = cx.reduce_motion();
+        if working {
+            // Live elapsed timers, turning marks and the status shimmer.
+            motion::pulse_lease(cx.entity_id(), cx);
+        }
+        let shimmer_phase = (working && !reduce_motion)
+            .then(|| tool_title_shimmer_phase(shimmer_epoch(), Instant::now()));
+        let (busy, peak) = (theme.busy, theme.text_strong);
+        let status_theme = theme.clone();
+        let state = self
+            .workflow_boards
+            .get(row_id)
+            .cloned()
+            .unwrap_or_default();
+        let name = tool
+            .call
+            .workflow_name()
+            .map(|name| SharedString::from(name.to_owned()))
+            .unwrap_or_else(|| "Workflow".into());
+        let view = cx.entity().downgrade();
+        let dispatch_row = row_id.clone();
+        let dispatch: crate::workflow_board::BoardDispatch = Rc::new(move |action, _window, cx| {
+            let row = dispatch_row.clone();
+            let _ = view.update(cx, |this, cx| this.workflow_board_action(&row, action, cx));
+        });
+        crate::workflow_board::render_board(
+            BoardProps {
+                row_id: row_id.clone(),
+                name,
+                run,
+                progress: progress.as_ref(),
+                script_path,
+                brand,
+                stacked: column - 32.0 < crate::workflow_board::STACK_BELOW_WIDTH,
+                state: &state,
+                now_ms: crate::workflow_board::now_ms(),
+                spin: (!reduce_motion).then(|| crate::workflow_board::spin_epoch().elapsed()),
+                status_shimmer: Some(Box::new(move |text| {
+                    shimmer_title(text, shimmer_phase, busy, peak, &status_theme)
+                })),
+            },
+            dispatch,
+            theme,
+        )
+    }
+
+    /// A board control was used: update its state and remeasure its row.
+    fn workflow_board_action(
+        &mut self,
+        row_id: &SharedString,
+        action: crate::workflow_board::BoardAction,
+        cx: &mut Context<Self>,
+    ) {
+        let state = self.workflow_boards.entry(row_id.clone()).or_default();
+        if state.apply(&action) {
+            self.diagram_layout_changed(std::slice::from_ref(row_id), cx);
+        }
+        cx.notify();
+    }
+
     /// A diagram replaced its source (or the reverse): remeasure the rows
     /// painting it and let the bottom pin and the own-turn runway absorb the
     /// height change, exactly like any other layout-affecting row update.
@@ -7883,6 +8050,7 @@ impl Transcript {
                 &theme,
                 cx,
             ),
+            RowKind::WorkflowRun { tool } => self.render_workflow_run(&row.id, tool, &theme, cx),
             RowKind::InputChip { header, resolved } => {
                 input_chip(header.clone(), *resolved, &theme)
             }
@@ -12887,6 +13055,101 @@ mod tests {
         assert_eq!(rows.len(), 4);
         assert!(matches!(rows[1].kind, RowKind::ToolGroup { .. }));
         assert!(matches!(rows[2].kind, RowKind::GeneratedImage { .. }));
+    }
+
+    fn workflow_part(
+        progress: Option<&zuse_protocol::WorkflowProgress>,
+        status: Option<SubagentStatus>,
+    ) -> MessagePart {
+        MessagePart::Tool {
+            id: "wf".into(),
+            call: ToolCall::workflow_run(None, Some("audit"), progress),
+            is_error: false,
+            resolved: true,
+            output: None,
+            diff: None,
+            output_ref: None,
+            output_bytes: None,
+            diff_ref: None,
+            diff_stats: None,
+            subagent_ref: None,
+            subagent_status: status,
+            subagent_tail: None,
+        }
+    }
+
+    #[test]
+    fn workflow_run_is_its_own_board_row_that_resplices_on_progress() {
+        use zuse_protocol::{WorkflowAgentProgress, WorkflowAgentState, WorkflowProgress};
+        let progress = WorkflowProgress {
+            phases: vec![],
+            agents: vec![WorkflowAgentProgress {
+                index: 1,
+                label: "scan".into(),
+                state: WorkflowAgentState::Running,
+                phase_index: None,
+                phase_title: None,
+                model: None,
+                started_at: Some(1),
+                duration_ms: None,
+                prompt_preview: None,
+                result_preview: None,
+                error: None,
+            }],
+        };
+        let rows_of = |part: MessagePart, compact: bool| {
+            let entry = assistant(
+                "a",
+                MessageStatus::Complete,
+                vec![
+                    tool_part("r1", "ls"),
+                    part,
+                    tool_part("r2", "pwd"),
+                    text_part("t", "done"),
+                ],
+            );
+            rows_for_entry(&entry, false, compact, &mut parse)
+        };
+        let running = rows_of(
+            workflow_part(Some(&progress), Some(SubagentStatus::Running)),
+            false,
+        );
+        assert_eq!(running.len(), 4);
+        assert!(matches!(running[0].kind, RowKind::ToolGroup { .. }));
+        let RowKind::WorkflowRun { tool } = &running[1].kind else {
+            panic!("board row expected");
+        };
+        assert_eq!(
+            workflow_run_status(tool),
+            crate::workflow_board::RunStatus::Working
+        );
+        assert!(matches!(running[2].kind, RowKind::ToolGroup { .. }));
+        // A new snapshot and the settle each re-splice the board.
+        let bare = rows_of(workflow_part(None, Some(SubagentStatus::Running)), false);
+        let settled = rows_of(
+            workflow_part(Some(&progress), Some(SubagentStatus::Done)),
+            false,
+        );
+        assert_eq!(running[1].id, bare[1].id);
+        assert_ne!(running[1].version, bare[1].version);
+        assert_ne!(running[1].version, settled[1].version);
+        // Compact mode folds the tools but keeps the board visible.
+        let compact = rows_of(workflow_part(Some(&progress), None), true);
+        let boards = compact
+            .iter()
+            .filter(|row| matches!(row.kind, RowKind::WorkflowRun { .. }))
+            .filter(|row| row.compact_fold.is_none())
+            .count();
+        assert_eq!(boards, 1);
+        // A legacy chip (no lifecycle, no snapshot) reads by its resolution.
+        let legacy = rows_of(workflow_part(None, None), false);
+        let RowKind::WorkflowRun { tool } = &legacy[1].kind else {
+            panic!("board row expected");
+        };
+        assert_eq!(
+            workflow_run_status(tool),
+            crate::workflow_board::RunStatus::Done
+        );
     }
 
     #[test]
