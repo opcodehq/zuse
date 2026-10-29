@@ -291,6 +291,14 @@ async fn missing_tools_return_setup_instead_of_starting_processes() {
     assert!(state.requirements.iter().all(|r| !r.ready));
     assert!(state.requirements.iter().any(|r| r.message.contains("JDK")));
     assert!(!*fake.started.lock().unwrap());
+
+    // An emulator binary and AVD alone cannot drive a device without adb.
+    let (sim, fake) = controller(false);
+    *fake.unavailable.lock().unwrap() = vec![sim.0.tools.adb.clone()];
+    sim.configure("chat", true, true).await;
+    assert!(sim.state("chat").await.devices.is_empty());
+    assert!(sim.open(&target("android:Pixel_8"), true).await.is_err());
+    assert!(!*fake.started.lock().unwrap());
 }
 #[tokio::test]
 async fn reused_serial_cannot_control_a_different_avd() {

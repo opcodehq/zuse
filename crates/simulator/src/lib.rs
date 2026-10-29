@@ -173,7 +173,7 @@ impl Simulators {
                         HashMap::new()
                     }
                 };
-                devices.extend(names.into_iter().filter(|n| valid_avd(n)).map(|name| {
+                devices.extend(names.into_iter().filter(|n| adb.is_ok() && valid_avd(n)).map(|name| {
                     let serial = running.get(&name).cloned();
                     Device { id: format!("android:{name}"), name, platform: Platform::Android, runtime: "Android AVD".into(), booted: serial.is_some(), serial }
                 }));
