@@ -11,7 +11,7 @@ const LIMIT: usize = 2 * 1024 * 1024;
 fn error(message: &str) -> EngineError {
     EngineError::Other(message.into())
 }
-async fn drain(
+pub(crate) async fn drain(
     mut stream: impl AsyncRead + Unpin,
     limit: usize,
 ) -> std::io::Result<(Vec<u8>, bool)> {

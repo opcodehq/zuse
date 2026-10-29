@@ -126,6 +126,9 @@ pub const CREATE_REPO: &str = "CreateRepo";
 pub const LIST_BRANCHES: &str = "ListBranches";
 pub const LIST_REFS: &str = "ListRefs";
 pub const LIST_GIT_HISTORY: &str = "ListGitHistory";
+/// A branch's commits beside its base's since they forked, and a merge
+/// preview (`branch_graph::BranchGraphRequest`). Read-only.
+pub const GET_BRANCH_GRAPH: &str = "GetBranchGraph";
 /// Fuzzy commit-subject / SHA search over the complete public history.
 pub const SEARCH_GIT_HISTORY: &str = "SearchGitHistory";
 /// Resolve hosted profile images for a page of Git commit authors.
@@ -288,6 +291,7 @@ pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";
 pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
     match method {
         GET_GIT_WORKSPACE
+        | GET_BRANCH_GRAPH
         | RELAY_ACCESS_STATUS
         | BROWSER_ACCESS_STATUS
         | LIST_PAIRINGS

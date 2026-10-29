@@ -14325,6 +14325,13 @@ impl Render for Shell {
                 this.random_wallpaper(cx);
             }))
             .on_action(cx.listener(
+                |this, action: &crate::pull_request_card::SendToChat, _, cx| {
+                    let text = action.0.clone();
+                    this.composer
+                        .update(cx, |composer, cx| composer.send_prompt(text, cx));
+                },
+            ))
+            .on_action(cx.listener(
                 |this, action: &crate::pull_request_detail::OpenPullRequest, window, cx| {
                     // From a chat (a sidebar badge, the composer's badge), the
                     // pull request opens beside the focused session, so
@@ -19270,6 +19277,13 @@ impl Shell {
                     .update(cx, |transcript, cx| transcript.fixture_show_jump_button(cx));
             }
         }
+        // `prcard-flow-<stage>` keeps one turn across routes, so its card
+        // moves from stage to stage instead of a new card each time.
+        if let Some(stage) = variant.strip_prefix("prcard-flow-") {
+            self.fixture_seed_pull_request_card(stage, true, cx);
+        } else if let Some(stage) = variant.strip_prefix("prcard-") {
+            self.fixture_seed_pull_request_card(stage, false, cx);
+        }
         // `<route>:draft` types a prompt so the send key is live.
         if variant == "draft" {
             self.composer.update(cx, |composer, cx| {
@@ -19394,6 +19408,320 @@ impl Shell {
                 composer.fixture_seed_chips(variant == "chips-mention", cx)
             });
         }
+    }
+
+    /// `main:prcard-<stage>`: a conversation whose turn opened a pull
+    /// request, with its card seeded at `creating`, `conflicts`, `checks`,
+    /// `ready` or `merged` (the branch, its commits beside main's and the
+    /// composer's chips).
+    fn fixture_seed_pull_request_card(&mut self, stage: &str, flow: bool, cx: &mut Context<Self>) {
+        use zuse_protocol::branch_graph::{BranchGraph, ConflictHunk, MergeConflict, MergePreview};
+        use zuse_protocol::{
+            ChangeRequestCheck, GitHistoryCommit, GitHistoryRef, GitHistoryRefKind,
+        };
+        if stage == "none" {
+            self.fixture_seed_create_pull_request(cx);
+            return;
+        }
+        let url = "https://github.com/example/fieldnotes/pull/418";
+        let now = Utc::now();
+        let sha = |short: &str| format!("{short}{}", "0".repeat(40 - short.len()));
+        let commit = |short: &str,
+                      parents: &[&str],
+                      subject: &str,
+                      author: &str,
+                      minutes: i64,
+                      refs: &[(GitHistoryRefKind, &str)]| {
+            GitHistoryCommit {
+                sha: sha(short),
+                parent_shas: parents.iter().map(|p| sha(p)).collect(),
+                subject: subject.into(),
+                author_name: author.into(),
+                author_email: format!("{}@example.test", author.to_lowercase().replace(' ', ".")),
+                authored_at: (now - chrono::Duration::minutes(minutes)).to_rfc3339(),
+                refs: refs
+                    .iter()
+                    .map(|(kind, label)| GitHistoryRef {
+                        kind: *kind,
+                        label: (*label).into(),
+                    })
+                    .collect(),
+            }
+        };
+        let merged = matches!(stage, "checks" | "ready" | "merged");
+        let mut commits = Vec::new();
+        if merged {
+            commits.push(commit(
+                "7e0c3b",
+                &["d29f50", "5be27d"],
+                "Merge main into feat/session-refresh",
+                "You",
+                0,
+                &[(GitHistoryRefKind::Branch, "feat/session-refresh")],
+            ));
+        }
+        commits.extend([
+            commit(
+                "d29f50",
+                &["c70a92"],
+                "Add session refresh tests",
+                "You",
+                1,
+                if merged {
+                    &[]
+                } else {
+                    &[(GitHistoryRefKind::Branch, "feat/session-refresh")]
+                },
+            ),
+            commit(
+                "5be27d",
+                &["4d1e07"],
+                "Read sessions with the current key",
+                "Lena Park",
+                6,
+                &[(GitHistoryRefKind::Remote, "main")],
+            ),
+            commit(
+                "4d1e07",
+                &["a3f9c1", "e83c51"],
+                "Merge feat/checkout-analytics",
+                "Sam Ortiz",
+                12,
+                &[],
+            ),
+            commit(
+                "c70a92",
+                &["1f8e3b"],
+                "Refresh sessions near expiry",
+                "You",
+                25,
+                &[],
+            ),
+            commit(
+                "e83c51",
+                &["62b0e4"],
+                "Add analytics consent banner",
+                "Sam Ortiz",
+                32,
+                &[(GitHistoryRefKind::Branch, "feat/checkout-analytics")],
+            ),
+            commit(
+                "a3f9c1",
+                &["9c2d4a"],
+                "Rotate session keys",
+                "Lena Park",
+                18,
+                &[],
+            ),
+            commit(
+                "1f8e3b",
+                &["9c2d4a"],
+                "Read session expiry from the token",
+                "You",
+                40,
+                &[],
+            ),
+            commit(
+                "62b0e4",
+                &["9c2d4a"],
+                "Track checkout funnel events",
+                "Sam Ortiz",
+                120,
+                &[],
+            ),
+            commit("9c2d4a", &[], "Bump next to 16.3", "Sam Ortiz", 180, &[]),
+        ]);
+        let mut head_shas: Vec<String> = ["d29f50", "c70a92", "1f8e3b"]
+            .iter()
+            .map(|s| sha(s))
+            .collect();
+        if merged {
+            head_shas.insert(0, sha("7e0c3b"));
+        }
+        let conflicts = vec![
+            MergeConflict {
+                path: "src/middleware.ts".into(),
+                base_author: Some("Lena Park".into()),
+                hunks: vec![ConflictHunk {
+                    line: 18,
+                    head: "if (nearExpiry(session)) await refresh(session)".into(),
+                    base: "const session = await readSession(req, keys)".into(),
+                }],
+                note: None,
+            },
+            MergeConflict {
+                path: "src/auth.ts".into(),
+                base_author: Some("Lena Park".into()),
+                hunks: vec![
+                    ConflictHunk {
+                        line: 42,
+                        head: "return refreshIfNear(token, 5 * MINUTE)".into(),
+                        base: "return verify(token, keys.current)".into(),
+                    },
+                    ConflictHunk {
+                        line: 57,
+                        head: "const ttl = session.expiresAt - Date.now()".into(),
+                        base: "const ttl = keys.current.ttl".into(),
+                    },
+                ],
+                note: None,
+            },
+        ];
+        let graph = BranchGraph {
+            base_ref: "origin/main".into(),
+            head_branch: "feat/session-refresh".into(),
+            head_sha: Some(commits[0].sha.clone()),
+            fork_sha: Some(sha("9c2d4a")),
+            ahead: head_shas.len(),
+            behind: if merged { 0 } else { 4 },
+            commits,
+            head_shas,
+            self_email: Some("you@example.test".into()),
+            uncommitted: if stage == "creating" { 3 } else { 0 },
+            merge: Some(if stage == "conflicts" {
+                MergePreview {
+                    clean: false,
+                    conflicts,
+                    more_files: 0,
+                }
+            } else {
+                MergePreview {
+                    clean: true,
+                    ..Default::default()
+                }
+            }),
+        };
+        let check = |name: &str, conclusion: &str, status: &str| ChangeRequestCheck {
+            name: name.into(),
+            conclusion: conclusion.into(),
+            status: status.into(),
+            ..Default::default()
+        };
+        let detail = (stage != "creating").then(|| zuse_protocol::ChangeRequestDetail {
+            title: "Refresh sessions in the auth middleware".into(),
+            url: url.into(),
+            number: 418,
+            base_ref_name: "main".into(),
+            head_ref_name: "feat/session-refresh".into(),
+            state: if stage == "merged" { "MERGED" } else { "OPEN" }.into(),
+            mergeable: if stage == "conflicts" {
+                "CONFLICTING"
+            } else {
+                "MERGEABLE"
+            }
+            .into(),
+            additions: 482,
+            deletions: 37,
+            status_check_rollup: if stage == "checks" {
+                vec![
+                    check("Tests", "", "IN_PROGRESS"),
+                    check("Lint", "SUCCESS", "COMPLETED"),
+                    check("Types", "SUCCESS", "COMPLETED"),
+                    check("Preview", "", "QUEUED"),
+                ]
+            } else {
+                ["Tests", "Lint", "Types", "Preview"]
+                    .iter()
+                    .map(|name| check(name, "SUCCESS", "COMPLETED"))
+                    .collect()
+            },
+            ..Default::default()
+        });
+        let key = if stage == "creating" { "" } else { url };
+        cx.default_global::<crate::pull_request_card::PullRequestCardFixtures>()
+            .0
+            .insert(key.into(), (detail, graph));
+
+        let millis = now.timestamp_millis();
+        let tool = |id: &str, command: &str, output: Option<&str>| {
+            let mut part = serde_json::json!({
+                "kind": "tool", "id": id,
+                "call": {"kind": "exec", "command": command},
+                "resolved": output.is_some(),
+            });
+            if let Some(output) = output {
+                part["output"] = output.into();
+            }
+            part
+        };
+        let creating = stage == "creating";
+        let reply = match stage {
+            "conflicts" => {
+                "PR #418 is open, but `main` moved on while we worked: Lena's session key rotation changed the same lines in `auth.ts` and `middleware.ts`. I can merge `main` in and resolve them."
+            }
+            "creating" => "",
+            _ => {
+                "PR #418 is open against `main`. I merged `main` in and resolved the conflicts with Lena's key rotation; the checks are below."
+            }
+        };
+        let mut parts = vec![
+            tool(
+                "c1",
+                "git add -A && git commit -m 'Add session refresh tests'",
+                Some("[feat/session-refresh d29f50] Add session refresh tests"),
+            ),
+            tool(
+                "c2",
+                "git push -u origin feat/session-refresh",
+                Some(
+                    "branch 'feat/session-refresh' set up to track 'origin/feat/session-refresh'.",
+                ),
+            ),
+            tool(
+                "c3",
+                "gh pr create --fill --base main",
+                (!creating).then_some(url),
+            ),
+        ];
+        if !reply.is_empty() {
+            parts.push(serde_json::json!({"kind": "text", "id": "t1", "text": reply}));
+        }
+        let entries = vec![
+            serde_json::from_value::<zuse_doc::SessionMessageEntry>(serde_json::json!({
+                "id": if flow { "u-flow".to_owned() } else { format!("u-{stage}") }, "role": "user", "createdAt": millis - 60_000, "deviceId": "local",
+                "status": "complete",
+                "parts": [{"kind": "text", "id": "t", "text": "Create PR"}],
+            }))
+            .unwrap(),
+            serde_json::from_value::<zuse_doc::SessionMessageEntry>(serde_json::json!({
+                "id": if flow { "a-flow".to_owned() } else { format!("a-{stage}") }, "role": "assistant", "createdAt": millis - 55_000, "deviceId": "local",
+                "status": if creating { "streaming" } else { "complete" },
+                "durationMs": 5_000, "parts": parts,
+            }))
+            .unwrap(),
+        ];
+        self.fixture_seed_pull_request(cx);
+        self.state.update(cx, |state, cx| {
+            state.apply_transcript(entries);
+            cx.notify();
+        });
+        self.transcript.update(cx, |transcript, cx| {
+            transcript.fixture_reload_pull_request_cards(cx)
+        });
+    }
+
+    /// A Git chat with changes and no pull request: the composer offers
+    /// Create PR.
+    fn fixture_seed_create_pull_request(&mut self, cx: &mut Context<Self>) {
+        self.fixture_seed_transcript(false, cx);
+        self.state.update(cx, |state, cx| {
+            let selected = state.selected_chat.clone();
+            if let Some(chat) = state
+                .chats
+                .iter_mut()
+                .find(|chat| Some(&chat.id) == selected.as_ref())
+            {
+                chat.source_context = Some(zuse_protocol::ConversationSourceContext {
+                    checkout_id: "fixture-checkout".into(),
+                    repo_root: "/tmp/fieldnotes".into(),
+                    cwd: "/tmp/fieldnotes".into(),
+                    branch: "feat/session-refresh".into(),
+                    head_sha: None,
+                    observed_at: Utc::now(),
+                });
+            }
+            cx.notify();
+        });
     }
 
     fn fixture_seed_link_transcript(&mut self, cx: &mut Context<Self>) {

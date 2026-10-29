@@ -57,6 +57,7 @@ pub mod pickers;
 pub mod popover;
 pub mod project_actions;
 mod project_archive;
+pub mod pull_request_card;
 pub mod pull_request_detail;
 mod pull_request_media;
 mod pull_request_skeleton;

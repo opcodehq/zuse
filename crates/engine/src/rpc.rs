@@ -1618,6 +1618,8 @@ fn forward_deadline(method: &str) -> std::time::Duration {
         methods::APPLY_HARNESS_UPDATE => Duration::from_secs(20 * 60),
         methods::GIT_WORKSPACE_ACTION | methods::GET_GIT_WORKSPACE => Duration::from_secs(180),
         methods::CREATE_WORKTREE => Duration::from_secs(120),
+        // A best-effort fetch of the base, then several local reads.
+        methods::GET_BRANCH_GRAPH => Duration::from_secs(60),
         zuse_protocol::creation_source::RESOLVE => Duration::from_secs(180),
         // Allow the adapter discovery budget plus relay and shutdown overhead.
         methods::LIST_MODELS | methods::LIST_COMMANDS => Duration::from_secs(100),
@@ -1694,6 +1696,7 @@ fn forwardable(method: &str) -> bool {
             | methods::GIT_WORKSPACE_ACTION
             | methods::LIST_REFS
             | methods::LIST_GIT_HISTORY
+            | methods::GET_BRANCH_GRAPH
             | methods::SEARCH_GIT_HISTORY
             | methods::RESOLVE_GIT_AVATARS
             | methods::FETCH_ALL
@@ -4411,6 +4414,13 @@ impl RpcService for EngineRpc {
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&history)
             }
+            methods::GET_BRANCH_GRAPH => {
+                let p: zuse_protocol::branch_graph::BranchGraphRequest = parse_params(params)?;
+                let graph = crate::branch_graph::branch_graph(std::path::Path::new(&p.cwd), &p)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&graph)
+            }
             methods::SEARCH_GIT_HISTORY => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
@@ -5886,6 +5896,7 @@ mod tests {
         assert!(forwardable(methods::QUEUE_COMMAND));
         assert!(forwardable(methods::SEARCH_FILES));
         assert!(forwardable(methods::SEARCH_GIT_HISTORY));
+        assert!(forwardable(methods::GET_BRANCH_GRAPH));
         assert!(forwardable(methods::FETCH_ALL));
         assert!(forwardable(methods::RESOLVE_GIT_AVATARS));
         assert!(forwardable(methods::WATCH_CHECKOUT_CHANGE_REQUEST));
