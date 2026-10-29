@@ -210,8 +210,8 @@ pub async fn handle_request(tools: &Tools, id: Value, method: &str, params: Valu
                 Ok(value) => ok_response(
                     id,
                     json!({
-                        "content": [{ "type": "text", "text": pretty(&value) }],
-                        "structuredContent": wrap_structured(value),
+                        "content": crate::simulators::image_content(name, &value).map(|image| vec![json!({"type":"text","text":format!("{} × {} pixels",value["width"],value["height"])}),image]).unwrap_or_else(||vec![json!({ "type": "text", "text": pretty(&value) })]),
+                        "structuredContent": wrap_structured(if name == "device_screenshot" { json!({"width":value["width"],"height":value["height"],"mimeType":"image/png"}) } else {value}),
                         "isError": false,
                     }),
                 ),

@@ -261,6 +261,7 @@ fn catalog() -> Vec<ToolDef> {
     ] {
         tools.push(ToolDef{name,description,input_schema:json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})});
     }
+    tools.extend(crate::simulators::definitions());
     tools.push(ToolDef {
         name: SHOW_VISUAL,
         description: SHOW_VISUAL_DESCRIPTION,
@@ -703,7 +704,7 @@ impl Tools {
         catalog()
             .into_iter()
             .filter(|tool| {
-                in_chat || (tool.name != "request_secret" && tool.name != SHOW_VISUAL && !tool.name.starts_with("plugins_"))
+                in_chat || (tool.name != "request_secret" && tool.name != SHOW_VISUAL && !tool.name.starts_with("plugins_") && !tool.name.starts_with("device_"))
             })
             .collect()
     }
@@ -717,12 +718,19 @@ impl Tools {
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
         let result = match name {
             "request_secret" => {
-                let chat = self.zuse.origin().chat_id.as_deref().ok_or("Private secrets require an originating chat")?;
+                let chat = self
+                    .zuse
+                    .origin()
+                    .chat_id
+                    .as_deref()
+                    .ok_or("Private secrets require an originating chat")?;
                 self.zuse.call_once(zuse_rpc::methods::REQUEST_PRIVATE_OPERATION, json!({"chatId":chat,"targetDeviceId":self.zuse.origin().device_id,"operation":args})).await
             }
             "plugins_list" | "plugins_search" | "plugins_schema" | "plugins_call" => {
                 self.plugin_tool(name, args).await
             }
+            "device_list" | "device_open" | "device_close" | "device_screenshot"
+            | "device_input" => self.device_tool(name, args).await,
             "whoami" => self.whoami().await,
             "list_devices" => self.list_devices().await,
             "list_projects" => self.list_projects(parse(args)?).await,
@@ -743,6 +751,15 @@ impl Tools {
             other => return Err(format!("unknown tool: {other}")),
         };
         result.map_err(|e| format!("{e:#}"))
+    }
+
+    async fn device_tool(&self, name: &str, arguments: Value) -> anyhow::Result<Value> {
+        let origin = self.zuse.origin();
+        let chat = origin
+            .chat_id
+            .as_deref()
+            .context("Device tools require an originating chat")?;
+        self.zuse.call_once(zuse_rpc::methods::SIMULATOR_TOOL, json!({"chatId":chat,"targetDeviceId":origin.device_id,"name":name,"arguments":arguments})).await
     }
 
     async fn plugin_tool(&self, name: &str, args: Value) -> anyhow::Result<Value> {
@@ -1768,6 +1785,44 @@ mod tests {
         assert!(!human.has("plugins_call"));
         assert!(human.call("plugins_list", json!({})).await.is_err());
         assert_eq!(capture.0.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn simulator_tools_bind_origin_and_return_images_over_mcp() {
+        #[derive(Default)]
+        struct Capture(Mutex<Vec<Value>>);
+        #[async_trait]
+        impl RpcService for Capture {
+            async fn handle(&self, method: &str, params: Value) -> Result<RpcReply, RpcError> {
+                assert_eq!(method, methods::SIMULATOR_TOOL);
+                self.0.lock().unwrap().push(params);
+                Ok(RpcReply::Value(
+                    json!({"data":"cG5n","width":100,"height":200,"mimeType":"image/png"}),
+                ))
+            }
+        }
+        let capture = Arc::new(Capture::default());
+        let agent = Tools::new(Arc::new(Zuse::with_client(
+            memory_client(capture.clone()),
+            Origin {
+                chat_id: Some("origin".into()),
+                device_id: Some("host".into()),
+            },
+        )));
+        assert!(agent.has("device_input"));
+        let reply=crate::jsonrpc::handle_request(&agent,json!(1),"tools/call",json!({"name":"device_screenshot","arguments":{"chatId":"other","targetDeviceId":"other-host","deviceId":"ios-id"}})).await;
+        assert_eq!(reply["result"]["content"][1]["type"], "image");
+        assert_eq!(reply["result"]["content"][1]["data"], "cG5n");
+        assert!(reply["result"]["structuredContent"].get("data").is_none());
+        let calls = capture.0.lock().unwrap().clone();
+        assert_eq!(calls[0]["chatId"], "origin");
+        assert_eq!(calls[0]["targetDeviceId"], "host");
+        let human = Tools::new(Arc::new(Zuse::with_client(
+            memory_client(capture),
+            Origin::default(),
+        )));
+        assert!(!human.has("device_list"));
+        assert!(human.call("device_list", json!({})).await.is_err());
     }
 
     #[tokio::test]

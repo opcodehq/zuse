@@ -681,6 +681,7 @@ pub enum RightSurface {
     Picker,
     File(u64),
     Browser(u64),
+    Simulator(u64),
     Diff(u64),
     Terminal(u64),
     /// A subagent's transcript, read-only (per-subagent viz) — the handle
@@ -2083,6 +2084,8 @@ pub struct Shell {
     browsers: std::collections::HashMap<u64, Entity<crate::browser::BrowserSurface>>,
     browser_subs: std::collections::HashMap<u64, Subscription>,
     browser_seq: u64,
+    simulators: std::collections::HashMap<u64, Entity<crate::simulator::SimulatorPane>>,
+    simulator_seq: u64,
     /// Pull request tabs in session panes, keyed like the other surfaces.
     chat_pull_requests: std::collections::HashMap<u64, chat_pull_requests::ChatPullRequest>,
     chat_pull_request_seq: u64,
@@ -2673,6 +2676,8 @@ impl Shell {
             browsers: std::collections::HashMap::new(),
             browser_subs: std::collections::HashMap::new(),
             browser_seq: 0,
+            simulators: std::collections::HashMap::new(),
+            simulator_seq: 0,
             chat_pull_requests: std::collections::HashMap::new(),
             chat_pull_request_seq: 0,
             browser_context: crate::browser::BrowserContext::default(),
@@ -3597,6 +3602,10 @@ impl Shell {
                     .subagent_tabs
                     .get(id)
                     .map(|tab| (*surface, tab.title.clone(), false, None)),
+                RightSurface::Simulator(id) => self
+                    .simulators
+                    .get(id)
+                    .map(|_| (*surface, SharedString::from("Simulator"), false, None)),
                 RightSurface::Browser(id) => self.browsers.get(id).map(|browser| {
                     let browser = browser.read(cx);
                     (
@@ -3666,6 +3675,7 @@ impl Shell {
             | RightSurface::Terminal(_)
             | RightSurface::SideChat(_)
             | RightSurface::Subagent(_)
+            | RightSurface::Simulator(_)
             | RightSurface::Browser(_)
             | RightSurface::PullRequest(_) => {
                 return None;
@@ -3821,8 +3831,10 @@ impl Shell {
                     files.update(cx, |files, cx| files.ensure_loaded(cx));
                 }
             }
-            RightSurface::Subagent(_) | RightSurface::Browser(_) | RightSurface::PullRequest(_) => {
-            }
+            RightSurface::Simulator(_)
+            | RightSurface::Subagent(_)
+            | RightSurface::Browser(_)
+            | RightSurface::PullRequest(_) => {}
             RightSurface::Picker => {}
         }
         self.sync_explorer_selection(cx);
@@ -4038,6 +4050,41 @@ impl Shell {
             self.chat_pull_requests.clear();
             self.browser_profile = browser_profile;
         }
+    }
+
+    /// Each chat owns one simulator picker/viewer tab.
+    fn add_simulator_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let key = self.panel_key(cx);
+        if let Some(surface) = self
+            .right_tabs
+            .get(&key)
+            .and_then(|tabs| {
+                tabs.iter()
+                    .find(|s| matches!(s, RightSurface::Simulator(_)))
+            })
+            .copied()
+        {
+            self.set_right_active(surface, cx);
+            return;
+        }
+        let state = self.state.read(cx);
+        let Some(engine) = state.engine().cloned() else {
+            return;
+        };
+        let Some(chat) = state.selected_chat_row() else {
+            return;
+        };
+        let (chat_id, host_id) = (chat.id.clone(), chat.device_id.clone());
+        self.simulator_seq += 1;
+        let id = self.simulator_seq;
+        let pane =
+            cx.new(|cx| crate::simulator::SimulatorPane::new(engine, chat_id, host_id, window, cx));
+        self.simulators.insert(id, pane);
+        self.right_tabs
+            .entry(key)
+            .or_default()
+            .push(RightSurface::Simulator(id));
+        self.set_right_active(RightSurface::Simulator(id), cx);
     }
 
     /// Browser tabs are independent instances owned by the current session.
@@ -4680,6 +4727,11 @@ impl Shell {
         }
         match surface {
             RightSurface::File(_) => {}
+            RightSurface::Simulator(id) => {
+                if let Some(pane) = self.simulators.remove(&id) {
+                    pane.update(cx, |pane, cx| pane.close(cx));
+                }
+            }
             RightSurface::Browser(id) => {
                 if let Some(browser) = self.browsers.remove(&id) {
                     browser.update(cx, |browser, cx| browser.close(cx));
@@ -6557,6 +6609,11 @@ impl Shell {
                         browser.update(cx, |browser, cx| browser.close(cx));
                     }
                     self.browser_subs.remove(id);
+                }
+                if let RightSurface::Simulator(id) = surface {
+                    if let Some(pane) = self.simulators.remove(id) {
+                        pane.update(cx, |pane, cx| pane.close(cx));
+                    }
                 }
                 if let RightSurface::PullRequest(id) = surface {
                     self.chat_pull_requests.remove(id);
@@ -12691,6 +12748,12 @@ impl Shell {
                         .child(div().flex_1().min_h_0().child(changes))
                         .into_any_element()
                 }
+                RightSurface::Simulator(id) => self
+                    .simulators
+                    .get(&id)
+                    .cloned()
+                    .map(|pane| pane.into_any_element())
+                    .unwrap_or_else(|| self.render_surface_picker(cx)),
                 RightSurface::Browser(id) => self
                     .browsers
                     .get(&id)
@@ -13005,6 +13068,7 @@ impl Shell {
                 RightSurface::SideChat(_) => icons::CHAT_ROUND_LINE,
                 RightSurface::Subagent(_) => icons::BOT,
                 RightSurface::Terminal(_) => icons::TERMINAL,
+                RightSurface::Simulator(_) => icons::SMARTPHONE,
                 RightSurface::Browser(_) => icons::GLOBE,
                 RightSurface::PullRequest(_) => icons::PULL_REQUEST,
                 RightSurface::Files => icons::FOLDER,
@@ -13988,6 +14052,16 @@ impl Render for Shell {
         // Every repaint (state frame, input, or the clock firing) reschedules
         // the next clock-driven one; the sidebar and transcript follow this
         // view's notifications.
+        let simulator_active = matches!(self.route, Route::Chat) && self.right_pane_shown(cx);
+        let selected = self.resolved_right_active(cx);
+        for (id, pane) in &self.simulators {
+            pane.update(cx, |pane, cx| {
+                pane.set_active(
+                    simulator_active && selected == RightSurface::Simulator(*id),
+                    cx,
+                )
+            });
+        }
         let now = Utc::now();
         let wake = shell_clock_wake(self.state.read(cx), now);
         self.clock
@@ -20946,3 +21020,23 @@ index 3333333..4444444 100644
 +Run `cargo run` to start. Cached pages expire after
 +the configured time to live.
 ";
+
+#[cfg(feature = "simulator-fixture")]
+impl Shell {
+    pub fn fixture_simulator(
+        &mut self,
+        state: zuse_protocol::simulators::State,
+        frame: Option<zuse_protocol::simulators::Frame>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_surfaces_open(true, cx);
+        self.add_simulator_surface(window, cx);
+        if let RightSurface::Simulator(id) = self.resolved_right_active(cx) {
+            self.simulators
+                .get(&id)
+                .unwrap()
+                .update(cx, |pane, cx| pane.fixture_load(state, frame, cx));
+        }
+    }
+}

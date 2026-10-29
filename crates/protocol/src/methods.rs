@@ -1,4 +1,12 @@
 //! Canonical native/browser engine RPC method names.
+pub const SIMULATOR_STATE: &str = "SimulatorState";
+pub const CONFIGURE_SIMULATORS: &str = "ConfigureSimulators";
+pub const OPEN_SIMULATOR: &str = "OpenSimulator";
+pub const CLOSE_SIMULATOR: &str = "CloseSimulator";
+pub const SIMULATOR_INPUT: &str = "SimulatorInput";
+pub const SIMULATOR_SCREENSHOT: &str = "SimulatorScreenshot";
+pub const SIMULATOR_FRAMES: &str = "SimulatorFrames";
+pub const SIMULATOR_TOOL: &str = "SimulatorTool";
 pub const VOICE_CAPABILITIES_V2: &str = "VoiceCapabilitiesV2";
 pub const PREPARE_VOICE_V2: &str = "PrepareVoiceV2";
 pub const OWN_VOICE_V2: &str = "OwnVoiceV2";

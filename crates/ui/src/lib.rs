@@ -696,3 +696,5 @@ fn deliver_appshot(
 }
 
 mod cloud_history;
+
+pub mod simulator;

@@ -157,3 +157,12 @@ Source: `packages/utils/src/cloud-transcript-crypto.ts`, [archive schema](https:
 - Upstream sub-five-second Boxd preparation is a target, not a universal end-to-end first-token result; compare identical milestones and report evidence.
 
 Source: [production configuration](https://github.com/swarajbachu/zuse/blob/2016cf4f0cc240e6797916dd5cab1d8bebab89ae/infra/api/wrangler.production.jsonc), [Stripe operations](https://github.com/swarajbachu/zuse/blob/2016cf4f0cc240e6797916dd5cab1d8bebab89ae/internal-docs/cloud/stripe-billing.md), `internal-docs/cloud/resume-latency.md`; native `crates/{client,engine}/src/auth.rs`, `crates/rpc/src/{lib,managed}.rs`.
+
+## Simulator host capability
+
+Simulator contracts/RPCs and MCP/native application tools now route to the chat's
+execution host. Native panes can view a remote host through peer RPC. Linux hosts
+report iOS as unavailable and probe Android SDK tools without installing them.
+The managed cloud WebSocket path's smaller message cap is not hardware-verified;
+use peer routing for large PNG frames. See [device-simulators.md](device-simulators.md)
+for scope and remaining acceptance.
