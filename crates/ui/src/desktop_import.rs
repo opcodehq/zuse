@@ -389,6 +389,7 @@ fn legacy_harness(value: &str) -> Option<HarnessId> {
         "devin" => HarnessId::Devin,
         "hermes" => HarnessId::Hermes,
         "pi" => HarnessId::Pi,
+        "muse" => HarnessId::Muse,
         "antigravity" => HarnessId::Antigravity,
         "zuse" => HarnessId::Zuse,
         _ => return None,

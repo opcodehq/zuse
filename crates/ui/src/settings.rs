@@ -812,7 +812,7 @@ impl SkillCompletionSettings {
     }
 }
 
-pub const SKILL_COMPLETION_HARNESSES: [(zuse_protocol::HarnessId, &str); 9] = [
+pub const SKILL_COMPLETION_HARNESSES: [(zuse_protocol::HarnessId, &str); 10] = [
     (zuse_protocol::HarnessId::Antigravity, "Antigravity"),
     (zuse_protocol::HarnessId::ClaudeCode, "Claude Code"),
     (zuse_protocol::HarnessId::Codex, "Codex"),
@@ -821,6 +821,7 @@ pub const SKILL_COMPLETION_HARNESSES: [(zuse_protocol::HarnessId, &str); 9] = [
     (zuse_protocol::HarnessId::Grok, "Grok"),
     (zuse_protocol::HarnessId::Hermes, "Hermes"),
     (zuse_protocol::HarnessId::Pi, "Pi"),
+    (zuse_protocol::HarnessId::Muse, "Muse Code"),
     (zuse_protocol::HarnessId::Opencode, "OpenCode"),
 ];
 

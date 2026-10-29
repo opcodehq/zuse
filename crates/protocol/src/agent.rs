@@ -29,6 +29,9 @@ pub enum HarnessId {
     /// google's antigravity agent over acp (`agy_acp_server`, installed from
     /// its pinned release archive).
     Antigravity,
+    /// Meta's Muse Code agent, driven over its native stdio session protocol
+    /// (`muse serve`).
+    Muse,
     /// Test harness; never shown in production pickers.
     Mock,
 }

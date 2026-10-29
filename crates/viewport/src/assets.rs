@@ -50,6 +50,7 @@ assets!(
     "cursor-mark",
     "opencode-mark",
     "pi-mark",
+    "muse-mark",
     "devin-mark",
     "grok-mark",
     "gemini-mark",

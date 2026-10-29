@@ -107,6 +107,7 @@ pub fn cli_name(harness: HarnessId) -> &'static str {
         HarnessId::Grok => "grok",
         HarnessId::Hermes => "hermes",
         HarnessId::Pi => "pi",
+        HarnessId::Muse => "muse",
         HarnessId::Opencode => "opencode",
         HarnessId::Antigravity => "Antigravity",
         HarnessId::Gemini => "gemini",
@@ -1573,6 +1574,7 @@ fn install_visibility_and_hint_follow_target_capabilities() {
         HarnessId::Grok,
         HarnessId::Hermes,
         HarnessId::Devin,
+        HarnessId::Muse,
         HarnessId::Mock,
     ] {
         for installed in [false, true] {
@@ -1585,6 +1587,11 @@ fn install_visibility_and_hint_follow_target_capabilities() {
         }
     }
     assert_eq!(cli_name(HarnessId::Antigravity), "Antigravity");
+    assert_eq!(cli_name(HarnessId::Muse), "muse");
+    assert_eq!(
+        install_hint(HarnessId::Muse, false, false),
+        "Install the muse CLI to enable. Install with `curl -fsSL https://dev.meta.ai/install.sh | bash`"
+    );
     assert_eq!(
         install_hint(HarnessId::Antigravity, false, true),
         "Install Antigravity to enable"

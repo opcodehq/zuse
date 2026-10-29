@@ -382,6 +382,7 @@ fn harness_from_env() -> zuse_engine::HarnessId {
         Ok("grok") => zuse_engine::HarnessId::Grok,
         Ok("hermes") => zuse_engine::HarnessId::Hermes,
         Ok("pi") => zuse_engine::HarnessId::Pi,
+        Ok("muse") => zuse_engine::HarnessId::Muse,
         Ok("antigravity") => zuse_engine::HarnessId::Antigravity,
         _ => zuse_engine::HarnessId::ClaudeCode,
     }

@@ -1189,7 +1189,7 @@ impl Pickers {
     }
 
     pub fn toggle_plan_mode(&mut self, cx: &mut Context<Self>) {
-        if self.cloud_launch_frozen() || self.resolved(cx).harness == Some(HarnessId::Pi) { return; }
+        if self.cloud_launch_frozen() || matches!(self.resolved(cx).harness, Some(HarnessId::Pi | HarnessId::Muse)) { return; }
         let key=self.state.read(cx).selected_chat.clone().unwrap_or_else(|| "new-chat".into());
         let current=self.resolved(cx).sandbox;
         let sandbox=if current==SandboxLevel::ReadOnly {
@@ -5787,6 +5787,7 @@ pub(crate) fn harness_display_name(harness: HarnessId) -> &'static str {
         HarnessId::Grok => "Grok",
         HarnessId::Hermes => "Hermes",
         HarnessId::Pi => "Pi",
+        HarnessId::Muse => "Muse Code",
         HarnessId::Opencode => "OpenCode",
         HarnessId::Antigravity => "Antigravity",
         HarnessId::Gemini => "Gemini CLI",
@@ -5817,6 +5818,8 @@ pub(crate) fn harness_brand_icon(harness: HarnessId) -> (&'static str, Option<gp
         // Nous Research's mark (the Hermes product icon), monochrome.
         HarnessId::Hermes => (crate::icons::HERMES_MARK, None),
         HarnessId::Pi => (crate::icons::PI_MARK, None),
+        // The Meta symbol Muse Code ships under, monochrome.
+        HarnessId::Muse => (crate::icons::MUSE_MARK, None),
         // The pixel-"o" from opencode's wordmark (their favicon), monochrome.
         HarnessId::Opencode => (crate::icons::OPENCODE_MARK, None),
         HarnessId::Antigravity => (crate::icons::ANTIGRAVITY_MARK, None),
