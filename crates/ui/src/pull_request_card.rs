@@ -485,9 +485,10 @@ impl PullRequestCard {
                     )
                 })
             });
-            self.watch_subscription = self.watch_control.as_ref().map(|control| {
-                cx.observe(control, |card, _, cx| card.changed(cx))
-            });
+            self.watch_subscription = self
+                .watch_control
+                .as_ref()
+                .map(|control| cx.observe(control, |card, _, cx| card.changed(cx)));
         }
         self.refresh(false, cx);
         self.changed(cx);

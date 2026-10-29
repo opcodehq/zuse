@@ -157,7 +157,15 @@ impl GitHubCli {
                 .await
                 .map_err(classify_run_error)?;
             if !output.success {
-                return Err(classify_github_failure(&output.stderr));
+                let error = classify_github_failure(&output.stderr);
+                if error == ChangeRequestError::CommandFailed {
+                    // Jobs can fail before producing logs (for example a
+                    // workflow startup or infrastructure failure). Let the
+                    // agent inspect the check and explain the blocker.
+                    logs.push_str("Logs unavailable for this failed check. Inspect the job metadata, workflow configuration and provider availability before changing code.\n");
+                    continue;
+                }
+                return Err(error);
             }
             logs.push_str(&String::from_utf8_lossy(&output.stdout));
             if output.stdout_truncated {
@@ -396,6 +404,43 @@ mod tests {
                 "--job",
                 "19"
             ]
+        );
+    }
+    #[tokio::test]
+    async fn unavailable_job_logs_become_context_instead_of_stalling_repairs() {
+        let runner = Arc::new(ScriptedRunner {
+            requests: Mutex::new(vec![]),
+            responses: Mutex::new(
+                [ProcessOutput {
+                    success: false,
+                    stdout: vec![],
+                    stderr: b"log not found: 19".to_vec(),
+                    stdout_truncated: false,
+                }]
+                .into(),
+            ),
+        });
+        let github = GitHubCli {
+            runner,
+            ..GitHubCli::new()
+        };
+        let detail = ChangeRequestDetail {
+            url: "https://github.com/base/project/pull/1".into(),
+            status_check_rollup: vec![zuse_protocol::ChangeRequestCheck {
+                name: "startup".into(),
+                conclusion: "FAILURE".into(),
+                details_url: "https://github.com/base/project/actions/runs/17/job/19".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let logs = github.ci_failure_logs(&detail).await.unwrap();
+        assert!(logs.contains("Check: startup"));
+        assert!(logs.contains("Logs unavailable"));
+        assert!(logs.contains("before changing code"));
+        assert!(
+            !logs.contains("log not found: 19"),
+            "provider stderr is not agent instructions"
         );
     }
 }

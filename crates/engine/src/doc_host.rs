@@ -6314,7 +6314,9 @@ impl DocHost {
         // The watcher already pinned and verified this conversation's source.
         // Avoid another asynchronous Git lookup between permission admission
         // and dispatch, and keep its original conversation source binding.
-        sessions.dispatch(chat_id, harness, request, Some(message_id.to_string())).await?;
+        sessions
+            .dispatch(chat_id, harness, request, Some(message_id.to_string()))
+            .await?;
         Ok(true)
     }
 

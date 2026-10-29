@@ -77,7 +77,6 @@ mod command_palette;
 mod file_mutations;
 mod files_panel;
 mod harness_updates;
-mod pr_watch;
 mod main_tabs;
 mod keyboard_commands;
 mod navigation_focus;
@@ -85,6 +84,7 @@ mod navigation_focus;
 mod navigation_tests;
 mod panel_layout;
 mod panel_menu;
+mod pr_watch;
 mod open_in;
 use panel_layout::{AuxiliaryPanel, FitInputs, HorizontalPanelFit, panel_content_tween};
 #[cfg(test)]

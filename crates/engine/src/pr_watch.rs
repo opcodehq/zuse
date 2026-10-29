@@ -492,9 +492,13 @@ impl PrWatches {
         }
         let detail = self.inner.github.snapshot(&record.status.url).await?;
         if detail.url != record.status.url {
-            return Err(other(
-                "PR identity changed; reopen the current PR to watch it",
-            ));
+            self.change(record, |r| {
+                r.status.enabled = false;
+                r.status.auto_fix = false;
+                r.status.can_auto_fix = false;
+                r.status.error = Some("Watching stopped because the PR identity changed. Reopen the current PR to watch it.".into());
+            })?;
+            return Ok(CiState::Unknown);
         }
         let Some(current) = self.change(record, |r| {
             if r.poll_error {
@@ -1186,6 +1190,27 @@ mod tests {
         });
         assert!(result.unwrap_err().to_string().contains("Another watch"));
         assert!(!watches.store().records[1].status.auto_fix);
+        watches.inner.host.shutdown_workers().await;
+        watches.inner.workspace.shutdown();
+    }
+    #[tokio::test]
+    async fn changed_pr_identity_retires_the_old_watch_and_repair_permission() {
+        let (_temp, watches, fixture, sessions) = service(SandboxLevel::WorkspaceWrite, true);
+        watches.observe(request()).unwrap();
+        poll(&watches).await;
+        enable(&watches).unwrap();
+        fixture.detail.lock().unwrap().url = "https://github.com/renamed/project/pull/17".into();
+        poll(&watches).await;
+        let status = watches.store().records[0].status.clone();
+        assert!(!status.enabled);
+        assert!(!status.auto_fix);
+        assert!(!status.can_auto_fix);
+        assert_eq!(status.attempts, 0);
+        assert_eq!(
+            fixture.logs_read.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert!(sessions.last_request("chat").is_none());
         watches.inner.host.shutdown_workers().await;
         watches.inner.workspace.shutdown();
     }

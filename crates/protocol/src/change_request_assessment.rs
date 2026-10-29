@@ -302,9 +302,16 @@ mod tests {
     #[test]
     fn terminal_conclusions_take_precedence_over_stale_running_status() {
         for status in ["QUEUED", "IN_PROGRESS", "PENDING", "WAITING"] {
-            let check = ChangeRequestCheck { status: status.into(), conclusion: "FAILURE".into(), ..Default::default() };
+            let check = ChangeRequestCheck {
+                status: status.into(),
+                conclusion: "FAILURE".into(),
+                ..Default::default()
+            };
             assert_eq!(check_status(&check), "FAILURE");
-            assert_eq!(ChangeRequestCi::from_checks(&[check]).state, CiState::Failed);
+            assert_eq!(
+                ChangeRequestCi::from_checks(&[check]).state,
+                CiState::Failed
+            );
         }
     }
 
