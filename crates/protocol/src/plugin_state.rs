@@ -92,6 +92,7 @@ impl PluginState {
             "list"
                 | "connect"
                 | "addServer"
+                | "addLocalServer"
                 | "removeServer"
                 | "poll"
                 | "cancel"
@@ -175,7 +176,7 @@ impl PluginState {
             PluginResponse::Attempt { ref state, .. } => {
                 if !matches!(
                     pending.action.as_str(),
-                    "connect" | "addServer" | "poll" | "complete"
+                    "connect" | "addServer" | "addLocalServer" | "poll" | "complete"
                 ) || !matches!(
                     state.as_str(),
                     "pending" | "connected" | "failed" | "cancelled"
@@ -517,6 +518,33 @@ mod tests {
         assert_eq!(
             state.refresh(),
             json!({"action":"list","tenantId":"organization:team"})
+        );
+    }
+    #[test]
+    fn local_server_add_reconciles_its_personal_workspace_and_removes_like_custom_servers() {
+        let mut state = PluginState::default();
+        state
+            .begin(json!({"action":"list","tenantId":"personal:owner"}))
+            .unwrap();
+        state.apply(&snapshot("personal:owner")).unwrap();
+        state
+            .begin(json!({"action":"addLocalServer","tenantId":"personal:owner","requestId":"r","name":"Files","command":"npx"}))
+            .unwrap();
+        let next = state
+            .apply(&json!({"kind":"attempt","id":"local-1","connectionId":"local-1","state":"connected","authorizationUrl":null,"expiresAt":0,"pluginId":"local-1"}))
+            .unwrap()
+            .unwrap();
+        assert_eq!(next, json!({"action":"list","tenantId":"personal:owner"}));
+        assert!(!state.active_attempt());
+        state.begin(next).unwrap();
+        let mut response = snapshot("personal:owner");
+        response["catalog"] =
+            json!([{"id":"local-1","name":"Files","description":"","custom":true,"command":"npx"}]);
+        state.apply(&response).unwrap();
+        state.ask_removal(Removal::Server, "local-1").unwrap();
+        assert_eq!(
+            state.confirm_removal().unwrap(),
+            json!({"action":"removeServer","tenantId":"personal:owner","pluginId":"local-1"})
         );
     }
 }

@@ -402,8 +402,14 @@ impl EngineCore {
             )
             .map_err(|error| EngineError::Other(error.to_string()))?,
         ));
-        let plugins = plugins::Plugins::open(data_dir, account.clone(), workspace.clone())
-            .map_err(|e| EngineError::Other(e.to_string()))?;
+        // Hosted runtimes never launch commands configured on a user's computer.
+        let plugins = plugins::Plugins::open(
+            data_dir,
+            account.clone(),
+            workspace.clone(),
+            !profile.durable_command_commits(),
+        )
+        .map_err(|e| EngineError::Other(e.to_string()))?;
         let browser_access =
             browser_access::Owner::new(profile.store_root(), device_id.clone(), pairings.clone())
                 .with_managed_authority(Arc::new(managed_host.control()));

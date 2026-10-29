@@ -1,8 +1,8 @@
 //! Shared ephemeral plugin setup form for both GPUI frontends.
 use gpui::{prelude::*, *};
-use gpui_base::input::{InputEditorStyle, InputEvent, InputState};
+use gpui_base::input::{InputEditorStyle, InputEvent, InputState, TextareaState};
 use zuse_protocol::{
-    plugin_setup::{ServerAuth, ServerDraft, api_key},
+    plugin_setup::{LOCAL_CONFIG_TEMPLATE, LocalServerDraft, ServerAuth, ServerDraft, api_key},
     plugins::{PluginDefinition, PluginRequest, PluginReturnTo},
 };
 
@@ -40,6 +40,11 @@ pub struct PluginSetup {
     header: Entity<InputState>,
     secret: Entity<InputState>,
     auth: ServerAuth,
+    /// Personal workspaces may run a stdio server on this computer instead of a URL.
+    local: bool,
+    transport_focus: [FocusHandle; 2],
+    /// One pasted stdio server configuration in JSON.
+    config: Entity<TextareaState>,
     error: Option<&'static str>,
     menu: Option<crate::input::edit_menu::EditMenu>,
     pub busy: bool,
@@ -94,7 +99,19 @@ impl PluginSetup {
             },
             true,
         );
-        let subscriptions = [&name, &url, &header, &secret]
+        let config = cx.new(|cx| {
+            let mut input = TextareaState::new(window, cx)
+                .auto_grow(6, 14)
+                .submit_on_enter(false);
+            input.set_editor_style(style.clone());
+            input.on_context_menu(crate::input::edit_menu::handler(
+                owner.clone(),
+                input.focus_handle(cx),
+            ));
+            input.set_value(LOCAL_CONFIG_TEMPLATE, window, cx);
+            input
+        });
+        let mut subscriptions: Vec<Subscription> = [&name, &url, &header, &secret]
             .into_iter()
             .map(|input| {
                 cx.subscribe(input, |this, input, event: &InputEvent, cx| {
@@ -129,6 +146,22 @@ impl PluginSetup {
                 })
             })
             .collect();
+        subscriptions.push(
+            cx.subscribe(&config, |this, input, event: &InputEvent, cx| {
+                match event {
+                    InputEvent::Change => this.error = None,
+                    InputEvent::ClipboardReadFailed => {
+                        this.error = Some(crate::input::CLIPBOARD_PASTE_ERROR);
+                    }
+                    InputEvent::ClipboardWriteFailed => {
+                        this.error = Some(crate::input::CLIPBOARD_COPY_ERROR);
+                    }
+                    _ => {}
+                }
+                input.update(cx, |_, cx| cx.notify());
+                cx.notify();
+            }),
+        );
         if let SetupTarget::Catalog(plugin) = &target {
             name.update(cx, |input, cx| {
                 input.set_value(plugin.name.clone(), window, cx)
@@ -151,6 +184,9 @@ impl PluginSetup {
             header,
             secret,
             auth: ServerAuth::Automatic,
+            local: false,
+            transport_focus: std::array::from_fn(|_| cx.focus_handle()),
+            config,
             error: None,
             menu: None,
             busy: false,
@@ -326,6 +362,17 @@ impl PluginSetup {
             })
             .into_any_element()
     }
+    /// Local servers belong to Personal; organization workspaces only offer Remote.
+    fn offers_local(&self) -> bool {
+        matches!(self.target, SetupTarget::Server) && self.tenant.starts_with("personal:")
+    }
+    fn set_local(&mut self, local: bool, cx: &mut Context<Self>) {
+        if !self.busy && self.offers_local() {
+            self.local = local;
+            self.error = None;
+            cx.notify();
+        }
+    }
     fn submit(&mut self, cx: &mut Context<Self>) {
         if self.busy {
             return;
@@ -333,6 +380,11 @@ impl PluginSetup {
         let name = self.name.read(cx).value().to_string();
         let secret = self.secret.read(cx).value().to_string();
         let result = match &self.target {
+            SetupTarget::Server if self.local => LocalServerDraft {
+                name,
+                config: self.config.read(cx).value().to_string(),
+            }
+            .request(&self.tenant),
             SetupTarget::Server => ServerDraft {
                 name,
                 url: self.url.read(cx).value().to_string(),
@@ -378,7 +430,11 @@ impl Render for PluginSetup {
             self.focus_on_mount = false;
             let current = window.focused(cx);
             if !self.busy && (current.is_none() || current == self.focus_at_open) {
-                let field = if self.is_inline() { &self.secret } else { &self.name };
+                let field = if self.is_inline() {
+                    &self.secret
+                } else {
+                    &self.name
+                };
                 window.focus(&field.read(cx).focus_handle(cx), cx);
                 field.update(cx, |_, cx| cx.notify());
             }
@@ -388,9 +444,10 @@ impl Render for PluginSetup {
         }
         let viewport = window.viewport_size();
         let server = matches!(self.target, SetupTarget::Server);
+        let local = server && self.local;
         let needs_key = match &self.target {
             SetupTarget::Catalog(p) => p.api_key_header.is_some(),
-            SetupTarget::Server => self.auth != ServerAuth::Automatic,
+            SetupTarget::Server => !local && self.auth != ServerAuth::Automatic,
         };
         let field = |title: &'static str, input: Entity<InputState>| {
             let focus = input.read(cx).focus_handle(cx);
@@ -417,6 +474,30 @@ impl Render for PluginSetup {
                         .child(input),
                 )
         };
+        let area = |title: &'static str, input: Entity<TextareaState>| {
+            let focus = input.read(cx).focus_handle(cx);
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(div().font_weight(FontWeight::MEDIUM).child(title))
+                .child(
+                    div()
+                        .id(title)
+                        .debug_selector(|| title.to_owned())
+                        .cursor_text()
+                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                            window.focus(&focus, cx)
+                        })
+                        .border_1()
+                        .border_color(self.colors.border)
+                        .rounded(px(7.))
+                        .px(px(9.))
+                        .py(px(5.))
+                        .font_family("Geist Mono")
+                        .child(input),
+                )
+        };
         let button = |id: &'static str, title: &'static str| {
             div()
                 .id(id)
@@ -438,9 +519,96 @@ impl Render for PluginSetup {
             .gap(px(12.))
             .px(px(16.))
             .pt(px(4.))
-            .pb(px(16.))
-            .child(field("Name", self.name.clone()));
-        if server {
+            .pb(px(16.));
+        if self.offers_local() {
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .id("plugin-transport-tabs")
+                            .role(Role::TabList)
+                            .aria_label("Connection type")
+                            .h(px(28.))
+                            .flex()
+                            .items_center()
+                            .p(px(2.))
+                            .gap(px(2.))
+                            .rounded(px(7.))
+                            .bg(crate::settings_style::frame_bg().opacity(0.55))
+                            .children(
+                                [(false, "Remote", "Remote"), (true, "Local", "Local command")]
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(i, (local, key, title))| {
+                                        let handles = self.transport_focus.clone();
+                                        let selected = self.local == local;
+                                        div()
+                                            .id(("plugin-transport", i))
+                                            .debug_selector(move || {
+                                                format!("plugin-transport-{key}")
+                                            })
+                                            .role(Role::Tab)
+                                            .aria_label(title)
+                                            .aria_selected(selected)
+                                            .track_focus(
+                                                &self.transport_focus[i].clone().tab_stop(selected),
+                                            )
+                                            .tab_index(if selected { 0 } else { -1 })
+                                            .cursor_pointer()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .h(px(24.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .px(px(10.))
+                                            .rounded(px(5.))
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(if selected {
+                                                self.colors.text
+                                            } else {
+                                                self.colors.muted
+                                            })
+                                            .when(selected, |d| {
+                                                d.bg(crate::palette::rgb(crate::shell::BG))
+                                            })
+                                            .child(title)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.set_local(local, cx)
+                                            }))
+                                            .on_key_down(cx.listener(
+                                                move |this, event: &KeyDownEvent, window, cx| {
+                                                    let index = match event.keystroke.key.as_str() {
+                                                        "right" | "left" => 1 - i,
+                                                        "home" => 0,
+                                                        "end" => 1,
+                                                        _ => return,
+                                                    };
+                                                    if !this.busy {
+                                                        this.set_local(index == 1, cx);
+                                                        window.focus(&handles[index], cx);
+                                                    }
+                                                    cx.stop_propagation();
+                                                },
+                                            ))
+                                    }),
+                            ),
+                    ),
+            );
+        }
+        body = body.child(field("Name", self.name.clone()));
+        if local {
+            body = body.child(
+                area("MCP configuration (JSON)", self.config.clone()).child(
+                    div().text_color(self.colors.muted).child(
+                        "Runs on this computer in your personal workspace. Paste one stdio server configuration, including command, args, and optional env. Desktop apps such as Paper must be installed here.",
+                    ),
+                ),
+            );
+        } else if server {
             body=body.child(field("Server URL",self.url.clone())).child(
                 div().flex().flex_col().gap(px(6.))
                     .child(div().font_weight(FontWeight::MEDIUM).child("Authentication"))
@@ -466,7 +634,7 @@ impl Render for PluginSetup {
                         .child("Zuse detects whether the server needs you to sign in or is open to everyone.")))
             );
         }
-        if server && self.auth == ServerAuth::Header {
+        if server && !local && self.auth == ServerAuth::Header {
             body = body.child(
                 div()
                     .flex()
@@ -515,7 +683,9 @@ impl Render for PluginSetup {
         let form = div()
             .id("plugin-setup-form")
             .role(Role::Dialog)
-            .aria_label(if server {
+            .aria_label(if local {
+                "Add local MCP server"
+            } else if server {
                 "Add MCP server"
             } else {
                 "Connect plugin"
@@ -543,6 +713,8 @@ impl Render for PluginSetup {
                         if !this.dialog_focus.contains_focused(window, cx) {
                             if event.keystroke.modifiers.shift {
                                 window.focus(&this.submit_focus, cx);
+                            } else if this.offers_local() {
+                                window.focus(&this.transport_focus[this.local as usize], cx);
                             } else {
                                 window.focus(&this.name.read(cx).focus_handle(cx), cx);
                             }
@@ -787,6 +959,16 @@ mod tests {
         mpsc::UnboundedReceiver<serde_json::Value>,
         mpsc::UnboundedSender<serde_json::Value>,
     ) {
+        fixture_in(cx, "tenant")
+    }
+    fn fixture_in(
+        cx: &mut TestAppContext,
+        tenant: &str,
+    ) -> (
+        WindowHandle<crate::WorkspaceView>,
+        mpsc::UnboundedReceiver<serde_json::Value>,
+        mpsc::UnboundedSender<serde_json::Value>,
+    ) {
         cx.update(crate::initialize);
         let (requests, rx) = mpsc::unbounded();
         let (events, frames) = mpsc::unbounded();
@@ -806,7 +988,7 @@ mod tests {
                 view.connection_epoch = 1;
                 view.cloud_account = serde_json::json!({"user":{"id":"owner"}});
                 view.plugin_state.snapshot =
-                    serde_json::json!({"kind":"snapshot","tenantId":"tenant","canManage":true});
+                    serde_json::json!({"kind":"snapshot","tenantId":tenant,"canManage":true});
                 view.open_plugin_setup(SetupTarget::Server, window, cx);
             })
             .unwrap();
@@ -930,5 +1112,158 @@ mod tests {
                 assert_ne!(request["method"], zuse_protocol::methods::PLUGINS);
             }
         }
+    }
+    fn plugin_writes(
+        requests: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+    ) -> Vec<serde_json::Value> {
+        let mut writes = vec![];
+        while let Ok(request) = requests.try_recv() {
+            if request["method"] == zuse_protocol::methods::PLUGINS {
+                writes.push(request["params"].clone());
+            }
+        }
+        writes
+    }
+    #[gpui::test]
+    fn local_transport_submits_a_stdio_server_for_personal_workspaces(cx: &mut TestAppContext) {
+        let (window, mut requests, _events) = fixture_in(cx, "personal:owner");
+        window
+            .update(cx, |view, _, cx| {
+                view.settings = true;
+                view.settings_section = crate::settings_view::Section::Plugins;
+                cx.notify();
+            })
+            .unwrap();
+        let cx = &mut VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert!(cx.debug_bounds("MCP configuration (JSON)").is_none());
+        let local = cx.debug_bounds("plugin-transport-Local").unwrap();
+        cx.simulate_click(local.center(), Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert!(cx.debug_bounds("Server URL").is_none());
+        assert!(cx.debug_bounds("Name").is_some());
+        let config = cx.debug_bounds("MCP configuration (JSON)").unwrap();
+        cx.simulate_click(config.center(), Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        window
+            .update(cx, |view, window, cx| {
+                let form = view.plugin_setup.clone().unwrap();
+                form.update(cx, |form, cx| {
+                    assert!(form.local);
+                    assert_eq!(
+                        form.config.read(cx).value().as_ref(),
+                        LOCAL_CONFIG_TEMPLATE
+                    );
+                    assert!(form.config.read(cx).focus_handle(cx).is_focused(window));
+                    form.config.update(cx, |input, cx| input.set_value("", window, cx));
+                });
+            })
+            .unwrap();
+        // Enter in the configuration inserts a line break instead of submitting.
+        cx.simulate_input("{");
+        cx.simulate_keystrokes("enter");
+        cx.simulate_input(
+            r#""mcpServers":{"files":{"type":"stdio","command":"npx","args":["-y","@scope/server"],"env":{"TOKEN":"fixture-value"}}}}"#,
+        );
+        window
+            .update(cx, |view, window, cx| {
+                let form = view.plugin_setup.clone().unwrap();
+                form.update(cx, |form, cx| {
+                    assert!(form.config.read(cx).value().starts_with("{\n"));
+                    form.name
+                        .update(cx, |input, cx| input.set_value("Files", window, cx));
+                    form.submit(cx);
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let writes = plugin_writes(&mut requests);
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0]["action"], "addLocalServer");
+        assert_eq!(writes[0]["tenantId"], "personal:owner");
+        assert_eq!(writes[0]["command"], "npx");
+        assert_eq!(
+            writes[0]["args"],
+            serde_json::json!(["-y", "@scope/server"])
+        );
+        assert_eq!(writes[0]["env"]["TOKEN"], "fixture-value");
+        assert!(writes[0].get("url").is_none() && writes[0].get("returnTo").is_none());
+        window
+            .update(cx, |view, _, _| assert!(view.plugin_setup.is_none()))
+            .unwrap();
+    }
+    #[gpui::test]
+    fn organization_workspaces_only_offer_remote_servers(cx: &mut TestAppContext) {
+        let (window, mut requests, _events) = fixture_in(cx, "organization:team");
+        window
+            .update(cx, |view, _, cx| {
+                view.settings = true;
+                view.settings_section = crate::settings_view::Section::Plugins;
+                cx.notify();
+            })
+            .unwrap();
+        let cx = &mut VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert!(cx.debug_bounds("plugin-transport-Local").is_none());
+        window
+            .update(cx, |view, window, cx| {
+                let form = fill(view, window, cx);
+                form.update(cx, |form, cx| {
+                    form.set_local(true, cx);
+                    assert!(!form.local);
+                    form.submit(cx);
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let writes = plugin_writes(&mut requests);
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0]["action"], "addServer");
+    }
+    #[gpui::test]
+    fn invalid_local_input_stays_in_the_form_without_a_request(cx: &mut TestAppContext) {
+        let (window, mut requests, _events) = fixture_in(cx, "personal:owner");
+        window
+            .update(cx, |view, window, cx| {
+                let form = view.plugin_setup.clone().unwrap();
+                form.update(cx, |form, cx| {
+                    form.set_local(true, cx);
+                    form.name
+                        .update(cx, |input, cx| input.set_value("Files", window, cx));
+                    // The untouched template has no command yet.
+                    form.submit(cx);
+                    assert_eq!(
+                        form.error,
+                        Some(zuse_protocol::plugin_setup::LOCAL_CONFIG_INVALID)
+                    );
+                    form.config.update(cx, |input, cx| {
+                        input.set_value(
+                            r#"{"command":"npx","env":{"BAD NAME":"fixture-value"}}"#,
+                            window,
+                            cx,
+                        )
+                    });
+                    form.submit(cx);
+                    assert!(form.error.is_some_and(|e| !e.contains("fixture-value")));
+                    form.config.update(cx, |input, cx| {
+                        input.set_value(
+                            r#"{"mcpServers":{"a":{"command":"x"},"b":{"command":"y"}}}"#,
+                            window,
+                            cx,
+                        )
+                    });
+                    form.submit(cx);
+                    assert_eq!(
+                        form.error,
+                        Some(zuse_protocol::plugin_setup::LOCAL_CONFIG_INVALID)
+                    );
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(plugin_writes(&mut requests).is_empty());
+        window
+            .update(cx, |view, _, _| assert!(view.plugin_setup.is_some()))
+            .unwrap();
     }
 }
