@@ -95,14 +95,14 @@ impl PermissionRules {
         let tx = db.transaction().map_err(error)?;
         let id = new_id();
         let at = now_ms();
-        tx.execute("INSERT INTO permission_rules(id,project,chat,tool,input,effect,created,updated) VALUES (?,?,?,?,?,'allow',?,?) ON CONFLICT(project,chat,tool,input) DO UPDATE SET effect='allow',updated=excluded.updated", params![id,project,chat.unwrap_or(""),approval.tool,input_key(&rule_input(approval)),at,at]).map_err(error)?;
+        tx.execute("INSERT INTO permission_rules(id,project,chat,tool,input,effect,created,updated) VALUES (?,?,?,?,?,'allow',?,?) ON CONFLICT(project,chat,tool,input) DO UPDATE SET effect='allow',updated=excluded.updated", params![id,project,chat.unwrap_or(""),rule_tool(approval),input_key(&rule_input(approval)),at,at]).map_err(error)?;
         let rule_id: String = tx
             .query_row(
                 "SELECT id FROM permission_rules WHERE project=? AND chat=? AND tool=? AND input=?",
                 params![
                     project,
                     chat.unwrap_or(""),
-                    approval.tool,
+                    rule_tool(approval),
                     input_key(&rule_input(approval))
                 ],
                 |r| r.get(0),
@@ -193,7 +193,7 @@ impl PermissionRules {
         } else {
             let matched: Option<(String,String)> = db.query_row(
                 "SELECT id,effect FROM permission_rules WHERE project=? AND (chat='' OR chat=?) AND tool=? AND input=? ORDER BY (chat<>'') DESC LIMIT 1",
-                params![project,chat,approval.tool,input_key(&rule_input(approval))],
+                params![project,chat,rule_tool(approval),input_key(&rule_input(approval))],
                 |r|Ok((r.get(0)?,r.get(1)?)),
             ).optional().map_err(error)?;
             match matched {
@@ -283,6 +283,18 @@ fn file_body_fields(approval: &ToolApproval) -> Option<&'static [&'static str]> 
         .get(path)
         .and_then(serde_json::Value::as_str)?;
     Some(fields)
+}
+fn rule_tool(approval: &ToolApproval) -> &str {
+    if file_body_fields(approval).is_some() {
+        match approval.tool.split(':').next() {
+            Some("claude") => "claude:file-write",
+            Some("zuse") => "zuse:file-write",
+            Some("pi") => "pi:file-write",
+            _ => &approval.tool,
+        }
+    } else {
+        &approval.tool
+    }
 }
 /// Known schemas grant a file target or command, while retaining all other context.
 /// Unclassified tools keep their complete input, including ACP tool kind.
@@ -607,7 +619,16 @@ mod tests {
             Some(false)
         );
         let snapshot = rules.snapshot("p", "c").unwrap();
+        assert_eq!(snapshot.rules[0].tool, "claude:file-write");
         assert!(snapshot.rules[0].input["input"].get("content").is_none());
+        next.tool = "claude:Edit".into();
+        next.input["input"] = serde_json::json!({"file_path":"src/login.rs", "old_string":"old", "new_string":"new", "replace_all":false});
+        assert_eq!(
+            rules
+                .decide("p", "c", SandboxLevel::WorkspaceWrite, &next)
+                .unwrap(),
+            Some(true)
+        );
         next.input["input"]["file_path"] = serde_json::json!("src/other.rs");
         assert_eq!(
             rules
