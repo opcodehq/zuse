@@ -575,11 +575,12 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     ..
                 } = p
                     && id == parent_tool_use_id
-                    // Genus gate: only a SPAWN call ever carries subagent
+                    // Genus gate: only a SPAWN call (or a background workflow
+                    // run, which settles the same way) ever carries subagent
                     // lifecycle. A driver keying bug (claude's background
                     // shells settled through the subagent subtype,
                     // 2026-08-20) must not decorate an ordinary chip.
-                    && call.is_subagent_spawn()
+                    && (call.is_subagent_spawn() || call.is_workflow_run())
                 {
                     match status {
                         Some(s) => *subagent_status = Some(s),
@@ -594,6 +595,28 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                         }
                         None => {}
                     }
+                }
+            }
+        }
+        // A workflow run's refreshed snapshot replaces its own chip's call in
+        // place — never a new part: a refresh for a chip this fold doesn't
+        // hold belongs to an earlier segment (the engine writes it there).
+        AgentEvent::WorkflowProgress { tool_use_id, call } => {
+            for p in out.iter_mut() {
+                if let MessagePart::Tool {
+                    id,
+                    call: c,
+                    subagent_status,
+                    ..
+                } = p
+                    && id == tool_use_id
+                    && c.is_workflow_run()
+                    && call.is_workflow_run()
+                {
+                    *c = call.clone();
+                    // Reporting progress proves the run is live (its launch
+                    // ack already resolved the call); a settled run stays so.
+                    subagent_status.get_or_insert(SubagentStatus::Running);
                 }
             }
         }
@@ -693,11 +716,66 @@ pub fn sanitize_tool_call(call: &ToolCall) -> ToolCall {
             tool: tool.clone(),
             input: spawn_badge(call),
         },
+        ToolCall::Unknown { name, .. } if call.is_workflow_run() => ToolCall::Unknown {
+            name: name.clone(),
+            input: workflow_badge(call),
+        },
         ToolCall::Unknown { name, .. } => ToolCall::Unknown {
             name: name.clone(),
             input: spawn_badge(call),
         },
         other => other.clone(),
+    }
+}
+
+/// Char cap for each preview a workflow snapshot carries into the doc. The
+/// harness already sends short previews; this bounds a run of many agents
+/// (the snapshot is rewritten in place on every change).
+pub const WORKFLOW_PREVIEW_MAX: usize = 240;
+
+/// What a workflow run keeps in the doc: its name and latest phase/agent
+/// snapshot (previews capped). The script itself — the bulk of the launch
+/// input — stays in the host's run journal like every other tool input.
+/// Idempotent: the kept keys survive a second pass unchanged.
+fn workflow_badge(call: &ToolCall) -> Option<serde_json::Value> {
+    let mut progress = call.workflow_progress();
+    if let Some(progress) = progress.as_mut() {
+        for agent in &mut progress.agents {
+            for preview in [
+                &mut agent.prompt_preview,
+                &mut agent.result_preview,
+                &mut agent.error,
+            ] {
+                if let Some(text) = preview.as_mut()
+                    && text.chars().count() > WORKFLOW_PREVIEW_MAX
+                {
+                    let mut capped: String = text.chars().take(WORKFLOW_PREVIEW_MAX).collect();
+                    capped.push('…');
+                    *text = capped;
+                }
+            }
+        }
+    }
+    // A script FILE is named by a short path: keep it so the board can say
+    // where the run's source lives. An inline script body never enters.
+    let script_path = match call {
+        ToolCall::Unknown {
+            input: Some(input), ..
+        } => input
+            .get("scriptPath")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty() && path.len() <= 1024)
+            .map(|path| serde_json::json!({ "scriptPath": path })),
+        _ => None,
+    };
+    match ToolCall::workflow_run(
+        script_path.as_ref(),
+        call.workflow_name(),
+        progress.as_ref(),
+    ) {
+        ToolCall::Unknown { input, .. } => input,
+        _ => None,
     }
 }
 
@@ -1443,5 +1521,157 @@ mod tests {
         .unwrap();
         assert_eq!(payload.part_id, "t");
         assert_eq!(payload.output.as_deref(), Some("full output"));
+    }
+
+    fn workflow_snapshot(state: zuse_protocol::WorkflowAgentState, preview: &str) -> ToolCall {
+        use zuse_protocol::{WorkflowAgentProgress, WorkflowPhase, WorkflowProgress};
+        ToolCall::workflow_run(
+            Some(&serde_json::json!({ "script": "export const meta = { name: 'audit' }" })),
+            Some("audit"),
+            Some(&WorkflowProgress {
+                phases: vec![WorkflowPhase {
+                    index: 1,
+                    title: "Map".into(),
+                }],
+                agents: vec![WorkflowAgentProgress {
+                    index: 1,
+                    label: "map:files".into(),
+                    state,
+                    phase_index: Some(1),
+                    phase_title: Some("Map".into()),
+                    model: None,
+                    started_at: Some(100),
+                    duration_ms: None,
+                    prompt_preview: Some(preview.into()),
+                    result_preview: None,
+                    error: None,
+                }],
+            }),
+        )
+    }
+
+    #[test]
+    fn workflow_progress_refreshes_its_chip_in_place_and_settles_like_a_spawn() {
+        use zuse_protocol::{DoneStatus, WorkflowAgentState};
+        let mut parts = Vec::new();
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::ToolCall {
+                id: "wf".into(),
+                call: ToolCall::workflow_run(None, Some("audit"), None),
+            },
+        );
+        let running = workflow_snapshot(WorkflowAgentState::Running, "List files");
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::WorkflowProgress {
+                tool_use_id: "wf".into(),
+                call: running.clone(),
+            },
+        );
+        // A refresh for a chip this fold doesn't hold mints nothing.
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::WorkflowProgress {
+                tool_use_id: "elsewhere".into(),
+                call: running.clone(),
+            },
+        );
+        assert_eq!(parts.len(), 1);
+        match &parts[0] {
+            MessagePart::Tool {
+                call,
+                subagent_status,
+                ..
+            } => {
+                assert_eq!(call, &running);
+                assert_eq!(*subagent_status, Some(SubagentStatus::Running));
+            }
+            other => panic!("{other:?}"),
+        }
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::Subagent {
+                parent_tool_use_id: "wf".into(),
+                event: Box::new(AgentEvent::Done {
+                    status: DoneStatus::Errored,
+                    result: None,
+                    error: None,
+                    session_id: None,
+                }),
+            },
+        );
+        assert!(matches!(
+            &parts[0],
+            MessagePart::Tool {
+                subagent_status: Some(SubagentStatus::Failed),
+                ..
+            }
+        ));
+
+        // A snapshot never rewrites an ordinary chip that shares the id.
+        let mut parts = Vec::new();
+        let bash = ToolCall::Exec {
+            command: "ls".into(),
+        };
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::ToolCall {
+                id: "wf".into(),
+                call: bash.clone(),
+            },
+        );
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::WorkflowProgress {
+                tool_use_id: "wf".into(),
+                call: running,
+            },
+        );
+        assert!(matches!(&parts[0], MessagePart::Tool { call, .. } if call == &bash));
+    }
+
+    #[test]
+    fn sanitize_keeps_a_workflow_snapshot_drops_its_script_and_caps_previews() {
+        use zuse_protocol::WorkflowAgentState;
+        let long = "x".repeat(WORKFLOW_PREVIEW_MAX * 3);
+        let call = workflow_snapshot(WorkflowAgentState::Done, &long);
+        let clean = sanitize_tool_call(&call);
+        assert!(clean.is_workflow_run());
+        assert_eq!(clean.workflow_name(), Some("audit"));
+        let ToolCall::Unknown {
+            input: Some(input), ..
+        } = &clean
+        else {
+            panic!("{clean:?}");
+        };
+        assert!(input.get("script").is_none(), "{input}");
+        let progress = clean.workflow_progress().expect("snapshot kept");
+        assert_eq!(progress.agents[0].state, WorkflowAgentState::Done);
+        let preview = progress.agents[0].prompt_preview.as_deref().unwrap();
+        assert_eq!(preview.chars().count(), WORKFLOW_PREVIEW_MAX + 1);
+        assert!(preview.ends_with('…'));
+        assert_eq!(sanitize_tool_call(&clean), clean, "idempotent");
+        // A bare launch keeps only its name (and a script file's path).
+        let launch = ToolCall::Unknown {
+            name: zuse_protocol::WORKFLOW_TOOL.into(),
+            input: Some(serde_json::json!({ "script": "…", "name": "audit" })),
+        };
+        assert_eq!(
+            sanitize_tool_call(&launch),
+            ToolCall::workflow_run(None, Some("audit"), None)
+        );
+        let from_file = ToolCall::Unknown {
+            name: zuse_protocol::WORKFLOW_TOOL.into(),
+            input: Some(serde_json::json!({ "scriptPath": "/w/audit.js", "args": [1] })),
+        };
+        assert_eq!(
+            sanitize_tool_call(&from_file),
+            ToolCall::workflow_run(
+                Some(&serde_json::json!({ "scriptPath": "/w/audit.js" })),
+                None,
+                None
+            )
+        );
     }
 }

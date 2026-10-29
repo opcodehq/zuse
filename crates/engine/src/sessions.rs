@@ -29,8 +29,8 @@ use zuse_doc::{
     SessionMessageEntry, fold_event_into_parts, sanitize_tool_call,
 };
 use zuse_protocol::{
-    AgentEvent, DoneStatus, HarnessId, RunRequest, Session, SessionStatus, UserInputAnswer,
-    UserInputQuestion,
+    AgentEvent, DoneStatus, HarnessId, RunRequest, Session, SessionStatus, ToolCall,
+    UserInputAnswer, UserInputQuestion,
 };
 use zuse_providers::{CancellationToken, Harness, RunControls, SteerMessage, TurnControl};
 
@@ -2381,6 +2381,23 @@ impl SubagentSink {
 /// The parent-chip refresh a tagged event implies, for the in-place (parked)
 /// path — LIFECYCLE ONLY, mirroring the fold (live tails were rejected:
 /// per-delta chip rewrites grew the parent doc for the whole run).
+/// Coalescing window for background workflow snapshots written to finished
+/// entries (see `pending_workflows` in `drive_run`).
+const WORKFLOW_COMMIT_MS: u64 = 1_000;
+
+/// Write every pending workflow snapshot to its chip, wherever it sits.
+fn flush_workflows(
+    doc: &SessionDoc,
+    chat_id: &str,
+    pending: &mut std::collections::HashMap<String, ToolCall>,
+) {
+    for (tool_id, call) in pending.drain() {
+        if let Err(err) = doc.update_tool_call(&tool_id, &call) {
+            tracing::warn!(%chat_id, error = %err, "workflow progress write failed");
+        }
+    }
+}
+
 fn subagent_chip_update(event: &AgentEvent) -> Option<&'static str> {
     match event {
         AgentEvent::Done { status, .. } => Some(match status {
@@ -2960,6 +2977,15 @@ async fn drive_run(
     // spawned it, and its traffic never un-parks the chat, so the idle reaper
     // measures from here as well as from the park.
     let mut last_subagent_activity: Option<tokio::time::Instant> = None;
+    // Background workflow runs' latest snapshots awaiting a doc write, by
+    // chip id. A run outlives its turn and reports every agent transition;
+    // writing each one to a finished entry would grow the oplog by a whole
+    // snapshot per transition, so they coalesce to one write per window.
+    let mut pending_workflows: std::collections::HashMap<String, ToolCall> =
+        std::collections::HashMap::new();
+    let mut workflow_flush_at: Option<tokio::time::Instant> = None;
+    // Workflow chips this run saw progress for and that have not settled.
+    let mut live_workflows: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     let mut final_completed_turn = None;
     let final_status = loop {
@@ -3100,6 +3126,13 @@ async fn drive_run(
                         session_id: None,
                     },
                 },
+                _ = tokio::time::sleep_until(
+                    workflow_flush_at.unwrap_or_else(tokio::time::Instant::now)
+                ), if workflow_flush_at.is_some() => {
+                    workflow_flush_at = None;
+                    flush_workflows(doc_ref, &chat_id, &mut pending_workflows);
+                    continue;
+                }
                 _ = tokio::time::sleep_until(flush_at), if dirty || subagents.values().any(|s| s.dirty) => {
                     #[cfg(test)]
                     FLUSH_TICKS.with(|t| t.set(t.get() + 1));
@@ -3340,6 +3373,14 @@ async fn drive_run(
             let done = matches!(sub_event.as_ref(), AgentEvent::Done { .. });
             if done {
                 settled_subagents.insert(parent_tool_use_id.clone());
+                live_workflows.remove(parent_tool_use_id);
+                // A settling workflow's last snapshot lands now, not a
+                // window later (the run may end first).
+                if let Some(call) = pending_workflows.remove(parent_tool_use_id)
+                    && let Err(err) = doc_ref.update_tool_call(parent_tool_use_id, &call)
+                {
+                    tracing::warn!(%chat_id, error = %err, "workflow progress write failed");
+                }
                 if !chip_streaming {
                     // A resumed run can finish an older chip without ever
                     // opening a sink. The chip's lifecycle is independent of
@@ -3411,6 +3452,46 @@ async fn drive_run(
                         );
                     }
                 }
+            }
+            continue;
+        }
+
+        // ── workflow progress ──────────────────────────────────────────
+        // A background workflow run's refreshed chip. Like subagent
+        // lifecycle it is handled BEFORE the parked gate: the run outlives
+        // its turn, and its progress must neither un-park the chat nor mint
+        // a part. A chip still in the streaming segment refreshes through
+        // the fold; one in a finished entry is rewritten in place,
+        // coalesced (see `pending_workflows`).
+        if let AgentEvent::WorkflowProgress { tool_use_id, call } = &event {
+            inner.publish(&chat_id, &event);
+            inner.touch_session(&chat_id);
+            let first_report = live_workflows.insert(tool_use_id.clone());
+            let chip_streaming = folded
+                .iter()
+                .any(|p| matches!(p, MessagePart::Tool { id, .. } if id == tool_use_id));
+            if chip_streaming {
+                zuse_doc::fold_event_into_parts(&mut folded, &event);
+                if !dirty {
+                    dirty = true;
+                    flush_at = tokio::time::Instant::now()
+                        + std::time::Duration::from_millis(STREAM_COMMIT_MS);
+                }
+            } else {
+                // Reporting progress proves the run is live: its chip (whose
+                // launch ack already resolved it) reads running until the
+                // run settles.
+                if first_report
+                    && let Err(err) =
+                        doc_ref.update_subagent_chip(tool_use_id, None, Some("running"), None)
+                {
+                    tracing::warn!(%chat_id, error = %err, "workflow status write failed");
+                }
+                pending_workflows.insert(tool_use_id.clone(), call.clone());
+                workflow_flush_at.get_or_insert_with(|| {
+                    tokio::time::Instant::now()
+                        + std::time::Duration::from_millis(WORKFLOW_COMMIT_MS)
+                });
             }
             continue;
         }
@@ -3885,6 +3966,12 @@ async fn drive_run(
         }
     }
     inner.set_running_subagents(&chat_id, 0);
+    // Workflow runs end with the runtime that ran them: land their last
+    // snapshot, then settle any that never reported an outcome.
+    flush_workflows(doc_ref, &chat_id, &mut pending_workflows);
+    for tool_id in live_workflows.drain() {
+        let _ = doc_ref.update_subagent_chip(&tool_id, None, Some("failed"), None);
+    }
     // The runtime's background work ended with it.
     inner.set_background_tasks(&chat_id, Vec::new());
 

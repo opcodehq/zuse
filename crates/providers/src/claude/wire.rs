@@ -78,6 +78,17 @@ pub(crate) struct SystemFrame {
     /// absent on subagent-owned background shell tasks.
     #[serde(default)]
     pub subagent_type: Option<String>,
+    /// `task_started`: the task's kind (`local_agent`, `local_bash`,
+    /// `local_workflow`, …).
+    #[serde(default)]
+    pub task_type: Option<String>,
+    /// `task_started` for a native workflow run: the run's name.
+    #[serde(default)]
+    pub workflow_name: Option<String>,
+    /// `task_progress` for a native workflow run: the phase/agent snapshot
+    /// (see `workflow::reduce_progress`).
+    #[serde(default)]
+    pub workflow_progress: Option<Value>,
     /// `background_tasks_changed`: every background task the session holds
     /// now (agents and shells) — the authoritative set, not a delta.
     #[serde(default)]

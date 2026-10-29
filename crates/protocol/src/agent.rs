@@ -822,6 +822,17 @@ pub enum AgentEvent {
         parent_tool_use_id: String,
         event: Box<AgentEvent>,
     },
+    /// A background workflow run's refreshed call (its name and latest
+    /// phase/agent snapshot, see [`crate::WorkflowProgress`]), replacing the
+    /// chip `tool_use_id` names in place. Runs outlive the turn that launched
+    /// them, so this is routed like subagent lifecycle: it never opens a turn
+    /// and never mints a new part. The run settles through a tagged
+    /// [`AgentEvent::Subagent`] `Done`, exactly like a background subagent.
+    #[serde(rename_all = "camelCase")]
+    WorkflowProgress {
+        tool_use_id: String,
+        call: ToolCall,
+    },
 }
 
 #[cfg(test)]
