@@ -492,6 +492,12 @@ impl WorkspaceDoc {
         set_opt_ms(&row, "startedAt", session.started_at)?;
         row.insert("updatedAt", session.updated_at.timestamp_millis())?;
         row.insert("runningSubagents", i64::from(session.running_subagents))?;
+        // One JSON string: the list is replaced whole on every change, so a
+        // nested container would only add merge state nobody reads.
+        let background = (!session.background_tasks.is_empty())
+            .then(|| serde_json::to_string(&session.background_tasks))
+            .transpose()?;
+        set_opt_str(&row, "backgroundTasks", background.as_deref())?;
         self.doc.commit();
         Ok(())
     }
@@ -792,6 +798,10 @@ pub(crate) struct RawSession {
     updated_at: i64,
     #[serde(default)]
     running_subagents: u32,
+    /// JSON list written by [`WorkspaceDoc::upsert_session`]; unreadable
+    /// content (a newer writer's shape) reads as no tasks.
+    #[serde(default)]
+    background_tasks: Option<String>,
 }
 
 impl From<RawSession> for Session {
@@ -804,6 +814,10 @@ impl From<RawSession> for Session {
             started_at: raw.started_at.map(dt),
             updated_at: dt(raw.updated_at),
             running_subagents: raw.running_subagents,
+            background_tasks: raw
+                .background_tasks
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .unwrap_or_default(),
         }
     }
 }
@@ -914,6 +928,7 @@ mod tests {
             started_at: Some(ts(3_000)),
             updated_at: ts(3_500),
             running_subagents: 0,
+            background_tasks: Vec::new(),
         }
     }
 
@@ -1011,6 +1026,21 @@ mod tests {
         // The running-subagent count rides the row and survives the round trip.
         let mut busy = session("chat-1", "dev-a", SessionStatus::Working);
         busy.running_subagents = 4;
+        ws.upsert_session(&busy).unwrap();
+        assert_eq!(ws.read_sessions().unwrap(), vec![busy.clone()]);
+        // So do its background tasks; an emptied list clears the field.
+        busy.background_tasks = vec![zuse_protocol::BackgroundTask {
+            id: "bg-1".into(),
+            kind: zuse_protocol::BackgroundTaskKind::Shell,
+            description: "pnpm dev".into(),
+            started_at: ts(3_100),
+            ended_at: Some(ts(3_400)),
+            outcome: Some(zuse_protocol::BackgroundTaskOutcome::Stopped),
+            stoppable: false,
+        }];
+        ws.upsert_session(&busy).unwrap();
+        assert_eq!(ws.read_sessions().unwrap(), vec![busy.clone()]);
+        busy.background_tasks.clear();
         ws.upsert_session(&busy).unwrap();
         assert_eq!(ws.read_sessions().unwrap(), vec![busy]);
         ws.upsert_session(&session("chat-1", "dev-a", SessionStatus::Working))

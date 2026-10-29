@@ -1,13 +1,12 @@
-//! The Code tab: a file tree beside one continuous review stream. Every file
-//! keeps its place in the stream under a foldable header (the Changes pane's
-//! convention), the current file's header stays pinned while its body
-//! scrolls, and the tree follows the scroll position.
+//! The Code tab: one continuous review stream that reads as a file list.
+//! Every file is a row (fold toggle, status, path, counts, Viewed); a row
+//! unfolds its diff inline beneath it, the current file's row stays pinned
+//! while its body scrolls, and a picker finds a file by name.
 use super::*;
 use std::ops::Range;
 
-const FILES_WIDTH: f32 = 260.0;
-const WORKSPACE_GAP: f32 = 16.0;
-const WIDE_MIN: f32 = 760.0;
+/// The stream's and toolbar's inset from the pane edges.
+const STREAM_PAD_X: f32 = 16.0;
 const TREE_ROW_HEIGHT: f32 = 28.0;
 const TREE_INDENT: f32 = 14.0;
 const PICKER_WIDTH: f32 = 320.0;
@@ -16,13 +15,8 @@ const PICKER_HEIGHT: f32 = 360.0;
 /// scrolling under it, light enough to keep the header rows' tone.
 const STICKY_BLUR: f32 = 32.0;
 const STICKY_VEIL: f32 = 0.18;
-const CARD_RADIUS: f32 = 12.0;
-// Rows run flush to the card's 1px border. Whatever scrolls past a corner is
-// clipped along the inner arc per pixel (`rounded_clip`); a painted corner
-// cover can't do that on frost, which has no solid backdrop color.
-const CARD_CLIP_RADIUS: f32 = CARD_RADIUS - 1.0;
-
 fn stream_frame(theme: &Theme, content: impl IntoElement) -> impl IntoElement {
+    // Hairline-separated, no card: the toolbar's rule is the only edge.
     div()
         .id("pr-code-viewport")
         .debug_selector(|| "pr-code-viewport".into())
@@ -30,10 +24,9 @@ fn stream_frame(theme: &Theme, content: impl IntoElement) -> impl IntoElement {
         .min_h_0()
         .flex()
         .flex_col()
-        .rounded(px(CARD_RADIUS))
-        .border_1()
+        .border_t_1()
         .border_color(theme.border)
-        .child(crate::rounded_clip::rounded_clip(CARD_CLIP_RADIUS, content))
+        .child(content)
 }
 
 fn stream_viewport() -> gpui::Stateful<gpui::Div> {
@@ -200,7 +193,7 @@ fn tree<'a>(files: &'a [(String, usize)], query: &str) -> Vec<TreeEntry<'a>> {
     entries
 }
 
-fn counts(additions: u64, deletions: u64, size: f32, theme: &Theme) -> gpui::Div {
+pub(super) fn counts(additions: u64, deletions: u64, size: f32, theme: &Theme) -> gpui::Div {
     div()
         .flex_none()
         .flex()
@@ -221,6 +214,51 @@ fn counts(additions: u64, deletions: u64, size: f32, theme: &Theme) -> gpui::Div
                     .child(format!("−{deletions}")),
             )
         })
+}
+
+/// A file's change as a small outlined square: plus for added, a dot for
+/// modified, a bar for deleted, an arrow for renamed.
+fn status_badge(status: crate::changes::FileStatus, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+    use crate::changes::FileStatus;
+    let (label, color) = match status {
+        FileStatus::Added => ("Added", theme.success),
+        FileStatus::Modified => ("Modified", theme.warning),
+        FileStatus::Deleted => ("Deleted", theme.danger),
+        FileStatus::Renamed => ("Renamed", theme.text_muted),
+    };
+    let mark = match status {
+        FileStatus::Added => crate::icons::icon(crate::icons::PLUS)
+            .size(px(10.0))
+            .text_color(color)
+            .into_any_element(),
+        FileStatus::Renamed => crate::icons::icon(crate::icons::ARROW_RIGHT)
+            .size(px(10.0))
+            .text_color(color)
+            .into_any_element(),
+        FileStatus::Modified => div()
+            .size(px(5.0))
+            .rounded_full()
+            .bg(color)
+            .into_any_element(),
+        FileStatus::Deleted => div()
+            .w(px(6.0))
+            .h(px(1.5))
+            .rounded_full()
+            .bg(color)
+            .into_any_element(),
+    };
+    div()
+        .id(SharedString::from(format!("pr-file-status-{label}")))
+        .size(px(14.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.0))
+        .border_1()
+        .border_color(color.opacity(0.85))
+        .tooltip(widgets::text_tooltip(label))
+        .child(mark)
 }
 
 impl PullRequestDetailPage {
@@ -299,6 +337,11 @@ impl PullRequestDetailPage {
         if index >= self.review.ranges.len() {
             return;
         }
+        // Picking a file opens its diff in place.
+        if self.review.collapsed.remove(&index) {
+            self.review.jumped = None;
+            self.rebuild_stream(cx);
+        }
         self.scroll_to_file(index);
         self.review.jumped = Some(index);
         cx.notify();
@@ -314,6 +357,31 @@ impl PullRequestDetailPage {
         self.rebuild_stream(cx);
         if anchor == Some(file) {
             self.scroll_to_file(file);
+        }
+    }
+
+    /// Mark a file viewed (folding it away, as a reviewer moves on) or not.
+    fn toggle_viewed(&mut self, file: usize, cx: &mut Context<Self>) {
+        let Some(path) = self
+            .parsed_diff()
+            .files
+            .get(file)
+            .map(|(path, _)| path.clone())
+        else {
+            return;
+        };
+        let viewed = !self.review.viewed.remove(&path);
+        if viewed {
+            self.review.viewed.insert(path);
+        }
+        self.cache.borrow_mut().viewed.insert(
+            (self.target.clone(), self.url.clone()),
+            self.review.viewed.clone(),
+        );
+        if viewed && !self.review.collapsed.contains(&file) {
+            self.toggle_fold(file, cx);
+        } else {
+            cx.notify();
         }
     }
 
@@ -432,23 +500,29 @@ impl PullRequestDetailPage {
             .get(file)
             .map(|(path, _)| path.clone())
             .unwrap_or_default();
-        let (directory, name) = match path.rsplit_once('/') {
-            Some((directory, name)) => (format!("{directory}/"), name.to_owned()),
-            None => (String::new(), path.clone()),
-        };
         let collapsed = self.review.collapsed.contains(&file);
+        let viewed = self.review.viewed.contains(&path);
         let (additions, deletions) = self
             .parsed_diff()
             .stats
             .get(file)
             .copied()
             .unwrap_or_default();
+        let status = self
+            .parsed_diff()
+            .statuses
+            .get(file)
+            .copied()
+            .unwrap_or(crate::changes::FileStatus::Modified);
         let paint = crate::changes::sticky_file_header_paint(theme);
         // Frosted: the pinned copy blurs what scrolls beneath it and keeps the
         // rows' own translucent wash, so both read as one header. Opaque
-        // surfaces need the solid equivalent to hide the rows.
+        // surfaces need the solid equivalent to hide the rows. A folded row
+        // rests on the page itself, like a list item.
         let (rest, hover) = if sticky && !theme.is_frost() {
             (paint.rest_bg, paint.hover_bg)
+        } else if collapsed {
+            (theme.ink(0.0), theme.ink(0.04))
         } else {
             (theme.ink(0.025), theme.ink(0.05))
         };
@@ -463,7 +537,7 @@ impl PullRequestDetailPage {
             .debug_selector(move || format!("{prefix}-{file}"))
             .role(gpui::Role::Button)
             .aria_label(format!(
-                "{path}, {} ",
+                "{path}, {}",
                 if collapsed { "collapsed" } else { "expanded" }
             ))
             .aria_expanded(!collapsed)
@@ -474,16 +548,17 @@ impl PullRequestDetailPage {
             .flex()
             .items_center()
             .gap(px(8.0))
-            .px(px(Theme::SPACE_MD))
+            .pl(px(STREAM_PAD_X - 4.0))
+            .pr(px(STREAM_PAD_X - 6.0))
             .bg(rest)
             .when(!sticky && file > 0, |el| {
                 el.border_t_1().border_color(theme.border)
             })
-            .when(sticky || collapsed, |el| {
+            .when(sticky, |el| {
                 el.border_b_1()
-                    .border_color(paint.border.opacity(if sticky { 1.0 } else { 0.0 }))
+                    .border_color(paint.border)
+                    .block_mouse_except_scroll()
             })
-            .when(sticky, |el| el.block_mouse_except_scroll())
             .cursor_pointer()
             .hover(move |style| style.bg(hover))
             .focus_visible(|style| style.border_2().border_color(theme.accent))
@@ -496,41 +571,77 @@ impl PullRequestDetailPage {
                 })
                 .size(px(13.0))
                 .flex_none()
-                .text_color(theme.text_muted.opacity(0.7)),
+                .text_color(theme.text_muted.opacity(0.8)),
             )
+            .child(status_badge(status, theme))
             .child(
-                crate::file_icons::icon(
-                    crate::file_icons::FileIconIdentity::file(&path),
-                    theme.appearance,
-                )
-                .size(px(14.0))
-                .flex_none(),
-            )
-            .child(
+                // The full path; a long one gives up its leading folders
+                // first, so the file name stays readable.
                 div()
                     .flex_1()
                     .min_w_0()
-                    .flex()
                     .overflow_hidden()
-                    .font_family(theme.font_mono.clone())
-                    .text_size(px(12.0))
                     .whitespace_nowrap()
+                    .text_ellipsis_start()
+                    .text_size(crate::typography::text_sm())
+                    .text_color(if viewed { theme.text_muted } else { theme.text })
+                    .child(path.clone()),
+            )
+            // Unfolded, the row heads a diff and offers its path.
+            .when(!collapsed, |el| {
+                el.child(
+                    action("pr-copy-path", "Copy path", theme).on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_path.clone()));
+                    }),
+                )
+            })
+            .child(counts(additions, deletions, 12.0, theme))
+            .child(
+                div()
+                    .id(SharedString::from(format!("{prefix}-viewed-{file}")))
+                    .debug_selector(move || format!("{prefix}-viewed-{file}"))
+                    .role(gpui::Role::CheckBox)
+                    .aria_label(format!("Mark {path} as viewed"))
+                    .aria_toggled(if viewed {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .tab_index(0)
+                    .flex_none()
+                    .h(px(24.0))
+                    .px(px(6.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .rounded(px(5.0))
+                    .text_size(crate::typography::text_xs())
+                    .text_color(theme.text_muted)
+                    .hover(|style| style.text_color(theme.text))
                     .child(
                         div()
-                            .flex_shrink(1.0)
-                            .min_w_0()
-                            .truncate()
-                            .text_color(theme.text_muted)
-                            .child(directory),
+                            .size(px(14.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(3.0))
+                            .border_1()
+                            .border_color(theme.border_strong)
+                            .when(viewed, |el| {
+                                el.bg(theme.accent).border_color(theme.accent).child(
+                                    crate::icons::icon(crate::icons::CHECK)
+                                        .size(px(11.0))
+                                        .text_color(theme.on_accent),
+                                )
+                            }),
                     )
-                    .child(div().flex_none().text_color(theme.text).child(name)),
-            )
-            .child(counts(additions, deletions, 11.0, theme))
-            .child(
-                action("pr-copy-path", "Copy path", theme).on_click(move |_, _, cx| {
-                    cx.stop_propagation();
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_path.clone()));
-                }),
+                    .child("Viewed")
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |page, _, _, cx| {
+                        cx.stop_propagation();
+                        page.toggle_viewed(file, cx);
+                    })),
             )
             .into_any_element()
     }
@@ -580,7 +691,6 @@ impl PullRequestDetailPage {
     fn file_tree(
         &self,
         active: Option<usize>,
-        wide: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -608,7 +718,7 @@ impl PullRequestDetailPage {
             .flex_col()
             .gap(px(1.0))
             .pt(px(4.0))
-            .pb(px(if wide { NAV_CLEARANCE } else { 8.0 }));
+            .pb(px(8.0));
         let loading = self.diff.is_none();
         if loading {
             list = list.child(crate::pull_request_skeleton::tree(
@@ -688,10 +798,8 @@ impl PullRequestDetailPage {
                         .child(counts(additions, deletions, 10.0, theme))
                         .on_click(cx.listener(move |page, _, window, cx| {
                             page.select_code_file(index, cx);
-                            if !wide {
-                                page.files_expanded = false;
-                                window.focus(&page.files_focus, cx);
-                            }
+                            page.files_expanded = false;
+                            window.focus(&page.files_focus, cx);
                         }))
                         .into_any_element()
                 }
@@ -755,73 +863,37 @@ impl PullRequestDetailPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let _ = window;
-        let wide = self.code_pane_width.is_some_and(|width| width >= WIDE_MIN);
         let loading = self.diff.is_none();
         let active = self.active_file();
         let file_count = self.parsed_diff().files.len();
+        let viewed = self
+            .parsed_diff()
+            .files
+            .iter()
+            .filter(|(path, _)| self.review.viewed.contains(path))
+            .count();
         let all_folded = file_count > 0 && self.review.collapsed.len() == file_count;
         let diff = self.diff.clone();
-        let measure = {
-            let page = cx.weak_entity();
-            gpui::canvas(
-                move |bounds, window, cx| {
-                    let width = f32::from(bounds.size.width);
-                    window.defer(cx, move |_, cx| {
-                        let _ = page.update(cx, |page, cx| {
-                            if page
-                                .code_pane_width
-                                .is_none_or(|old| (old - width).abs() > 0.5)
-                            {
-                                page.code_pane_width = Some(width);
-                                cx.notify();
-                            }
-                        });
-                    });
-                },
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .inset_0()
-        };
-        let position = active.map_or(0, |file| file + 1);
         let toolbar = div()
             .id("pr-file-navigation")
             .debug_selector(|| "pr-file-navigation".into())
-            .h(px(crate::surface_chrome::CONTROL_SIZE))
+            .h(px(40.0))
             .flex_none()
             .min_w_0()
+            .px(px(STREAM_PAD_X - 6.0))
             .flex()
             .items_center()
-            .gap(px(4.0))
-            .when(!wide, |el| {
-                el.child(
-                    action("pr-files", "Choose a changed file", theme)
-                        .track_focus(&self.files_focus)
-                        .aria_expanded(self.files_expanded)
-                        .when(self.files_expanded, |el| el.bg(theme.glass_hover()))
-                        .on_click(cx.listener(move |page, _, window, cx| {
-                            page.toggle_files(cx);
-                            if page.files_expanded {
-                                window.focus(&page.file_search.read(cx).focus_handle(cx), cx);
-                            }
-                        })),
-                )
-            })
+            .gap(px(2.0))
             .child(
-                action("pr-previous-file", "Previous file", theme)
-                    .when(position <= 1, |el| el.opacity(0.4))
-                    .on_click(cx.listener(move |page, _, _, cx| {
-                        if let Some(file) = page.active_file().filter(|file| *file > 0) {
-                            page.select_code_file(file - 1, cx);
+                action("pr-files", "Find a changed file", theme)
+                    .track_focus(&self.files_focus)
+                    .aria_expanded(self.files_expanded)
+                    .when(self.files_expanded, |el| el.bg(theme.glass_hover()))
+                    .on_click(cx.listener(move |page, _, window, cx| {
+                        page.toggle_files(cx);
+                        if page.files_expanded {
+                            window.focus(&page.file_search.read(cx).focus_handle(cx), cx);
                         }
-                    })),
-            )
-            .child(
-                action("pr-next-file", "Next file", theme)
-                    .when(position >= file_count, |el| el.opacity(0.4))
-                    .on_click(cx.listener(move |page, _, _, cx| {
-                        let next = page.active_file().map_or(0, |file| file + 1);
-                        page.select_code_file(next, cx);
                     })),
             )
             .child(
@@ -832,14 +904,17 @@ impl PullRequestDetailPage {
                     .min_w_0()
                     .truncate()
                     .px(px(4.0))
-                    .text_size(px(12.0))
+                    .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(if loading {
                         "Loading changes…".to_owned()
                     } else if file_count == 0 {
                         "No changed files".to_owned()
                     } else {
-                        format!("File {position} of {file_count}")
+                        format!(
+                            "{file_count} {} · {viewed} / {file_count} viewed",
+                            if file_count == 1 { "file" } else { "files" }
+                        )
                     }),
             )
             .child(
@@ -896,18 +971,19 @@ impl PullRequestDetailPage {
                 .children(self.sticky_header(theme, cx))
             }
         });
-        let editor = div()
+        div()
+            .id("pr-code-workspace")
+            .debug_selector(|| "pr-code-workspace".into())
             .relative()
             .flex_1()
-            .min_w_0()
             .min_h_0()
+            .min_w_0()
             .flex()
             .flex_col()
-            .gap(px(8.0))
             .pb(px(NAV_CLEARANCE))
             .child(toolbar)
             .child(stream_frame(theme, viewport))
-            .when(!wide && self.files_expanded, |el| {
+            .when(self.files_expanded, |el| {
                 el.child(
                     // Dismiss layer, then the picker anchored under the toolbar.
                     div()
@@ -928,10 +1004,10 @@ impl PullRequestDetailPage {
                         .id("pr-file-picker")
                         .debug_selector(|| "pr-file-picker".into())
                         .absolute()
-                        .top(px(crate::surface_chrome::CONTROL_SIZE + 4.0))
-                        .left_0()
+                        .top(px(40.0))
+                        .left(px(STREAM_PAD_X - 6.0))
                         .w(px(PICKER_WIDTH))
-                        .max_w_full()
+                        .max_w(gpui::relative(0.9))
                         .h(px(PICKER_HEIGHT))
                         .max_h(gpui::relative(0.9))
                         .p(px(8.0))
@@ -949,30 +1025,9 @@ impl PullRequestDetailPage {
                                 cx.notify();
                             }
                         }))
-                        .child(self.file_tree(active, false, theme, cx)),
-                )
-            });
-        div()
-            .id("pr-code-workspace")
-            .debug_selector(|| "pr-code-workspace".into())
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .flex()
-            .gap(px(WORKSPACE_GAP))
-            .child(measure)
-            .when(wide, |el| {
-                el.child(
-                    div()
-                        .w(px(FILES_WIDTH))
-                        .flex_none()
-                        .h_full()
-                        .min_h_0()
-                        .child(self.file_tree(active, true, theme, cx)),
+                        .child(self.file_tree(active, theme, cx)),
                 )
             })
-            .child(editor)
             .into_any_element()
     }
 }
@@ -1112,164 +1167,5 @@ mod tests {
                 },
             ]
         );
-    }
-}
-
-#[cfg(all(test, target_os = "macos", feature = "pull-request-fixture"))]
-mod corner_render_tests {
-    use super::*;
-    use crate::theme::Appearance;
-
-    struct ViewportFixture {
-        theme: Theme,
-    }
-
-    impl Render for ViewportFixture {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            let theme = &self.theme;
-            div()
-                .size_full()
-                .relative()
-                // Two different backdrop colors expose any painted corner
-                // cover, including one that happens to match the theme.
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .flex_col()
-                        .child(div().flex_1().bg(gpui::rgb(0x305070)))
-                        .child(div().flex_1().bg(gpui::rgb(0x705030))),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .p(px(16.0))
-                        .bg(theme.glass())
-                        .flex()
-                        .flex_col()
-                        .child(stream_frame(
-                            theme,
-                            stream_viewport()
-                                .child(div().size_full().bg(gpui::rgb(0xff0000)))
-                                // Model the full-width pinned header over the
-                                // stream. Both layers must stay inside the frame.
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .top_0()
-                                        .left_0()
-                                        .w_full()
-                                        .h(px(30.0))
-                                        .bg(gpui::rgb(0x0000ff)),
-                                ),
-                        )),
-                )
-        }
-    }
-
-    #[test]
-    fn pull_request_stream_corners_preserve_the_actual_backdrop() {
-        let mut cx = gpui::HeadlessAppContext::with_platform(
-            Arc::new(gpui::NoopTextSystem),
-            Arc::new(()),
-            gpui_platform::current_headless_renderer,
-        );
-        for (name, appearance, surface, treatment) in [
-            (
-                "dark-frost",
-                Appearance::Dark,
-                0x181818,
-                zuse_theme::SurfaceTreatment::Frosted,
-            ),
-            (
-                "light-frost",
-                Appearance::Light,
-                0xeeeeee,
-                zuse_theme::SurfaceTreatment::Frosted,
-            ),
-            (
-                "dark-opaque",
-                Appearance::Dark,
-                0x181818,
-                zuse_theme::SurfaceTreatment::Opaque,
-            ),
-            (
-                "light-opaque",
-                Appearance::Light,
-                0xeeeeee,
-                zuse_theme::SurfaceTreatment::Opaque,
-            ),
-        ] {
-            let theme = Theme {
-                appearance,
-                surface: gpui::rgb(surface).into(),
-                surface_treatment: treatment,
-                ..match appearance {
-                    Appearance::Dark => Theme::dark(),
-                    Appearance::Light => Theme::light(),
-                }
-            };
-            let window = cx
-                .open_window(gpui::size(px(160.0), px(120.0)), |_, cx| {
-                    cx.new(|_| ViewportFixture { theme })
-                })
-                .unwrap();
-            cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
-                .unwrap();
-            let image = cx.capture_screenshot(window.into()).unwrap();
-            if let Ok(directory) = std::env::var("ZUSE_PR_CORNER_CAPTURE_DIR") {
-                image
-                    .save(std::path::Path::new(&directory).join(format!("{name}.png")))
-                    .unwrap();
-            }
-            let scale = image.width() as f32 / 160.0;
-            let radius = CARD_RADIUS * scale;
-            let inset = 16.0 * scale;
-            for (corner_x, corner_y, dx, dy) in [
-                (inset, inset, 1.0, 1.0),
-                (image.width() as f32 - inset, inset, -1.0, 1.0),
-                (inset, image.height() as f32 - inset, 1.0, -1.0),
-                (
-                    image.width() as f32 - inset,
-                    image.height() as f32 - inset,
-                    -1.0,
-                    -1.0,
-                ),
-            ] {
-                for y in 0..radius as u32 {
-                    for x in 0..radius as u32 {
-                        let distance = ((radius - x as f32 - 0.5).powi(2)
-                            + (radius - y as f32 - 0.5).powi(2))
-                        .sqrt();
-                        if distance < radius + 2.0 * scale {
-                            continue;
-                        }
-                        let x = (corner_x + dx * (x as f32 + 0.5)).floor() as u32;
-                        let y = (corner_y + dy * (y as f32 + 0.5)).floor() as u32;
-                        let pixel = image.get_pixel(x, y).0;
-                        let backdrop = image.get_pixel((8.0 * scale) as u32, y).0;
-                        assert!(
-                            pixel.iter().zip(backdrop).all(|(a, b)| a.abs_diff(b) <= 1),
-                            "{name}: corner ({x}, {y}) is {pixel:?}, backdrop is {backdrop:?}"
-                        );
-                    }
-                }
-            }
-            // Ensure this is testing visible content, not an empty frame.
-            assert_eq!(
-                image
-                    .get_pixel((80.0 * scale) as u32, (30.0 * scale) as u32)
-                    .0[..3],
-                [0, 0, 255]
-            );
-            assert_eq!(
-                image
-                    .get_pixel((80.0 * scale) as u32, (80.0 * scale) as u32)
-                    .0[..3],
-                [255, 0, 0]
-            );
-        }
     }
 }

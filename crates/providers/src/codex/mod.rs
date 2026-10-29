@@ -1367,7 +1367,7 @@ async fn run_session(session: Session) {
     // watcher): its `item/completed` arrives when the process exits, turns
     // later (live, 0.159.3). The host's idle reaper must not retire the
     // app-server — and the process with it — while it runs.
-    let mut open_commands: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+    let mut open_commands: HashMap<String, OpenCommand> = HashMap::new();
     // An interrupted turn's foreground command is killed WITHOUT an
     // `item/completed`: once its process has had a moment to go, drop the
     // turn's commands whose process is gone (background ones live on).
@@ -1472,13 +1472,18 @@ async fn run_session(session: Session) {
                         if matches!(item_type(item), "commandExecution" | "command_execution") {
                             let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
                             let changed = if phase == Phase::Started {
-                                let pid = item.get("processId").and_then(Value::as_str).map(str::to_owned);
-                                open_commands.insert(id.to_owned(), (pid, router.active.clone())).is_none()
+                                let command = OpenCommand {
+                                    pid: item.get("processId").and_then(Value::as_str).map(str::to_owned),
+                                    turn: router.active.clone(),
+                                    command: item.get("command").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                                };
+                                open_commands.insert(id.to_owned(), command).is_none()
                             } else {
                                 open_commands.remove(id).is_some()
                             };
                             if changed {
                                 turn.set_background(open_commands.len());
+                                turn.set_background_tasks(background_commands(&open_commands, router.active.as_deref()));
                             }
                         }
                         if matches!(item_type(item), "userMessage" | "user_message")
@@ -1589,6 +1594,9 @@ async fn run_session(session: Session) {
                         }
                         router.note_completed(&id);
                         stop_when_announced = false;
+                        // Commands outliving the turn that started them are
+                        // now background work.
+                        turn.set_background_tasks(background_commands(&open_commands, router.active.as_deref()));
                         // Accepted steers whose item never surfaced still
                         // joined this turn: confirm them before its end.
                         while accepted_steers.pop_front().is_some() {
@@ -1680,6 +1688,9 @@ async fn run_session(session: Session) {
                         }
                         router.note_completed(&id);
                         stop_when_announced = false;
+                        // Commands outliving the turn that started them are
+                        // now background work.
+                        turn.set_background_tasks(background_commands(&open_commands, router.active.as_deref()));
                         accepted_steers.clear();
                         if let Some(usage) = pending_usage.take()
                             && !send(&event_tx, usage).await
@@ -1730,6 +1741,9 @@ async fn run_session(session: Session) {
                         }
                         router.note_completed(&id);
                         stop_when_announced = false;
+                        // Commands outliving the turn that started them are
+                        // now background work.
+                        turn.set_background_tasks(background_commands(&open_commands, router.active.as_deref()));
                         accepted_steers.clear();
                         done_current = true;
                         prune_at = Some((tokio::time::Instant::now() + COMMAND_EXIT_GRACE, id.clone()));
@@ -1944,11 +1958,12 @@ async fn run_session(session: Session) {
                 prune_at.as_ref().map_or_else(tokio::time::Instant::now, |(at, _)| *at)
             ), if prune_at.is_some() => {
                 let (_, stopped) = prune_at.take().expect("guarded by if");
-                open_commands.retain(|_, (pid, started_in)| {
-                    started_in.as_deref() != Some(stopped.as_str())
-                        || pid.as_deref().is_some_and(process_alive)
+                open_commands.retain(|_, open| {
+                    open.turn.as_deref() != Some(stopped.as_str())
+                        || open.pid.as_deref().is_some_and(process_alive)
                 });
                 turn.set_background(open_commands.len());
+                turn.set_background_tasks(background_commands(&open_commands, router.active.as_deref()));
             },
 
             _ = event_tx.closed() => break 'main,
@@ -2284,8 +2299,62 @@ fn approval_question(method: &str, params: &Value) -> UserInputQuestion {
 
 use crate::{Signal, send_signal, shutdown_child};
 
+/// A command the app-server started and has not reported finished: its
+/// process id, the turn that started it, and its command line.
+struct OpenCommand {
+    pid: Option<String>,
+    turn: Option<String>,
+    command: String,
+}
+
+/// Open commands whose turn has ended, as background tasks: a dev server
+/// or watcher outliving the turn that started it. The app-server offers no
+/// per-command stop, so none is stoppable.
+fn background_commands(
+    open: &HashMap<String, OpenCommand>,
+    active_turn: Option<&str>,
+) -> Vec<crate::LiveBackgroundTask> {
+    let mut tasks: Vec<crate::LiveBackgroundTask> = open
+        .iter()
+        .filter(|(_, command)| active_turn.is_none() || command.turn.as_deref() != active_turn)
+        .map(|(id, command)| crate::LiveBackgroundTask {
+            id: id.clone(),
+            kind: zuse_protocol::BackgroundTaskKind::Shell,
+            description: command.command.clone(),
+            stoppable: false,
+        })
+        .collect();
+    tasks.sort_by(|a, b| a.id.cmp(&b.id));
+    tasks
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_commands_outliving_their_turn_are_background_work() {
+        let open: HashMap<String, OpenCommand> =
+            [("c1", "t1", "pnpm dev"), ("c2", "t2", "cargo test")]
+                .into_iter()
+                .map(|(id, turn, command)| {
+                    (
+                        id.to_owned(),
+                        OpenCommand {
+                            pid: None,
+                            turn: Some(turn.to_owned()),
+                            command: command.to_owned(),
+                        },
+                    )
+                })
+                .collect();
+        // While t2 runs, its own command is foreground work.
+        let during = background_commands(&open, Some("t2"));
+        assert_eq!(during.len(), 1);
+        assert_eq!(during[0].description, "pnpm dev");
+        assert!(!during[0].stoppable);
+        // Between turns every open command outlived its turn.
+        assert_eq!(background_commands(&open, None).len(), 2);
+    }
+
     use super::*;
     use serde_json::json;
 

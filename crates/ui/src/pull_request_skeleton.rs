@@ -150,28 +150,29 @@ pub(crate) fn board(
 }
 
 /// The Summary's card stack below a real header.
-pub(crate) fn summary(gap: f32, view: EntityId, theme: &Theme, cx: &mut App) -> AnyElement {
-    let fields = ["Status", "Review", "Branch", "Changes"]
-        .into_iter()
-        .enumerate()
-        .map(|(index, label)| {
-            let height = if index < 2 { 22.0 } else { 12.0 };
-            crate::pull_request_detail::field_row(
-                label,
-                bar(
-                    px(if index == 2 { 220.0 } else { 96.0 }),
-                    height,
-                    index,
-                    view,
-                    theme,
-                    cx,
-                )
-                .into_any_element(),
-                index == 0,
-                theme,
-            )
-        })
-        .collect::<Vec<_>>();
+/// The Summary's property rows and description lines.
+pub(crate) fn summary(view: EntityId, theme: &Theme, cx: &mut App) -> AnyElement {
+    let rows = [
+        (crate::icons::EYE, "Reviewers", 72.0),
+        (crate::icons::CHECKLIST, "Checks", 120.0),
+        (crate::icons::INFO_CIRCLE, "Status", 140.0),
+        (crate::icons::GIT_BRANCH, "Commit", 56.0),
+        (crate::icons::BOT, "Hand off", 180.0),
+        (crate::icons::CHECKLIST, "Verify on", 220.0),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (glyph, label, width))| {
+        crate::pull_request_detail::property_row(
+            &format!("skeleton-{index}"),
+            glyph,
+            label,
+            bar(px(width), 12.0, index, view, theme, cx),
+            theme,
+        )
+        .into_any_element()
+    })
+    .collect::<Vec<_>>();
     let lines = (0..5)
         .map(|index| {
             bar(
@@ -190,104 +191,23 @@ pub(crate) fn summary(gap: f32, view: EntityId, theme: &Theme, cx: &mut App) -> 
         .debug_selector(|| "pr-detail-skeleton".into())
         .role(gpui::Role::ProgressIndicator)
         .aria_label("Loading pull request")
-        .mt(px(24.0))
+        .mt(px(12.0))
+        .px(px(8.0))
         .flex()
         .flex_col()
-        .gap(px(gap))
-        .child(widgets::section_card(theme).mt_0().children(fields))
+        .children(rows)
         .child(
-            widgets::section_card(theme).mt_0().child(
-                widgets::card_row(theme, true)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.0))
-                            .child(widgets::row_title(theme, "Current assessment"))
-                            .child(bar(relative(0.6), 14.0, 4, view, theme, cx))
-                            .child(bar(relative(0.4), 14.0, 4, view, theme, cx))
-                            .child(bar(px(100.0), 13.0, 4, view, theme, cx)),
-                    )
-                    .child(
-                        div()
-                            .size(px(28.0))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(bar(px(14.0), 14.0, 4, view, theme, cx)),
-                    ),
-            ),
-        )
-        .child(
-            widgets::section_card(theme)
-                .mt_0()
-                .px(px(16.0))
-                .py(px(10.0))
-                .flex_row()
+            div()
+                .mt(px(20.0))
+                .h(px(26.0))
+                .flex()
                 .items_center()
-                .gap(px(8.0))
-                .child(bar(px(14.0), 14.0, 4, view, theme, cx))
-                .child(div().flex_1().child("Checks"))
-                .child(bar(px(72.0), 22.0, 4, view, theme, cx)),
+                .text_size(crate::typography::text_sm())
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.text_muted)
+                .child("Description"),
         )
-        .child(
-            widgets::section_card(theme)
-                .mt_0()
-                .child(
-                    widgets::card_row(theme, true)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(220.0))
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.0))
-                                .child(widgets::row_title(theme, "Hand off to an agent"))
-                                .child(
-                                    div()
-                                        .text_size(crate::typography::text_xs())
-                                        .text_color(theme.text_muted)
-                                        .child(
-                                            "Opens a new session with the prompt ready to send.",
-                                        ),
-                                ),
-                        )
-                        .child(bar(px(180.0), 28.0, 5, view, theme, cx)),
-                )
-                .child(
-                    widgets::card_row(theme, false)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(120.0))
-                                .child(widgets::row_title(theme, "Verification")),
-                        )
-                        .child(div().flex_1().min_w_0().child(bar(
-                            relative(0.8),
-                            28.0,
-                            6,
-                            view,
-                            theme,
-                            cx,
-                        ))),
-                )
-                .child(crate::pull_request_detail::field_row(
-                    "Checkout",
-                    bar(relative(0.7), 12.0, 6, view, theme, cx).into_any_element(),
-                    false,
-                    theme,
-                )),
-        )
-        .child(
-            widgets::section_card(theme)
-                .mt_0()
-                .p(px(16.0))
-                .gap(px(12.0))
-                .children(lines),
-        )
+        .child(div().mt(px(8.0)).flex().flex_col().gap(px(12.0)).children(lines))
         .into_any_element()
 }
 

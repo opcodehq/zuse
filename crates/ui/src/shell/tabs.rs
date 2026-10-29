@@ -1026,13 +1026,6 @@ impl Shell {
             content_width,
         } = self.titlebar_trailing_layout(on_canvas, cx);
 
-        let running_subagents = {
-            let state = self.state.read(cx);
-            state
-                .selected_chat
-                .as_deref()
-                .map_or(0, |chat| state.running_subagents_for(chat, Utc::now()))
-        };
         let trailing: Option<gpui::AnyElement> = if on_canvas {
             None
         } else {
@@ -1146,18 +1139,6 @@ impl Shell {
                                     ),
                                     ShortcutId::ToggleChanges.label(),
                                     cx.listener(|this, _, _, cx| this.toggle_right_pane(cx)),
-                                )
-                                // Subagents open as tabs in this pane: mark its
-                                // toggle so running ones are findable while closed.
-                                .when(
-                                    running_subagents > 0,
-                                    |button| {
-                                        crate::running_pill::mark_files_button(
-                                            button,
-                                            running_subagents,
-                                            &theme,
-                                        )
-                                    },
                                 ),
                             ),
                     )
@@ -1256,9 +1237,6 @@ impl Shell {
                     .children(cloud_info)
                     .children(open_in)
                     .children(session_info_toggle)
-                    .when(self.workspace_gutter() > 0. && !on_canvas && !takeover, |view| {
-                        view.child(self.render_pull_requests_button(&theme, cx))
-                    })
                     .children(terminal_toggle),
             )
             .children(trailing);
@@ -1489,16 +1467,16 @@ impl Shell {
                 (
                     "thread-review",
                     "Review the sync protocol",
-                    HarnessId::Codex,
+                    zuse_protocol::HarnessId::Codex,
                     30,
                 ),
                 (
                     "thread-copy",
                     "Tidy onboarding copy",
-                    HarnessId::ClaudeCode,
+                    zuse_protocol::HarnessId::ClaudeCode,
                     2,
                 ),
-                ("thread-tests", "Add snapshot tests", HarnessId::Codex, 1),
+                ("thread-tests", "Add snapshot tests", zuse_protocol::HarnessId::Codex, 1),
             ] {
                 let mut chat = base.clone();
                 chat.id = id.into();

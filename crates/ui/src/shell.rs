@@ -91,6 +91,7 @@ pub(crate) mod project_icon;
 mod pull_request_pane;
 mod search_warm;
 mod session_info;
+mod summary_pull_request;
 mod side_chats;
 mod sidebar_pins;
 mod sidebar_controls;
@@ -1610,7 +1611,8 @@ enum ShellEscapeOutcome {
 
 /// When the shell next has render-only clock pixels to repaint, as of `now`:
 /// every second while the selected chat is Working (the trailer's elapsed
-/// timer and its 7s flavour word), else the next wall-clock minute for
+/// timer) or holds running background tasks (their timers in the session
+/// card), else the next wall-clock minute for
 /// relative "5m"/"2h" labels. State transitions (staleness, device presence,
 /// send grace) arrive as AppState notifications instead — see
 /// [`AppState::watch_clock_transitions`]. Nothing else ticks: AwaitingInput
@@ -1621,7 +1623,13 @@ fn shell_clock_wake(state: &AppState, now: DateTime<Utc>) -> DateTime<Utc> {
         .selected_chat
         .as_deref()
         .is_some_and(|id| state.indicator_for(id, now) == Indicator::Working);
-    if working {
+    // Running background tasks count up in the session card, turn or not.
+    let background = state.selected_chat.as_deref().is_some_and(|id| {
+        zuse_protocol::view::background_tasks(state.session_for(id), now)
+            .iter()
+            .any(|task| task.running())
+    });
+    if working || background {
         return now + chrono::TimeDelta::seconds(1);
     }
     DateTime::from_timestamp((now.timestamp().div_euclid(60) + 1) * 60, 0)
@@ -2278,6 +2286,13 @@ pub struct Shell {
     session_info_shown: bool,
     /// The card opened over a transcript too narrow to show it beside.
     session_info_overlay: bool,
+    /// The card's sections the user toggled away from their default (by key).
+    session_info_folded: std::collections::HashSet<&'static str>,
+    /// The session card's pull request: details, menu and updates.
+    summary_pr: summary_pull_request::SummaryPullRequest,
+    /// Background tasks with a stop request on its way (by task id); their
+    /// row shows a spinner until the task leaves the live set.
+    background_stops: std::collections::HashSet<String>,
     /// Whether the card showed at the toggle's press (see
     /// `note_session_info_press`).
     session_info_pressed_open: Option<bool>,
@@ -2787,6 +2802,9 @@ impl Shell {
             session_info_tween: None,
             session_info_shown: false,
             session_info_overlay: false,
+            session_info_folded: Default::default(),
+            background_stops: Default::default(),
+            summary_pr: Default::default(),
             session_info_pressed_open: None,
             session_info_docked: false,
             session_info_last_reserve: 0.0,
@@ -8419,20 +8437,6 @@ impl Shell {
         let shows_metadata = branch.is_some() || change_request.is_some();
         let queued = queued && !undelivered;
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
-        // Subagents running under this chat show as a "● N" pill beside the
-        // row's own activity indicator, never in place of it: the pill takes
-        // the time stamp's spot (compact) or leads the status (regular), and
-        // keeps showing after the parent's own turn has settled.
-        let running_subagents = self.state.read(cx).running_subagents_for(&id, Utc::now());
-        let subagent_pill = |suffix: &str| {
-            (running_subagents > 0).then(|| {
-                crate::running_pill::running_pill(
-                    format!("{row_id}-subagents-{suffix}"),
-                    running_subagents,
-                    theme,
-                )
-            })
-        };
         let compact_status = sidebar.then(|| {
             let glyph = if working {
                 loaders::mini_glyph_spinner(
@@ -8567,7 +8571,6 @@ impl Shell {
                         .flex_row()
                         .items_center()
                         .gap(px(6.0))
-                        .children(subagent_pill("label"))
                         .child(
                             div()
                                 .flex()
@@ -8592,7 +8595,6 @@ impl Shell {
                     .gap(px(6.0))
                     .text_size(crate::typography::text_xs())
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .children(subagent_pill("idle"))
                     .child(time_ago.clone())
                     .into_any_element(),
             }
@@ -8853,9 +8855,6 @@ impl Shell {
             let text_hint = compact_jump_label
                 .as_ref()
                 .is_some_and(|label| label.chars().count() > 3);
-            let pill = (!show_legend && !show_archive)
-                .then(|| subagent_pill("compact"))
-                .flatten();
             let archive_id = id.clone();
             let trailing_info: AnyElement = if show_archive {
                 icon(if archived {
@@ -8867,8 +8866,6 @@ impl Shell {
                 .flex_none()
                 .text_color(theme.text_muted)
                 .into_any_element()
-            } else if let Some(pill) = pill {
-                pill
             } else if let (false, false, Some((additions, deletions))) =
                 (show_legend, two_line, diff_stat)
             {
@@ -9275,11 +9272,6 @@ impl Shell {
                             let text_hint = compact_jump_label
                                 .as_ref()
                                 .is_some_and(|label| label.chars().count() > 3);
-                            // Running subagents take the time stamp's place; the
-                            // legend and the hover archive still win.
-                            let pill = (!show_legend && !show_archive)
-                                .then(|| subagent_pill("compact"))
-                                .flatten();
                             let archive_id = id.clone();
                             el.children(change_request.clone().map(|summary| {
                                 if preview {
@@ -9311,7 +9303,6 @@ impl Shell {
                                             COMPACT_JUMP_HINT_WIDTH,
                                         ))
                                     })
-                                    // A running-subagents pill can be wider than the plain time.
                                     .when(!text_hint, |el| el.min_w(px(30.0)))
                                     // Fixed height so swapping the time text for the
                                     // archive glyph never resizes the slot.
@@ -9357,8 +9348,6 @@ impl Shell {
                                         .flex_none()
                                         .text_color(theme.text_muted)
                                         .into_any_element()
-                                    } else if let Some(pill) = pill {
-                                        pill
                                     } else {
                                         div()
                                             .whitespace_nowrap()
@@ -10546,7 +10535,9 @@ impl Shell {
                     .min_w_0()
                     .child(self.sidebar_controls.clone()),
             )
-            .when(self.workspace_gutter() == 0., |view| view.child(pull_requests))
+            // Pull requests span every chat, so the entry lives here rather
+            // than in a chat's top bar.
+            .child(pull_requests)
             .child(settings)
             .into_any_element()
     }
@@ -12552,8 +12543,8 @@ impl Shell {
         .into_any_element()
     }
 
-    /// Working indicator strip: gradient spinner + rotating flavour word (7s,
-    /// seeded per chat) + elapsed, staleness-gated via [`Indicator`]; falls back
+    /// Working indicator strip: working mark + status + elapsed,
+    /// staleness-gated via [`Indicator`]; falls back
     /// to a "Sending…" bridge and then the engine mode line.
     fn render_status_strip(&mut self, composer_width: f32, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
@@ -12609,12 +12600,10 @@ impl Shell {
                 .child(SharedString::from("Run failed"))
                 .into_any_element(),
             Indicator::None if sending => strip
-                .child(loaders::gradient_spinner(
-                    "sending-indicator",
-                    &theme,
-                    2.5,
-                    cx.entity_id(),
-                    cx,
+                .child(loaders::working_mark(
+                    format!("sending-indicator-{}", cx.entity_id()),
+                    14.0,
+                    theme.text,
                 ))
                 .child(
                     div()
@@ -15245,6 +15234,7 @@ mod tests {
             started_at: Some(updated_at),
             updated_at,
             running_subagents: 0,
+            background_tasks: Vec::new(),
         }
     }
 
@@ -19192,6 +19182,25 @@ impl Shell {
         }
         cx.notify();
     }
+    /// `pr-<variant>` opens a synthetic pull request beside the chat:
+    /// `summary`, `summary-checks`, `code`, `code-open`, or `activity`.
+    pub fn fixture_open_pull_request(
+        &mut self,
+        variant: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let url = crate::pull_request_detail::fixture_seed_cache(&self.pull_request_cache);
+        self.open_chat_pull_request(url.clone(), None, window, cx);
+        let page = self
+            .chat_pull_requests
+            .values()
+            .find(|tab| tab.url == url)
+            .map(|tab| tab.page.clone());
+        if let Some(page) = page {
+            page.update(cx, |page, cx| page.fixture_review(variant, cx));
+        }
+    }
     pub fn fixture_review_route(&mut self, route: &str, cx: &mut Context<Self>) {
         // `<route>:<variant>` seeds fixture data (plugins, providers, the ACP
         // dialog) for pages that otherwise wait on an engine.
@@ -19264,7 +19273,7 @@ impl Shell {
             // `:transcript-card-git` runs the chat in a worktree of a Git
             // project whose branch has a pull request, so the card lists
             // the checkout, branch and pull request rows.
-            if variant == "transcript-card-git" {
+            if variant == "transcript-card-git" || variant.starts_with("transcript-card-pr") {
                 self.state.update(cx, |state, cx| {
                     if let Some(space) = state.spaces.iter_mut().find(|s| s.id == "project") {
                         space.git_detected = true;
@@ -19280,6 +19289,72 @@ impl Shell {
                     }
                     cx.notify();
                 });
+            }
+            // `:transcript-working` runs a turn, so the live status row shows.
+            if variant == "transcript-working" {
+                self.state.update(cx, |state, cx| {
+                    state.apply_sessions(vec![zuse_protocol::Session {
+                        last_completed_turn: None,
+                        running_subagents: 1,
+                        background_tasks: Vec::new(),
+                        chat_id: "browser-fixture".into(),
+                        device_id: "local".into(),
+                        status: zuse_protocol::SessionStatus::Working,
+                        started_at: Some(Utc::now() - chrono::Duration::seconds(42)),
+                        updated_at: Utc::now(),
+                    }]);
+                    cx.notify();
+                });
+            }
+            // `:transcript-card-git` also runs background work, with the
+            // card's Background work section unfolded.
+            if variant == "transcript-card-git" {
+                self.session_info_folded.insert("background");
+                let now = Utc::now();
+                let task = |id: &str, description: &str, started: i64, ended: Option<(i64, zuse_protocol::BackgroundTaskOutcome)>, stoppable| {
+                    zuse_protocol::BackgroundTask {
+                        id: id.into(),
+                        kind: zuse_protocol::BackgroundTaskKind::Shell,
+                        description: description.into(),
+                        started_at: now - chrono::Duration::seconds(started),
+                        ended_at: ended.map(|(at, _)| now - chrono::Duration::seconds(at)),
+                        outcome: ended.map(|(_, outcome)| outcome),
+                        stoppable,
+                    }
+                };
+                self.state.update(cx, |state, cx| {
+                    state.apply_sessions(vec![zuse_protocol::Session {
+                        last_completed_turn: None,
+                        running_subagents: 0,
+                        background_tasks: vec![
+                            task("bg-1", "pnpm dev --port 3000", 312, None, true),
+                            task("bg-2", "cargo watch -x test", 95, None, true),
+                            task("bg-3", "npm run build", 400, Some((340, zuse_protocol::BackgroundTaskOutcome::Completed)), false),
+                            task("bg-4", "tail -f logs/server.log", 600, Some((420, zuse_protocol::BackgroundTaskOutcome::Stopped)), false),
+                        ],
+                        chat_id: "browser-fixture".into(),
+                        device_id: "local".into(),
+                        status: zuse_protocol::SessionStatus::Idle,
+                        started_at: Some(now),
+                        updated_at: now,
+                    }]);
+                    cx.notify();
+                });
+            }
+            // `:transcript-card-pr…` opens the card's pull request menu
+            // (`-repair` / `-merge` / `-status` its group).
+            if let Some(rest) = variant.strip_prefix("transcript-card-pr") {
+                let submenu = match rest {
+                    "-repair" => Some(summary_pull_request::PrSubmenu::Repair),
+                    "-merge" => Some(summary_pull_request::PrSubmenu::Merge),
+                    "-status" => Some(summary_pull_request::PrSubmenu::Status),
+                    _ => None,
+                };
+                self.fixture_seed_summary_pull_request(
+                    "https://github.com/opcodehq/zuse/pull/412",
+                    rest != "-row",
+                    submenu,
+                );
             }
             // `:transcript-fork` opens the Fork menu on the hovered reply.
             if variant == "transcript-fork" {
@@ -19409,6 +19484,7 @@ impl Shell {
                 "a2",
                 "assistant",
                 vec![
+                    serde_json::json!({"kind":"reasoning","id":"r3","text":"Session expiry and cookie flags are independent. Two parallel audits will be faster than reading both paths myself."}),
                     tool(
                         "s1",
                         serde_json::json!({"kind":"unknown","name":"Agent: audit session expiry"}),

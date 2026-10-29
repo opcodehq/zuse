@@ -142,7 +142,7 @@ fn main() -> anyhow::Result<()> {
             // Every Threads row state: running, waiting on input, failed
             // unseen and finished unseen (chat-3, bold).
             s.chats[7].last_message_at = Some(chrono::Utc::now());
-            let session = |chat_id: &str, device_id: &str, status| zuse_protocol::Session { last_completed_turn: None, running_subagents: 0, chat_id: chat_id.into(), device_id: device_id.into(), status, started_at: Some(chrono::Utc::now()), updated_at: chrono::Utc::now() };
+            let session = |chat_id: &str, device_id: &str, status| zuse_protocol::Session { last_completed_turn: None, running_subagents: 0, background_tasks: Vec::new(), chat_id: chat_id.into(), device_id: device_id.into(), status, started_at: Some(chrono::Utc::now()), updated_at: chrono::Utc::now() };
             s.apply_sessions(vec![
                 session("zuse-publish", "local", zuse_protocol::SessionStatus::Working),
                 session("chat-5", "local", zuse_protocol::SessionStatus::AwaitingInput),
@@ -173,7 +173,7 @@ fn main() -> anyhow::Result<()> {
             for route in routes {
                 let _ = window.update(cx, |shell, window, cx| {
                     shell.fixture_review_route(&route, cx);
-                    if route.ends_with("model-picker") { shell.fixture_open_model_picker(window, cx); } else if route.ends_with("-menu") { shell.fixture_open_menu(&route, window, cx); } else if route.starts_with("panel/") || route.starts_with("main/") { shell.fixture_open_panel(&route, window, cx); }
+                    if route.ends_with("model-picker") { shell.fixture_open_model_picker(window, cx); } else if route.ends_with("-menu") { shell.fixture_open_menu(&route, window, cx); } else if route.starts_with("panel/") || route.starts_with("main/") { shell.fixture_open_panel(&route, window, cx); } else if let Some(variant) = route.strip_prefix("pr-") { shell.fixture_open_pull_request(variant, window, cx); }
                 });
                 pause(cx, 700).await;
                 let name = route.replace('/', "-");

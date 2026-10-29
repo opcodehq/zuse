@@ -412,6 +412,56 @@ pub(crate) fn stop_turn_request_line(request_id: &str) -> String {
     .to_string()
 }
 
+/// Stop one background task (a shell, monitor or detached agent) without
+/// touching the turn or the CLI's other tasks.
+pub(crate) fn stop_task_request_line(request_id: &str, task_id: &str) -> String {
+    json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": { "subtype": "stop_task", "task_id": task_id },
+    })
+    .to_string()
+}
+
+/// The live background tasks a `background_tasks_changed` frame lists,
+/// minus ambient ones (watchers the CLI says are not activity).
+pub(crate) fn live_background_tasks(tasks: &[Value]) -> Vec<crate::LiveBackgroundTask> {
+    use zuse_protocol::BackgroundTaskKind;
+    tasks
+        .iter()
+        .filter(|task| task.get("ambient").and_then(Value::as_bool) != Some(true))
+        .filter_map(|task| {
+            let id = task.get("task_id").and_then(Value::as_str)?;
+            let kind = match task.get("task_type").and_then(Value::as_str) {
+                Some("local_bash") => BackgroundTaskKind::Shell,
+                Some("local_agent") => BackgroundTaskKind::Agent,
+                _ => BackgroundTaskKind::Other,
+            };
+            Some(crate::LiveBackgroundTask {
+                id: id.to_owned(),
+                kind,
+                description: task
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                stoppable: true,
+            })
+        })
+        .collect()
+}
+
+/// A `task_notification` status as a background task's outcome.
+pub(crate) fn background_outcome(status: &str) -> Option<zuse_protocol::BackgroundTaskOutcome> {
+    use zuse_protocol::BackgroundTaskOutcome;
+    match status {
+        "completed" => Some(BackgroundTaskOutcome::Completed),
+        "failed" => Some(BackgroundTaskOutcome::Failed),
+        "stopped" | "killed" => Some(BackgroundTaskOutcome::Stopped),
+        _ => None,
+    }
+}
+
 /// Success reply to a CLI control request (`can_use_tool` allow/deny payloads).
 pub(crate) fn control_response_line(request_id: &str, response: Value) -> String {
     json!({

@@ -1513,12 +1513,10 @@ impl AccountsPage {
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
-                .child(crate::loaders::gradient_spinner(
-                    "login-poll",
-                    &theme,
-                    3.0,
-                    cx.entity_id(),
-                    cx,
+                .child(crate::loaders::working_mark(
+                    format!("login-poll-{}", cx.entity_id()),
+                    16.0,
+                    theme.text,
                 ))
                 .child(
                     div()

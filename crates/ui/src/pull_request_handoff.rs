@@ -109,7 +109,7 @@ pub(super) fn checkout_command(detail: &ChangeRequestDetail, url: &str) -> Strin
 /// Pull request text for a prompt: one line, no code fences or control
 /// characters, bounded. Titles, branch and check names are written by whoever
 /// opened the pull request.
-fn plain(text: &str) -> String {
+pub(super) fn plain(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -362,21 +362,19 @@ impl PullRequestDetailPage {
         cx.notify();
     }
 
-    /// Settings-style rows: purpose on the left with the actions trailing
-    /// (wrapping below on narrow widths), then the checkout command.
-    pub(super) fn handoff_card(
+    /// Property rows: the hand-off actions, then the platforms the agent
+    /// verifies on, with any lookup progress or failure between them.
+    pub(super) fn handoff_rows(
         &self,
         detail: &ChangeRequestDetail,
         theme: &Theme,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let command = checkout_command(detail, &self.url);
-        let copy = command.clone();
+    ) -> Vec<AnyElement> {
         let buttons = handoffs(detail).into_iter().map(|kind| {
             let prompt = prompt(kind, detail, &self.url, self.verification_platform);
             let id = kind.id();
             let summary = kind.summary();
-            widgets::action_button(theme, widgets::ActionTone::Filled)
+            widgets::action_button(theme, widgets::ActionTone::Outlined)
                 .id(id)
                 .debug_selector(move || id.to_owned())
                 .role(gpui::Role::Button)
@@ -384,12 +382,13 @@ impl PullRequestDetailPage {
                 .aria_description(summary)
                 .tab_index(0)
                 .flex_none()
-                .border_1()
-                .border_color(gpui::transparent_black())
-                .focus_visible(|style| style.border_2().border_color(theme.accent))
+                .min_h(px(26.0))
+                .px(px(10.0))
+                .py_0()
+                .focus_visible(|style| style.border_color(theme.accent))
                 .child(
                     crate::icons::icon(kind.glyph())
-                        .size(px(14.0))
+                        .size(px(13.0))
                         .flex_none()
                         .text_color(theme.text_muted),
                 )
@@ -399,28 +398,41 @@ impl PullRequestDetailPage {
                     page.prepare_handoff(prompt.clone(), window, cx)
                 }))
         });
-        widgets::section_card(theme)
-            .mt(px(CARD_GAP))
-            .id("pr-handoff")
-            .debug_selector(|| "pr-handoff".into())
-            .when(self.handoff_task.is_some(), |card| {
-                card.child(
-                    div()
-                        .px(px(16.0))
-                        .py(px(12.0))
-                        .text_color(theme.text_muted)
-                        .child("Finding a checkout…"),
-                )
-            })
-            .children(self.handoff_error.as_ref().map(|error| {
+        let mut rows = vec![
+            summary::property_row(
+                "handoff",
+                crate::icons::BOT,
+                "Hand off",
+                div()
+                    .id("pr-handoff-actions")
+                    .debug_selector(|| "pr-handoff-actions".into())
+                    .py(px(3.0))
+                    .max_w_full()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(6.0))
+                    .children(buttons),
+                theme,
+            )
+            .into_any_element(),
+        ];
+        let status = if self.handoff_task.is_some() {
+            Some(
+                div()
+                    .text_color(theme.text_muted)
+                    .child("Finding a checkout…")
+                    .into_any_element(),
+            )
+        } else {
+            self.handoff_error.as_ref().map(|error| {
                 let device = self.handoff_device.clone();
                 div()
-                    .px(px(16.0))
-                    .py(px(12.0))
                     .flex()
                     .flex_col()
                     .items_start()
-                    .gap(px(8.0))
+                    .gap(px(6.0))
+                    .text_size(crate::typography::text_xs())
+                    .text_color(theme.text_muted)
                     .child(error.clone())
                     .children(device.map(|device| {
                         widgets::action_button(theme, widgets::ActionTone::Filled)
@@ -436,121 +448,59 @@ impl PullRequestDetailPage {
                                 )
                             })
                     }))
-            }))
-            .child(
-                widgets::card_row(theme, true)
-                    .id("pr-handoff-row")
-                    .debug_selector(|| "pr-handoff-row".into())
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(220.0))
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.0))
-                            .child(widgets::row_title(theme, "Hand off to an agent"))
+                    .into_any_element()
+            })
+        };
+        rows.extend(status.map(|status| {
+            div()
+                .pl(px(summary::PROPERTY_LABEL + 12.0))
+                .pb(px(6.0))
+                .child(status)
+                .into_any_element()
+        }));
+        rows.push(
+            summary::property_row(
+                "verification",
+                crate::icons::CHECKLIST,
+                "Verify on",
+                div().max_w_full().flex().flex_wrap().gap(px(4.0)).children(
+                    [
+                        VerificationPlatform::Relevant,
+                        VerificationPlatform::Macos,
+                        VerificationPlatform::Linux,
+                        VerificationPlatform::Windows,
+                    ]
+                    .into_iter()
+                    .map(|platform| {
+                        let selected = self.verification_platform == platform;
+                        let id = format!("pr-verification-{}", platform.label());
+                        let selector = id.clone();
+                        crate::surface_chrome::tab(SharedString::from(id), selected, theme)
+                            .debug_selector(move || selector.clone())
+                            .role(gpui::Role::Button)
+                            .aria_label(platform.label())
+                            .aria_selected(selected)
+                            .text_size(crate::typography::text_xs())
+                            .line_height(crate::typography::ui_rems(16.0))
+                            .px(px(10.0))
                             .child(
                                 div()
-                                    .text_size(crate::typography::text_xs())
-                                    .text_color(theme.text_muted)
-                                    .child("Opens a new session with the prompt ready to send."),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("pr-handoff-actions")
-                            .debug_selector(|| "pr-handoff-actions".into())
-                            // Keep the buttons on one line when the row wraps.
-                            .flex_none()
-                            .max_w_full()
-                            .flex()
-                            .flex_wrap()
-                            .gap(px(8.0))
-                            .children(buttons),
-                    ),
+                                    .debug_selector(move || {
+                                        format!("pr-verification-label-{}", platform.label())
+                                    })
+                                    .child(platform.label()),
+                            )
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                page.verification_platform = platform;
+                                cx.notify();
+                            }))
+                    }),
+                ),
+                theme,
             )
-            .child(
-                widgets::card_row(theme, false)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(120.0))
-                            .child(widgets::row_title(theme, "Verification")),
-                    )
-                    .child(
-                        div().max_w_full().flex().flex_wrap().gap(px(4.0)).children(
-                            [
-                                VerificationPlatform::Relevant,
-                                VerificationPlatform::Macos,
-                                VerificationPlatform::Linux,
-                                VerificationPlatform::Windows,
-                            ]
-                            .into_iter()
-                            .map(|platform| {
-                                let selected = self.verification_platform == platform;
-                                let id = format!("pr-verification-{}", platform.label());
-                                let selector = id.clone();
-                                crate::surface_chrome::tab(SharedString::from(id), selected, theme)
-                                    .debug_selector(move || selector.clone())
-                                    .role(gpui::Role::Button)
-                                    .aria_label(platform.label())
-                                    .aria_selected(selected)
-                                    .text_size(crate::typography::text_xs())
-                                    .line_height(crate::typography::ui_rems(16.0))
-                                    .px(px(10.0))
-                                    .child(
-                                        div()
-                                            .debug_selector(move || {
-                                                format!(
-                                                    "pr-verification-label-{}",
-                                                    platform.label()
-                                                )
-                                            })
-                                            .child(platform.label()),
-                                    )
-                                    .on_click(cx.listener(move |page, _, _, cx| {
-                                        page.verification_platform = platform;
-                                        cx.notify();
-                                    }))
-                            }),
-                        ),
-                    ),
-            )
-            .child(
-                // Same label column and gap as the overview rows.
-                widgets::card_row(theme, false)
-                    .min_h(px(44.0))
-                    .py(px(8.0))
-                    .flex_nowrap()
-                    .child(
-                        div()
-                            .w(px(80.0))
-                            .flex_none()
-                            .child(widgets::row_title(theme, "Checkout")),
-                    )
-                    .child(
-                        div()
-                            .id("pr-checkout-command")
-                            .debug_selector(|| "pr-checkout-command".into())
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(theme.font_mono.clone())
-                            .text_size(crate::typography::text_xs())
-                            .child(command),
-                    )
-                    .child(
-                        action("pr-copy-checkout", "Copy checkout command", theme).on_click(
-                            move |_, _, cx| {
-                                cx.stop_propagation();
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                    copy.clone(),
-                                ));
-                            },
-                        ),
-                    ),
-            )
-            .into_any_element()
+            .into_any_element(),
+        );
+        rows
     }
 }
 

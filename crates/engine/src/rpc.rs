@@ -1725,6 +1725,7 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_CHANGE_REQUEST
             | methods::GET_CHANGE_REQUEST_DIFF
             | methods::POST_CHANGE_REQUEST_COMMENT
+            | methods::UPDATE_CHANGE_REQUEST
             | methods::GET_CHECKOUT_DIFF
             | methods::DISCARD_WORKING_TREE
             | methods::GET_CHECKOUT_FILE_DIFF_TEXT
@@ -3898,6 +3899,20 @@ impl RpcService for EngineRpc {
                     .map_err(change_request_rpc_error)?;
                 RpcReply::value(&comment)
             }
+            methods::UPDATE_CHANGE_REQUEST => {
+                #[derive(Deserialize)]
+                struct P {
+                    url: String,
+                    update: zuse_protocol::ChangeRequestUpdate,
+                }
+                let p: P = parse_params(params)?;
+                let refusal = self
+                    .github
+                    .update_pull_request(&p.url, p.update)
+                    .await
+                    .map_err(change_request_rpc_error)?;
+                RpcReply::value(&serde_json::json!({ "refusal": refusal }))
+            }
             methods::GET_CHANGE_REQUEST | methods::GET_CHANGE_REQUEST_DIFF => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
@@ -5852,6 +5867,8 @@ mod tests {
         assert!(forwardable(methods::GET_CHANGE_REQUEST));
         assert!(forwardable(methods::GET_CHANGE_REQUEST_DIFF));
         assert!(forwardable(methods::POST_CHANGE_REQUEST_COMMENT));
+        assert!(forwardable(methods::UPDATE_CHANGE_REQUEST));
+        assert!(!is_stream_method(methods::UPDATE_CHANGE_REQUEST));
         assert!(!is_stream_method(methods::POST_CHANGE_REQUEST_COMMENT));
         assert!(!is_stream_method(methods::GET_CHANGE_REQUEST));
         assert!(!is_stream_method(methods::GET_CHANGE_REQUEST_DIFF));

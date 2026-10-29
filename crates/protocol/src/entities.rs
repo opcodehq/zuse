@@ -335,6 +335,59 @@ pub struct Session {
     /// has not opened; read it through `view::running_subagents`.
     #[serde(default)]
     pub running_subagents: u32,
+    /// Background work the chat's runtime holds (shells, dev servers,
+    /// detached agents) plus the few most recently ended, so every device
+    /// can list them. Read through `view::background_tasks`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_tasks: Vec<BackgroundTask>,
+}
+
+/// What kind of work a background task is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BackgroundTaskKind {
+    /// A shell command left running (a dev server, a watcher, a long build).
+    Shell,
+    /// A detached subagent; listed with the chat's other agents.
+    Agent,
+    /// Anything else the runtime tracks (monitors, workflows).
+    Other,
+}
+
+/// How a background task ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BackgroundTaskOutcome {
+    Completed,
+    Failed,
+    Stopped,
+}
+
+/// One background task of a chat's runtime, running or recently ended.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundTask {
+    /// The runtime's own id for the task (what a stop request names).
+    pub id: String,
+    pub kind: BackgroundTaskKind,
+    /// What it is, in the agent's words or as its command line.
+    pub description: String,
+    pub started_at: DateTime<Utc>,
+    /// Set once the task leaves the runtime's live set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<DateTime<Utc>>,
+    /// How it ended, when the runtime said; absent while running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<BackgroundTaskOutcome>,
+    /// The runtime can stop this task on its own, without ending the turn.
+    #[serde(default)]
+    pub stoppable: bool,
+}
+
+impl BackgroundTask {
+    pub fn running(&self) -> bool {
+        self.ended_at.is_none()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1048,6 +1101,40 @@ pub struct ChangeRequestPage {
     pub fetched_at: Option<DateTime<Utc>>,
 }
 
+/// How a pull request's commits land on its base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChangeRequestMergeMethod {
+    Squash,
+    Merge,
+    Rebase,
+}
+
+/// A change to a pull request the user asked for explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ChangeRequestUpdate {
+    Merge {
+        method: ChangeRequestMergeMethod,
+    },
+    /// Merge once requirements pass.
+    EnableAutoMerge {
+        method: ChangeRequestMergeMethod,
+    },
+    DisableAutoMerge,
+    MarkReady,
+    MarkDraft,
+    Close,
+    Reopen,
+}
+
+/// Auto-merge armed on a pull request (`autoMergeRequest`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestAutoMerge {
+    pub merge_method: String,
+}
+
 /// Read-only GitHub detail response. Optional collections tolerate absent provider data.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1076,6 +1163,9 @@ pub struct ChangeRequestDetail {
     pub review_threads: Option<Vec<ChangeRequestReviewThread>>,
     pub files: Vec<ChangeRequestFile>,
     pub status_check_rollup: Vec<ChangeRequestCheck>,
+    /// Set while auto-merge is armed; absent from older engines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_merge_request: Option<ChangeRequestAutoMerge>,
     /// The signed-in GitHub account, so clients can tell which comments and
     /// reviews are the viewer's. Absent from older engines.
     #[serde(skip_serializing_if = "Option::is_none")]

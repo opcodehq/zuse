@@ -409,9 +409,36 @@ fn is_spawn_link(item: &ToolItem) -> bool {
 }
 
 /// Ordinary tool groups fold behind a summary header; agent/spawn chips
-/// render as their own always-open row.
+/// render as their own always-open row. Thinking alone needs no header: the
+/// "Thinking" chip already folds its text, and a "Thinking" summary over it
+/// nested one accordion inside another.
+///
+/// Several subagents from one stretch of a turn fold under a single
+/// "N subagents" header too; a lone one stays its own row.
 fn tool_group_collapses(tools: &[ToolItem]) -> bool {
-    tools.iter().any(|t| !is_agent_tool(t))
+    tools
+        .iter()
+        .any(|t| !is_agent_tool(t) && t.kind != ToolItemKind::Thought)
+        || tools.iter().filter(|t| is_agent_tool(t)).count() > 1
+}
+
+/// A subagent's lifecycle from its spawn chip; chips written before the
+/// status field existed fall back to the call's own resolution.
+fn agent_status(tool: &ToolItem) -> SubagentStatus {
+    match tool.subagent_status {
+        Some(status) => status,
+        None if tool.is_error => SubagentStatus::Failed,
+        None if tool.resolved => SubagentStatus::Done,
+        None => SubagentStatus::Running,
+    }
+}
+
+/// True while any subagent in the group still works: its header stays open
+/// and shimmers until they all settle.
+fn agents_running(tools: &[ToolItem]) -> bool {
+    tools
+        .iter()
+        .any(|t| is_agent_tool(t) && agent_status(t) == SubagentStatus::Running)
 }
 
 /// Column budget for soft-wrapping thought text into detail lines. The
@@ -2071,6 +2098,35 @@ pub fn tool_group_summary(tools: &[ToolItem]) -> String {
         .iter()
         .filter(|t| t.kind == ToolItemKind::Note)
         .count();
+    // A group of subagents says how its agents stand ("1 of 3 running",
+    // "2 done · 1 failed"); the header's avatar stack shows how many.
+    if calls > 1
+        && tools
+            .iter()
+            .all(|t| t.kind != ToolItemKind::Call || is_agent_tool(t))
+    {
+        let statuses: Vec<SubagentStatus> = tools
+            .iter()
+            .filter(|t| is_agent_tool(t))
+            .map(agent_status)
+            .collect();
+        let count = |status| statuses.iter().filter(|s| **s == status).count();
+        let running = count(SubagentStatus::Running);
+        if running > 0 {
+            return format!("{running} of {calls} running");
+        }
+        return [
+            (SubagentStatus::Done, "done"),
+            (SubagentStatus::Failed, "failed"),
+        ]
+        .into_iter()
+        .filter_map(|(status, word)| {
+            let n = count(status);
+            (n > 0).then(|| format!("{n} {word}"))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    }
     let mut summary = match (calls, thoughts, notes) {
         (0, 0, 0) => String::new(),
         (0, 0, 1) => "Wrote a note".into(),
@@ -2291,43 +2347,6 @@ fn format_kb(bytes: u64) -> String {
 // ---------------------------------------------------------------------------
 // Working indicator flavour (pure; rendered by the shell strip)
 // ---------------------------------------------------------------------------
-
-/// Rotating flavour vocabulary (21 words / 7s, seeded per chat).
-pub const FLAVOUR_WORDS: [&str; 21] = [
-    "Zuseing",
-    "Thinking",
-    "Pondering",
-    "Scheming",
-    "Brewing",
-    "Weaving",
-    "Tinkering",
-    "Musing",
-    "Composing",
-    "Sifting",
-    "Untangling",
-    "Distilling",
-    "Sketching",
-    "Plotting",
-    "Riffing",
-    "Combobulating",
-    "Percolating",
-    "Marinating",
-    "Noodling",
-    "Puzzling",
-    "Conjuring",
-];
-pub const FLAVOUR_ROTATE_SECS: i64 = 7;
-
-/// The flavour word for a seed at an elapsed time.
-pub fn flavour_word(seed: u64, elapsed_secs: i64) -> &'static str {
-    let step = (elapsed_secs.max(0) / FLAVOUR_ROTATE_SECS) as u64;
-    FLAVOUR_WORDS[((seed.wrapping_add(step)) % FLAVOUR_WORDS.len() as u64) as usize]
-}
-
-/// A stable per-chat seed.
-pub fn flavour_seed(chat_id: &str) -> u64 {
-    fnv1a(chat_id.as_bytes())
-}
 
 /// The working trailer's "Sending…" bridge: true while an in-flight send is
 /// fresher than the session row's turn start — the row still carries the
@@ -7342,7 +7361,7 @@ impl Transcript {
         // `turn` (the turn's start, ms) keys the rolling word and timer, so a
         // new turn's labels appear fresh instead of rolling from the last
         // turn's final values.
-        let (sending, queued, elapsed_secs, seed, turn) = if let Some(doc_id) = &self.doc_override {
+        let (sending, queued, elapsed_secs, turn) = if let Some(doc_id) = &self.doc_override {
             // A subagent doc has no Session row — `indicator_for` would read
             // the PARENT chat's live state into this tab. Liveness rides the
             // doc itself instead: the sink's assistant entry streams until
@@ -7360,7 +7379,7 @@ impl Transcript {
                 return None;
             }
             let elapsed = ((now.timestamp_millis() - last.created_at).max(0) / 1000) as i64;
-            (false, false, elapsed, flavour_seed(doc_id), last.created_at)
+            (false, false, elapsed, last.created_at)
         } else {
             let chat_id = self.chat_id.clone()?;
             // Failed-send state first: past the grace window the trailer IS
@@ -7412,7 +7431,7 @@ impl Transcript {
                     .map_or(0, |t| t.timestamp_millis());
                 (sending, queued, elapsed, turn)
             };
-            (sending, queued, elapsed, flavour_seed(&chat_id), turn)
+            (sending, queued, elapsed, turn)
         };
         if self.compact_mode && !sending && !queued && elapsed_secs > 0 {
             let entry_id = if let Some(doc_id) = &self.doc_override {
@@ -7434,12 +7453,22 @@ impl Transcript {
                 self.compact_last_elapsed.insert(entry_id, elapsed_secs);
             }
         }
+        // Who is working, by name: the chat's agent ("Claude Code is
+        // working"); a subagent tab reads its parent chat's agent.
+        let agent = self
+            .chat_id
+            .as_deref()
+            .and_then(|id| self.state.read(cx).chats.iter().find(|chat| chat.id == id))
+            .and_then(|chat| chat.config.as_ref())
+            .map_or("Agent", |config| {
+                crate::pickers::harness_display_name(config.harness)
+            });
         let word = if queued {
-            "Queued — will send automatically"
+            "Queued — will send automatically".to_owned()
         } else if sending {
-            "Sending"
+            "Sending…".to_owned()
         } else {
-            flavour_word(seed, elapsed_secs)
+            format!("{agent} is working")
         };
         let theme = Theme::of(cx).clone();
         Some(
@@ -7450,15 +7479,12 @@ impl Transcript {
                 .gap(px(Theme::SPACE_SM))
                 .pt(px(Theme::SPACE_LG))
                 .text_size(crate::typography::text_xs())
-                .child(crate::loaders::gradient_spinner(
-                    "working-indicator",
-                    &theme,
-                    2.5,
-                    cx.entity_id(),
-                    cx,
+                .child(crate::loaders::working_mark(
+                    format!("working-mark-{}", cx.entity_id()),
+                    14.0,
+                    theme.text,
                 ))
                 .child(
-                    // The flavour word rotates every 7s; roll it as it turns.
                     div()
                         .text_size(crate::typography::text_xs())
                         .text_color(if queued {
@@ -7468,11 +7494,7 @@ impl Transcript {
                         })
                         .child(crate::roll_text::roll_text(
                             format!("working-word-{}-{turn}", cx.entity_id()),
-                            SharedString::from(if queued {
-                                word.to_string()
-                            } else {
-                                format!("{word}…")
-                            }),
+                            SharedString::from(word),
                             cx.reduce_motion(),
                         )),
                 )
@@ -8228,6 +8250,10 @@ impl Transcript {
         // Compact mode is the exception: EVERYTHING sits under the one work
         // accordion, spawn chips included.
         let collapses = self.compact_mode || tool_group_collapses(tools);
+        // Several subagents get the delegation header: their provider marks
+        // stacked, how they stand, and the chevron trailing.
+        let agent_group = !self.compact_mode && tools.len() > 1 && tools.iter().all(is_agent_tool);
+        let agent_count = tools.len();
         let arrival_pending = !cx.reduce_motion()
             && self.tool_group_reveals.get(row_id).is_some_and(|reveal| {
                 reveal.starts.iter().flatten().any(|start| {
@@ -8242,7 +8268,9 @@ impl Transcript {
         let effective_auto_open = auto_open || (arrival_pending && !self.compact_mode);
         #[cfg(feature = "browser-fixture")]
         let effective_auto_open = effective_auto_open || self.fixture_open_groups;
-        let open = !collapses || fold.open.unwrap_or(effective_auto_open);
+        // A subagent group stays open while any of its agents still works.
+        let live_agents = agents_running(tools);
+        let open = !collapses || fold.open.unwrap_or(effective_auto_open || live_agents);
         // Compact shells only change `open` through `toggle_fold`, which
         // already seeds `from` with the body's measured height — the
         // rendered-height reset below must not clobber it with the shell's
@@ -8264,8 +8292,10 @@ impl Transcript {
         // fold — any unresolved chip (a running tool, a live thought) keeps it
         // pulsing until the turn's work settles. Compute this before the
         // collapsed-body skip, which may empty `tools`.
-        let active =
-            collapses && (auto_open || (self.compact_mode && tools.iter().any(|t| !t.resolved)));
+        let active = collapses
+            && (auto_open
+                || live_agents
+                || (self.compact_mode && tools.iter().any(|t| !t.resolved)));
         if self.compact_mode && active {
             self.compact_live_entries.insert(row_id.clone());
         }
@@ -8557,7 +8587,25 @@ impl Transcript {
             summary.clone(),
             reduce_motion,
         );
+        // Native subagents run inside the chat's own provider: its mark
+        // names them better than a generic agent glyph.
+        let agent_brand = self
+            .chat_id
+            .as_deref()
+            .and_then(|id| self.state.read(cx).chats.iter().find(|chat| chat.id == id))
+            .and_then(|chat| chat.config.as_ref())
+            .map(|config| crate::pickers::harness_brand_icon(config.harness));
         let toggle_id = row_id.clone();
+        let chevron = |slot: gpui::Div| {
+            slot.child(
+                crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
+                    .size(px(14.0))
+                    .with_transformation(gpui::Transformation::rotate(gpui::radians(
+                        -std::f32::consts::FRAC_PI_2 * (1.0 - disclosure_progress),
+                    )))
+                    .text_color(theme.text_muted),
+            )
+        };
         // A quiet summary sits above the activity rail; its chevron occupies
         // the same gutter as the rounded task-tree elbows below it.
         let header = div()
@@ -8584,25 +8632,21 @@ impl Transcript {
                 this.toggle_fold(toggle_id.clone(), viewport_height, effective_auto_open, cx);
                 cx.notify();
             }))
-            .child(
-                div()
-                    // Keep the title adjacent to its disclosure affordance.
-                    .w(px(22.0))
-                    .h(px(18.0))
-                    .flex_none()
-                    .relative()
-                    .child(
-                        crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
-                            .absolute()
-                            .left(px(ACTIVITY_TRUNK_X - 7.0))
-                            .top(px(2.0))
-                            .size(px(14.0))
-                            .with_transformation(gpui::Transformation::rotate(gpui::radians(
-                                -std::f32::consts::FRAC_PI_2 * (1.0 - disclosure_progress),
-                            )))
-                            .text_color(theme.text_muted),
-                    ),
-            )
+            .map(|header| {
+                if agent_group {
+                    header.child(agent_avatar_stack(agent_count, agent_brand, theme))
+                } else {
+                    header.child(chevron(
+                        div()
+                            // Keep the title adjacent to its disclosure affordance.
+                            .w(px(22.0))
+                            .h(px(18.0))
+                            .flex_none()
+                            .pl(px(ACTIVITY_TRUNK_X - 7.0))
+                            .pt(px(2.0)),
+                    ))
+                }
+            })
             .child(
                 div()
                     .min_w_0()
@@ -8622,7 +8666,10 @@ impl Transcript {
                             tool_group_title(summary.clone(), shimmer_phase, theme)
                         }),
                     }),
-            );
+            )
+            .when(agent_group, |header| {
+                header.child(chevron(div().flex_none()))
+            });
 
         if compact_shell {
             let view = cx.entity_id();
@@ -8689,7 +8736,13 @@ impl Transcript {
                                 frozen,
                             });
                         }),
-                        collapses,
+                        collapses.then_some(TreePlace {
+                            has_predecessor: ix > 0,
+                            continues: ix + 1 < tools.len(),
+                            reveal: connector_reveal,
+                            continuation_reveal,
+                        }),
+                        agent_brand,
                         theme,
                         cx.entity_id(),
                         cx,
@@ -8729,6 +8782,7 @@ impl Transcript {
                         .toggled_at
                         .is_some_and(|at| at.elapsed() < FOLD_TWEEN_WINDOW);
                 let toggle_key = key.clone();
+                let flat_thought = !collapses && tool.kind == ToolItemKind::Thought;
                 let mut card = div()
                     .my(px((base_row_height - CHIP_CARD_HEIGHT) / 2.0))
                     .when(collapses, |el| el.ml(px(ACTIVITY_TEXT_GAP)))
@@ -8757,6 +8811,16 @@ impl Transcript {
                                 entry.toggled_at = Some(Instant::now());
                                 cx.notify();
                             }))
+                            // A lone thought has no task tree to carry its
+                            // icon, so the header leads with it.
+                            .when(flat_thought, |header| {
+                                header.gap(px(ACTIVITY_TEXT_GAP)).child(
+                                    crate::icons::icon(crate::icons::TOOL_THINKING)
+                                        .flex_none()
+                                        .size(px(ACTIVITY_ICON_SIZE))
+                                        .text_color(theme.text_muted),
+                                )
+                            })
                             .child(chip_header(
                                 tool,
                                 open,
@@ -8776,14 +8840,19 @@ impl Transcript {
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .overflow_hidden();
+                        .overflow_hidden()
+                        .when(flat_thought, |panel| {
+                            panel.ml(px(ACTIVITY_ICON_SIZE + ACTIVITY_TEXT_GAP))
+                        });
                     if let Some(invocation) = invocation.as_deref() {
                         panel = panel
                             .child(
                                 div()
                                     .h(px(DETAIL_SEPARATOR))
                                     .flex_none()
-                                    .when(!collapses, |line| line.bg(crate::theme::hairline(0.06))),
+                                    .when(!collapses && is_agent_tool(tool), |line| {
+                                        line.bg(crate::theme::hairline(0.06))
+                                    }),
                             )
                             .child(detail_body(invocation, None, &format!("{key}-call"), theme));
                     }
@@ -8798,7 +8867,9 @@ impl Transcript {
                                 div()
                                     .h(px(DETAIL_SEPARATOR))
                                     .flex_none()
-                                    .when(!collapses, |line| line.bg(crate::theme::hairline(0.06))),
+                                    .when(!collapses && is_agent_tool(tool), |line| {
+                                        line.bg(crate::theme::hairline(0.06))
+                                    }),
                             )
                             .child(detail_body(
                                 detail,
@@ -9773,7 +9844,7 @@ fn chip_header_row(
     cx: &mut gpui::App,
 ) -> gpui::Div {
     if is_agent_tool(tool) {
-        return subagent_header_row(tool, trail, theme, view, cx);
+        return subagent_header_row(tool, trail, None, theme, view, cx);
     }
     let (label, detail) = chip_label(tool);
     let file_path = match &tool.call {
@@ -10059,17 +10130,13 @@ fn chip_diff_stats(tool: &ToolItem) -> Option<(u64, u64)> {
 fn subagent_header_row(
     tool: &ToolItem,
     trail: Option<ChipTrail>,
+    brand: Option<(&'static str, Option<gpui::Hsla>)>,
     theme: &Theme,
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> gpui::Div {
     let (_, description) = tool_chip_content(&tool.call);
-    let status = match tool.subagent_status {
-        Some(status) => status,
-        None if tool.is_error => SubagentStatus::Failed,
-        None if tool.resolved => SubagentStatus::Done,
-        None => SubagentStatus::Running,
-    };
+    let status = agent_status(tool);
     let running = matches!(status, SubagentStatus::Running);
     let failed = tool.is_error || matches!(status, SubagentStatus::Failed);
     let title: SharedString = if description.is_empty() {
@@ -10133,11 +10200,16 @@ fn subagent_header_row(
         .text_size(px(TOOL_LABEL_SIZE))
         .line_height(px(TOOL_LABEL_LINE_HEIGHT))
         .child(glyph)
-        .child(
-            crate::icons::icon(crate::icons::TOOL_AGENT)
+        // The provider's mark in the row's own ink, not its brand color:
+        // several agents read as one quiet column.
+        .child(match brand {
+            Some((path, _)) => crate::icons::icon(path)
+                .size(px(14.0))
+                .text_color(theme.text),
+            None => crate::icons::icon(crate::icons::TOOL_AGENT)
                 .size(px(14.0))
                 .text_color(theme.text_muted),
-        )
+        })
         .child(
             div()
                 .flex_none()
@@ -10307,72 +10379,90 @@ fn activity_rail(
     row_height: f32,
     theme: &Theme,
 ) -> gpui::Div {
-    let color = theme.hairline(0.12);
     let tint = if tool.is_error {
         theme.danger
     } else {
         theme.text_muted
     };
+    let (_, branch_reveal) = tool_connector_parts(reveal, has_predecessor);
+    activity_connectors(
+        has_predecessor,
+        continues,
+        reveal,
+        continuation_reveal,
+        row_height,
+        ACTIVITY_GUTTER_WIDTH,
+        theme,
+    )
+    .child(
+        crate::icons::icon(match tool.kind {
+            ToolItemKind::Thought => crate::icons::TOOL_THINKING,
+            ToolItemKind::Note => crate::icons::PEN,
+            ToolItemKind::Call => tool_icon_path(&tool.call),
+        })
+        .absolute()
+        .left(px(ACTIVITY_ICON_LEFT))
+        .top(px(row_height / 2.0 - ACTIVITY_ICON_SIZE / 2.0))
+        .size(px(ACTIVITY_ICON_SIZE))
+        .opacity(branch_reveal)
+        .text_color(tint),
+    )
+}
+
+/// The task tree's trunk and rounded elbow for one row, `width` wide; the
+/// caller places the row's own glyph after it.
+fn activity_connectors(
+    has_predecessor: bool,
+    continues: bool,
+    reveal: f32,
+    continuation_reveal: f32,
+    row_height: f32,
+    width: f32,
+    theme: &Theme,
+) -> gpui::Div {
+    let color = theme.hairline(0.12);
     let (incoming_reveal, branch_reveal) = tool_connector_parts(reveal, has_predecessor);
-    div()
-        .relative()
-        .w(px(ACTIVITY_GUTTER_WIDTH))
-        .flex_none()
-        .child(
-            canvas(
-                move |_, _, _| (),
-                move |bounds, _, window, _| {
-                    let x = bounds.origin.x + px(ACTIVITY_TRUNK_X);
-                    let branch_y = bounds.origin.y + px(row_height / 2.0);
-                    let bend_y = branch_y - px(ACTIVITY_BEND_RADIUS);
-                    // Union the ribbons before painting. Stroke tessellation
-                    // blends intersections twice, even in a single path.
-                    let mut tree = PathBuilder::fill().with_style(gpui::PathStyle::Fill(
-                        gpui::FillOptions::default().with_fill_rule(gpui::FillRule::NonZero),
-                    ));
-                    if incoming_reveal > 0.0 {
-                        let mut bottom = point(
-                            x,
-                            bounds.origin.y
-                                + px((row_height / 2.0 - ACTIVITY_BEND_RADIUS) * incoming_reveal),
-                        );
-                        if incoming_reveal >= 1.0 && continues && continuation_reveal > 0.0 {
-                            let continuation_height = (f32::from(bounds.size.height)
-                                - (row_height / 2.0 - ACTIVITY_BEND_RADIUS))
-                                .max(0.0);
-                            bottom =
-                                point(x, bend_y + px(continuation_height * continuation_reveal));
-                        }
-                        activity_ribbon(&mut tree, &[point(x, bounds.origin.y), bottom]);
+    div().relative().w(px(width)).flex_none().child(
+        canvas(
+            move |_, _, _| (),
+            move |bounds, _, window, _| {
+                let x = bounds.origin.x + px(ACTIVITY_TRUNK_X);
+                let branch_y = bounds.origin.y + px(row_height / 2.0);
+                let bend_y = branch_y - px(ACTIVITY_BEND_RADIUS);
+                // Union the ribbons before painting. Stroke tessellation
+                // blends intersections twice, even in a single path.
+                let mut tree = PathBuilder::fill().with_style(gpui::PathStyle::Fill(
+                    gpui::FillOptions::default().with_fill_rule(gpui::FillRule::NonZero),
+                ));
+                if incoming_reveal > 0.0 {
+                    let mut bottom = point(
+                        x,
+                        bounds.origin.y
+                            + px((row_height / 2.0 - ACTIVITY_BEND_RADIUS) * incoming_reveal),
+                    );
+                    if incoming_reveal >= 1.0 && continues && continuation_reveal > 0.0 {
+                        let continuation_height = (f32::from(bounds.size.height)
+                            - (row_height / 2.0 - ACTIVITY_BEND_RADIUS))
+                            .max(0.0);
+                        bottom = point(x, bend_y + px(continuation_height * continuation_reveal));
                     }
-                    if branch_reveal > 0.0 {
-                        let points: Vec<_> = activity_branch_points(branch_reveal)
-                            .into_iter()
-                            .map(|p| point(x + px(p.x), bend_y + px(p.y)))
-                            .collect();
-                        activity_ribbon(&mut tree, &points);
-                    }
-                    if let Ok(path) = tree.build() {
-                        window.paint_path(path, color);
-                    }
-                },
-            )
-            .absolute()
-            .inset_0(),
+                    activity_ribbon(&mut tree, &[point(x, bounds.origin.y), bottom]);
+                }
+                if branch_reveal > 0.0 {
+                    let points: Vec<_> = activity_branch_points(branch_reveal)
+                        .into_iter()
+                        .map(|p| point(x + px(p.x), bend_y + px(p.y)))
+                        .collect();
+                    activity_ribbon(&mut tree, &points);
+                }
+                if let Ok(path) = tree.build() {
+                    window.paint_path(path, color);
+                }
+            },
         )
-        .child(
-            crate::icons::icon(match tool.kind {
-                ToolItemKind::Thought => crate::icons::TOOL_THINKING,
-                ToolItemKind::Note => crate::icons::PEN,
-                ToolItemKind::Call => tool_icon_path(&tool.call),
-            })
-            .absolute()
-            .left(px(ACTIVITY_ICON_LEFT))
-            .top(px(row_height / 2.0 - ACTIVITY_ICON_SIZE / 2.0))
-            .size(px(ACTIVITY_ICON_SIZE))
-            .opacity(branch_reveal)
-            .text_color(tint),
-        )
+        .absolute()
+        .inset_0(),
+    )
 }
 
 /// A clockwise ribbon contour. Nonzero fill unions intersecting contours,
@@ -10467,36 +10557,116 @@ fn tool_chip(
 /// No accordion — an inline body would only repeat the subagent's own
 /// transcript. The group guide rail is omitted for agent-only rows (no
 /// collapse header for it to hang from).
+/// Provider tiles shown over a subagent group, overlapping like avatars.
+const AGENT_AVATAR_MAX: usize = 3;
+const AGENT_AVATAR_SIZE: f32 = 20.0;
+
+/// A subagent group's avatar stack: one tile per agent (up to
+/// [`AGENT_AVATAR_MAX`], then "+N"), each the provider's mark; the ring in
+/// the page tone separates the overlapping tiles.
+fn agent_avatar_stack(
+    count: usize,
+    brand: Option<(&'static str, Option<gpui::Hsla>)>,
+    theme: &Theme,
+) -> gpui::Div {
+    let tile = || {
+        div()
+            .size(px(AGENT_AVATAR_SIZE))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.0))
+            .border_2()
+            .border_color(theme.bg)
+            .bg(theme.element_hover)
+    };
+    let shown = count.min(AGENT_AVATAR_MAX);
+    let tiles = shown + usize::from(count > AGENT_AVATAR_MAX);
+    // Overlapping tiles: each after the first adds its width less the
+    // overlap. Sized explicitly so negative margins never shrink the slot.
+    let width = AGENT_AVATAR_SIZE + (tiles - 1) as f32 * (AGENT_AVATAR_SIZE - 6.0);
+    div()
+        .w(px(width))
+        .flex_none()
+        .flex()
+        .items_center()
+        .children((0..shown).map(|ix| {
+            tile().when(ix > 0, |tile| tile.ml(px(-6.0))).child(
+                crate::icons::icon(brand.map_or(crate::icons::TOOL_AGENT, |(path, _)| path))
+                    .size(px(12.0))
+                    .text_color(theme.text),
+            )
+        }))
+        .when(count > AGENT_AVATAR_MAX, |stack| {
+            stack.child(
+                tile()
+                    .ml(px(-6.0))
+                    .text_size(px(10.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text_muted)
+                    .child(SharedString::from(format!("+{}", count - AGENT_AVATAR_MAX))),
+            )
+        })
+}
+
+/// Where a spawn row sits in its group's task tree: whether a row precedes
+/// it, whether one follows, and the connectors' reveal progress.
+#[derive(Clone, Copy)]
+struct TreePlace {
+    has_predecessor: bool,
+    continues: bool,
+    reveal: f32,
+    continuation_reveal: f32,
+}
+
+/// Width of a spawn row's tree gutter: trunk and elbow, no tool glyph (the
+/// row leads with its own status mark).
+const AGENT_TREE_WIDTH: f32 = ACTIVITY_BRANCH_END_X + 2.0;
+
+#[allow(clippy::too_many_arguments)]
 fn subagent_chip(
     tool: &ToolItem,
     id: SharedString,
     on_open: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-    rail: bool,
+    tree: Option<TreePlace>,
+    brand: Option<(&'static str, Option<gpui::Hsla>)>,
     theme: &Theme,
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> AnyElement {
+    // Under a group header the row hangs off the task tree at the tree's
+    // height, so the fold measures it like any other tool row.
+    let row_height = if tree.is_some() {
+        TOOL_TREE_ROW_HEIGHT
+    } else {
+        CHIP_HEIGHT
+    };
     div()
-        .h(px(CHIP_HEIGHT))
+        .h(px(row_height))
         .w_full()
         .flex_none()
         .flex()
         .flex_row()
         .items_center()
-        .when(rail, |row| {
+        .when_some(tree, |row, place| {
             row.child(
-                div()
-                    .ml(px(12.0))
-                    .h_full()
-                    .w(px(1.0))
-                    .flex_none()
-                    .bg(crate::theme::ink(0.08)),
+                activity_connectors(
+                    place.has_predecessor,
+                    place.continues,
+                    place.reveal,
+                    place.continuation_reveal,
+                    row_height,
+                    AGENT_TREE_WIDTH,
+                    theme,
+                )
+                .h_full()
+                .flex_none(),
             )
         })
         .child(
             div()
                 .id(id)
-                .when(rail, |el| el.ml(px(12.0)))
                 .h(px(CHIP_CARD_HEIGHT))
                 .min_w_0()
                 .max_w_full()
@@ -10508,11 +10678,10 @@ fn subagent_chip(
                 .cursor_pointer()
                 .hover(|s| s.bg(crate::theme::ink(0.05)))
                 .on_click(on_open)
-                .child(chip_header_row(
+                .child(subagent_header_row(
                     tool,
                     Some(ChipTrail::OpenArrow),
-                    false,
-                    None,
+                    brand,
                     theme,
                     view,
                     cx,
@@ -13443,8 +13612,10 @@ mod tests {
             panic!("consecutive agents share a group")
         };
         assert_eq!(tools.len(), 2);
-        assert!(!tool_group_collapses(tools));
+        // Two agents fold under one "2 subagents" header.
+        assert!(tool_group_collapses(tools));
         assert!(tools.iter().all(is_agent_tool));
+        assert_eq!(tool_group_summary(tools), "2 of 2 running");
     }
 
     #[test]
@@ -14236,6 +14407,7 @@ mod tests {
                         state.sessions.push(zuse_protocol::Session {
                             last_completed_turn: None,
                             running_subagents: 0,
+                            background_tasks: Vec::new(),
                             chat_id: "chat".into(),
                             device_id: "test".into(),
                             status: zuse_protocol::SessionStatus::Working,
@@ -16617,15 +16789,6 @@ mod tests {
             tool_title_shimmer_phase(start, start + TOOL_GROUP_SHIMMER_DURATION),
             0.0
         );
-    }
-
-    #[test]
-    fn flavour_words_rotate_every_seven_seconds() {
-        let seed = flavour_seed("chat-1");
-        assert_eq!(flavour_word(seed, 0), flavour_word(seed, 6));
-        assert_ne!(flavour_word(seed, 0), flavour_word(seed, 7));
-        // Deterministic per chat; different chats usually differ in phase.
-        assert_eq!(flavour_word(seed, 3), flavour_word(seed, 3));
     }
 
     #[test]

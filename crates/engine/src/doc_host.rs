@@ -5837,6 +5837,16 @@ impl DocHost {
                 self.interrupt_and_pause_queue(sessions, handle).await?;
                 Ok((SessionCommandStatus::Applied, None))
             }
+            SessionCommandPayload::StopBackgroundTask { task_id } => {
+                if sessions.stop_background_task(chat_id, task_id) {
+                    Ok((SessionCommandStatus::Applied, None))
+                } else {
+                    Ok((
+                        SessionCommandStatus::Rejected,
+                        Some("no running background task to stop".into()),
+                    ))
+                }
+            }
             SessionCommandPayload::RespondInput {
                 request_id,
                 answers,

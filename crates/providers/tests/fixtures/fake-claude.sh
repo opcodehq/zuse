@@ -359,6 +359,25 @@ case "$first" in
   exec sleep 30
   ;;
 
+*scenario:stop-task*)
+  # A per-task stop is the `stop_task` control request naming the task: the
+  # CLI stops that task alone, announces how it ended, and drops it from the
+  # live set while the turn runs on. Ambient watchers are not activity.
+  [ "$initialized" = true ] || exit 7
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Bash"],"cwd":"/tmp","session_id":"sess-task"}'
+  emit '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bg-2","task_type":"local_bash","description":"pnpm dev"},{"task_id":"w-1","task_type":"monitor","description":"watch","ambient":true}]}'
+  emit '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"working"}}}'
+  read -r stop || exit 1
+  case "$stop" in *'"subtype":"stop_task"'*) ;; *) exit 8 ;; esac
+  case "$stop" in *'"task_id":"bg-2"'*) ;; *) exit 8 ;; esac
+  rid=$(printf '%s\n' "$stop" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+  emit "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{}}}"
+  emit '{"type":"system","subtype":"task_notification","task_id":"bg-2","status":"stopped","output_file":"/tmp/bg-2","summary":"stopped"}'
+  emit '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"w-1","task_type":"monitor","description":"watch","ambient":true}]}'
+  emit '{"type":"result","subtype":"success","result":"done","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-task"}'
+  cat >/dev/null
+  ;;
+
 *scenario:stop-in-place*)
   # A turn stop is the `interrupt` control request with `cancel_queued`: the
   # CLI ends the turn (an error_during_execution result carrying only its

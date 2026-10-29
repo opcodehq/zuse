@@ -205,6 +205,18 @@ pub const SETTINGS_PROVIDERS: &str = "icons/settings-providers.svg";
 pub const SETTINGS_DEFAULTS: &str = "icons/settings-defaults.svg";
 pub const SETTINGS_PLUGINS: &str = "icons/settings-plugins.svg";
 pub const SETTINGS_REMOTE: &str = "icons/settings-remote.svg";
+/// The session card's activity sections and a stopped task's mark.
+pub const SUMMARY_BACKGROUND: &str = "icons/summary-background.svg";
+pub const SUMMARY_AGENTS: &str = "icons/summary-agents.svg";
+pub const TASK_STOPPED: &str = "icons/task-stopped.svg";
+/// The session card's pull request menu.
+pub const PR_VIEW: &str = "icons/pr-view.svg";
+pub const PR_REPAIR: &str = "icons/pr-repair.svg";
+pub const PR_COMMENTS: &str = "icons/pr-comments.svg";
+pub const PR_CHECKS: &str = "icons/pr-checks.svg";
+pub const PR_CONFLICTS: &str = "icons/pr-conflicts.svg";
+pub const PR_ADD_TO_CHAT: &str = "icons/pr-add-to-chat.svg";
+pub const PR_GITHUB: &str = "icons/pr-github.svg";
 
 /// Serves both the compact control-icon set and the complete file-identity
 /// icon theme through the single asset source registered at app startup.

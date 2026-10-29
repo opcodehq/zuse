@@ -1371,6 +1371,14 @@ async fn a_stopped_turn_keeps_the_process_and_its_background_work() {
         turn.background_live(),
         "background_tasks_changed must report the live task"
     );
+    {
+        let tasks = turn.watch_background_tasks().borrow().clone();
+        assert_eq!(tasks.len(), 1, "{tasks:?}");
+        assert_eq!(tasks[0].task.id, "bg-1");
+        assert_eq!(tasks[0].task.description, "scout");
+        assert_eq!(tasks[0].task.kind, zuse_protocol::BackgroundTaskKind::Agent);
+        assert!(tasks[0].ended.is_none());
+    }
 
     turn.stop_turn();
     let stopped = loop {
@@ -1439,6 +1447,16 @@ async fn a_stopped_turn_keeps_the_process_and_its_background_work() {
         })
     ));
     assert!(!turn.background_live());
+    {
+        // The emptied live set ends the task; with no notification it
+        // reads as completed.
+        let tasks = turn.watch_background_tasks().borrow().clone();
+        assert!(tasks[0].ended.is_some(), "{tasks:?}");
+        assert_eq!(
+            tasks[0].outcome,
+            Some(zuse_protocol::BackgroundTaskOutcome::Completed)
+        );
+    }
 
     // A stop that lands between turns still settles: the CLI answers and no
     // result follows, so the driver reports the (empty) turn stopped.
@@ -1530,4 +1548,59 @@ fn changing_access_posture_requires_a_new_runtime() {
     after.sandbox = SandboxLevel::WorkspaceWrite;
     assert!(!harness().same_runtime(&before, &after));
     assert!(!harness().reconfigures_in_place(&before, &after));
+}
+
+#[tokio::test]
+async fn a_background_task_stops_alone_and_records_how_it_ended() {
+    use zuse_protocol::{BackgroundTaskKind, BackgroundTaskOutcome};
+    use zuse_providers::TurnControl;
+    let (mut controls, _steer, _token) = controls("A");
+    let turn = TurnControl::default();
+    controls.turn = turn.clone();
+    let mut stream = harness()
+        .run(request("scenario:stop-task"), controls)
+        .await
+        .expect("run starts");
+    async fn next(
+        stream: &mut futures::stream::BoxStream<'static, Result<AgentEvent, HarnessError>>,
+    ) -> Option<AgentEvent> {
+        tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("event in time")
+            .map(|r| r.expect("stream event"))
+    }
+    loop {
+        match next(&mut stream).await {
+            Some(AgentEvent::TextDelta { text }) if text == "working" => break,
+            Some(_) => {}
+            None => panic!("stream ended before the turn streamed"),
+        }
+    }
+    {
+        let tasks = turn.watch_background_tasks().borrow().clone();
+        assert_eq!(
+            tasks.len(),
+            1,
+            "ambient watchers are not activity: {tasks:?}"
+        );
+        assert_eq!(tasks[0].task.kind, BackgroundTaskKind::Shell);
+        assert_eq!(tasks[0].task.description, "pnpm dev");
+        assert!(tasks[0].task.stoppable);
+    }
+    turn.stop_background_task("bg-2");
+    loop {
+        match next(&mut stream).await {
+            Some(AgentEvent::Done { status, .. }) => {
+                assert_eq!(status, DoneStatus::Completed, "the turn itself ran on");
+                break;
+            }
+            Some(_) => {}
+            None => panic!("stream ended before the turn finished"),
+        }
+    }
+    let tasks = turn.watch_background_tasks().borrow().clone();
+    assert!(tasks[0].ended.is_some(), "{tasks:?}");
+    assert_eq!(tasks[0].outcome, Some(BackgroundTaskOutcome::Stopped));
+    // The ambient watcher is not listed, but it still keeps the runtime up.
+    assert!(turn.background_live());
 }

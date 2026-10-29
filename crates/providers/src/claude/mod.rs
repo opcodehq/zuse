@@ -968,6 +968,18 @@ async fn run_session(session: Session) {
                         && system.subtype == "background_tasks_changed"
                     {
                         turn.set_background(system.tasks.as_ref().map_or(0, Vec::len));
+                        turn.set_background_tasks(wire::live_background_tasks(
+                            system.tasks.as_deref().unwrap_or_default(),
+                        ));
+                    }
+                    if let Frame::System(system) = &frame
+                        && system.subtype == "task_notification"
+                        && let (Some(id), Some(outcome)) = (
+                            system.task_id.as_deref(),
+                            system.status.as_deref().and_then(wire::background_outcome),
+                        )
+                    {
+                        turn.note_background_outcome(id, outcome);
                     }
                     if let Frame::ControlRequest(req) = frame {
                         if title_only {
@@ -1152,6 +1164,16 @@ async fn run_session(session: Session) {
                     // after the current turn.
                     steering_open = false;
                     let _ = stdin_tx.send(StdinMsg::Close);
+                }
+            },
+
+            // Stop one background task; the turn and the CLI's other tasks
+            // run on. The CLI's next `background_tasks_changed` drops it.
+            task = turn.background_stop_requested() => {
+                stops_sent += 1;
+                let line = wire::stop_task_request_line(&format!("zuse_stop_task_{stops_sent}"), &task);
+                if stdin_tx.send(StdinMsg::Line(line)).is_err() {
+                    break 'main;
                 }
             },
 

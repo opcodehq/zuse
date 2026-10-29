@@ -4037,12 +4037,10 @@ impl Render for GitHistory {
                 .items_center()
                 .justify_center()
                 .gap(px(8.0))
-                .child(crate::loaders::gradient_spinner(
-                    "history-loading",
-                    &theme,
-                    3.0,
-                    cx.entity_id(),
-                    cx,
+                .child(crate::loaders::working_mark(
+                    format!("history-loading-{}", cx.entity_id()),
+                    20.0,
+                    theme.text,
                 ))
                 .child(
                     div()
