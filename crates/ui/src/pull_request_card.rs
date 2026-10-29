@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use gpui::{
-    Action, AnyElement, App, Context, EventEmitter, Global, Hsla, PathBuilder, SharedString, Task,
-    Window, canvas, div, point, prelude::*, px,
+    Action, AnyElement, App, Context, Entity, EventEmitter, Global, Hsla, PathBuilder,
+    SharedString, Subscription, Task, Window, canvas, div, point, prelude::*, px,
 };
 use zuse_protocol::branch_graph::{BranchGraph, BranchGraphRequest, MergePreview};
 use zuse_protocol::change_request_assessment::{check_failed, check_status};
@@ -365,6 +365,8 @@ pub struct CardLayoutChanged;
 
 pub struct PullRequestCard {
     state: gpui::Entity<AppState>,
+    watch_control: Option<Entity<crate::pr_watch::PrWatchControl>>,
+    watch_subscription: Option<Subscription>,
     chat_id: String,
     url: Option<String>,
     step: Option<CreateStep>,
@@ -403,6 +405,8 @@ impl PullRequestCard {
         let mut card = Self {
             state,
             chat_id,
+            watch_control: None,
+            watch_subscription: None,
             url: None,
             step: None,
             detail: None,
@@ -467,6 +471,23 @@ impl PullRequestCard {
                 self.detail = detail;
                 self.set_graph(Some(graph));
             }
+        }
+        if url_changed && !self.fixture {
+            self.watch_control = self.url.as_ref().map(|url| {
+                cx.new(|cx| {
+                    crate::pr_watch::PrWatchControl::new(
+                        self.state.clone(),
+                        self.chat_id.clone(),
+                        url.clone(),
+                        self.target(cx),
+                        false,
+                        cx,
+                    )
+                })
+            });
+            self.watch_subscription = self.watch_control.as_ref().map(|control| {
+                cx.observe(control, |card, _, cx| card.changed(cx))
+            });
         }
         self.refresh(false, cx);
         self.changed(cx);
@@ -1769,6 +1790,11 @@ impl gpui::Render for PullRequestCard {
                 .border_color(theme.border)
                 .bg(theme.surface_card)
                 .child(header)
+                .children(
+                    self.watch_control
+                        .clone()
+                        .map(|control| div().px(px(14.0)).pb(px(6.0)).child(control)),
+                )
                 .child(merge_row)
                 .children(commits)
                 .children(checks)

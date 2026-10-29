@@ -489,6 +489,7 @@ impl Default for CodeReview {
 
 pub struct PullRequestDetailPage {
     state: Entity<AppState>,
+    watch_control: Option<Entity<crate::pr_watch::PrWatchControl>>,
     pub url: String,
     target: Option<String>,
     detail: Option<ChangeRequestDetail>,
@@ -565,6 +566,7 @@ impl PullRequestDetailPage {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut page = Self {
+            watch_control: None,
             state,
             url,
             target,
@@ -759,6 +761,19 @@ impl PullRequestDetailPage {
     /// The pane's toolbar row: the repository and number on the left; the
     /// state, star and the pull request's actions on the right. The title
     /// itself leads the page below.
+    pub(crate) fn watch_in_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.watch_control = Some(cx.new(|cx| {
+            crate::pr_watch::PrWatchControl::new(
+                self.state.clone(),
+                chat_id,
+                self.url.clone(),
+                self.target.clone(),
+                true,
+                cx,
+            )
+        }));
+    }
+
     pub(crate) fn toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         let url = self.url.clone();
@@ -820,6 +835,7 @@ impl PullRequestDetailPage {
                             .child(format!("#{number}"))
                     })),
             )
+            .children(self.watch_control.clone())
             .children(state.map(|(state, draft)| {
                 div()
                     .mr(px(4.0))

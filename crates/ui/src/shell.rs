@@ -77,6 +77,7 @@ mod command_palette;
 mod file_mutations;
 mod files_panel;
 mod harness_updates;
+mod pr_watch;
 mod main_tabs;
 mod keyboard_commands;
 mod navigation_focus;
@@ -2226,6 +2227,7 @@ pub struct Shell {
     harness_update_banner_task: Option<Task<()>>,
     /// Independent watches retain device identity across selection changes.
     harness_update_devices: std::collections::BTreeMap<String, harness_updates::DeviceUpdates>,
+    pr_watch_devices: std::collections::HashMap<String, pr_watch::DeviceWatch>,
     harness_update_expanded: bool,
     harness_update_transition: Option<WidthTween>,
     harness_update_geometry: [Option<WidthTween>; 2],
@@ -2768,6 +2770,7 @@ impl Shell {
             harness_update_seen: std::collections::HashSet::new(),
             harness_update_banner_task: None,
             harness_update_devices: Default::default(),
+            pr_watch_devices: Default::default(),
             harness_update_expanded: false,
             harness_update_transition: None,
             harness_update_geometry: [None; 2],
@@ -2918,6 +2921,7 @@ impl Shell {
     // ---- splash ----
 
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
+        self.refresh_pr_watches(cx);
         // Voice is an orchestrator over every thread: navigation keeps it,
         // only losing the engine that hosts it ends the session.
         if self.voice.read(cx).chat_id.is_some()
