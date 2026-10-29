@@ -2302,7 +2302,20 @@ fn approval_question(method: &str, params: &Value) -> UserInputQuestion {
                 "Yes",
                 "No",
             );
-            approval.force_prompt = params
+            // Some app-server versions send only an item ID and reason. Those
+            // callbacks cannot establish an exact command or file resource key.
+            let has_resource = if method.contains("commandExecution") {
+                match params.get("command") {
+                    Some(Value::String(command)) => !command.trim().is_empty(),
+                    Some(Value::Array(parts)) => !parts.is_empty() && parts.iter().all(|part| part.as_str().is_some_and(|part| !part.is_empty())),
+                    _ => false,
+                }
+            } else {
+                params.get("changes").and_then(Value::as_array).is_some_and(|changes| {
+                    !changes.is_empty() && changes.iter().all(|change| change.get("path").and_then(Value::as_str).is_some_and(|path| !path.is_empty()))
+                })
+            };
+            approval.force_prompt = !has_resource || params
                 .get("additionalPermissions")
                 .is_some_and(|v| !v.is_null())
                 || params.get("grantRoot").is_some_and(|v| !v.is_null());
@@ -2457,6 +2470,13 @@ for line in sys.stdin:
         assert_eq!(first.input["cwd"], "/project");
         let escalation = approval_question("item/commandExecution/requestApproval", &json!({"command":"cargo test", "additionalPermissions":{"network":true}})).approval.unwrap();
         assert!(escalation.force_prompt);
+        assert!(!first.force_prompt);
+        for method in ["item/commandExecution/requestApproval", "item/fileChange/requestApproval"] {
+            let incomplete = approval_question(method, &json!({"itemId":"id", "reason":"approval needed"})).approval.unwrap();
+            assert!(incomplete.force_prompt, "missing resources cannot create reusable grants");
+        }
+        let file = approval_question("item/fileChange/requestApproval", &json!({"changes":[{"path":"src/lib.rs"}]})).approval.unwrap();
+        assert!(!file.force_prompt);
     }
 
     #[test]
