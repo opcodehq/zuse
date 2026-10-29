@@ -136,7 +136,7 @@ impl Composer {
                 div()
                     .text_size(px(11.))
                     .text_color(theme.text_muted)
-                    .child("Exact actions only · chat overrides project · read only always wins"),
+                    .child("Exact tools and resources · chat overrides project · read only always wins"),
             )
             .child(div().text_size(px(11.)).text_color(theme.text_muted)
                 .child("Rules apply to approval requests. Full access and native automatic review can run actions without a request."));

@@ -95,7 +95,7 @@ impl PermissionRules {
         let tx = db.transaction().map_err(error)?;
         let id = new_id();
         let at = now_ms();
-        tx.execute("INSERT INTO permission_rules(id,project,chat,tool,input,effect,created,updated) VALUES (?,?,?,?,?,'allow',?,?) ON CONFLICT(project,chat,tool,input) DO UPDATE SET effect='allow',updated=excluded.updated", params![id,project,chat.unwrap_or(""),approval.tool,input_key(&approval.input),at,at]).map_err(error)?;
+        tx.execute("INSERT INTO permission_rules(id,project,chat,tool,input,effect,created,updated) VALUES (?,?,?,?,?,'allow',?,?) ON CONFLICT(project,chat,tool,input) DO UPDATE SET effect='allow',updated=excluded.updated", params![id,project,chat.unwrap_or(""),approval.tool,input_key(&rule_input(approval)),at,at]).map_err(error)?;
         let rule_id: String = tx
             .query_row(
                 "SELECT id FROM permission_rules WHERE project=? AND chat=? AND tool=? AND input=?",
@@ -103,7 +103,7 @@ impl PermissionRules {
                     project,
                     chat.unwrap_or(""),
                     approval.tool,
-                    input_key(&approval.input)
+                    input_key(&rule_input(approval))
                 ],
                 |r| r.get(0),
             )
@@ -193,7 +193,7 @@ impl PermissionRules {
         } else {
             let matched: Option<(String,String)> = db.query_row(
                 "SELECT id,effect FROM permission_rules WHERE project=? AND (chat='' OR chat=?) AND tool=? AND input=? ORDER BY (chat<>'') DESC LIMIT 1",
-                params![project,chat,approval.tool,input_key(&approval.input)],
+                params![project,chat,approval.tool,input_key(&rule_input(approval))],
                 |r|Ok((r.get(0)?,r.get(1)?)),
             ).optional().map_err(error)?;
             match matched {
@@ -245,6 +245,97 @@ impl PermissionRules {
         )
     }
 }
+fn approval_payload(input: &serde_json::Value) -> &serde_json::Value {
+    if input.get("harness").is_some() && input.get("cwd").is_some() && input.get("input").is_some()
+    {
+        &input["input"]
+    } else {
+        input
+    }
+}
+fn file_body_fields(approval: &ToolApproval) -> Option<&'static [&'static str]> {
+    let (path, fields): (&str, &'static [&'static str]) = match approval.tool.as_str() {
+        "claude:Write" | "claude:Edit" | "claude:MultiEdit" => (
+            "file_path",
+            &[
+                "content",
+                "old_string",
+                "new_string",
+                "replace_all",
+                "edits",
+            ],
+        ),
+        "zuse:write_file" | "zuse:edit_file" | "zuse:multi_edit" => (
+            "path",
+            &[
+                "content",
+                "old_string",
+                "new_string",
+                "replace_all",
+                "edits",
+                "expected_hash",
+            ],
+        ),
+        "pi:write" | "pi:edit" => ("path", &["content", "oldText", "newText"]),
+        _ => return None,
+    };
+    approval_payload(&approval.input)
+        .get(path)
+        .and_then(serde_json::Value::as_str)?;
+    Some(fields)
+}
+/// Known schemas grant a file target or command, while retaining all other context.
+/// Unclassified tools keep their complete input, including ACP tool kind.
+fn rule_input(approval: &ToolApproval) -> serde_json::Value {
+    let mut input = approval.input.clone();
+    let wrapped = input.get("harness").is_some()
+        && input.get("cwd").is_some()
+        && input.get("input").is_some();
+    let payload = if wrapped {
+        input.get_mut("input").unwrap()
+    } else {
+        &mut input
+    };
+    let fields = file_body_fields(approval).or_else(|| {
+        let command = payload.get("command")?;
+        if !(command.is_string()
+            || command.as_array().is_some_and(|parts| {
+                !parts.is_empty() && parts.iter().all(serde_json::Value::is_string)
+            }))
+        {
+            return None;
+        }
+        match approval.tool.as_str() {
+            "claude:Bash" | "pi:bash" => Some(&["description", "timeout", "timeout_ms"]),
+            "codex:item/commandExecution/requestApproval" => Some(&["reason"]),
+            _ => None,
+        }
+    });
+    if let (Some(fields), Some(payload)) = (fields, payload.as_object_mut()) {
+        for field in fields {
+            payload.remove(*field);
+        }
+    }
+    input
+}
+fn declared_escalation(input: &serde_json::Value) -> bool {
+    match input {
+        serde_json::Value::Object(fields) => fields.iter().any(|(key, value)| match key.as_str() {
+            "dangerouslyDisableSandbox" | "dangerously_disable_sandbox" if value == true => true,
+            "sandbox_permissions" | "sandboxPermissions" if value == "require_escalated" => true,
+            "additionalPermissions" | "grantRoot" | "networkApprovalContext"
+                if !value.is_null() =>
+            {
+                true
+            }
+            "kind" if value == "switch_mode" || value == "switchMode" => true,
+            _ => declared_escalation(value),
+        }),
+        serde_json::Value::Array(values) => values.iter().any(declared_escalation),
+        _ => false,
+    }
+}
+
 fn input_key(input: &serde_json::Value) -> String {
     fn canonical(input: &serde_json::Value) -> serde_json::Value {
         match input {
@@ -284,10 +375,15 @@ fn audit(
 }
 /// Persistent grants cannot silence credential, private, or plan-exit prompts.
 pub fn forced(approval: &ToolApproval) -> bool {
-    if approval.force_prompt {
+    if approval.force_prompt || declared_escalation(&approval.input) {
         return true;
     }
-    let value = format!("{} {}", approval.tool, approval.input).to_ascii_lowercase();
+    let value = format!("{} {}", approval.tool, rule_input(approval)).to_ascii_lowercase();
+    if approval.tool.to_ascii_lowercase().contains("login")
+        || (file_body_fields(approval).is_none() && value.contains("login"))
+    {
+        return true;
+    }
     [
         ".env",
         ".ssh",
@@ -307,7 +403,6 @@ pub fn forced(approval: &ToolApproval) -> bool {
         "id_ed25519",
         ".pem",
         ".key",
-        "login",
     ]
     .iter()
     .any(|needle| value.contains(needle))
@@ -485,6 +580,120 @@ mod tests {
         let rules = PermissionRules::new(dir.path().join("rules.sqlite"));
         (dir, rules)
     }
+    #[test]
+    fn file_grants_bind_paths_across_edits_without_persisting_contents() {
+        let (_dir, rules) = store();
+        let first = ToolApproval::new(
+            "claude:Write",
+            serde_json::json!({"harness":"claude-code", "cwd":"/project", "input":{"file_path":"src/login.rs", "content":"login credentials implementation"}}),
+            "Yes",
+            "No",
+        );
+        rules.save("p", None, &first).unwrap();
+        let mut next = first.clone();
+        next.input["input"]["content"] = serde_json::json!("different implementation");
+        assert_eq!(
+            rules
+                .decide("p", "c", SandboxLevel::WorkspaceWrite, &next)
+                .unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            rules
+                .decide("p", "c", SandboxLevel::ReadOnly, &next)
+                .unwrap(),
+            Some(false)
+        );
+        let snapshot = rules.snapshot("p", "c").unwrap();
+        assert!(snapshot.rules[0].input["input"].get("content").is_none());
+        next.input["input"]["file_path"] = serde_json::json!("src/other.rs");
+        assert_eq!(
+            rules
+                .decide("p", "c", SandboxLevel::WorkspaceWrite, &next)
+                .unwrap(),
+            None
+        );
+        next.input["input"]["file_path"] = serde_json::json!(".env");
+        assert!(rules.save("p", None, &next).is_err());
+    }
+    #[test]
+    fn command_grants_ignore_display_hints_and_keep_execution_context() {
+        let (_dir, rules) = store();
+        let first = ToolApproval::new(
+            "claude:Bash",
+            serde_json::json!({"command":"cargo test", "cwd":"/project", "description":"Run tests", "timeout":1000}),
+            "Yes",
+            "No",
+        );
+        rules.save("p", None, &first).unwrap();
+        let mut next = first.clone();
+        next.input["description"] = serde_json::json!("Verify tests");
+        next.input["timeout"] = serde_json::json!(5000);
+        assert_eq!(
+            rules
+                .decide("p", "c", SandboxLevel::WorkspaceWrite, &next)
+                .unwrap(),
+            Some(true)
+        );
+        next.input["cwd"] = serde_json::json!("/other");
+        assert_eq!(
+            rules
+                .decide("p", "c", SandboxLevel::WorkspaceWrite, &next)
+                .unwrap(),
+            None
+        );
+        next.input["cwd"] = serde_json::json!("/project");
+        next.input["run_in_background"] = serde_json::json!(true);
+        assert_eq!(
+            rules
+                .decide("p", "c", SandboxLevel::WorkspaceWrite, &next)
+                .unwrap(),
+            None
+        );
+    }
+    #[test]
+    fn unknown_file_schemas_keep_complete_input_matching() {
+        let (_dir, rules) = store();
+        let first = ToolApproval::new(
+            "custom:write",
+            serde_json::json!({"path":"file.rs", "content":"one"}),
+            "Yes",
+            "No",
+        );
+        rules.save("p", None, &first).unwrap();
+        let mut next = first.clone();
+        next.input["content"] = serde_json::json!("two");
+        assert_eq!(
+            rules
+                .decide("p", "c", SandboxLevel::WorkspaceWrite, &next)
+                .unwrap(),
+            None
+        );
+    }
+    #[test]
+    fn declared_escalations_and_mode_switches_cannot_be_saved() {
+        let (_dir, rules) = store();
+        for input in [
+            serde_json::json!({"command":"cargo test", "dangerouslyDisableSandbox":true}),
+            serde_json::json!({"kind":"switch_mode", "rawInput":{"mode":"full-access"}}),
+        ] {
+            let approval = ToolApproval::new("test:tool", input, "Yes", "No");
+            assert!(rules.save("p", None, &approval).is_err());
+            assert_eq!(
+                rules
+                    .decide("p", "c", SandboxLevel::WorkspaceWrite, &approval)
+                    .unwrap(),
+                None
+            );
+            assert_eq!(
+                rules
+                    .decide("p", "c", SandboxLevel::ReadOnly, &approval)
+                    .unwrap(),
+                Some(false)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn unanswered_content_questions_keep_the_original_cancellation_shape() {
         let dir = tempfile::tempdir().unwrap();
