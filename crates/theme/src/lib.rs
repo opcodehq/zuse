@@ -935,30 +935,25 @@ mod tests {
             .into_iter()
             .filter(|issue| issue.severity == ValidationSeverity::Error)
             .collect();
-        // Keep the app's authored light primary and its #7f7f7f subtle text
-        // (the design system's metadata tone, 4:1 on white). Validation
-        // must continue to report both rather than silently recolor them.
-        assert_eq!(errors.len(), 2, "{errors:#?}");
+        // Keep the app's authored light primary. Validation must continue to
+        // report it rather than silently recolor it.
+        assert_eq!(errors.len(), 1, "{errors:#?}");
         assert!(errors.iter().all(|error| error.variant_id == "zuse-light"
             && error.category == ValidationCategory::Contrast));
-        assert!(
-            errors[0]
-                .message
-                .starts_with("muted text contrast is 4.00:1")
-        );
-        assert!(errors[1].message.starts_with("accent contrast is 2.23:1"));
+        assert!(errors[0].message.starts_with("accent contrast is 2.23:1"));
     }
 
     #[test]
     fn zuse_light_carries_the_design_system_neutrals() {
         let light = ThemeRegistry::builtin().variant("zuse-light").unwrap();
         let hex = |color: Color| color.to_string();
-        assert_eq!(hex(light.colors.text_muted), "#7f7f7f");
-        assert_eq!(hex(light.colors.text), "#5d5d5d");
-        assert_eq!(hex(light.colors.text_strong), "#292929");
-        assert_eq!(hex(light.colors.selected), "#f5f5f5");
-        assert_eq!(hex(light.colors.border), "#f2f2f2");
+        assert_eq!(hex(light.colors.text_muted), "#737373");
+        assert_eq!(hex(light.colors.text), "#2a2a2a");
+        assert_eq!(hex(light.colors.text_strong), "#0f0f0f");
+        assert_eq!(hex(light.colors.selected), "#f0f0f0");
+        assert_eq!(hex(light.colors.border), "#e8e8e8");
         assert_eq!(hex(light.colors.background), "#ffffff");
+        assert_eq!(hex(light.colors.shell), "#efefef");
     }
 
     #[test]

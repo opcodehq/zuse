@@ -14723,7 +14723,19 @@ impl Render for Shell {
                     .overflow_hidden()
                     .opacity(under_stage)
                     .when(self.workspace_gutter() > 0., |view| {
-                        view.rounded(px(zuse_viewport::workspace_style::RADIUS)).bg(Theme::of(cx).bg)
+                        view.rounded(px(zuse_viewport::workspace_style::RADIUS))
+                            .bg(Theme::of(cx).bg)
+                            .border_1()
+                            .border_color(crate::theme::hairline(0.05))
+                    })
+                    // Flush, the conversation still reads as its own panel:
+                    // a solid content tone against the translucent sidebar,
+                    // parted by one hairline.
+                    .when(self.workspace_gutter() <= 0., |view| {
+                        view.bg(Theme::of(cx).bg)
+                            .when(self.sidebar_content_width() > 0., |view| {
+                                view.border_l_1().border_color(crate::theme::hairline(0.06))
+                            })
                     })
                     .when(tab_row.is_some(), |column| {
                         column.pt(px(top_bar::CONVERSATION_TAB_ROW_HEIGHT))

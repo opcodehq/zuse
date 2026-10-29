@@ -952,10 +952,8 @@ pub fn menu_row_nav(
     }
 }
 
-/// Small uppercase section heading inside a floating menu (zuse
-/// `MenuHeading`): `px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase
-/// tracking-[0.1em] text-muted-foreground/60`. gpui has no letter-spacing at
-/// the pinned rev; the tracking is approximated with hair spaces.
+/// Small sentence-case section heading inside a floating menu: medium
+/// weight in the muted tone, so groups read without shouting.
 pub fn menu_heading(theme: &Theme, label: &str) -> gpui::Div {
     let theme = &theme.for_popup();
     div()
@@ -965,7 +963,7 @@ pub fn menu_heading(theme: &Theme, label: &str) -> gpui::Div {
         .text_size(crate::typography::text_xs())
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.text_muted)
-        .child(SharedString::from(tracked_upper(label)))
+        .child(SharedString::from(label.to_string()))
 }
 
 /// Uppercase + hair-space tracking (see [`menu_heading`]).

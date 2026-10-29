@@ -4,33 +4,33 @@ use crate::shell::{BORDER, MUTED, TEXT};
 use gpui::{prelude::*, *};
 // Values come directly from Zuse's app-palette.css and settings-panel.tsx.
 pub const FRAME_BG: Hsla = Hsla {
-    h: 132. / 360.,
-    s: 0.05,
-    l: 0.14,
+    h: 0.,
+    s: 0.,
+    l: 0.15,
     a: 1.,
 };
 pub const CARD_BG: Hsla = Hsla {
-    h: 136. / 360.,
-    s: 0.05,
-    l: 0.075,
+    h: 0.,
+    s: 0.,
+    l: 0.095,
     a: 1.,
 };
 pub const SIDEBAR_BG: Hsla = Hsla {
-    h: 138. / 360.,
-    s: 0.05,
-    l: 0.0575,
+    h: 0.,
+    s: 0.,
+    l: 0.105,
     a: 1.,
 };
 pub const SIDEBAR_ACTIVE: Hsla = Hsla {
-    h: 130. / 360.,
-    s: 0.06,
-    l: 0.135,
+    h: 0.,
+    s: 0.,
+    l: 0.16,
     a: 1.,
 };
 pub const SIDEBAR_BORDER: Hsla = Hsla {
-    h: 136. / 360.,
-    s: 0.05,
-    l: 0.085,
+    h: 0.,
+    s: 0.,
+    l: 0.13,
     a: 1.,
 };
 pub const CARD_BORDER: Hsla = Hsla {

@@ -919,13 +919,11 @@ impl Theme {
         self.glass().a < 1.0
     }
 
-    /// Shared background for the editor host and the adjacent Files column.
+    /// Shared background for the editor host and the adjacent Files column:
+    /// the conversation panel's solid tone, so content panes read as one
+    /// plane beside the translucent sidebar.
     pub fn panel_bg(&self) -> Hsla {
-        if self.is_glass() {
-            self.bg.opacity(0.4)
-        } else {
-            self.bg
-        }
+        self.bg
     }
 
     /// Whether FLOATING surfaces (popovers, the composer pill) paint their
@@ -1011,7 +1009,7 @@ impl Theme {
     pub fn settings_frame_bg(&self) -> Hsla {
         match self.variant_id.as_ref() {
             "zuse-dark" => zuse_viewport::settings_style::FRAME_BG,
-            "zuse-light" => hsla(105. / 360., 0.18, 0.94, 1.),
+            "zuse-light" => hsla(0., 0., 0.94, 1.),
             _ => self.surface_raised,
         }
     }
@@ -1138,8 +1136,8 @@ impl Theme {
     /// needs over the most adverse scene underneath.
     pub fn popover_glass_alpha(&self) -> f32 {
         let base = match self.appearance {
-            Appearance::Dark => 0.78,
-            Appearance::Light => 0.82,
+            Appearance::Dark => 0.92,
+            Appearance::Light => 0.92,
         };
         self.contrast_checked_tint_alpha(self.popover_glass_tint(), base, self.adverse_backdrop())
     }
@@ -1151,21 +1149,11 @@ impl Theme {
         if !self.floating_glass() {
             return self.surface_overlay.opacity(1.0).into();
         }
-        let alpha = self.popover_glass_alpha();
-        let tint = self.popover_glass_tint();
-        let (top, bottom) = match self.appearance {
-            Appearance::Dark => {
-                let sheen = |strength: f32| flatten(hsla(0.0, 0.0, 1.0, strength), tint);
-                (sheen(0.045).opacity(alpha), sheen(0.008).opacity(alpha))
-            }
-            // White cannot brighten white: the sheen is a denser top edge.
-            Appearance::Light => (tint.opacity((alpha + 0.06).min(1.0)), tint.opacity(alpha)),
-        };
-        gpui::linear_gradient(
-            180.0,
-            gpui::linear_color_stop(top, 0.0),
-            gpui::linear_color_stop(bottom, 1.0),
-        )
+        // A flat neutral plate: dense enough to read as a solid card, with
+        // just enough of the blur showing through to keep it light.
+        self.popover_glass_tint()
+            .opacity(self.popover_glass_alpha())
+            .into()
     }
 
     /// The glass card's hairline ring (its 1px border): white on dark, ink
@@ -1182,8 +1170,8 @@ impl Theme {
     /// the hairline ring is the card's border instead.
     pub fn popover_glass_shadows(&self) -> Vec<gpui::BoxShadow> {
         let (highlight, drop) = match self.appearance {
-            Appearance::Dark => (0.09, 0.45),
-            Appearance::Light => (0.8, 0.16),
+            Appearance::Dark => (0.05, 0.5),
+            Appearance::Light => (0.8, 0.14),
         };
         vec![
             gpui::BoxShadow::new(gpui::px(0.0), gpui::px(1.0), hsla(0.0, 0.0, 1.0, highlight))
@@ -1199,7 +1187,7 @@ impl Theme {
     pub fn composer_glass_bg(&self) -> Hsla {
         match self.appearance {
             Appearance::Dark if self.variant_id.as_ref() == "zuse-dark" => {
-                hsla(120.0 / 360.0, 0.02, 0.10, 0.9)
+                hsla(0.0, 0.0, 0.118, 0.9)
             }
             Appearance::Dark => {
                 flatten(self.surface_raised.opacity(0.6), self.surface_card).opacity(0.9)
@@ -1235,7 +1223,7 @@ impl Theme {
     /// the shared translucent wash elsewhere.
     pub fn user_bubble_fill(&self) -> Hsla {
         match self.variant_id.as_ref() {
-            "zuse-dark" => hsla(132.0 / 360.0, 0.04, 0.11, 1.0),
+            "zuse-dark" => hsla(0.0, 0.0, 0.135, 1.0),
             _ => user_bubble_bg(),
         }
     }
@@ -1243,7 +1231,7 @@ impl Theme {
     /// The muted fill (chips, segmented tracks, toolbar washes).
     pub fn muted_fill(&self) -> Hsla {
         match self.variant_id.as_ref() {
-            "zuse-dark" => hsla(132.0 / 360.0, 0.05, 0.14, 1.0),
+            "zuse-dark" => hsla(0.0, 0.0, 0.16, 1.0),
             "zuse-light" => self.bg_selected,
             _ => flatten(self.text.opacity(0.04), self.surface_raised),
         }
@@ -1252,7 +1240,7 @@ impl Theme {
     /// The neutral accent fill (active tabs, pressed ghost controls).
     pub fn accent_fill(&self) -> Hsla {
         match self.variant_id.as_ref() {
-            "zuse-dark" => hsla(130.0 / 360.0, 0.06, 0.165, 1.0),
+            "zuse-dark" => hsla(0.0, 0.0, 0.19, 1.0),
             "zuse-light" => self.bg_selected,
             _ => self.element_hover,
         }
@@ -1319,21 +1307,21 @@ impl Theme {
             surface_preference: SurfacePreference::ThemeDefault,
             surface_treatment: SurfaceTreatment::Opaque,
             accent_color,
-            bg: hsla(140. / 360., 0.05, 0.045, 1.), // app-palette.css background
-            surface: hsla(138. / 360., 0.05, 0.0575, 1.), // app-palette.css sidebar
-            surface_raised: hsla(132. / 360., 0.05, 0.105, 1.),
-            surface_card: hsla(136. / 360., 0.05, 0.075, 1.),
-            surface_dialog: hsla(132. / 360., 0.05, 0.105, 1.),
-            surface_overlay: hsla(128. / 360., 0.05, 0.15, 1.),
+            bg: grey(0x15),      // the conversation panel
+            surface: grey(0x1e), // the sidebar and window shell, a step lighter
+            surface_raised: grey(0x22),
+            surface_card: grey(0x18),
+            surface_dialog: grey(0x1c),
+            surface_overlay: grey(0x1f),
             element_hover: hsla(0.0, 0.0, 0.92, 0.11),
             element_active: hsla(0.0, 0.0, 0.92, 0.16),
             bg_selected: hsla(0.0, 0.0, 0.92, 0.11),
-            border: hsla(132. / 360., 0.04, 0.125, 1.),
-            border_strong: hsla(128. / 360., 0.05, 0.17, 1.),
-            text_strong: hsla(100. / 360., 0.04, 0.955, 1.),
-            text: hsla(100. / 360., 0.04, 0.91, 1.),
-            text_muted: hsla(105. / 360., 0.03, 0.65, 1.),
-            text_faint: hsla(110. / 360., 0.03, 0.43, 1.),
+            border: grey(0x27),
+            border_strong: grey(0x32),
+            text_strong: grey(0xf4),
+            text: grey(0xe8),
+            text_muted: grey(0xa3),
+            text_faint: grey(0x6e),
             text_dim: grey(0x98),
             solid: neutral(0.922), // near-white plate
             on_solid: grey(0x0e),  // near-black label
@@ -1411,21 +1399,21 @@ impl Theme {
             accent_color,
             // The design system's neutrals on a white canvas.
             bg: grey(0xff),
-            surface: grey(0xfa),
+            surface: grey(0xef), // the sidebar and window shell, grey beside the white panel
             surface_raised: grey(0xef),
             surface_card: grey(0xff),
             surface_dialog: grey(0xff),
             surface_overlay: grey(0xff),
-            element_hover: grey(0xf7),
+            element_hover: grey(0xf4),
             element_active: grey(0xf5),
-            bg_selected: grey(0xf5),
-            border: grey(0xf2),
-            border_strong: grey(0xe5),
-            text_strong: grey(0x29),
-            text: grey(0x5d),
-            text_muted: grey(0x7f),
+            bg_selected: grey(0xf0),
+            border: grey(0xe8),
+            border_strong: grey(0xdc),
+            text_strong: grey(0x0f),
+            text: grey(0x2a),
+            text_muted: grey(0x73),
             text_faint: grey(0xa3),
-            text_dim: grey(0x7f),
+            text_dim: grey(0x73),
             solid: neutral(0.205),    // near-black plate, deeper than body text
             on_solid: neutral(0.985), // near-white label
             accent: accent.primary,
@@ -2614,11 +2602,11 @@ mod tests {
     #[test]
     fn light_text_and_lines_are_the_design_system_neutrals() {
         let l = Theme::light();
-        assert_eq!(l.text_strong, grey(0x29));
-        assert_eq!(l.text, grey(0x5d));
-        assert_eq!(l.text_muted, grey(0x7f));
-        assert_eq!(l.bg_selected, grey(0xf5));
-        assert_eq!(l.border, grey(0xf2));
+        assert_eq!(l.text_strong, grey(0x0f));
+        assert_eq!(l.text, grey(0x2a));
+        assert_eq!(l.text_muted, grey(0x73));
+        assert_eq!(l.bg_selected, grey(0xf0));
+        assert_eq!(l.border, grey(0xe8));
         // The registry's Zuse Light resolves to the same roles.
         let resolved = Theme::for_selection(
             Appearance::Light,

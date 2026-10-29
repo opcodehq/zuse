@@ -689,7 +689,7 @@ impl Shell {
             Mode::Clone => "clone",
         };
         let focus = setup.focus.clone();
-        let card = cmd::card("project-setup", &focus, viewport, &theme)
+        let card = command_palette::cmd::card("project-setup", &focus, viewport, &theme)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_add_space(cx)))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 this.project_setup_key(event, window, cx)
@@ -715,7 +715,7 @@ impl Shell {
         };
         let card = card
             .child(header)
-            .child(cmd::panel(&theme).child(panel_body))
+            .child(command_palette::cmd::panel(&theme).child(panel_body))
             .child(footer);
         Some(command_palette::palette_overlay(viewport, card))
     }
@@ -745,41 +745,40 @@ impl Shell {
         let mut first_project = true;
         for (ix, entry) in self.project_action_rows(cx).into_iter().enumerate() {
             if ix == 0 && !matches!(entry, SetupRow::Project { .. }) {
-                items.push(cmd::group_label(&theme, "Start").into_any_element());
+                items.push(command_palette::cmd::group_label(&theme, "Start").into_any_element());
             }
-            let row = cmd::row(&theme, ix == active, ("project-setup-row", ix)).on_mouse_move(
-                cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
+            let row = command_palette::cmd::row(&theme, ix == active, ("project-setup-row", ix))
+                .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
                     this.project_setup_hover(ix, cx)
-                }),
-            );
+                }));
             let row = match &entry {
                 SetupRow::Project { id, name, path } => {
                     if std::mem::take(&mut first_project) {
                         items.push(
-                            cmd::group_label(&theme, "Projects")
+                            command_palette::cmd::group_label(&theme, "Projects")
                                 .when(ix > 0, |el| el.mt(px(6.0)))
                                 .into_any_element(),
                         );
                     }
                     let op = creations.iter().find(|op| &op.destination == path);
-                    row.child(cmd::glyph(&theme, icons::PROJECT_DEFAULT))
+                    row.child(command_palette::cmd::glyph(&theme, icons::PROJECT_DEFAULT))
                         .child(div().flex_none().max_w(px(220.0)).truncate().child(
                             popover::search_highlight(name.clone().into(), Some(&filter), &theme),
                         ))
-                        .child(cmd::detail(&theme, path.clone()))
+                        .child(command_palette::cmd::detail(&theme, path.clone()))
                         .children(
                             op.and_then(|op| creation_badge(op, &theme, format!("setup-op-{id}"))),
                         )
                 }
                 action => {
                     let (glyph, title, hint) = action.action();
-                    row.child(cmd::glyph(&theme, glyph))
+                    row.child(command_palette::cmd::glyph(&theme, glyph))
                         .child(div().flex_none().child(popover::search_highlight(
                             title.into(),
                             Some(&filter),
                             &theme,
                         )))
-                        .child(cmd::detail(&theme, hint))
+                        .child(command_palette::cmd::detail(&theme, hint))
                 }
             };
             items.push(
@@ -790,21 +789,37 @@ impl Shell {
             );
         }
         if items.is_empty() {
-            items.push(cmd::empty(&theme, "Nothing matches").into_any_element());
+            items.push(command_palette::cmd::empty(&theme, "Nothing matches").into_any_element());
         }
-        let header = cmd::header(&theme, cmd::search_glyph(&theme), query.into_any_element());
-        let panel = cmd::list("project-setup-results", &scroll, viewport).children(items);
-        let footer = cmd::footer(&theme)
+        let header = command_palette::cmd::header(
+            &theme,
+            command_palette::cmd::search_glyph(&theme),
+            query.into_any_element(),
+        );
+        let panel =
+            command_palette::cmd::list("project-setup-results", &scroll, viewport).children(items);
+        let footer = command_palette::cmd::footer(&theme)
             .child(
-                cmd::hints()
-                    .child(cmd::hint(
+                command_palette::cmd::hints()
+                    .child(command_palette::cmd::hint(
                         &theme,
-                        &[cmd::Key::Up, cmd::Key::Down],
+                        &[
+                            command_palette::cmd::Key::Up,
+                            command_palette::cmd::Key::Down,
+                        ],
                         "Navigate",
                     ))
-                    .child(cmd::hint(&theme, &[cmd::Key::Enter], "Open")),
+                    .child(command_palette::cmd::hint(
+                        &theme,
+                        &[command_palette::cmd::Key::Enter],
+                        "Open",
+                    )),
             )
-            .child(cmd::hint(&theme, &[cmd::Key::Text("Esc")], "Close"));
+            .child(command_palette::cmd::hint(
+                &theme,
+                &[command_palette::cmd::Key::Text("Esc".into())],
+                "Close",
+            ));
         (header, panel, footer)
     }
 
@@ -894,8 +909,11 @@ impl Shell {
                 )
             };
             items.push(
-                cmd::group_label(&theme, if confirm { "Repository" } else { "Project" })
-                    .into_any_element(),
+                command_palette::cmd::group_label(
+                    &theme,
+                    if confirm { "Repository" } else { "Project" },
+                )
+                .into_any_element(),
             );
             items.push(
                 div()
@@ -905,7 +923,7 @@ impl Shell {
                     .items_center()
                     .gap(px(10.0))
                     .text_size(crate::typography::text_sm())
-                    .child(cmd::glyph(&theme, glyph))
+                    .child(command_palette::cmd::glyph(&theme, glyph))
                     .child(
                         div()
                             .flex_1()
@@ -952,16 +970,20 @@ impl Shell {
             let heading = entry.group();
             if heading.is_some() && heading != group {
                 items.push(
-                    cmd::group_label(&theme, heading.unwrap_or_default())
+                    command_palette::cmd::group_label(&theme, heading.unwrap_or_default())
                         .when(!items.is_empty(), |el| el.mt(px(6.0)))
                         .into_any_element(),
                 );
             }
             group = heading;
-            let row = cmd::row(&theme, navigating && ix == active, ("project-form-row", ix))
-                .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
-                    this.project_setup_hover(ix, cx)
-                }));
+            let row = command_palette::cmd::row(
+                &theme,
+                navigating && ix == active,
+                ("project-form-row", ix),
+            )
+            .on_mouse_move(cx.listener(
+                move |this, _: &gpui::MouseMoveEvent, _, cx| this.project_setup_hover(ix, cx),
+            ));
             let row = match &entry {
                 FormRow::Template(choice) => {
                     let (_, label, hint) = TEMPLATES
@@ -969,9 +991,9 @@ impl Shell {
                         .copied()
                         .find(|(t, ..)| t == choice)
                         .unwrap_or(TEMPLATES[0]);
-                    row.child(cmd::glyph(&theme, template_glyph(*choice)))
+                    row.child(command_palette::cmd::glyph(&theme, template_glyph(*choice)))
                         .child(div().flex_none().child(label))
-                        .child(cmd::detail(&theme, hint))
+                        .child(command_palette::cmd::detail(&theme, hint))
                         .child(popover::radio_dot(&theme, template == *choice))
                 }
                 FormRow::Publish => {
@@ -985,7 +1007,7 @@ impl Shell {
                         _ => "GitHub is unavailable here".into(),
                     };
                     let on = publish && github_ok;
-                    row.child(cmd::glyph(&theme, icons::SITE_GITHUB))
+                    row.child(command_palette::cmd::glyph(&theme, icons::SITE_GITHUB))
                         .child(
                             div()
                                 .flex_none()
@@ -996,7 +1018,7 @@ impl Shell {
                                 })
                                 .child("Create private GitHub repository"),
                         )
-                        .child(cmd::detail(&theme, detail))
+                        .child(command_palette::cmd::detail(&theme, detail))
                         .child(
                             crate::settings::widgets::toggle_switch(&theme, on, "project-publish")
                                 .rounded_full()
@@ -1005,7 +1027,7 @@ impl Shell {
                         )
                 }
                 FormRow::Location => {
-                    row.child(cmd::glyph(&theme, icons::FOLDER))
+                    row.child(command_palette::cmd::glyph(&theme, icons::FOLDER))
                         .child(div().flex_1().min_w_0().truncate().child(
                             if parent_text.is_empty() {
                                 "Choose a folder".to_owned()
@@ -1013,7 +1035,7 @@ impl Shell {
                                 parent_text.clone()
                             },
                         ))
-                        .child(cmd::trailing(&theme, "Change"))
+                        .child(command_palette::cmd::trailing(&theme, "Change"))
                 }
                 FormRow::Computer(d) => {
                     let current = device.as_ref().is_some_and(|c| c.id == d.id);
@@ -1022,9 +1044,12 @@ impl Shell {
                     } else {
                         d.name.clone()
                     };
-                    row.child(cmd::glyph(&theme, spaces::device_glyph(&d.platform)))
-                        .child(div().flex_1().min_w_0().truncate().child(label))
-                        .child(popover::radio_dot(&theme, current))
+                    row.child(command_palette::cmd::glyph(
+                        &theme,
+                        spaces::device_glyph(&d.platform),
+                    ))
+                    .child(div().flex_1().min_w_0().truncate().child(label))
+                    .child(popover::radio_dot(&theme, current))
                 }
                 FormRow::Repo(repo) => {
                     let (owner, repo_name) = repo
@@ -1032,23 +1057,25 @@ impl Shell {
                         .split_once('/')
                         .map(|(o, n)| (o.to_owned(), n.to_owned()))
                         .unwrap_or_else(|| (String::new(), repo.name_with_owner.clone()));
-                    row.child(cmd::glyph(&theme, icons::SITE_GITHUB))
+                    row.child(command_palette::cmd::glyph(&theme, icons::SITE_GITHUB))
                         .child(div().flex_none().child(repo_name))
-                        .child(cmd::detail(&theme, owner))
+                        .child(command_palette::cmd::detail(&theme, owner))
                         .when(repo.private, |el| {
-                            el.child(cmd::trailing(&theme, "Private"))
+                            el.child(command_palette::cmd::trailing(&theme, "Private"))
                         })
                 }
                 FormRow::Url(url) => row
-                    .child(cmd::glyph(&theme, icons::GLOBAL))
+                    .child(command_palette::cmd::glyph(&theme, icons::GLOBAL))
                     .child(div().flex_none().child("Clone from URL"))
-                    .child(cmd::detail(&theme, url.clone())),
-                FormRow::More(_) => row.child(cmd::glyph(&theme, icons::REFRESH)).child(
-                    div()
-                        .flex_1()
-                        .text_color(theme.text_muted)
-                        .child("Load more repositories"),
-                ),
+                    .child(command_palette::cmd::detail(&theme, url.clone())),
+                FormRow::More(_) => row
+                    .child(command_palette::cmd::glyph(&theme, icons::REFRESH))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(theme.text_muted)
+                            .child("Load more repositories"),
+                    ),
             };
             items.push(
                 row.on_click(
@@ -1076,7 +1103,7 @@ impl Shell {
             items.push(if repos_loading {
                 popover::skeleton_rows("project-repos-loading", &theme, 4, cx.entity_id(), cx)
             } else {
-                cmd::empty(&theme, note).into_any_element()
+                command_palette::cmd::empty(&theme, note).into_any_element()
             });
         }
 
@@ -1101,8 +1128,9 @@ impl Shell {
                     .group_hover("project-form-back", |s| s.text_color(theme.text)),
             )
             .into_any_element();
-        let header = cmd::header(&theme, back, input.into_any_element());
-        let panel = cmd::list("project-form-results", &scroll, viewport).children(items);
+        let header = command_palette::cmd::header(&theme, back, input.into_any_element());
+        let panel =
+            command_palette::cmd::list("project-form-results", &scroll, viewport).children(items);
 
         let highlighted = navigating.then(|| rows.get(active)).flatten();
         let enter_label = match highlighted {
@@ -1114,22 +1142,51 @@ impl Shell {
             None if confirm => "Clone",
             None => "Create",
         };
-        let (action, keys): (&str, &[cmd::Key]) = match (mode, confirm, busy) {
-            (_, _, true) => ("Starting…", &[cmd::Key::Mod, cmd::Key::Enter]),
-            (Mode::Clone, false, _) => ("Continue", &[cmd::Key::Enter]),
-            (Mode::Clone, true, _) => ("Clone", &[cmd::Key::Mod, cmd::Key::Enter]),
-            _ => ("Create", &[cmd::Key::Mod, cmd::Key::Enter]),
+        let (action, keys): (&str, &[command_palette::cmd::Key]) = match (mode, confirm, busy) {
+            (_, _, true) => (
+                "Starting…",
+                &[
+                    command_palette::cmd::Key::Mod,
+                    command_palette::cmd::Key::Enter,
+                ],
+            ),
+            (Mode::Clone, false, _) => ("Continue", &[command_palette::cmd::Key::Enter]),
+            (Mode::Clone, true, _) => (
+                "Clone",
+                &[
+                    command_palette::cmd::Key::Mod,
+                    command_palette::cmd::Key::Enter,
+                ],
+            ),
+            _ => (
+                "Create",
+                &[
+                    command_palette::cmd::Key::Mod,
+                    command_palette::cmd::Key::Enter,
+                ],
+            ),
         };
-        let footer = cmd::footer(&theme)
+        let footer = command_palette::cmd::footer(&theme)
             .child(
-                cmd::hints()
-                    .child(cmd::hint(
+                command_palette::cmd::hints()
+                    .child(command_palette::cmd::hint(
                         &theme,
-                        &[cmd::Key::Up, cmd::Key::Down],
+                        &[
+                            command_palette::cmd::Key::Up,
+                            command_palette::cmd::Key::Down,
+                        ],
                         "Navigate",
                     ))
-                    .child(cmd::hint(&theme, &[cmd::Key::Enter], enter_label))
-                    .child(cmd::hint(&theme, &[cmd::Key::Text("⌫")], "Back")),
+                    .child(command_palette::cmd::hint(
+                        &theme,
+                        &[command_palette::cmd::Key::Enter],
+                        enter_label,
+                    ))
+                    .child(command_palette::cmd::hint(
+                        &theme,
+                        &[command_palette::cmd::Key::Text("⌫".into())],
+                        "Back",
+                    )),
             )
             .child(
                 div()
@@ -1154,7 +1211,7 @@ impl Shell {
                     })
                     .when(!can_submit, |el| el.opacity(0.4))
                     .child(action)
-                    .child(cmd::keys(&theme, keys)),
+                    .child(command_palette::cmd::keys(&theme, keys)),
             );
         (header, panel, footer)
     }
@@ -1429,281 +1486,6 @@ fn clone_name(url: &str) -> String {
         .to_owned()
 }
 
-/// The command surface: a neutral card whose input and footer sit on a
-/// faintly lifted layer around an inset results panel.
-mod cmd {
-    use super::*;
-
-    fn dark(theme: &Theme) -> bool {
-        theme.appearance.is_dark()
-    }
-
-    /// The card's outer layer, under the input and the footer.
-    fn chrome(theme: &Theme) -> gpui::Hsla {
-        if dark(theme) {
-            gpui::hsla(0.0, 0.0, 0.122, 1.0)
-        } else {
-            gpui::hsla(0.0, 0.0, 0.975, 1.0)
-        }
-    }
-
-    /// The inset results panel.
-    fn surface(theme: &Theme) -> gpui::Hsla {
-        if dark(theme) {
-            gpui::hsla(0.0, 0.0, 0.098, 1.0)
-        } else {
-            gpui::white()
-        }
-    }
-
-    fn border(theme: &Theme) -> gpui::Hsla {
-        if dark(theme) {
-            gpui::hsla(0.0, 0.0, 1.0, 0.07)
-        } else {
-            gpui::hsla(0.0, 0.0, 0.0, 0.08)
-        }
-    }
-
-    /// The row highlight and key-cap fill.
-    fn wash(theme: &Theme) -> gpui::Hsla {
-        if dark(theme) {
-            gpui::hsla(0.0, 0.0, 1.0, 0.05)
-        } else {
-            gpui::hsla(0.0, 0.0, 0.0, 0.045)
-        }
-    }
-
-    pub(super) fn card(
-        id: &'static str,
-        focus: &gpui::FocusHandle,
-        viewport: gpui::Size<Pixels>,
-        theme: &Theme,
-    ) -> Stateful<Div> {
-        div()
-            .id(id)
-            .track_focus(focus)
-            .w(px(576.0_f32.min(f32::from(viewport.width) - 32.0)))
-            .flex()
-            .flex_col()
-            .rounded(px(16.0))
-            .border_1()
-            .border_color(border(theme))
-            .bg(chrome(theme))
-            .shadow_lg()
-            .overflow_hidden()
-            .text_color(theme.text)
-    }
-
-    /// The input row: a leading glyph or back button, then the input.
-    pub(super) fn header(theme: &Theme, leading: AnyElement, input: AnyElement) -> Div {
-        div()
-            .h(px(50.0))
-            .flex_none()
-            .px(px(16.0))
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .text_color(theme.text)
-            .child(leading)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_size(crate::typography::text_md())
-                    .child(input),
-            )
-    }
-
-    pub(super) fn search_glyph(theme: &Theme) -> AnyElement {
-        div()
-            .size(px(22.0))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                icon(icons::MAGNIFER)
-                    .size(px(16.0))
-                    .text_color(theme.text_muted),
-            )
-            .into_any_element()
-    }
-
-    /// The results panel, inset into the card with its own top corners.
-    pub(super) fn panel(theme: &Theme) -> Div {
-        div()
-            .mx(px(-1.0))
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .rounded_t(px(12.0))
-            .border_1()
-            .border_b_0()
-            .border_color(border(theme))
-            .bg(surface(theme))
-    }
-
-    pub(super) fn list(
-        id: &'static str,
-        scroll: &gpui::ScrollHandle,
-        viewport: gpui::Size<Pixels>,
-    ) -> Stateful<Div> {
-        div()
-            .id(id)
-            .min_h_0()
-            .max_h(px((f32::from(viewport.height) - 220.0).clamp(140.0, 360.0)))
-            .overflow_y_scroll()
-            .track_scroll(scroll)
-            .p(px(8.0))
-            .flex()
-            .flex_col()
-    }
-
-    pub(super) fn group_label(theme: &Theme, label: &str) -> Div {
-        div()
-            .px(px(8.0))
-            .pt(px(6.0))
-            .pb(px(4.0))
-            .text_size(crate::typography::text_xs())
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.text_muted)
-            .child(SharedString::from(label.to_owned()))
-    }
-
-    /// One result: compact, with the highlight as a quiet wash.
-    pub(super) fn row(
-        theme: &Theme,
-        highlighted: bool,
-        id: impl Into<gpui::ElementId>,
-    ) -> Stateful<Div> {
-        div()
-            .id(id)
-            .min_h(px(32.0))
-            .px(px(8.0))
-            .py(px(4.0))
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .rounded(px(8.0))
-            .text_size(crate::typography::text_sm())
-            .text_color(theme.text)
-            .cursor_pointer()
-            .when(highlighted, |el| el.bg(wash(theme)))
-    }
-
-    pub(super) fn glyph(theme: &Theme, glyph: &'static str) -> gpui::Svg {
-        icon(glyph)
-            .size(px(16.0))
-            .flex_none()
-            .text_color(theme.text_muted)
-    }
-
-    pub(super) fn detail(theme: &Theme, text: impl Into<SharedString>) -> Div {
-        div()
-            .flex_1()
-            .min_w_0()
-            .truncate()
-            .text_size(crate::typography::text_xs())
-            .text_color(theme.text_muted.opacity(0.8))
-            .child(text.into())
-    }
-
-    pub(super) fn trailing(theme: &Theme, text: &'static str) -> Div {
-        div()
-            .flex_none()
-            .text_size(crate::typography::text_xs())
-            .text_color(theme.text_muted.opacity(0.8))
-            .child(text)
-    }
-
-    pub(super) fn empty(theme: &Theme, text: impl Into<SharedString>) -> Div {
-        div()
-            .py(px(20.0))
-            .px(px(16.0))
-            .flex()
-            .justify_center()
-            .text_size(crate::typography::text_sm())
-            .text_color(theme.text_muted)
-            .child(text.into())
-    }
-
-    pub(super) fn footer(theme: &Theme) -> Div {
-        div()
-            .flex_none()
-            .h(px(46.0))
-            .px(px(16.0))
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(12.0))
-            .border_t_1()
-            .border_color(border(theme))
-            .text_size(crate::typography::text_xs())
-            .text_color(theme.text_muted)
-    }
-
-    pub(super) fn hints() -> Div {
-        div().flex().items_center().gap(px(14.0))
-    }
-
-    #[derive(Clone, Copy)]
-    pub(super) enum Key {
-        Up,
-        Down,
-        Enter,
-        Mod,
-        Text(&'static str),
-    }
-
-    fn cap(theme: &Theme, key: Key) -> Div {
-        let cap = div()
-            .h(px(20.0))
-            .min_w(px(20.0))
-            .px(px(4.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(4.0))
-            .bg(wash(theme))
-            .text_size(crate::typography::text_xs())
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.text_muted);
-        let glyph = |path: &'static str| icon(path).size(px(12.0)).text_color(theme.text_muted);
-        match key {
-            Key::Up => cap.child(glyph(icons::ARROW_UP)),
-            Key::Down => cap.child(glyph(icons::ARROW_DOWN)),
-            Key::Enter => cap.child(glyph(icons::RETURN)),
-            Key::Mod => {
-                cap.font_family(popover::KEY_GLYPH_FONT)
-                    .child(if cfg!(target_os = "macos") {
-                        "⌘"
-                    } else {
-                        "Ctrl"
-                    })
-            }
-            Key::Text(text) => cap.font_family(popover::KEY_GLYPH_FONT).child(text),
-        }
-    }
-
-    pub(super) fn keys(theme: &Theme, keys: &[Key]) -> Div {
-        div()
-            .flex()
-            .items_center()
-            .gap(px(3.0))
-            .children(keys.iter().map(|key| cap(theme, *key)))
-    }
-
-    /// Key caps followed by what they do.
-    pub(super) fn hint(theme: &Theme, keys_: &[Key], label: &'static str) -> Div {
-        div()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .child(keys(theme, keys_))
-            .child(label)
-    }
-}
-
 /// `owner/name` from a clone URL.
 fn repository_label(url: &str) -> String {
     let mut parts = url
@@ -1912,6 +1694,12 @@ mod tests {
 impl Shell {
     /// Deterministic project surfaces for the isolated native fixture.
     pub fn fixture_open_project_setup(&mut self, mode: &str, cx: &mut Context<Self>) {
+        if mode == "folder" {
+            self.open_project_setup(None, cx);
+            self.project_open_folder(None, cx);
+            cx.notify();
+            return;
+        }
         self.open_project_setup(None, cx);
         if mode == "create" {
             self.project_mode(Mode::Create, cx);

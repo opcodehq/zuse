@@ -7468,18 +7468,21 @@ impl Shell {
                     search.into_any_element(),
                     popover::kbd_hint(&theme, &shortcut),
                 ))
-                .child(crumbs)
-                .child(results)
-                .when_some(error, |el, error| {
-                    el.child(
-                        div()
-                            .px(px(16.0))
-                            .pb(px(8.0))
-                            .text_size(crate::typography::text_xs())
-                            .text_color(theme.danger)
-                            .child(error),
-                    )
-                })
+                .child(
+                    command_palette::palette_panel(&theme)
+                        .child(crumbs)
+                        .child(results)
+                        .when_some(error, |el, error| {
+                            el.child(
+                                div()
+                                    .px(px(16.0))
+                                    .pb(px(8.0))
+                                    .text_size(crate::typography::text_xs())
+                                    .text_color(theme.danger)
+                                    .child(error),
+                            )
+                        }),
+                )
                 .child(footer);
         Some(command_palette::palette_overlay(viewport, card))
     }
