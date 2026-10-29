@@ -3288,6 +3288,14 @@ fn is_user_question(options: &[Value]) -> bool {
     })
 }
 
+fn permission_rule_input(call: &Value) -> Value {
+    let mut input = call.clone();
+    if let Some(fields) = input.as_object_mut() {
+        fields.remove("toolCallId");
+    }
+    input
+}
+
 /// Only explicitly unrestricted runs automatically select an allow option.
 /// Restricted tool permissions and content questions use the input bridge;
 /// read-only tool requests and dropped resolvers are cancelled.
@@ -3365,7 +3373,7 @@ fn handle_server_request_live(
                                 .map(String::from)
                                 .unwrap_or_else(|| "unknown".into())
                         ),
-                        input.clone(),
+                        permission_rule_input(call),
                         allow,
                         deny,
                     );
@@ -5387,6 +5395,18 @@ async fn run_session(session: Session) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_approval_keys_bind_tool_kind_and_complete_inputs() {
+        let call = json!({"toolCallId":"first", "title":"Apply change", "kind":"edit", "rawInput":{"path":"file.rs"}, "locations":[{"path":"file.rs"}]});
+        let first = permission_rule_input(&call);
+        let mut repeated = call.clone(); repeated["toolCallId"] = json!("second");
+        assert_eq!(first, permission_rule_input(&repeated));
+        repeated["kind"] = json!("delete");
+        assert_ne!(first, permission_rule_input(&repeated));
+        assert_eq!(first["locations"], call["locations"]);
+        assert_eq!(first["rawInput"], call["rawInput"]);
+    }
 
     #[test]
     fn unix_browser_suppression_falls_back_to_zuses_noop_mode() {

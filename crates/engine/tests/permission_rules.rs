@@ -291,7 +291,13 @@ async fn inspector_rpc_derives_project_scope_and_mutations_return_confirmed_snap
         .into_owned();
     for chat in ["owner", "other"] {
         core.workspace
-            .create_chat(chat, None, None, None, Some(cwd.clone()))
+            .create_chat(
+                chat,
+                None,
+                Some(core.doc_host.device_id()),
+                None,
+                Some(cwd.clone()),
+            )
             .unwrap();
     }
     let project = format!("path:{cwd}");
