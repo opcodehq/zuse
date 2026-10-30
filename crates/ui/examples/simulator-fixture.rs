@@ -2,20 +2,62 @@
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use zuse_ui::*;
-fn capture(
+async fn capture(
     window: gpui::AnyWindowHandle,
     cx: &mut gpui::AsyncApp,
     path: &std::path::Path,
 ) -> anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    let capture_window = window.update(cx, |_, window, _| -> anyhow::Result<String> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        match HasWindowHandle::window_handle(&*window)?.as_raw() {
+            RawWindowHandle::Xcb(handle) => Ok(handle.window.get().to_string()),
+            RawWindowHandle::Xlib(handle) => Ok(handle.window.to_string()),
+            _ => anyhow::bail!("Linux fixture capture requires an X11 display"),
+        }
+    })??;
+    // Static native fixtures must submit their freshly drawn scene explicitly.
     window.update(cx, |_, window, cx| {
-        window.draw(cx).clear();
-        window.render_to_image()?.save(path)?;
+        window.refresh();
+        let arena = window.draw(cx);
+        window.present_if_needed();
+        arena.clear();
+    })?;
+    cx.background_executor()
+        .timer(Duration::from_millis(50))
+        .await;
+    #[cfg(target_os = "linux")]
+    {
+        use anyhow::Context as _;
+        let status = std::process::Command::new("import")
+            .args(["-window", &capture_window])
+            .arg(path)
+            .status()
+            .context("Install ImageMagick for X11 fixture screenshots")?;
+        anyhow::ensure!(status.success(), "X11 fixture screenshot failed");
+        let screenshot = image::open(path)?.to_rgba8();
+        let first = screenshot.get_pixel(0, 0);
+        anyhow::ensure!(
+            screenshot.pixels().any(|pixel| pixel != first),
+            "X11 fixture capture was blank"
+        );
         Ok(())
-    })?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        window.update(cx, |_, window, _| {
+            window.render_to_image()?.save(path)?;
+            Ok(())
+        })?
+    }
 }
+
 fn main() -> anyhow::Result<()> {
     let output = PathBuf::from(std::env::args().nth(1).expect("output directory"));
     std::fs::create_dir_all(&output)?;
+    if output.join("result.txt").exists() {
+        std::fs::remove_file(output.join("result.txt"))?;
+    }
     let root = tempfile::tempdir()?;
     let runtime = tokio::runtime::Runtime::new()?;
     let core = runtime.block_on(async {
@@ -72,7 +114,7 @@ fn main() -> anyhow::Result<()> {
                 for (name,state) in [("simulator-setup",zuse_protocol::simulators::State{requirements:requirements.clone(),..Default::default()}),("simulator-picker",zuse_protocol::simulators::State{enabled:true,devices:vec![zuse_protocol::simulators::Device{id:"android:Fixture_Pixel".into(),name:"Fixture Pixel".into(),platform:zuse_protocol::simulators::Platform::Android,runtime:"Android AVD".into(),booted:false,serial:None}],..Default::default()})] {
                     window.update(cx,|shell,window,cx|shell.fixture_simulator(state,None,window,cx))?;
                     cx.background_executor().timer(Duration::from_millis(600)).await;
-                    capture(window.into(),cx,&output.join(format!("{name}.png")))?;
+                    capture(window.into(),cx,&output.join(format!("{name}.png"))).await?;
                 }
                 let pixels=image::RgbaImage::from_fn(390,844,|x,y| {
                     image::Rgba(if y < 80 {[28,32,40,255]} else if x > 24 && x < 366 && ((110..250).contains(&y) || (280..420).contains(&y) || (450..590).contains(&y)) {[48,116,218,255]} else {[238,241,247,255]})
@@ -86,7 +128,7 @@ fn main() -> anyhow::Result<()> {
                 for (name,mode) in [("simulator-viewer-dark",appearance::AppearanceMode::Dark),("simulator-viewer-light",appearance::AppearanceMode::Light)] {
                     cx.update(|cx|appearance::set_mode(mode,cx));
                     cx.background_executor().timer(Duration::from_millis(600)).await;
-                    capture(window.into(),cx,&output.join(format!("{name}.png")))?;
+                    capture(window.into(),cx,&output.join(format!("{name}.png"))).await?;
                 }
                 std::fs::write(output.join("result.txt"),"Production Shell and SimulatorPane with synthetic setup/picker/viewer data. No real device execution.\n")?;Ok(())
             }.await;

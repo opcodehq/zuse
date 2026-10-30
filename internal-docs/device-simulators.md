@@ -72,7 +72,9 @@ Boot uses `simctl boot` then `bootstatus -b`; shutdown and PNG screenshots also
 use `simctl` with an explicit UDID.
 
 Touch, typing, and Home require an installed [idb and idb_companion](https://fbidb.io/docs/installation/)
-and a companion connected for that UDID. The pane reports a missing CLI and
+and a companion connected for that UDID. Make `idb` available on the execution
+host's PATH, including when launching the app outside a terminal; restart the
+host after changing its PATH. The pane reports a missing CLI and
 returns companion guidance when input fails. Normalized image taps convert to
 logical points using `SIMULATOR_MAINSCREEN_SCALE`. idb text input supports ASCII;
 Unicode input through a device IME is deferred. The helper is not bundled or
@@ -124,6 +126,14 @@ Engine tests exercise RPC ownership, plan mode, screenshot/frame dispatch and
 revocation. MCP tests check origin binding and image content; the RPC queue test
 checks a slow device viewer cannot block another reply. UI tests check frame
 validation, letterboxing, selection, and hidden-view cancellation.
+
+The production-shell visual fixture renders synthetic device data. Its captured
+[setup](screenshots/device-simulator/simulator-setup.png),
+[picker](screenshots/device-simulator/simulator-picker.png),
+[dark viewer](screenshots/device-simulator/simulator-viewer-dark.png), and
+[light viewer](screenshots/device-simulator/simulator-viewer-light.png) show layout
+and theme behavior, including the device text field. They do not show a live device.
+See the development guide for the reproduction command.
 
 Before claiming hardware acceptance, verify on a Mac:
 

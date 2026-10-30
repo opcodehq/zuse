@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-simulator-fixture = ["gpui_platform/test-support"]
+simulator-fixture = ["gpui_platform/test-support", "gpui/bench"]
 voice-experimental = [] # Compatibility flag; native subscription voice uses Codex's packaged helper.
 project-palette-fixture = []
 compact-picker-fixture = ["gpui_platform/test-support"]
@@ -150,6 +150,9 @@ gpui = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 mimalloc.workspace = true
 tracing-subscriber.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 # Embedded browser: WebView2 in visual-hosting mode, composited by the Zkit

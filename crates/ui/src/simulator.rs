@@ -6,7 +6,7 @@ use gpui::{
     MouseButton, MouseDownEvent, ObjectFit, Pixels, Point, Render, RenderImage, Role, SharedString,
     Stateful, Subscription, Task, Window, canvas, div, img, prelude::*, px,
 };
-use gpui_base::input::{Input as TextInput, InputEvent, InputState};
+use gpui_base::input::{Input as TextInput, InputEditorStyle, InputEvent, InputState};
 use serde_json::{Value, json};
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
 use zuse_protocol::simulators::{Device, Frame, FrameEvent, Input, Platform, State};
@@ -390,6 +390,17 @@ fn tap_position(
 impl Render for SimulatorPane {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        self.input.update(cx, |input, _| {
+            input.set_editor_style(InputEditorStyle {
+                foreground: theme.text,
+                muted_foreground: theme.text_muted,
+                background: gpui::transparent_black(),
+                border: theme.border,
+                selection: theme.selection,
+                caret: theme.caret,
+                ..Default::default()
+            });
+        });
         let mut body = div()
             .size_full()
             .flex()
@@ -597,7 +608,28 @@ impl Render for SimulatorPane {
                     .flex()
                     .gap(px(6.0))
                     .items_center()
-                    .child(div().flex_1().min_w_0().child(TextInput::new(&self.input)))
+                    .child(
+                        div()
+                            .id("simulator-text")
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(32.0))
+                            .px(px(8.0))
+                            .flex()
+                            .items_center()
+                            .rounded(px(5.0))
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.input_glass_bg())
+                            .cursor_text()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.input.update(cx, |input, cx| input.focus(window, cx));
+                                }),
+                            )
+                            .child(TextInput::new(&self.input)),
+                    )
                     .child(self.button("simulator-type", "Type", cx, |this, _, cx| {
                         this.type_text(cx)
                     })),
