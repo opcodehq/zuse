@@ -735,6 +735,7 @@ pub struct EngineRpc {
     previews: Option<zuse_preview::PreviewService>,
     change_requests: CheckoutChangeRequests,
     github: GitHubCli,
+    pr_watches: Option<crate::pr_watch::PrWatches>,
     diff_sync: CheckoutDiffSync,
     uploads: Uploads,
     agent_accounts: AgentAccounts,
@@ -798,6 +799,7 @@ impl EngineRpc {
             previews: None,
             change_requests,
             github,
+            pr_watches: None,
             diff_sync,
             uploads,
             agent_accounts,
@@ -911,6 +913,11 @@ impl EngineRpc {
     /// Attach the local→synced profile importer (synced runtimes only).
     pub fn with_local_import(mut self, importer: crate::local_import::LocalImporter) -> Self {
         self.local_import = Some(importer);
+        self
+    }
+
+    pub fn with_pr_watches(mut self, watches: crate::pr_watch::PrWatches) -> Self {
+        self.pr_watches = Some(watches);
         self
     }
 
@@ -1760,6 +1767,9 @@ fn forwardable(method: &str) -> bool {
             | methods::LIST_CHANGE_REQUEST_PAGE
             | methods::GET_CHANGE_REQUEST_REPOSITORY
             | methods::GET_CHANGE_REQUEST
+            | methods::OBSERVE_PR_WATCH
+            | methods::SET_PR_WATCH
+            | methods::WATCH_PR_WATCHES
             | methods::GET_CHANGE_REQUEST_DIFF
             | methods::POST_CHANGE_REQUEST_COMMENT
             | methods::UPDATE_CHANGE_REQUEST
@@ -1819,6 +1829,7 @@ fn is_stream_method(method: &str) -> bool {
             | methods::WATCH_WORKSPACE_FILES
             | methods::UPDATE_STATUS
             | methods::WATCH_HARNESS_UPDATES
+            | methods::WATCH_PR_WATCHES
     )
 }
 
@@ -4066,6 +4077,37 @@ impl RpcService for EngineRpc {
                     .map_err(change_request_rpc_error)?;
                 RpcReply::value(&serde_json::json!({ "refusal": refusal }))
             }
+            methods::OBSERVE_PR_WATCH => {
+                let request: zuse_protocol::pr_watch::PrWatchRequest = parse_params(params)?;
+                let watches = self
+                    .pr_watches
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("CI watcher unavailable".into()))?;
+                RpcReply::value(
+                    &watches
+                        .observe(request)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?,
+                )
+            }
+            methods::SET_PR_WATCH => {
+                let request: zuse_protocol::pr_watch::SetPrWatchRequest = parse_params(params)?;
+                let watches = self
+                    .pr_watches
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("CI watcher unavailable".into()))?;
+                RpcReply::value(
+                    &watches
+                        .set(request)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?,
+                )
+            }
+            methods::WATCH_PR_WATCHES => {
+                let watches = self
+                    .pr_watches
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("CI watcher unavailable".into()))?;
+                Ok(RpcReply::Stream(watch_stream(watches.subscribe())))
+            }
             methods::GET_CHANGE_REQUEST | methods::GET_CHANGE_REQUEST_DIFF => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
@@ -6070,6 +6112,12 @@ mod tests {
         assert!(!is_stream_method(methods::LIST_CHANGE_REQUEST_PAGE));
         assert!(forwardable(methods::GET_CHANGE_REQUEST_REPOSITORY));
         assert!(forwardable(methods::GET_CHANGE_REQUEST));
+        assert!(forwardable(methods::OBSERVE_PR_WATCH));
+        assert!(forwardable(methods::SET_PR_WATCH));
+        assert!(forwardable(methods::WATCH_PR_WATCHES));
+        assert!(is_stream_method(methods::WATCH_PR_WATCHES));
+        assert!(!is_stream_method(methods::OBSERVE_PR_WATCH));
+        assert!(!is_stream_method(methods::SET_PR_WATCH));
         assert!(forwardable(methods::GET_CHANGE_REQUEST_DIFF));
         assert!(forwardable(methods::POST_CHANGE_REQUEST_COMMENT));
         assert!(forwardable(methods::UPDATE_CHANGE_REQUEST));

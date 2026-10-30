@@ -47,7 +47,7 @@ impl Shell {
                 self.chat_pull_request_seq += 1;
                 let id = self.chat_pull_request_seq;
                 let page = cx.new(|cx| {
-                    PullRequestDetailPage::new(
+                    let mut page = PullRequestDetailPage::new(
                         self.state.clone(),
                         url.clone(),
                         device,
@@ -55,7 +55,9 @@ impl Shell {
                         None,
                         window,
                         cx,
-                    )
+                    );
+                    page.watch_in_chat(self.active_chat.clone(), cx);
+                    page
                 });
                 let subscription = cx.observe(&page, |_, _, cx| cx.notify());
                 self.chat_pull_requests.insert(

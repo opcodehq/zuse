@@ -16,6 +16,7 @@ pub mod capabilities {
     pub const MESSAGE_QUEUE_EDIT_LEASE_V1: &str = "message-queue-edit-lease-v1";
     pub const CUSTOM_ACP_AGENTS_V1: &str = "custom-acp-agents-v1";
     pub const CHECKOUT_ARCHIVES_V1: &str = "checkout-archives-v1";
+    pub const PR_WATCH_V1: &str = "pr-watch-v1";
     pub const HARNESS_UPDATES_V1: &str = "harness-updates-v1";
     /// The host creates a projectless chat's scratch folder
     /// (`crate::projectless`) when it runs; older hosts only know `~`.
@@ -29,6 +30,7 @@ pub mod capabilities {
         MESSAGE_QUEUE_CLEAN_ATTACHMENT_TEXT_V1,
         MESSAGE_QUEUE_EDIT_LEASE_V1,
         HARNESS_UPDATES_V1,
+        PR_WATCH_V1,
         CHECKOUT_ARCHIVES_V1,
         CUSTOM_ACP_AGENTS_V1,
         PROJECTLESS_SCRATCH_V1,

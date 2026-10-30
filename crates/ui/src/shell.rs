@@ -84,6 +84,7 @@ mod navigation_focus;
 mod navigation_tests;
 mod panel_layout;
 mod panel_menu;
+mod pr_watch;
 mod open_in;
 use panel_layout::{AuxiliaryPanel, FitInputs, HorizontalPanelFit, panel_content_tween};
 #[cfg(test)]
@@ -2229,6 +2230,7 @@ pub struct Shell {
     harness_update_banner_task: Option<Task<()>>,
     /// Independent watches retain device identity across selection changes.
     harness_update_devices: std::collections::BTreeMap<String, harness_updates::DeviceUpdates>,
+    pr_watch_devices: std::collections::HashMap<String, pr_watch::DeviceWatch>,
     harness_update_expanded: bool,
     harness_update_transition: Option<WidthTween>,
     harness_update_geometry: [Option<WidthTween>; 2],
@@ -2773,6 +2775,7 @@ impl Shell {
             harness_update_seen: std::collections::HashSet::new(),
             harness_update_banner_task: None,
             harness_update_devices: Default::default(),
+            pr_watch_devices: Default::default(),
             harness_update_expanded: false,
             harness_update_transition: None,
             harness_update_geometry: [None; 2],
@@ -2923,6 +2926,7 @@ impl Shell {
     // ---- splash ----
 
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
+        self.refresh_pr_watches(cx);
         // Voice is an orchestrator over every thread: navigation keeps it,
         // only losing the engine that hosts it ends the session.
         if self.voice.read(cx).chat_id.is_some()
@@ -19686,7 +19690,14 @@ impl Shell {
             .into(),
             additions: 482,
             deletions: 37,
-            status_check_rollup: if stage == "checks" {
+            status_check_rollup: if stage == "failed" {
+                vec![
+                    check("Tests", "FAILURE", "COMPLETED"),
+                    check("Lint", "SUCCESS", "COMPLETED"),
+                    check("Types", "SUCCESS", "COMPLETED"),
+                    check("Preview", "SUCCESS", "COMPLETED"),
+                ]
+            } else if stage == "checks" {
                 vec![
                     check("Tests", "", "IN_PROGRESS"),
                     check("Lint", "SUCCESS", "COMPLETED"),

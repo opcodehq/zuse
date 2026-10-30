@@ -6214,6 +6214,112 @@ impl DocHost {
         })
     }
 
+    /// Automation never interrupts an active turn, bypasses a queued message,
+    /// or thaws a queue the user paused with Stop.
+    pub(crate) fn ci_repair_idle(&self, chat_id: &str) -> Result<bool, EngineError> {
+        let Some(sessions) = self.sessions() else {
+            return Ok(false);
+        };
+        let handle = self.open(chat_id)?;
+        // Another conversation may share this working tree. Do not start an
+        // automatic repair while its agent owns the same files.
+        if let Some(workspace) = self.workspace() {
+            let cwd = workspace
+                .chat(chat_id)?
+                .and_then(|c| c.cwd)
+                .and_then(|p| std::fs::canonicalize(p).ok());
+            if let Some(cwd) = cwd {
+                for other in workspace.read_chats()? {
+                    if other.id != chat_id
+                        && sessions.turn_in_flight(&other.id)
+                        && other
+                            .cwd
+                            .as_deref()
+                            .and_then(|p| std::fs::canonicalize(p).ok())
+                            .as_ref()
+                            == Some(&cwd)
+                    {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(!sessions.turn_in_flight(chat_id)
+            && !handle.queue_paused.load(Ordering::Acquire)
+            && handle.doc.read_queue()?.is_empty()
+            && !handle
+                .doc
+                .read_commands()?
+                .iter()
+                .any(|c| c.status == SessionCommandStatus::Pending))
+    }
+
+    pub(crate) async fn dispatch_ci_repair(
+        &self,
+        chat_id: &str,
+        cwd: &Path,
+        branch: &str,
+        prompt: &str,
+        message_id: &str,
+        reserve: impl FnOnce() -> Result<(), EngineError> + Send,
+    ) -> Result<bool, EngineError> {
+        let handle = self.open(chat_id)?;
+        let Ok(_commands) = handle.command_drain_lock.try_lock() else {
+            return Ok(false);
+        };
+        let Ok(_queue) = handle.drain_lock.try_lock() else {
+            return Ok(false);
+        };
+        if !self.ci_repair_idle(chat_id)? {
+            return Ok(false);
+        }
+        let workspace = self
+            .workspace()
+            .ok_or_else(|| EngineError::Other("Workspace unavailable".into()))?;
+        let chat = workspace
+            .chat(chat_id)?
+            .ok_or_else(|| EngineError::Other("Chat disappeared".into()))?;
+        if chat.archived
+            || !workspace.is_host(chat_id)
+            || chat
+                .cwd
+                .as_deref()
+                .and_then(|p| std::fs::canonicalize(p).ok())
+                .as_deref()
+                != Some(cwd)
+            || chat
+                .source_context
+                .as_ref()
+                .map(|s| s.branch.as_str())
+                .or(chat.branch.as_deref())
+                != Some(branch)
+            || !chat
+                .config
+                .as_ref()
+                .is_some_and(|c| c.sandbox != zuse_protocol::SandboxLevel::ReadOnly)
+        {
+            return Err(EngineError::Other(
+                "CI repair requires the original writable chat checkout".into(),
+            ));
+        }
+        let request = self
+            .request_from_chat_row(chat_id, prompt)
+            .ok_or_else(|| EngineError::Other("Chat configuration unavailable".into()))?;
+        let sessions = self
+            .sessions()
+            .ok_or_else(|| EngineError::Other("Sessions unavailable".into()))?;
+        let harness = self.harness_for_request(chat_id, &request);
+        // The durable reservation is the final synchronous step before dispatch.
+        reserve()?;
+        // The watcher already pinned and verified this conversation's source.
+        // Avoid another asynchronous Git lookup between permission admission
+        // and dispatch, and keep its original conversation source binding.
+        sessions
+            .dispatch(chat_id, harness, request, Some(message_id.to_string()))
+            .await?;
+        Ok(true)
+    }
+
     /// A steer-turned-run with no in-process `last_request` (engine restarted
     /// since the last turn): rebuild the run config from the chat's workspace
     /// row — cwd from the row, model/reasoning/options/sandbox from its config

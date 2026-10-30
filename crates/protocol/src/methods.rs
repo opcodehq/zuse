@@ -468,3 +468,8 @@ pub const CLOUD_GITHUB: &str = "CloudGithubCatalog";
 pub const CLOUD_IMAGE: &str = "CloudImage";
 pub const CLOUD_IMAGE_BUILD: &str = "CloudImageBuild";
 pub const CLOUD_IMAGE_DELETE: &str = "CloudImageDelete";
+
+/// Ensure observation without changing an existing watch or repair permission.
+pub const OBSERVE_PR_WATCH: &str = "ObservePrWatch";
+pub const SET_PR_WATCH: &str = "SetPrWatch";
+pub const WATCH_PR_WATCHES: &str = "WatchPrWatches";

@@ -55,6 +55,7 @@ pub mod orb;
 pub mod overscroll;
 pub mod pickers;
 pub mod popover;
+mod pr_watch;
 pub mod project_actions;
 mod project_archive;
 pub mod pull_request_card;
