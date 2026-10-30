@@ -2833,3 +2833,25 @@ fn access_readonly_planning_and_runtime_identity_keep_the_same_policy() {
     request.model_options.insert("agent".into(), json!("build"));
     assert!(!OpencodeHarness::new().reconfigures_in_place(&before, &request));
 }
+
+#[test]
+fn saved_http_approval_metadata_keeps_inputs_and_drops_only_transport_identity() {
+    let first = json!({"id":"one","sessionID":"session","action":"bash","resources":["cargo test"],"metadata":{"command":"cargo test"},"extra":{"cwd":"/project"}});
+    let mut second = first.clone();
+    second["id"] = json!("two");
+    let a = access_approval_question(&first).approval.unwrap();
+    let b = access_approval_question(&second).approval.unwrap();
+    assert_eq!(a, b);
+    assert_eq!(a.input["extra"]["cwd"], "/project");
+    second["metadata"]["command"] = json!("different command");
+    assert_ne!(
+        a.input,
+        access_approval_question(&second).approval.unwrap().input
+    );
+    assert!(
+        access_approval_question(&json!({"id":"unknown","action":"bash"}))
+            .approval
+            .unwrap()
+            .force_prompt
+    );
+}

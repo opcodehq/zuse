@@ -58,6 +58,7 @@ pub mod repos;
 pub mod rpc;
 pub mod run_journal;
 pub mod sessions;
+pub mod permission_rules;
 mod secret_broker;
 pub mod source_control;
 pub mod spaces;
@@ -183,6 +184,7 @@ pub struct EngineCore {
     pub spaces_sync: SpacesSync,
     pub uploads: Uploads,
     visuals: visuals::Visuals,
+    simulators: zuse_simulator::Simulators,
     pub agent_accounts: AgentAccounts,
     pub harness_updates: harness_updates::HarnessUpdateCoordinator,
     pub device_id: String,
@@ -452,6 +454,7 @@ impl EngineCore {
             spaces_sync,
             uploads,
             visuals: visuals::Visuals::default(),
+            simulators: zuse_simulator::Simulators::managed(profile.store_root().join("simulator-tools")),
             agent_accounts,
             harness_updates,
             device_id,
@@ -606,6 +609,7 @@ impl EngineCore {
         .with_usage(self.usage.clone())
         .with_desktop_import(self.desktop_import_profile.clone())
         .with_visuals(self.visuals.clone())
+        .with_simulators(self.simulators.clone())
         .with_pairings(self.pairings.clone())
         .with_browser_access(self.browser_access.control())
         .with_relay_access(self.relay_access.control())
@@ -652,6 +656,7 @@ impl EngineCore {
         // Freeze admission before any awaited cleanup: an Idle transition must
         // not release another queued command while credentials are draining.
         self.doc_host.pause_all_queues();
+        self.simulators.shutdown();
         self.account.retire();
         self.project_creation.shutdown().await;
         let reconcile = self

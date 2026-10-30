@@ -6436,3 +6436,10 @@ impl AppState {
         self.change_requests.store(key, snapshot);
     }
 }
+
+#[cfg(feature = "simulator-fixture")]
+impl AppState {
+    pub fn fixture_simulator_engine(&mut self, engine: EngineHandle) {
+        self.engine = Some(engine);
+    }
+}

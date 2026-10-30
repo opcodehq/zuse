@@ -2918,6 +2918,8 @@ for line in sys.stdin:
                     let mut events = Vec::new();
                     if request.prompt == "question" || request.prompt.ends_with("\n\nquestion") {
                         let questions = vec![zuse_protocol::UserInputQuestion {
+                            approval_prompt: None,
+                            approval: None,
                             id: "choice".into(),
                             header: "Question".into(),
                             question: "Continue?".into(),

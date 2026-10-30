@@ -66,6 +66,10 @@ impl RunJournal {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    pub(crate) fn permission_rules_path(&self) -> PathBuf {
+        self.dir.join("permission-rules.sqlite")
+    }
+
     fn path_for(&self, chat_id: &str) -> PathBuf {
         self.dir.join(format!("{}.jsonl", sanitize_id(chat_id)))
     }

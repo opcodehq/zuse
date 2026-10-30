@@ -29,6 +29,7 @@ pub mod motion;
 pub mod plugins;
 pub mod pr_watch;
 pub mod presentation;
+pub mod permission;
 pub mod preview;
 pub mod projectless;
 pub mod project_creation;
@@ -91,3 +92,4 @@ pub mod cloud_assets;
 pub mod usage;
 
 pub mod keybindings;
+pub mod simulators;

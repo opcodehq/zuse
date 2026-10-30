@@ -323,6 +323,66 @@ pub struct SessionsEngine {
 }
 
 impl SessionsEngine {
+    pub(crate) fn permission_failure(&self, chat: &str, run: &str, message: &str) {
+        if let Some(handle) = lock(&self.inner.runs)
+            .get(chat)
+            .filter(|handle| handle.run_id == run)
+        {
+            let _ = handle.engine_tx.send(AgentEvent::Error {
+                message: message.into(),
+            });
+        }
+    }
+    pub(crate) fn permission_harness(&self, chat: &str, run: &str) -> Option<HarnessId> {
+        lock(&self.inner.runs)
+            .get(chat)
+            .filter(|handle| handle.run_id == run)
+            .map(|handle| handle.runtime_config.harness_id)
+    }
+    pub(crate) fn permission_rules_path(&self) -> std::path::PathBuf {
+        self.inner.journal.permission_rules_path()
+    }
+    pub(crate) fn permission_context(
+        &self,
+        chat: &str,
+        run: Option<&str>,
+    ) -> Option<(String, String, zuse_protocol::SandboxLevel)> {
+        let live = lock(&self.inner.runs).get(chat).and_then(|h| {
+            if run.is_some_and(|id| id != h.run_id)
+                || h.retiring.load(std::sync::atomic::Ordering::Acquire)
+                || h.interrupt_token.is_cancelled()
+            {
+                return None;
+            }
+            Some(h.runtime_config.request.clone())
+        });
+        if run.is_some() && live.is_none() {
+            return None;
+        }
+        let row = self
+            .inner
+            .workspace()
+            .and_then(|ws| ws.chat(chat).ok().flatten());
+        let cwd = live
+            .as_ref()
+            .map(|r| r.cwd.clone())
+            .or_else(|| row.as_ref().and_then(|c| c.cwd.clone()))?;
+        let cwd = std::fs::canonicalize(&cwd)
+            .ok()?
+            .to_string_lossy()
+            .into_owned();
+        let project = row
+            .as_ref()
+            .and_then(|c| c.space_id.as_ref())
+            .map(|id| format!("space:{id}"))
+            .unwrap_or_else(|| format!("path:{cwd}"));
+        let sandbox = live
+            .map(|r| r.sandbox)
+            .or_else(|| row.and_then(|c| c.config.map(|c| c.sandbox)))
+            .unwrap_or(zuse_protocol::SandboxLevel::WorkspaceWrite);
+        Some((project, cwd, sandbox))
+    }
+
     pub fn new(
         device_id: String,
         journal: Arc<RunJournal>,
@@ -919,14 +979,43 @@ impl SessionsEngine {
             let pending = pending_inputs.clone();
             let engine_tx = engine_tx.clone();
             let secret_chat = chat_id.to_owned();
+            let permission_engine = Arc::downgrade(&self.inner);
+            let permission_run = run_id.clone();
             let secret_namespace = self.inner.secret_namespace.clone();
-            Box::new(move |questions: Vec<UserInputQuestion>| {
+            Box::new(move |mut questions: Vec<UserInputQuestion>| {
+                let Some(inner) = permission_engine.upgrade() else {
+                    return oneshot::channel().1;
+                };
+                let permission_engine = SessionsEngine { inner };
+                let automatic = permission_engine.prepare_permission_input(
+                    &secret_chat,
+                    &permission_run,
+                    &mut questions,
+                );
+                if questions.is_empty() {
+                    let (tx, rx) = oneshot::channel();
+                    let _ = tx.send(automatic);
+                    return rx;
+                }
+                let permission_questions = questions.clone();
+                // Matching inputs belong to the parked host request. Persist only
+                // display copy/options in the transcript, never a second raw payload.
+                for question in &mut questions {
+                    question.approval = None;
+                }
+                let permission_chat = secret_chat.clone();
+                let permission_run = permission_run.clone();
                 let (mut tx, rx) = oneshot::channel();
                 let (answer_tx, answer_rx) = oneshot::channel();
                 let request_id = new_id();
                 for question in &questions {
                     if let Some(id) = question.id.strip_prefix("private-secret:") {
-                        crate::secret_broker::shared().bind(&secret_namespace, id, &secret_chat, &request_id);
+                        crate::secret_broker::shared().bind(
+                            &secret_namespace,
+                            id,
+                            &secret_chat,
+                            &request_id,
+                        );
                     }
                 }
                 lock(&pending).insert(request_id.clone(), answer_tx);
@@ -939,7 +1028,11 @@ impl SessionsEngine {
                 tokio::spawn(async move {
                     tokio::select! {
                         // A dropped resolver stays an error for the harness, as before.
-                        answer = answer_rx => if let Ok(answer) = answer { let _ = tx.send(answer); },
+                        answer = answer_rx => if let Ok(answer) = answer {
+                            let mut answer = permission_engine.finish_permission_input(&permission_chat, &permission_run, &permission_questions, answer);
+                            answer.extend(automatic);
+                            let _ = tx.send(answer);
+                        },
                         _ = tx.closed() => {
                             lock(&pending).remove(&request_id);
                             let _ = engine_tx.send(AgentEvent::InputResolved { request_id });

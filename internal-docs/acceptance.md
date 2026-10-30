@@ -314,3 +314,21 @@ Status: `source` = adapted implementation; `compiled` = compile check passed; `p
 - The UI pass replaces sidebar segmented tabs with a heading switch, retains empty registered projects, moves native new-chat workspace controls above a bottom composer, adds the centered new-chat prompt, softens send actions and gives the native model picker a provider rail and reasoning slider. Initial loading uses the brand silhouette. Native/browser file rows share the complete file icon set. Plugin browsing has bundled metadata/logos, search, connected filtering and bounded pages; account authority still supplies the signed-in catalog and connection actions. Provider update actions, masked account emails, centered native switches and framed settings are adapted. The removed Model connections card no longer allocates browser forms or starts invisible account reads. Native advanced relay fields are collapsed. This is a substantial implementation pass, not a claim of exact visual, physical Mac or live authorization acceptance.
 
 - PR CI watch milestone: engine-owned, profile-persisted watches now follow chat PR checks with timer-based polling and bounded error backoff. Native chat PR cards/panes expose independent Watch CI and opt-in Auto-fix controls with a three-attempt budget, explicit restart, and current-chat permission/checkout admission. Failing job logs become quoted repair context, and the repair brief permits only normal pushes. Failure notifications use existing attention/desktop preferences across supported online devices. Thirty targeted tests pass: 19 watcher/admission, five process/log, three wire/notification, two assessment and one RPC-routing case. Native GPUI screenshots now show watching, auto-fix at 1/3 and the paused 3/3 limit through isolated deterministic WebSocket responses; no agent or GitHub action is executed by the capture fixture. Browser viewport controls, physical notifications and a live hosted repair/push remain unverified; see `pull-requests.md`.
+
+## Device simulator acceptance
+
+Simulator logic is exercised with Linux fake command runners, including consent,
+boot, input, image bounds and shutdown. RPC tests cover owning-host routing,
+read-only agent mutation denial and stream revocation. MCP/native tools preserve
+screenshot image content; the simulator RPC queue is capped independently of
+ordinary stream queues. UI geometry excludes letterboxed margins from taps.
+Real iOS/Xcode/Device Hub HID and Android/KVM execution remain required acceptance gates;
+[device-simulators.md](device-simulators.md) contains the exact manual checklist.
+
+The simulator installer additionally has fake tests for read-only prerequisites,
+pinned/atomic cache publication, duplicate requests, cancellation and late-ready
+protection, separate agent installation/revocation, and multi-chat ownership. An
+explicit real-package smoke test verifies both pinned installs, hub HTTP startup,
+and owned agent-daemon registration without device input. Native capture fixtures
+show onboarding, all helper installation phases, and retry states. Mac/XCTest,
+Android SDK/KVM, and remote-host hardware acceptance remain on the simulator checklist.

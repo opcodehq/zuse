@@ -434,3 +434,18 @@ Cloud operations now use the General account session. Device/workspace authentic
 - Metadata binds to its workspace. Missing, malformed, unknown-phase or unrelated summaries leave the existing archive card and saved-history actions available. This is additive: older API servers keep the existing presentation until the updated API is deployed. No API deployment or live provider recovery was performed here. Unsupported force/directory/archive-job commands are still absent rather than represented by placeholder actions.
 - Six shared model tests cover archive history state, optional-summary round trips, old/unknown metadata and polling termination. Two Cloud public-projection tests prove retained versus verified/retired facts, retention calculation, invalid-manifest rejection, active-row omission and absence of private payloads. `scripts/acceptance/cloud-archive-recovery.mjs` exercises the compiled browser and actual native Linux app against disposable real saved-chat metadata and controlled Cloud status replies. Both cover upload → verification → retirement, stopped polling, status search, legacy/wrong-workspace/unknown-phase pixel equality, failed recovery and manual refresh, light/compact views, saved history, one pending restore, retry identity, paused completion and the exact live draft. No provider or compute-start call runs. These are protocol/metadata checks, not live encrypted-backup, machine retirement, account or macOS acceptance.
 - Builds: `.context/archive-recovery-{native,web,host}-build.{log,exit}`. Model/public-payload checks: `archive-recovery-{model,projection}-tests.{log,exit}`. UI workflows: `archive-recovery-{browser,native}-actions.{log,exit}`, `archive-recovery-native-driver.{log,exit}` and `archive-recovery-{browser,native}-acceptance.json`. Existing broader Cloud/archive regression: `archive-recovery-browser-regression-actions.{log,exit}` and `cloud-archive-cleanup-browser-acceptance.json`. Captures use `archive-recovery-{browser,native}-{uploading,verifying,retiring,retired,verified-search,legacy,mismatched,unknown-phase,recovery-error,compact,light,history,restore-error,draft-returned}.png`. All thirteen deferred terminal files retain their saved hashes.
+
+## Device simulator pane
+
+The right-pane launcher and `+` menu now offer Simulator beside a chat. Setup,
+platform-grouped discovery, booting/error states, a contained screen, tap/text,
+Home, Android Back/Recents, clipboard screenshots, reconnect, and shutdown use
+this app's surface and text tokens. Agent access is separately enabled per chat.
+See [device-simulators.md](device-simulators.md) for original PR #908/#915 mapping,
+progressive PNG transport, deferred original controls, and host acceptance gates.
+
+Simulator onboarding now follows the original centered setup surface: read-only
+requirements, optional agent consent, pinned helper disclosure, host-driven
+installation/startup/discovery steps, cancel, and separate hub/agent failure retry.
+The captures in `screenshots/device-simulator/simulator-{onboarding,installing-hub,installing-agent,install-error}.png`
+are scripted native pane renders. The real installer has a separate Linux smoke test.

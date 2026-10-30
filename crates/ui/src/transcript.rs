@@ -1779,6 +1779,10 @@ pub fn rows_for_entry(
                         resolved,
                         ..
                     } => {
+                        // Tool approvals have their own permission surface in the composer.
+                        if questions.iter().any(|question| question.approval_prompt.is_some()) {
+                            continue;
+                        }
                         // Model-generated header onto the one-line chip.
                         let header: SharedString = single_line(
                             &questions

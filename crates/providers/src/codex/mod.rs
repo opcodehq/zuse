@@ -2210,6 +2210,8 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
                 if id.is_empty() { format!("q{ix}") } else { id }
             };
             let question = UserInputQuestion {
+                approval_prompt: None,
+                approval: None,
                 id: new_message_id(),
                 header: {
                     let h = field(["header", "title", "label"]);
@@ -2287,6 +2289,55 @@ fn approval_question(method: &str, params: &Value) -> UserInputQuestion {
         )
     };
     UserInputQuestion {
+        approval_prompt: None,
+        approval: Some({
+            let mut input = params.clone();
+            // Transport identities change on every invocation and confer no authority.
+            if let Some(fields) = input.as_object_mut() {
+                for key in ["threadId", "turnId", "itemId", "approvalId"] {
+                    fields.remove(key);
+                }
+            }
+            let mut approval = zuse_protocol::permission::ToolApproval::new(
+                format!("codex:{method}"),
+                input,
+                "Yes",
+                "No",
+            );
+            // Some app-server versions send only an item ID and reason. Those
+            // callbacks cannot establish an exact command or file resource key.
+            let has_resource = if method.contains("commandExecution") {
+                match params.get("command") {
+                    Some(Value::String(command)) => !command.trim().is_empty(),
+                    Some(Value::Array(parts)) => {
+                        !parts.is_empty()
+                            && parts
+                                .iter()
+                                .all(|part| part.as_str().is_some_and(|part| !part.is_empty()))
+                    }
+                    _ => false,
+                }
+            } else {
+                params
+                    .get("changes")
+                    .and_then(Value::as_array)
+                    .is_some_and(|changes| {
+                        !changes.is_empty()
+                            && changes.iter().all(|change| {
+                                change
+                                    .get("path")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|path| !path.is_empty())
+                            })
+                    })
+            };
+            approval.force_prompt = !has_resource
+                || params
+                    .get("additionalPermissions")
+                    .is_some_and(|v| !v.is_null())
+                || params.get("grantRoot").is_some_and(|v| !v.is_null());
+            approval
+        }),
         id: new_message_id(),
         header,
         question,
@@ -2423,6 +2474,50 @@ for line in sys.stdin:
             sandbox_policy_value(SandboxLevel::Auto),
             json!({"type":"workspaceWrite","networkAccess":false})
         );
+    }
+
+    #[test]
+    fn saved_approval_metadata_is_complete_and_excludes_transport_ids() {
+        let params = json!({"threadId":"thread", "turnId":"turn", "itemId":"first", "command":"cargo test", "cwd":"/project", "reason":"routine"});
+        let first = approval_question("item/commandExecution/requestApproval", &params)
+            .approval
+            .unwrap();
+        let mut second = params.clone();
+        second["itemId"] = json!("second");
+        let second = approval_question("item/commandExecution/requestApproval", &second)
+            .approval
+            .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.input["command"], "cargo test");
+        assert_eq!(first.input["cwd"], "/project");
+        let escalation = approval_question(
+            "item/commandExecution/requestApproval",
+            &json!({"command":"cargo test", "additionalPermissions":{"network":true}}),
+        )
+        .approval
+        .unwrap();
+        assert!(escalation.force_prompt);
+        assert!(!first.force_prompt);
+        for method in [
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        ] {
+            let incomplete =
+                approval_question(method, &json!({"itemId":"id", "reason":"approval needed"}))
+                    .approval
+                    .unwrap();
+            assert!(
+                incomplete.force_prompt,
+                "missing resources cannot create reusable grants"
+            );
+        }
+        let file = approval_question(
+            "item/fileChange/requestApproval",
+            &json!({"changes":[{"path":"src/lib.rs"}]}),
+        )
+        .approval
+        .unwrap();
+        assert!(!file.force_prompt);
     }
 
     #[test]

@@ -26,6 +26,7 @@ enum Pending {
     CheckedStream {
         items: mpsc::Sender<serde_json::Value>,
         ready: Option<oneshot::Sender<Result<(), RpcError>>>,
+        drop_when_full: bool,
     },
 }
 
@@ -458,13 +459,17 @@ impl RpcClient {
         let session = self.out.snapshot()?;
         let out = session.sender;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let (items_tx, items_rx) = mpsc::channel(STREAM_QUEUE_CAP);
+        // PNG preview frames are disposable. Keep a stalled viewer from retaining
+        // hundreds of images or blocking unrelated replies on this connection.
+        let drop_when_full = method == crate::methods::SIMULATOR_FRAMES;
+        let (items_tx, items_rx) = mpsc::channel(if drop_when_full { 2 } else { STREAM_QUEUE_CAP });
         let (ready_tx, ready_rx) = oneshot::channel();
         self.shared.lock().insert(
             id,
             Pending::CheckedStream {
                 items: items_tx,
                 ready: Some(ready_tx),
+                drop_when_full,
             },
         );
         let subscription = RpcSubscription {
@@ -583,12 +588,19 @@ async fn route_frame(shared: &Arc<Shared>, out: &Outbound, frame: ServerFrame) {
         // Clone the sender out of the lock: the bounded send must await
         // (backpressure) without holding `shared`.
         let tx = match shared.lock().get(&id) {
-            Some(Pending::Stream(tx)) => Some(tx.clone()),
-            Some(Pending::CheckedStream { items, .. }) => Some(items.clone()),
+            Some(Pending::Stream(tx)) => Some((tx.clone(), false)),
+            Some(Pending::CheckedStream {
+                items,
+                drop_when_full,
+                ..
+            }) => Some((items.clone(), *drop_when_full)),
             _ => None,
         };
         let dead = match tx {
-            Some(tx) => tx.send(item).await.is_err(),
+            Some((tx, true)) => {
+                matches!(tx.try_send(item), Err(mpsc::error::TrySendError::Closed(_)))
+            }
+            Some((tx, false)) => tx.send(item).await.is_err(),
             None => false,
         };
         if dead {
@@ -675,3 +687,63 @@ pub async fn connect_ws(url: &str) -> Result<RpcClient, RpcError> {
 #[cfg(test)]
 #[path = "client/forward_tests.rs"]
 mod forward_tests;
+
+#[cfg(test)]
+mod simulator_queue_tests {
+    use super::*;
+    use serde_json::json;
+    #[tokio::test]
+    async fn simulator_frames_are_bounded_without_blocking_other_replies() {
+        let (out, mut requests) = mpsc::channel(16);
+        let (replies, inbound) = mpsc::channel(16);
+        let client = Arc::new(RpcClient::new(out, inbound));
+        let subscribing = client.clone();
+        let task = tokio::spawn(async move {
+            subscribing
+                .subscribe_checked(crate::methods::SIMULATOR_FRAMES, json!({}))
+                .await
+                .unwrap()
+        });
+        let request: ClientFrame = serde_json::from_str(&requests.recv().await.unwrap()).unwrap();
+        let frame = |n| {
+            serde_json::to_string(&ServerFrame {
+                id: request.id,
+                item: Some(json!({"frame":n})),
+                ..Default::default()
+            })
+            .unwrap()
+        };
+        replies.send(frame(0)).await.unwrap();
+        let subscription = task.await.unwrap();
+        for n in 1..8 {
+            replies.send(frame(n)).await.unwrap();
+        }
+        let calling = client.clone();
+        let call = tokio::spawn(async move { calling.call("Ping", json!({})).await });
+        let ping: ClientFrame = serde_json::from_str(&requests.recv().await.unwrap()).unwrap();
+        replies
+            .send(
+                serde_json::to_string(&ServerFrame {
+                    id: ping.id,
+                    ok: Some(json!({"pong":true})),
+                    ..Default::default()
+                })
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), call)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()["pong"],
+            true
+        );
+        assert_eq!(subscription.items.len(), 2);
+        drop(subscription);
+        let cancel: ClientFrame = serde_json::from_str(&requests.recv().await.unwrap()).unwrap();
+        assert!(cancel.cancel);
+        assert_eq!(cancel.id, request.id);
+    }
+}

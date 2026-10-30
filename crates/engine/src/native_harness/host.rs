@@ -56,6 +56,20 @@ impl NativeCallbacks for Callbacks {
     }
     async fn approve(&self, request: ApprovalRequest, context: ToolContext) -> Result<bool, Error> {
         let question = UserInputQuestion {
+            approval_prompt: None,
+            approval: Some({
+                let mut approval = zuse_protocol::permission::ToolApproval::new(
+                    format!("zuse:{}", request.tool),
+                    request.input.clone(),
+                    "Allow once",
+                    "Deny",
+                );
+                approval.force_prompt = request
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| permission::sensitive(path));
+                approval
+            }),
             id: format!("{}:{}", context.agent_id, context.call_id),
             header: "Permission".into(),
             question: format!(
@@ -83,6 +97,8 @@ impl NativeCallbacks for Callbacks {
     ) -> Result<String, Error> {
         self.ask(
             UserInputQuestion {
+                approval_prompt: None,
+                approval: None,
                 id: format!("{}:{}", context.agent_id, context.call_id),
                 header: "Question".into(),
                 question,
@@ -149,6 +165,8 @@ fn category(name: &str) -> ToolCategory {
             | "list_chats"
             | "get_chat"
             | "wait_for_turn"
+            | "device_list"
+            | "device_screenshot"
             | "plugins_list"
             | "plugins_search"
             | "plugins_schema"
@@ -158,6 +176,24 @@ fn category(name: &str) -> ToolCategory {
         ToolCategory::Delegate
     }
 }
+fn application_output(name: &str, value: Value) -> ToolOutput {
+    if zuse_mcp::simulators::image_content(name, &value).is_some() {
+        ToolOutput::Content {
+            r#type: "content".into(),
+            value: vec![ImageContent {
+                r#type: "file".into(),
+                media_type: "image/png".into(),
+                data: ImageData {
+                    r#type: "data".into(),
+                    data: value["data"].as_str().unwrap().into(),
+                },
+            }],
+        }
+    } else {
+        ToolOutput::Text(value.to_string())
+    }
+}
+
 pub(super) struct Application {
     pub models: Arc<dyn Models>,
     pub events: mpsc::Sender<Event>,
@@ -308,7 +344,12 @@ impl Host for Application {
             }
             Verdict::Allow => {}
         }
-        tokio::select! {biased;_=context.cancel.cancelled()=>Err(Error::Interrupted),_=self.stop.cancelled()=>Err(Error::Interrupted),result=tools.call(name,input)=>result.map(|value| ToolOutput::Text(value.to_string())).map_err(Error::Tool)}
+        tokio::select! {
+            biased;
+            _=context.cancel.cancelled()=>Err(Error::Interrupted),
+            _=self.stop.cancelled()=>Err(Error::Interrupted),
+            result=tools.call(name,input)=>result.map(|value| application_output(name,value)).map_err(Error::Tool)
+        }
     }
     fn notify(&self, event: Event) {
         if let Err(error) = self.events.try_send(event) {
@@ -367,4 +408,32 @@ pub(super) fn callbacks(controls: &mut RunControls) -> Arc<Callbacks> {
     Arc::new(Callbacks {
         input: Arc::from(input),
     })
+}
+
+#[cfg(test)]
+mod simulator_tests {
+    use super::*;
+    #[test]
+    fn simulator_policy_keeps_mutations_out_of_plan_mode_and_screenshots_as_images() {
+        for name in ["device_open", "device_close", "device_input"] {
+            assert_eq!(
+                permission::decide(
+                    RuntimeMode::FullAccess,
+                    PermissionMode::Plan,
+                    category(name),
+                    false,
+                    true
+                ),
+                Verdict::Deny
+            );
+        }
+        assert!(matches!(
+            application_output("device_screenshot", json!({"data":"cG5n"})),
+            ToolOutput::Content { .. }
+        ));
+        assert!(matches!(
+            application_output("device_list", json!([])),
+            ToolOutput::Text(_)
+        ));
+    }
 }

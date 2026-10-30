@@ -56,3 +56,5 @@ pub async fn run(config: McpConfig) -> anyhow::Result<()> {
     let tools = Tools::new(std::sync::Arc::new(zuse));
     serve_stdio(std::sync::Arc::new(tools)).await
 }
+
+pub mod simulators;

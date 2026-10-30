@@ -308,6 +308,8 @@ where
     let _lease = secret_broker::Lease(id.clone());
     let question_id = format!("private-secret:{id}");
     let question = UserInputQuestion {
+        approval_prompt: None,
+        approval: None,
         id: question_id,
         header: "Private secret".into(),
         question: format!(

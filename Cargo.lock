@@ -13845,6 +13845,7 @@ dependencies = [
  "zuse-remote",
  "zuse-rpc",
  "zuse-serve",
+ "zuse-simulator",
  "zuse-sync",
  "zuse-update",
  "zuse-usage",
@@ -14135,6 +14136,24 @@ dependencies = [
  "zuse-protocol",
  "zuse-remote",
  "zuse-rpc",
+]
+
+[[package]]
+name = "zuse-simulator"
+version = "0.25.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "futures",
+ "libc",
+ "reqwest",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "zuse-protocol",
 ]
 
 [[package]]

@@ -12,6 +12,7 @@ pub(super) enum PanelChoice {
     Changes,
     Terminal,
     Browser,
+    Simulator,
     /// The commit graph. Offered from the `+` menu only.
     History,
 }
@@ -24,6 +25,7 @@ impl PanelChoice {
             Self::Changes => "Changes",
             Self::Terminal => "Terminal",
             Self::Browser => "Browser",
+            Self::Simulator => "Simulator",
             Self::History => "History",
         }
     }
@@ -35,6 +37,7 @@ impl PanelChoice {
             Self::Changes => icons::GIT_COMPARE,
             Self::Terminal => icons::TERMINAL,
             Self::Browser => icons::GLOBE,
+            Self::Simulator => icons::SMARTPHONE,
             Self::History => icons::GIT_BRANCH,
         }
     }
@@ -46,6 +49,7 @@ impl PanelChoice {
             Self::Changes => "changes",
             Self::Terminal => "terminal",
             Self::Browser => "browser",
+            Self::Simulator => "simulator",
             Self::History => "history",
         }
     }
@@ -73,6 +77,7 @@ pub(super) fn panel_choices(
     }
     choices.push(PanelChoice::Terminal);
     choices.push(PanelChoice::Browser);
+    choices.push(PanelChoice::Simulator);
     if git && menu {
         choices.push(PanelChoice::History);
     }
@@ -146,6 +151,7 @@ impl Shell {
             PanelChoice::Changes => self.open_review_tab(window, cx),
             PanelChoice::Terminal => self.add_terminal_surface(cx),
             PanelChoice::Browser => self.add_browser_surface(None, window, cx),
+            PanelChoice::Simulator => self.add_simulator_surface(window, cx),
             PanelChoice::History => self.add_history_surface(window, cx),
         }
     }
@@ -277,23 +283,31 @@ mod tests {
         use PanelChoice::*;
         assert_eq!(
             panel_choices(false, Some(false), true, false, false),
-            [Files, PullRequest, Changes, Terminal, Browser]
+            [Files, PullRequest, Changes, Terminal, Browser, Simulator]
         );
         // Each entry appears once, Files included.
         let menu = panel_choices(false, Some(false), true, false, true);
         assert_eq!(
             menu,
-            [Files, PullRequest, Changes, Terminal, Browser, History]
+            [
+                Files,
+                PullRequest,
+                Changes,
+                Terminal,
+                Browser,
+                Simulator,
+                History
+            ]
         );
         // An open tree, PR or review is not offered again.
         assert_eq!(
             panel_choices(true, Some(true), true, true, true),
-            [Terminal, Browser, History]
+            [Terminal, Browser, Simulator, History]
         );
         // No pull request, no repository: no PR or git entries.
         assert_eq!(
             panel_choices(false, None, false, false, true),
-            [Files, Terminal, Browser]
+            [Files, Terminal, Browser, Simulator]
         );
     }
 }
