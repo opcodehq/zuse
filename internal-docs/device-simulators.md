@@ -156,6 +156,7 @@ cargo test -p zuse-simulator --lib setup::smoke::pinned_helpers_install_verify_a
 
 The production native pane fixture captures scripted host-progress states:
 [onboarding](screenshots/device-simulator/simulator-onboarding.png),
+[narrow onboarding](screenshots/device-simulator/simulator-onboarding-narrow.png),
 [checking](screenshots/device-simulator/simulator-checking.png),
 [hub installation](screenshots/device-simulator/simulator-installing-hub.png),
 [hub startup](screenshots/device-simulator/simulator-starting-hub.png),
@@ -163,6 +164,9 @@ The production native pane fixture captures scripted host-progress states:
 [agent installation](screenshots/device-simulator/simulator-installing-agent.png),
 [hub failure/retry](screenshots/device-simulator/simulator-install-error.png), and
 [agent failure/retry](screenshots/device-simulator/simulator-agent-error.png).
+The onboarding fixture also renders at 280px: the switch stays aligned with its
+heading, the description wraps beneath it, and requirement details wrap without
+pushing controls outside the pane.
 These are native UI renders with fixture progress, rather than a recording of
 the network smoke test. The picker and dark/light viewer use synthetic device
 and sample app data. No real simulator/emulator execution is implied by captures.

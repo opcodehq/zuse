@@ -139,6 +139,12 @@ fn main() -> anyhow::Result<()> {
                     cx.background_executor().timer(Duration::from_millis(350)).await;
                     capture(setup_window.into(),cx,&output.join(format!("{name}.png"))).await?;
                 }
+                // Keep the setup controls inside a narrow right pane as descriptions wrap.
+                let narrow_window=cx.update(|cx|cx.open_window(WindowOptions{window_bounds:Some(WindowBounds::Windowed(Bounds::new(gpui::point(px(30.),px(30.)),size(px(280.),px(720.))))),..Default::default()},|window,cx|cx.new(|cx|simulator::SimulatorPane::new(setup_handle.clone(),"simulator-fixture".into(),device.clone(),window,cx))))?;
+                narrow_window.update(cx,|pane,_,cx|pane.fixture_load(zuse_protocol::simulators::State{agent_access:true,setup:Some(Setup{status:SetupStatus::Disabled,requirements:host_requirements.clone(),..Default::default()}),..Default::default()},None,cx))?;
+                cx.background_executor().timer(Duration::from_millis(350)).await;
+                capture(narrow_window.into(),cx,&output.join("simulator-onboarding-narrow.png")).await?;
+                narrow_window.update(cx,|_,window,_|window.remove_window())?;
                 setup_window.update(cx,|_,window,_|window.remove_window())?;
                 let pixels=image::load_from_memory(include_bytes!("simulator-sample.png"))?.to_rgba8();
                 let mut png=std::io::Cursor::new(Vec::new());image::DynamicImage::ImageRgba8(pixels).write_to(&mut png,image::ImageFormat::Png)?;

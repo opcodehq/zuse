@@ -395,15 +395,17 @@ impl SimulatorPane {
                                 .child(
                                     div()
                                         .flex()
-                                        .items_center()
+                                        .items_start()
                                         .gap(px(8.))
-                                        .child(div().flex_1().child(requirement.label.clone()))
+                                        .child(div().flex_none().child(requirement.label.clone()))
                                         .when(requirement.ready, |row| {
                                             row.child(
                                                 div()
+                                                    .flex_1()
                                                     .min_w_0()
-                                                    .truncate()
+                                                    .text_right()
                                                     .text_size(px(11.))
+                                                    .line_height(px(16.))
                                                     .text_color(theme.text_muted)
                                                     .child(requirement.detail.clone()),
                                             )
@@ -462,13 +464,42 @@ impl SimulatorPane {
             );
         }
         if !enabled {
-            card=card.child(div().id("simulator-setup-agents").role(Role::Switch).aria_label("Allow agents to control devices").aria_toggled(if agents {gpui::Toggled::True} else {gpui::Toggled::False}).tab_index(0)
-                .flex().items_start().gap(px(12.)).cursor_pointer()
-                .child(div().flex_1().flex().flex_col().gap(px(4.))
-                    .child("Allow agent control")
-                    .child(div().text_size(px(11.)).line_height(px(16.)).text_color(theme.text_muted).child("Let agents inspect and interact with the device in this chat.")))
-                .child(crate::settings::widgets::toggle_switch(&theme,agents,"simulator-setup-agents-switch"))
-                .on_click(cx.listener(move |this,_,_,cx| {this.setup_agents=Some(!agents);cx.notify();})));
+            card = card.child(
+                div()
+                    .id("simulator-setup-agents")
+                    .role(Role::Switch)
+                    .aria_label("Allow agents to control devices")
+                    .aria_toggled(if agents { gpui::Toggled::True } else { gpui::Toggled::False })
+                    .tab_index(0)
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap(px(12.))
+                            .child(div().flex_1().min_w_0().child("Allow agent control"))
+                            .child(crate::settings::widgets::toggle_switch(
+                                &theme, agents, "simulator-setup-agents-switch",
+                            )),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .text_color(theme.text_muted)
+                            .child("Let agents inspect and interact with the device in this chat."),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.setup_agents = Some(!agents);
+                        cx.notify();
+                    })),
+            );
             if blocked || checking {
                 card = card.child(self.button(
                     "simulator-check-again",
