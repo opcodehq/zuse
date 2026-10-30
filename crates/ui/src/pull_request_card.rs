@@ -356,6 +356,13 @@ pub struct PullRequestCardFixtures(pub HashMap<String, (Option<ChangeRequestDeta
 
 impl Global for PullRequestCardFixtures {}
 
+/// Opt a native capture into the production watch controls over fixture RPC.
+#[cfg(feature = "browser-fixture")]
+pub struct PullRequestWatchFixture;
+
+#[cfg(feature = "browser-fixture")]
+impl Global for PullRequestWatchFixture {}
+
 // ---------------------------------------------------------------------------
 // The card
 // ---------------------------------------------------------------------------
@@ -472,7 +479,11 @@ impl PullRequestCard {
                 self.set_graph(Some(graph));
             }
         }
-        if url_changed && !self.fixture {
+        #[cfg(feature = "browser-fixture")]
+        let fixture_watch = cx.try_global::<PullRequestWatchFixture>().is_some();
+        #[cfg(not(feature = "browser-fixture"))]
+        let fixture_watch = false;
+        if url_changed && (!self.fixture || fixture_watch) {
             self.watch_control = self.url.as_ref().map(|url| {
                 cx.new(|cx| {
                     crate::pr_watch::PrWatchControl::new(

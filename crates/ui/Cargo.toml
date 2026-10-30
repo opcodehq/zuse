@@ -47,6 +47,10 @@ name = "pull-request-fixture"
 required-features = ["pull-request-fixture"]
 
 [[example]]
+name = "pr-ci-watch-fixture"
+required-features = ["browser-fixture", "pull-request-fixture"]
+
+[[example]]
 name = "new-project-fixture"
 required-features = ["project-palette-fixture"]
 

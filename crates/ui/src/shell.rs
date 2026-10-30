@@ -19616,7 +19616,14 @@ impl Shell {
             .into(),
             additions: 482,
             deletions: 37,
-            status_check_rollup: if stage == "checks" {
+            status_check_rollup: if stage == "failed" {
+                vec![
+                    check("Tests", "FAILURE", "COMPLETED"),
+                    check("Lint", "SUCCESS", "COMPLETED"),
+                    check("Types", "SUCCESS", "COMPLETED"),
+                    check("Preview", "SUCCESS", "COMPLETED"),
+                ]
+            } else if stage == "checks" {
                 vec![
                     check("Tests", "", "IN_PROGRESS"),
                     check("Lint", "SUCCESS", "COMPLETED"),
