@@ -46,7 +46,7 @@ impl Host for Fixture {
         Ok(ModelOutput {
             messages: vec![Message {
                 role: Role::Assistant,
-                content: json!([{"type":"tool-call","toolCallId":call.id,"toolName":call.name,"input":call.input}]),
+                content: json!([{"type":"tool-call","toolCallId":call.id,"toolName":call.name,"input":call.input}]).into(),
                 metadata: Default::default(),
             }],
             calls: vec![call],
