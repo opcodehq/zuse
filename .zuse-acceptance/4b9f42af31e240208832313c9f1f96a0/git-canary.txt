@@ -1,0 +1,1 @@
+isolated-cloud-git-canary-ok
