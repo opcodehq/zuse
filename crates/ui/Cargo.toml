@@ -167,3 +167,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [[example]]
 name = "private-secrets-fixture"
 required-features = ["appshots-fixture"]
+
+[[example]]
+name = "approval-rules-fixture"
+required-features = ["appshots-fixture", "browser-fixture"]

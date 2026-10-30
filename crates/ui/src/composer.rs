@@ -11,6 +11,8 @@ mod archive;
 mod private_secrets;
 mod question_tray;
 mod permissions;
+mod permission_inspector;
+mod permission_prompt;
 mod skill_completion;
 
 use std::collections::{HashMap, HashSet};
@@ -6232,6 +6234,8 @@ pub struct Composer {
     /// ([`Pickers::render_new_thread_target_selectors`]).
     pickers: Entity<Pickers>,
     permission_open: bool,
+    permission_inspector: Option<permission_inspector::Inspector>,
+    permission_rules_task: Option<Task<()>>,
     permission_active: usize,
     permission_focus: FocusHandle,
     configuration_notice_seen: Option<(String, String)>,
@@ -6677,6 +6681,8 @@ impl Composer {
             queue_edit_attachment_draft: None,
             pickers,
             permission_open: false,
+            permission_inspector: None,
+            permission_rules_task: None,
             permission_active: 0,
             permission_focus: cx.focus_handle(),
             configuration_notice_seen: None,
@@ -10102,6 +10108,11 @@ impl Composer {
 
     /// Questions sit in a compact tray above the answer composer.
     fn render_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.wizard.as_ref().and_then(|wizard| wizard.current())
+            .is_some_and(|question| question.approval_prompt.is_some())
+        {
+            return self.render_permission_prompt(window, cx);
+        }
         self.render_question_composer(window, cx)
     }
 
@@ -10883,7 +10894,13 @@ impl Render for Composer {
             .flex_col()
             .gap(px(Theme::SPACE_SM))
             .px(px(COMPOSER_OUTER_PAD))
-            .pb(px(if new_chat { 12. } else { 8. }));
+            .pb(px(if new_chat { 12. } else { 8. }))
+            .when(
+                self.permission_inspector.as_ref().is_some_and(|inspector| {
+                    self.state.read(cx).selected_chat.as_deref() == Some(&inspector.chat)
+                }),
+                |view| view.child(self.render_permission_inspector(window.viewport_size(), cx)),
+            );
 
         if wizard_active {
             let wizard = self.render_wizard(window, cx);
@@ -15056,6 +15073,8 @@ mod tests {
 
     fn question(id: &str, options: &[&str], multi: bool) -> UserInputQuestion {
         UserInputQuestion {
+            approval_prompt: None,
+            approval: None,
             id: id.into(),
             header: "Header".into(),
             question: format!("Question {id}"),

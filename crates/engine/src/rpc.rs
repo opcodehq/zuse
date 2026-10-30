@@ -1663,7 +1663,8 @@ fn forwardable(method: &str) -> bool {
     }
     matches!(
         method,
-        zuse_protocol::usage::OVERVIEW | zuse_protocol::usage::SESSIONS
+        zuse_protocol::permission::LIST | zuse_protocol::permission::UPDATE | zuse_protocol::permission::REMOVE
+            | zuse_protocol::usage::OVERVIEW | zuse_protocol::usage::SESSIONS
             | zuse_protocol::creation_source::LIST | zuse_protocol::creation_source::RESOLVE
             | zuse_protocol::external_chat::LIST | zuse_protocol::external_chat::IMPORT
             | methods::OPEN_VISUAL | methods::CONTROL_VISUAL | methods::DRAW_VISUAL
@@ -2552,6 +2553,41 @@ impl RpcService for EngineRpc {
                 }
                 RpcReply::value(&serde_json::json!({"saved":saved}))
             }
+            zuse_protocol::permission::LIST
+            | zuse_protocol::permission::UPDATE
+            | zuse_protocol::permission::REMOVE => {
+                use zuse_protocol::permission::*;
+                let chat = params
+                    .get("chatId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| RpcError::BadParams("chatId is required".into()))?;
+                let (project, _, _) = self
+                    .sessions
+                    .permission_context(chat, None)
+                    .ok_or_else(|| RpcError::BadParams("Chat workspace is unavailable".into()))?;
+                let rules = self.sessions.permission_rules();
+                if method != LIST {
+                    let id = params
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| RpcError::BadParams("Rule id is required".into()))?;
+                    if method == REMOVE {
+                        rules.remove(&project, chat, id).map_err(failed)?;
+                    } else {
+                        let effect: RuleEffect = serde_json::from_value(params["effect"].clone())
+                            .map_err(|e| RpcError::BadParams(e.to_string()))?;
+                        let chat_only = params
+                            .get("chatOnly")
+                            .and_then(|v| v.as_bool())
+                            .ok_or_else(|| RpcError::BadParams("chatOnly is required".into()))?;
+                        rules
+                            .edit(&project, chat, id, effect, chat_only)
+                            .map_err(failed)?;
+                    }
+                }
+                RpcReply::value(&rules.snapshot(&project, chat).map_err(failed)?)
+            }
+
             zuse_protocol::external_chat::LIST | zuse_protocol::external_chat::IMPORT => {
                 self.external_chats(method, params).await
             }

@@ -1503,6 +1503,13 @@ fn handle_control_request(
 fn tool_approval_question(tool: &str, input: &Value) -> UserInputQuestion {
     let preview: String = input.to_string().chars().take(4000).collect();
     UserInputQuestion {
+        approval_prompt: None,
+        approval: Some(zuse_protocol::permission::ToolApproval::new(
+            format!("claude:{tool}"),
+            input.clone(),
+            "Yes",
+            "No",
+        )),
         id: uuid::Uuid::new_v4().to_string(),
         header: format!("Approve {tool}"),
         question: format!("Claude wants to use {tool}. Allow this action?\n\n{preview}"),
@@ -1525,6 +1532,8 @@ fn parse_questions(input: &Value) -> Vec<UserInputQuestion> {
             let field =
                 |keys: [&str; 2]| keys.iter().find_map(|k| q.get(*k).and_then(Value::as_str));
             UserInputQuestion {
+                approval_prompt: None,
+                approval: None,
                 id: uuid::Uuid::new_v4().to_string(),
                 header: field(["header", "title"]).unwrap_or("Question").into(),
                 question: field(["question", "prompt"]).unwrap_or("").into(),
@@ -1588,6 +1597,18 @@ fn updated_input_with_answers(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn saved_tool_approval_keeps_the_complete_input_and_questions_have_no_grant() {
+        let input = json!({"command": "x".repeat(9000), "timeout": 5000});
+        let question = tool_approval_question("Bash", &input);
+        assert_eq!(question.approval.unwrap().input, input);
+        let questions = parse_questions(
+            &json!({"questions":[{"question":"Continue?", "options":[{"label":"Yes"},{"label":"No"}]}]}),
+        );
+        assert_eq!(questions.len(), 1);
+        assert!(questions[0].approval.is_none());
+    }
 
     #[test]
     fn parses_questions_tolerantly() {

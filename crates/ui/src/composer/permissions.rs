@@ -96,6 +96,8 @@ impl Composer {
         match event.keystroke.key.as_str() {
             "escape" => {
                 self.permission_open = false;
+                self.permission_inspector = None;
+                self.permission_rules_task = None;
                 window.focus(&self.input.focus_handle(cx), cx);
             }
             "enter" | "space" if !event.is_held => {
@@ -152,7 +154,7 @@ impl Composer {
             .id("composer-permissions")
             .relative()
             .flex_none()
-            .track_focus(&self.permission_focus)
+            .when(self.permission_inspector.is_none(), |view|view.track_focus(&self.permission_focus))
             .on_key_down(cx.listener(Self::on_permission_key))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
@@ -207,6 +209,8 @@ impl Composer {
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if !pending {
+                            this.permission_inspector = None;
+                            this.permission_rules_task = None;
                             this.permission_active = LEVELS
                                 .iter()
                                 .position(|level| *level == selected)
@@ -294,19 +298,37 @@ impl Composer {
                     }
                     rows.push(row(index, level).into_any_element());
                 }
-                let menu = popover::popover_card(&popup_theme)
-                    .id("composer-permission-menu")
-                    .role(Role::ListBox)
-                    .w(px(260.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(popover::menu_heading(&popup_theme, "Agent access"))
-                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                        this.permission_open = false;
-                        cx.notify();
-                    }))
-                    .children(rows);
+                let menu =
+                    popover::popover_card(&popup_theme)
+                        .id("composer-permission-menu")
+                        .role(Role::ListBox)
+                        .w(px(260.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(popover::menu_heading(&popup_theme, "Agent access"))
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                            this.permission_open = false;
+                            cx.notify();
+                        }))
+                        .children(rows)
+                        .when(self.state.read(cx).selected_chat.is_some(), |menu| {
+                            menu.child(popover::menu_separator()).child(
+                                div()
+                                    .id("open-permission-rules")
+                                    .role(Role::Button)
+                                    .aria_label("Saved permission rules")
+                                    .px(px(10.))
+                                    .py(px(8.))
+                                    .text_size(crate::typography::text_xs())
+                                    .text_color(popup_theme.text)
+                                    .cursor_pointer()
+                                    .child("Saved permission rules…")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.open_permission_inspector(cx)
+                                    })),
+                            )
+                        });
                 let menu = menu.when(unconfirmed, |view| {
                     view.child(
                         div()
@@ -332,6 +354,7 @@ impl Composer {
                     None,
                 ))
             })
+
     }
 }
 

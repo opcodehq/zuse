@@ -164,6 +164,8 @@ impl PiHarness {
             child.stdin.take().expect("piped stdin"),
             child.stdout.take().expect("piped stdout"),
         );
+        let mut dialogs = ui::Dialogs::default();
+        dialogs.approval_nonce = access.as_ref().map(|guard| guard.ready.clone());
         Ok(Process {
             child,
             _scratch: scratch,
@@ -171,7 +173,7 @@ impl PiHarness {
             transport,
             tail,
             stderr_task,
-            dialogs: Default::default(),
+            dialogs,
             exit_deadline: None,
         })
     }

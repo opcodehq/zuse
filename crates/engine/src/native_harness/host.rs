@@ -56,6 +56,20 @@ impl NativeCallbacks for Callbacks {
     }
     async fn approve(&self, request: ApprovalRequest, context: ToolContext) -> Result<bool, Error> {
         let question = UserInputQuestion {
+            approval_prompt: None,
+            approval: Some({
+                let mut approval = zuse_protocol::permission::ToolApproval::new(
+                    format!("zuse:{}", request.tool),
+                    request.input.clone(),
+                    "Allow once",
+                    "Deny",
+                );
+                approval.force_prompt = request
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| permission::sensitive(path));
+                approval
+            }),
             id: format!("{}:{}", context.agent_id, context.call_id),
             header: "Permission".into(),
             question: format!(
@@ -83,6 +97,8 @@ impl NativeCallbacks for Callbacks {
     ) -> Result<String, Error> {
         self.ask(
             UserInputQuestion {
+                approval_prompt: None,
+                approval: None,
                 id: format!("{}:{}", context.agent_id, context.call_id),
                 header: "Question".into(),
                 question,
