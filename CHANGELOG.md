@@ -1,10 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.26.0 - 2026-10-30
+
+The first stable release of the native Zuse app since 0.25.0. It also includes every change from the 0.25.1 previews.
 
 ### Added
 
-- Watch chat pull request checks in the engine, notify on new CI failures, and opt into up to three automatic repairs with failing job logs and normal pushes.
+- Native Rust model harness: direct Responses, Messages, GenerateContent and Chat Completions transport, durable transition storage with recovery review, bounded child agents, concurrent independent reads, local skills and lazily pooled MCP connections. The production JavaScript model bridge is removed.
+- New project palette: open a folder, clone a repository (search your GitHub repositories or paste a Git URL) or create an Empty, Next.js or Turborepo project, optionally published as a private GitHub repository. Cloning and scaffolding run in the background with progress, cancel and retry above the composer.
+- Local stdio MCP servers in Plugins: add one by pasting its configuration; its tools reach every agent through the plugin gateway.
+- Claude Code workflow runs appear as live phase boards with agent tiles, counts, timers and details.
+- Saved approval rules: allow a tool for this chat or always for the project from the permission card, and review or remove rules in the permission inspector. Rules never exceed the chat's access mode.
+- iOS Simulator and Android emulator pane beside chat, with device boot and shutdown, live frames, manual input and optional agent control.
+- Pull request cards in chat with branch history, conflict previews, check status and resolve, ready and merge actions, plus a Create PR composer action.
+- Pull request CI watching with failure notifications and opt-in automatic repairs, limited to three attempts per failure and never force-pushing.
+- Private secret requests: agents can ask for a credential in a masked input and use it for one approved HTTPS request without it entering the model context or chat history.
+- Background task tracking with per-task stop, and pull request updates on session cards.
+
+### Changed
+
+- Neutral grey theme in dark and light: a lighter base palette, a translucent sidebar set apart from the conversation panel, flat menus and dialogs, and sentence-case group headings.
+- Command palette, folder browser and New project share one card with an inset results panel and every shortcut in the footer.
+- Chat chrome: provider tiles for running agents, a single Thinking chip, the attached question tray above the composer, and the Zuse working indicator.
 
 ## 0.25.1 Preview 5 - 2026-10-26
 
