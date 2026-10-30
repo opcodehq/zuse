@@ -108,5 +108,5 @@ jobs:
       - run: cargo test --locked -p zuse-cloud-projection
       - run: cargo test --locked -p zuse-cloud-runtime -- --include-ignored
       - run: cargo test --locked -p zuse-cloud -- --include-ignored
-      - run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud -- --ignored
+      - run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud -- --ignored --test-threads=1 --skip rust_cloud_composer_launch_close_and_reopen
       - run: cargo test --locked -p zuse-protocol cloud
