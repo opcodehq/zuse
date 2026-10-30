@@ -154,7 +154,7 @@ impl Composer {
             .id("composer-permissions")
             .relative()
             .flex_none()
-            .track_focus(&self.permission_focus)
+            .when(self.permission_inspector.is_none(), |view|view.track_focus(&self.permission_focus))
             .on_key_down(cx.listener(Self::on_permission_key))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
@@ -354,12 +354,7 @@ impl Composer {
                     None,
                 ))
             })
-            .when(
-                self.permission_inspector.as_ref().is_some_and(|inspector| {
-                    self.state.read(cx).selected_chat.as_deref() == Some(&inspector.chat)
-                }),
-                |view| view.child(self.render_permission_inspector(cx)),
-            )
+
     }
 }
 

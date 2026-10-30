@@ -1503,6 +1503,7 @@ fn handle_control_request(
 fn tool_approval_question(tool: &str, input: &Value) -> UserInputQuestion {
     let preview: String = input.to_string().chars().take(4000).collect();
     UserInputQuestion {
+        approval_prompt: None,
         approval: Some(zuse_protocol::permission::ToolApproval::new(
             format!("claude:{tool}"),
             input.clone(),
@@ -1531,6 +1532,7 @@ fn parse_questions(input: &Value) -> Vec<UserInputQuestion> {
             let field =
                 |keys: [&str; 2]| keys.iter().find_map(|k| q.get(*k).and_then(Value::as_str));
             UserInputQuestion {
+                approval_prompt: None,
                 approval: None,
                 id: uuid::Uuid::new_v4().to_string(),
                 header: field(["header", "title"]).unwrap_or("Question").into(),

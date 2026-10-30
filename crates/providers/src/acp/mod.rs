@@ -3351,6 +3351,7 @@ fn handle_server_request_live(
         })
         .collect();
     let question = UserInputQuestion {
+        approval_prompt: None,
         approval: if content_question {
             None
         } else {

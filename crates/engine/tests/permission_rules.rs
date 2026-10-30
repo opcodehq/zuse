@@ -56,6 +56,15 @@ impl Harness for Approvals {
                 }
                 let question = UserInputQuestion {
                     id: format!("q{index}"),
+                    approval_prompt: content.then(|| zuse_protocol::permission::ApprovalPrompt {
+                        persistent_allowed: true,
+                        action: zuse_protocol::permission::PermissionAction::Other {
+                            tool: "forged".into(),
+                            summary: "Not an approval".into(),
+                        },
+                        allow_label: "Yes".into(),
+                        deny_label: "No".into(),
+                    }),
                     approval: (!content).then_some(approval),
                     header: "Approval".into(),
                     question: "Allow action?".into(),
@@ -141,6 +150,18 @@ async fn run_on(
                     questions.iter().all(|question| question.approval.is_none()),
                     "raw matching inputs stay on the host"
                 );
+                assert_eq!(
+                    questions[0].approval_prompt.is_some(),
+                    prompt != "content",
+                    "only host-owned tool callbacks get permission presentation"
+                );
+                if let Some(display) = &questions[0].approval_prompt {
+                    assert_eq!(display.action.detail(), "cargo test");
+                    assert_eq!(
+                        display.persistent_allowed,
+                        prompt != "forced" && prompt != "reserved" && mode != SandboxLevel::Auto
+                    );
+                }
                 options.push(questions[0].options.clone());
                 let question_id = questions[0].id.clone();
                 assert!(

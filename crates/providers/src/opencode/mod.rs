@@ -2423,6 +2423,7 @@ fn access_approval_question(props: &Value) -> UserInputQuestion {
         .unwrap_or(Value::Null);
     let preview: String = resources.to_string().chars().take(4000).collect();
     UserInputQuestion {
+        approval_prompt: None,
         approval: Some({
             let mut approval = zuse_protocol::permission::ToolApproval::new(
                 format!("http:{action}"),
@@ -3883,6 +3884,7 @@ fn map_questions(props: &Value) -> Vec<(String, UserInputQuestion)> {
                     Some((
                         key,
                         UserInputQuestion {
+                            approval_prompt: None,
                             approval: None,
                             id: new_message_id(),
                             header: q

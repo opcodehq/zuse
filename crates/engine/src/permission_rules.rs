@@ -433,6 +433,12 @@ impl crate::sessions::SessionsEngine {
         let context = self.permission_context(chat, Some(run));
         let mut answers = Vec::new();
         questions.retain_mut(|question| {
+            question.approval_prompt = question.approval.as_ref().map(|approval| ApprovalPrompt {
+                persistent_allowed: false,
+                action: PermissionAction::from_tool_input(&approval.tool, &approval.input),
+                allow_label: approval.allow_label.clone(),
+                deny_label: approval.deny_label.clone(),
+            });
             let Some(approval) = question.approval.as_mut() else {
                 return true;
             };
@@ -483,6 +489,9 @@ impl crate::sessions::SessionsEngine {
                         question
                             .options
                             .extend([ALLOW_CHAT.into(), ALLOW_PROJECT.into()]);
+                        if let Some(prompt) = question.approval_prompt.as_mut() {
+                            prompt.persistent_allowed = true;
+                        }
                     }
                     true
                 }
@@ -726,6 +735,7 @@ mod tests {
             std::sync::Arc::new(crate::HarnessRegistry::new()),
         );
         let question = zuse_protocol::UserInputQuestion {
+            approval_prompt: None,
             approval: None,
             id: "content".into(),
             header: "Question".into(),

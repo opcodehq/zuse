@@ -36,6 +36,7 @@ impl Dialogs {
         let title = string(frame, "title");
         let message = string(frame, "message");
         let question = UserInputQuestion {
+            approval_prompt: None,
             approval: if method == "confirm" && self.approval_nonce.as_deref() == Some(title) {
                 serde_json::from_str::<Value>(message).ok().and_then(|v| {
                     Some(zuse_protocol::permission::ToolApproval::new(

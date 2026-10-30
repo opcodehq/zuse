@@ -56,6 +56,7 @@ impl NativeCallbacks for Callbacks {
     }
     async fn approve(&self, request: ApprovalRequest, context: ToolContext) -> Result<bool, Error> {
         let question = UserInputQuestion {
+            approval_prompt: None,
             approval: Some({
                 let mut approval = zuse_protocol::permission::ToolApproval::new(
                     format!("zuse:{}", request.tool),
@@ -96,6 +97,7 @@ impl NativeCallbacks for Callbacks {
     ) -> Result<String, Error> {
         self.ask(
             UserInputQuestion {
+                approval_prompt: None,
                 approval: None,
                 id: format!("{}:{}", context.agent_id, context.call_id),
                 header: "Question".into(),

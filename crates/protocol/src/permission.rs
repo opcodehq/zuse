@@ -33,6 +33,98 @@ impl ToolApproval {
     }
 }
 
+/// Display-only permission context. This never participates in rule evaluation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PermissionAction {
+    FileWrite { path: String },
+    Command { command: String },
+    Network { url: String },
+    Other { tool: String, summary: String },
+}
+impl PermissionAction {
+    pub fn from_tool_input(tool: &str, input: &Value) -> Self {
+        let input = if input.get("harness").is_some() && input.get("cwd").is_some() {
+            input.get("input").unwrap_or(input)
+        } else {
+            input
+        };
+        if let Some(command) = input.get("command") {
+            let command = command.as_str().map(str::to_owned).or_else(|| {
+                let parts = command.as_array()?;
+                Some(
+                    parts
+                        .iter()
+                        .map(Value::as_str)
+                        .collect::<Option<Vec<_>>>()?
+                        .join(" "),
+                )
+            });
+            if let Some(command) = command.filter(|command| !command.is_empty()) {
+                return Self::Command { command };
+            }
+        }
+        let name = tool.to_ascii_lowercase();
+        if name.contains("write") || name.contains("edit") || name.contains("filechange") {
+            if let Some(path) = input
+                .get("file_path")
+                .or_else(|| input.get("path"))
+                .and_then(Value::as_str)
+            {
+                return Self::FileWrite { path: path.into() };
+            }
+            if let Some(changes) = input.get("changes").and_then(Value::as_array) {
+                let paths: Vec<_> = changes
+                    .iter()
+                    .filter_map(|change| change.get("path").and_then(Value::as_str))
+                    .collect();
+                if !paths.is_empty() {
+                    return Self::FileWrite {
+                        path: paths.join(", "),
+                    };
+                }
+            }
+        }
+        if let Some(url) = input.get("url").and_then(Value::as_str) {
+            return Self::Network { url: url.into() };
+        }
+        let tool = tool.rsplit(':').next().unwrap_or(tool).replace('_', " ");
+        let summary = input
+            .get("summary")
+            .or_else(|| input.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or(&tool)
+            .to_owned();
+        Self::Other { tool, summary }
+    }
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::FileWrite { path } => path,
+            Self::Command { command } => command,
+            Self::Network { url } => url,
+            Self::Other { summary, .. } => summary,
+        }
+    }
+    pub fn headline(&self) -> String {
+        match self {
+            Self::FileWrite { .. } => "Write file?".into(),
+            Self::Command { .. } => "Run shell command?".into(),
+            Self::Network { .. } => "Make network request?".into(),
+            Self::Other { tool, .. } => format!("Use tool {tool}?"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalPrompt {
+    #[serde(default)]
+    pub persistent_allowed: bool,
+    pub action: PermissionAction,
+    pub allow_label: String,
+    pub deny_label: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RuleEffect {
@@ -87,6 +179,52 @@ mod tests {
                 .unwrap()
                 .get("approval")
                 .is_none()
+        );
+    }
+    #[test]
+    fn display_actions_extract_resources_without_exposing_bodies_or_host_context() {
+        let action = PermissionAction::from_tool_input(
+            "claude:file-write",
+            &serde_json::json!({"cwd":"/private/worktree","harness":"claude-code","input":{"file_path":"src/permissions.rs","content":"private payload"}}),
+        );
+        assert_eq!(
+            action,
+            PermissionAction::FileWrite {
+                path: "src/permissions.rs".into()
+            }
+        );
+        let json = serde_json::to_string(&action).unwrap();
+        for secret in ["private payload", "/private/worktree", "harness"] {
+            assert!(!json.contains(secret));
+        }
+        let other = PermissionAction::from_tool_input(
+            "custom:Deploy",
+            &serde_json::json!({"token":"private payload","summary":"Deploy preview"}),
+        );
+        assert_eq!(other.detail(), "Deploy preview");
+        assert!(
+            !serde_json::to_string(&other)
+                .unwrap()
+                .contains("private payload")
+        );
+    }
+    #[test]
+    fn display_actions_preserve_complete_commands_and_typed_prompt_labels() {
+        let action = PermissionAction::from_tool_input(
+            "pi:bash",
+            &serde_json::json!({"command":["cargo","test","--lib"]}),
+        );
+        assert_eq!(action.detail(), "cargo test --lib");
+        let prompt = ApprovalPrompt {
+            persistent_allowed: true,
+            action,
+            allow_label: "Accept once".into(),
+            deny_label: "Reject once".into(),
+        };
+        assert_eq!(
+            serde_json::from_value::<ApprovalPrompt>(serde_json::to_value(&prompt).unwrap())
+                .unwrap(),
+            prompt
         );
     }
     #[test]

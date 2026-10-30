@@ -2210,6 +2210,7 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
                 if id.is_empty() { format!("q{ix}") } else { id }
             };
             let question = UserInputQuestion {
+                approval_prompt: None,
                 approval: None,
                 id: new_message_id(),
                 header: {
@@ -2288,6 +2289,7 @@ fn approval_question(method: &str, params: &Value) -> UserInputQuestion {
         )
     };
     UserInputQuestion {
+        approval_prompt: None,
         approval: Some({
             let mut input = params.clone();
             // Transport identities change on every invocation and confer no authority.
