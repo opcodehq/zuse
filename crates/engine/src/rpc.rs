@@ -813,7 +813,10 @@ impl EngineRpc {
         }
     }
 
-    pub fn with_project_creation(mut self, service: crate::project_creation::ProjectCreationService) -> Self {
+    pub fn with_project_creation(
+        mut self,
+        service: crate::project_creation::ProjectCreationService,
+    ) -> Self {
         self.project_creation = Some(service);
         self
     }
@@ -2540,7 +2543,13 @@ impl RpcService for EngineRpc {
                         return Err(unavailable());
                     };
                     crate::secret_broker::shared()
-                        .submit_routed(self.sessions.secret_namespace(), &id, &chat, &request, zeroize::Zeroizing::new(value))
+                        .submit_routed(
+                            self.sessions.secret_namespace(),
+                            &id,
+                            &chat,
+                            &request,
+                            zeroize::Zeroizing::new(value),
+                        )
                         .map_err(|_| unavailable())?;
                 } else {
                     crate::secret_broker::shared()
@@ -3212,8 +3221,13 @@ impl RpcService for EngineRpc {
             methods::QUEUE_COMMAND => {
                 let p: QueueCommandParams = parse_params(params)?;
                 if let SessionCommandPayload::RespondInput { answers, .. } = &p.command {
-                    if answers.iter().any(|a| a.question_id.starts_with("private-secret:")) {
-                        return Err(RpcError::BadParams("Use the private secret card for this request".into()));
+                    if answers
+                        .iter()
+                        .any(|a| a.question_id.starts_with("private-secret:"))
+                    {
+                        return Err(RpcError::BadParams(
+                            "Use the private secret card for this request".into(),
+                        ));
                     }
                 }
                 if let SessionCommandPayload::Run { request, .. } = &p.command
@@ -4706,40 +4720,74 @@ impl RpcService for EngineRpc {
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
                 RpcReply::value(&status)
             }
-            zuse_protocol::project_creation::GITHUB_STATUS => RpcReply::value(&self.github.project_auth_status().await),
+            zuse_protocol::project_creation::GITHUB_STATUS => {
+                RpcReply::value(&self.github.project_auth_status().await)
+            }
             zuse_protocol::project_creation::GITHUB_REPOS => {
-                let p: zuse_protocol::project_creation::GithubRepositoriesRequest = parse_params(params)?;
-                RpcReply::value(&self.github.project_repositories(p.page).await.map_err(RpcError::Failed)?)
+                let p: zuse_protocol::project_creation::GithubRepositoriesRequest =
+                    parse_params(params)?;
+                RpcReply::value(
+                    &self
+                        .github
+                        .project_repositories(p.page)
+                        .await
+                        .map_err(RpcError::Failed)?,
+                )
             }
             zuse_protocol::project_creation::DEFAULT_PARENT => {
-                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                let service = self
+                    .project_creation
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
                 RpcReply::value(&service.default_parent().await)
             }
             zuse_protocol::project_creation::START => {
                 let p = parse_params(params)?;
-                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                let service = self
+                    .project_creation
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
                 let operation = service.start(p).await.map_err(RpcError::Failed)?;
-                self.workspace.create_space(&operation.id, &operation.device_id, &operation.destination, Some(operation.request.name.clone()), true)
+                self.workspace
+                    .create_space(
+                        &operation.id,
+                        &operation.device_id,
+                        &operation.destination,
+                        Some(operation.request.name.clone()),
+                        true,
+                    )
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&operation)
             }
             zuse_protocol::project_creation::LIST => {
-                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                let service = self
+                    .project_creation
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
                 RpcReply::value(&service.list())
             }
             zuse_protocol::project_creation::WATCH => {
-                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                let service = self
+                    .project_creation
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
                 Ok(RpcReply::Stream(watch_stream(service.subscribe())))
             }
             zuse_protocol::project_creation::CANCEL => {
                 let p: zuse_protocol::project_creation::ProjectOperationId = parse_params(params)?;
-                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                let service = self
+                    .project_creation
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
                 service.cancel(&p.id).map_err(RpcError::Failed)?;
                 RpcReply::value(&serde_json::json!({}))
             }
             zuse_protocol::project_creation::RETRY => {
                 let p: zuse_protocol::project_creation::ProjectOperationId = parse_params(params)?;
-                let service = self.project_creation.as_ref().ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
+                let service = self
+                    .project_creation
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Project creation unavailable".into()))?;
                 RpcReply::value(&service.retry(&p.id).await.map_err(RpcError::Failed)?)
             }
             methods::LIST_FOLDERS => {

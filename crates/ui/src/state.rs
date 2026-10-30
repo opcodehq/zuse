@@ -1684,7 +1684,9 @@ impl AppState {
     }
 
     pub fn apply_cloud_account(&mut self, value: serde_json::Value) -> bool {
-        if self.cloud_account.as_ref() == Some(&value) { return false; }
+        if self.cloud_account.as_ref() == Some(&value) {
+            return false;
+        }
         self.cloud_account = Some(value);
         true
     }
@@ -3058,7 +3060,13 @@ impl AppState {
     /// watch server-side. Selecting a chat also lands in its space and marks it
     /// seen (a global-list click must switch the tab strip too).
     pub fn select_chat(&mut self, chat_id: Option<String>, cx: &mut Context<Self>) {
-        if let Some(device) = chat_id.as_ref().and_then(|id| self.chats.iter().find(|c| &c.id == id)).map(|c| c.device_id.clone()) { self.watch_project_creations(device, cx); }
+        if let Some(device) = chat_id
+            .as_ref()
+            .and_then(|id| self.chats.iter().find(|c| &c.id == id))
+            .map(|c| c.device_id.clone())
+        {
+            self.watch_project_creations(device, cx);
+        }
         if let Some(id) = &chat_id
             && !self.is_unsaved_side_chat(id)
         {
@@ -3217,7 +3225,13 @@ impl AppState {
     /// `Some` clears a "Don't work in a project" opt-out and re-aims the
     /// device pick at the project's host; `None` IS that opt-out.
     pub fn select_space(&mut self, space_id: Option<String>, cx: &mut Context<Self>) {
-        if let Some(device) = space_id.as_ref().and_then(|id| self.space_row(id)).map(|s| s.device_id.clone()) { self.watch_project_creations(device, cx); }
+        if let Some(device) = space_id
+            .as_ref()
+            .and_then(|id| self.space_row(id))
+            .map(|s| s.device_id.clone())
+        {
+            self.watch_project_creations(device, cx);
+        }
         match &space_id {
             Some(id) => {
                 self.no_project = false;
@@ -4632,7 +4646,9 @@ mod tests {
 
         let before_reset = state.transcript_revision;
         state
-            .apply_transcript_frame(TranscriptFrame::Reset { reset: Vec::new().into() })
+            .apply_transcript_frame(TranscriptFrame::Reset {
+                reset: Vec::new().into(),
+            })
             .unwrap();
         assert!(state.transcript_replayed);
         assert_ne!(
@@ -5943,7 +5959,9 @@ mod tests {
         assert!(!state.transcript_replayed);
 
         state
-            .apply_transcript_frame(TranscriptFrame::Reset { reset: Vec::new().into() })
+            .apply_transcript_frame(TranscriptFrame::Reset {
+                reset: Vec::new().into(),
+            })
             .expect("empty reset");
         assert!(state.transcript_replayed);
     }

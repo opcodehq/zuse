@@ -521,18 +521,38 @@ impl AccountsPage {
         let plugins =
             (!embedded).then(|| cx.new(|cx| super::plugins::PluginsCard::new(state.clone(), cx)));
         let account_rows = cx.new(zuse_viewport::provider_accounts::AccountRows::new);
-        let account_events = cx.subscribe(&account_rows, |this: &mut Self, _, event: &zuse_viewport::provider_accounts::Event, cx| {
-            use zuse_viewport::provider_accounts::Action;
-            let id = match &event.action { Action::Switch(id) | Action::Remove(id) => id };
-            if event.scope != this.account_scope() { return; }
-            let account = this.snapshot.ready().and_then(|snapshot| snapshot.accounts.iter().find(|account| &account.id == id && Some(account.harness) == this.embedded_harness)).cloned();
-            if let Some(account) = account {
-                let method = match event.action { Action::Switch(_) => methods::ACTIVATE_AGENT_ACCOUNT, Action::Remove(_) => methods::FORGET_AGENT_ACCOUNT };
-                this.account_action(method, &account, cx);
-            } else {
-                this.account_rows.update(cx, |rows,cx| rows.finish(Err("Refresh accounts before trying again.".into()),cx));
-            }
-        });
+        let account_events = cx.subscribe(
+            &account_rows,
+            |this: &mut Self, _, event: &zuse_viewport::provider_accounts::Event, cx| {
+                use zuse_viewport::provider_accounts::Action;
+                let id = match &event.action {
+                    Action::Switch(id) | Action::Remove(id) => id,
+                };
+                if event.scope != this.account_scope() {
+                    return;
+                }
+                let account = this
+                    .snapshot
+                    .ready()
+                    .and_then(|snapshot| {
+                        snapshot.accounts.iter().find(|account| {
+                            &account.id == id && Some(account.harness) == this.embedded_harness
+                        })
+                    })
+                    .cloned();
+                if let Some(account) = account {
+                    let method = match event.action {
+                        Action::Switch(_) => methods::ACTIVATE_AGENT_ACCOUNT,
+                        Action::Remove(_) => methods::FORGET_AGENT_ACCOUNT,
+                    };
+                    this.account_action(method, &account, cx);
+                } else {
+                    this.account_rows.update(cx, |rows, cx| {
+                        rows.finish(Err("Refresh accounts before trying again.".into()), cx)
+                    });
+                }
+            },
+        );
         let mut page = Self {
             plugins,
             state,
@@ -574,7 +594,6 @@ impl AccountsPage {
     pub(crate) fn refresh_on_visit(&mut self, cx: &mut Context<Self>) {
         self.load(force_usage_for(LoadTrigger::Refresh), cx);
     }
-
 
     /// Review fixture: one live Claude login with usage meters.
     #[cfg(feature = "browser-fixture")]
@@ -706,16 +725,33 @@ impl AccountsPage {
         account: &AgentAccount,
         cx: &mut Context<Self>,
     ) {
-        if self.busy_account.is_some() || self.login.as_ref().is_some_and(|flow| !matches!(flow.step, LoginStep::Failed { .. })) {
-            self.account_rows.update(cx, |rows,cx| rows.finish(Err("Wait for the current account action to finish.".into()),cx));
+        if self.busy_account.is_some()
+            || self
+                .login
+                .as_ref()
+                .is_some_and(|flow| !matches!(flow.step, LoginStep::Failed { .. }))
+        {
+            self.account_rows.update(cx, |rows, cx| {
+                rows.finish(
+                    Err("Wait for the current account action to finish.".into()),
+                    cx,
+                )
+            });
             return;
         }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
-            self.account_rows.update(cx, |rows,cx| rows.finish(Err("Connect to the execution host and try again.".into()),cx));
+            self.account_rows.update(cx, |rows, cx| {
+                rows.finish(
+                    Err("Connect to the execution host and try again.".into()),
+                    cx,
+                )
+            });
             return;
         };
         let previous = self.snapshot.ready().cloned();
-        if !self.embedded && let Loadable::Ready(snapshot) = &mut self.snapshot {
+        if !self.embedded
+            && let Loadable::Ready(snapshot) = &mut self.snapshot
+        {
             if method == methods::ACTIVATE_AGENT_ACCOUNT {
                 mark_switched(snapshot, account);
             } else {
@@ -775,10 +811,11 @@ impl AccountsPage {
         provider: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
-        if self.busy_account.is_some() || self
-            .login
-            .as_ref()
-            .is_some_and(|flow| !matches!(flow.step, LoginStep::Failed { .. }))
+        if self.busy_account.is_some()
+            || self
+                .login
+                .as_ref()
+                .is_some_and(|flow| !matches!(flow.step, LoginStep::Failed { .. }))
         {
             return;
         }
@@ -1761,7 +1798,11 @@ impl AccountsPage {
     }
 
     fn account_scope(&self) -> String {
-        format!("{}:{:?}",self.target_device.as_deref().unwrap_or("local"),self.embedded_harness)
+        format!(
+            "{}:{:?}",
+            self.target_device.as_deref().unwrap_or("local"),
+            self.embedded_harness
+        )
     }
 
     fn render_embedded_provider(
@@ -1796,11 +1837,24 @@ impl AccountsPage {
                     )
                     .into_any_element(),
                 Loadable::Ready(snapshot) => {
-                    let accounts=provider_accounts(snapshot,harness).into_iter().cloned().collect::<Vec<_>>();
-                    let empty=accounts.is_empty();
-                    self.account_rows.update(cx,|rows,cx|rows.sync(zuse_viewport::provider_accounts::Data {
-                        scope:self.account_scope(),accounts,blocked:self.busy_account.is_some() || self.login.as_ref().is_some_and(|flow|!matches!(flow.step,LoginStep::Failed{..}))
-                    },cx));
+                    let accounts = provider_accounts(snapshot, harness)
+                        .into_iter()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let empty = accounts.is_empty();
+                    self.account_rows.update(cx, |rows, cx| {
+                        rows.sync(
+                            zuse_viewport::provider_accounts::Data {
+                                scope: self.account_scope(),
+                                accounts,
+                                blocked: self.busy_account.is_some()
+                                    || self.login.as_ref().is_some_and(|flow| {
+                                        !matches!(flow.step, LoginStep::Failed { .. })
+                                    }),
+                            },
+                            cx,
+                        )
+                    });
                     // Adding is the list's last row, not a header button —
                     // it sits where the next account will appear. A
                     // one-login agent that is connected has nothing to add.

@@ -20,14 +20,14 @@ mod access_widgets;
 pub mod accounts;
 pub mod appearance;
 pub mod archived;
+pub mod cloud_billing;
 pub mod composer;
-pub mod keybindings;
 mod custom_acp;
 pub mod defaults;
 pub mod devices;
-pub mod cloud_billing;
 pub mod files;
 pub mod harnesses;
+pub mod keybindings;
 mod managed_access;
 pub mod notifications;
 pub mod pairing;
@@ -1253,18 +1253,28 @@ impl ShortcutId {
     pub fn canonical(self) -> Self {
         use keybindings::Command;
         Self::Desktop(match self {
-            Self::SaveFile=>Command::EditorSave,Self::ToggleSidebar=>Command::ToggleLeftSidebar,
-            Self::ToggleChanges=>Command::ToggleRightSidebar,Self::ToggleTerminal=>Command::ToggleTerminal,
-            Self::NewSession=>Command::NewChat,Self::NewProject=>Command::OpenProject,
-            Self::NextSession=>Command::NextChat,Self::PrevSession=>Command::PrevChat,
-            other=>return other,
+            Self::SaveFile => Command::EditorSave,
+            Self::ToggleSidebar => Command::ToggleLeftSidebar,
+            Self::ToggleChanges => Command::ToggleRightSidebar,
+            Self::ToggleTerminal => Command::ToggleTerminal,
+            Self::NewSession => Command::NewChat,
+            Self::NewProject => Command::OpenProject,
+            Self::NextSession => Command::NextChat,
+            Self::PrevSession => Command::PrevChat,
+            other => return other,
         })
     }
-    pub fn overlaps_context(self, other:Self) -> bool {
-        self.key_context().is_none() || other.key_context().is_none() || self.key_context()==other.key_context()
+    pub fn overlaps_context(self, other: Self) -> bool {
+        self.key_context().is_none()
+            || other.key_context().is_none()
+            || self.key_context() == other.key_context()
     }
     pub fn key_context(self) -> Option<&'static str> {
-        match self {Self::Desktop(command)=>command.context(),Self::ToggleDictation=>Some("MessageComposer"), _=>None}
+        match self {
+            Self::Desktop(command) => command.context(),
+            Self::ToggleDictation => Some("MessageComposer"),
+            _ => None,
+        }
     }
     pub fn available(self) -> bool {
         self != Self::CaptureAppshot || crate::appshots::is_desktop()
@@ -1451,18 +1461,36 @@ impl Default for KeymapConfig {
 }
 
 impl KeymapConfig {
-    pub fn import_desktop_rules(&mut self, rules:Vec<keybindings::Rule>) {
-        for command in keybindings::Command::ALL {self.set(ShortcutId::Desktop(command),command.default_combo().into());}
-        for rule in &rules {if let Some(id)=Self::legacy_command(rule.command){self.set(id,rule.key.clone());}}
-        self.desktop_rules=rules;
+    pub fn import_desktop_rules(&mut self, rules: Vec<keybindings::Rule>) {
+        for command in keybindings::Command::ALL {
+            self.set(ShortcutId::Desktop(command), command.default_combo().into());
+        }
+        for rule in &rules {
+            if let Some(id) = Self::legacy_command(rule.command) {
+                self.set(id, rule.key.clone());
+            }
+        }
+        self.desktop_rules = rules;
     }
     fn align_desktop_defaults(&mut self) {
-        if self.desktop_defaults_version>0{return;}
-        for (field,old,new) in [(&mut self.toggle_changes,"mod-r","mod-alt-b"),(&mut self.new_project,"mod-shift-n","mod-o"),(&mut self.archive_session,"mod-shift-a","")] {
-            if field==old {*field=new.into();}
+        if self.desktop_defaults_version > 0 {
+            return;
         }
-        for (slot,combo) in self.jump_session.iter_mut().enumerate(){if *combo==format!("mod-{}",slot+1){combo.clear();}}
-        self.desktop_defaults_version=1;
+        for (field, old, new) in [
+            (&mut self.toggle_changes, "mod-r", "mod-alt-b"),
+            (&mut self.new_project, "mod-shift-n", "mod-o"),
+            (&mut self.archive_session, "mod-shift-a", ""),
+        ] {
+            if field == old {
+                *field = new.into();
+            }
+        }
+        for (slot, combo) in self.jump_session.iter_mut().enumerate() {
+            if *combo == format!("mod-{}", slot + 1) {
+                combo.clear();
+            }
+        }
+        self.desktop_defaults_version = 1;
     }
 
     fn legacy_command(command: keybindings::Command) -> Option<ShortcutId> {
@@ -1480,16 +1508,42 @@ impl KeymapConfig {
         })
     }
     pub fn desktop_bindings(&self) -> Vec<keybindings::Rule> {
-        let mut rules:Vec<_>=keybindings::Command::ALL.into_iter()
-            .filter(|command| !self.desktop_rules.iter().any(|rule|rule.command==*command))
-            .map(|command|keybindings::Rule{key:self.get(ShortcutId::Desktop(command)).to_owned(),command,when:None}).collect();
+        let mut rules: Vec<_> = keybindings::Command::ALL
+            .into_iter()
+            .filter(|command| {
+                !self
+                    .desktop_rules
+                    .iter()
+                    .any(|rule| rule.command == *command)
+            })
+            .map(|command| keybindings::Rule {
+                key: self.get(ShortcutId::Desktop(command)).to_owned(),
+                command,
+                when: None,
+            })
+            .collect();
         rules.extend(self.desktop_rules.iter().cloned());
         rules
     }
 
     pub fn get(&self, id: ShortcutId) -> &str {
         match id {
-            ShortcutId::Desktop(command) => self.desktop_rules.iter().rev().find(|rule|rule.command==command).map(|rule|rule.key.as_str()).unwrap_or_else(||self.desktop.get(&command).map(String::as_str).unwrap_or_else(||Self::legacy_command(command).map(|id|self.get(id)).unwrap_or_else(||ShortcutId::Desktop(command).default_combo()))),
+            ShortcutId::Desktop(command) => self
+                .desktop_rules
+                .iter()
+                .rev()
+                .find(|rule| rule.command == command)
+                .map(|rule| rule.key.as_str())
+                .unwrap_or_else(|| {
+                    self.desktop
+                        .get(&command)
+                        .map(String::as_str)
+                        .unwrap_or_else(|| {
+                            Self::legacy_command(command)
+                                .map(|id| self.get(id))
+                                .unwrap_or_else(|| ShortcutId::Desktop(command).default_combo())
+                        })
+                }),
             ShortcutId::ToggleDictation => &self.toggle_dictation,
             ShortcutId::CaptureAppshot => &self.capture_appshot,
             ShortcutId::RandomWallpaper => &self.random_wallpaper,
@@ -1516,8 +1570,12 @@ impl KeymapConfig {
     pub fn set(&mut self, id: ShortcutId, combo: String) {
         match id {
             ShortcutId::Desktop(command) => {
-                self.desktop_rules.retain(|rule|rule.command!=command);
-                if let Some(id)=Self::legacy_command(command) {self.set(id,combo);} else {self.desktop.insert(command,combo);}
+                self.desktop_rules.retain(|rule| rule.command != command);
+                if let Some(id) = Self::legacy_command(command) {
+                    self.set(id, combo);
+                } else {
+                    self.desktop.insert(command, combo);
+                }
             }
             ShortcutId::ToggleDictation => self.toggle_dictation = combo,
             ShortcutId::CaptureAppshot => self.capture_appshot = combo,
@@ -1566,7 +1624,10 @@ impl KeymapConfig {
     /// defaults and preserve every unrelated customization.
     fn heal_reserved_composer_shortcuts(&mut self) {
         for id in ShortcutId::ALL {
-            if matches!(id, ShortcutId::Desktop(command) if command.context()==Some("MessageComposer")) {continue;}
+            if matches!(id, ShortcutId::Desktop(command) if command.context()==Some("MessageComposer"))
+            {
+                continue;
+            }
             if self.get(id) == "mod-enter" {
                 self.reset(id);
             }
@@ -1635,9 +1696,12 @@ pub fn conflicted_shortcuts(keymap: &KeymapConfig) -> Vec<ShortcutId> {
             let combo = keymap.get(id);
             id.available()
                 && !combo.is_empty()
-                && ShortcutId::ALL
-                    .into_iter()
-                    .any(|other| other.available() && other != id && other.overlaps_context(id) && platform_combo(keymap.get(other)) == platform_combo(combo))
+                && ShortcutId::ALL.into_iter().any(|other| {
+                    other.available()
+                        && other != id
+                        && other.overlaps_context(id)
+                        && platform_combo(keymap.get(other)) == platform_combo(combo)
+                })
         })
         .collect()
 }
@@ -3731,7 +3795,9 @@ mod tests {
         for mac in [true, false] {
             for id in ShortcutId::ALL {
                 let combo = id.default_combo_on(mac);
-                if combo.is_empty(){continue;}
+                if combo.is_empty() {
+                    continue;
+                }
                 // Via the platform spelling, where modifier names are
                 // unambiguous, so the decode can't inherit the bug it checks.
                 let bound = platform_combo_on(mac, combo);
@@ -3762,7 +3828,9 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for id in ShortcutId::ALL {
             let bound = platform_combo(id.default_combo());
-            if bound.is_empty(){continue;}
+            if bound.is_empty() {
+                continue;
+            }
             assert!(seen.insert(bound.clone()), "{bound:?} bound twice");
         }
     }
@@ -3920,8 +3988,10 @@ mod tests {
     #[test]
     fn jump_hints_need_an_exact_modifier_match() {
         let mut keymap = KeymapConfig::default();
-        assert!(!jump_hints_visible(&keymap,true,false,false));
-        for slot in 0..JUMP_SLOTS {keymap.set(ShortcutId::JumpSession(slot),format!("mod-{}",slot+1));}
+        assert!(!jump_hints_visible(&keymap, true, false, false));
+        for slot in 0..JUMP_SLOTS {
+            keymap.set(ShortcutId::JumpSession(slot), format!("mod-{}", slot + 1));
+        }
         // Mod alone matches mod-1..9.
         assert!(jump_hints_visible(&keymap, true, false, false));
         // Extra modifiers are a different chord (Cmd+Shift+4 screenshots).

@@ -520,7 +520,8 @@ impl WorkspaceView {
         groups
     }
     fn session_row(&self, chat: &Value, nested: bool, cx: &mut Context<Self>) -> AnyElement {
-        let selected = !self.usage_open && self.project_archive.project.is_none()
+        let selected = !self.usage_open
+            && self.project_archive.project.is_none()
             && self
                 .selected
                 .as_ref()

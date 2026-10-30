@@ -1316,17 +1316,14 @@ impl FilesSurface {
         theme: &crate::theme::Theme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let partial = self
-            .tree
-            .node("")
-            .is_some_and(|root| {
-                matches!(
-                    root.load,
-                    DirectoryLoadState::Loaded {
-                        next_cursor: Some(_)
-                    }
-                )
-            });
+        let partial = self.tree.node("").is_some_and(|root| {
+            matches!(
+                root.load,
+                DirectoryLoadState::Loaded {
+                    next_cursor: Some(_)
+                }
+            )
+        });
         let label = if partial { "Files (partial)" } else { "Files" };
         let header_button = |id: &'static str, label: &'static str, glyph: &'static str| {
             toolbar_button(id, label)
@@ -1338,49 +1335,53 @@ impl FilesSurface {
                 )
         };
         let search_open = self.search_open || !self.search_state.query.is_empty();
-        let header = div()
-            .id("files-explorer-header")
-            .debug_selector(|| "files-explorer-header".into())
-            .flex_none()
-            .w_full()
-            .px(px(8.0))
-            .py(px(6.0))
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(crate::typography::text_xs())
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text_muted)
-                    .child(SharedString::from(label.to_string())),
-            )
-            .child(
-                header_button("files-new-file", "New File", crate::icons::DOCUMENT_ADD).on_click(
-                    cx.listener(|this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.begin_tree_create(create::CreateKind::File, window, cx);
-                    }),
-                ),
-            )
-            .child(
-                header_button("files-new-folder", "New Folder", crate::icons::FOLDER_ADD)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.begin_tree_create(create::CreateKind::Folder, window, cx);
-                    })),
-            )
-            .child(
-                header_button("files-search-toggle", "Search files", crate::icons::MAGNIFER)
+        let header =
+            div()
+                .id("files-explorer-header")
+                .debug_selector(|| "files-explorer-header".into())
+                .flex_none()
+                .w_full()
+                .px(px(8.0))
+                .py(px(6.0))
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(crate::typography::text_xs())
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text_muted)
+                        .child(SharedString::from(label.to_string())),
+                )
+                .child(
+                    header_button("files-new-file", "New File", crate::icons::DOCUMENT_ADD)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.begin_tree_create(create::CreateKind::File, window, cx);
+                        })),
+                )
+                .child(
+                    header_button("files-new-folder", "New Folder", crate::icons::FOLDER_ADD)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.begin_tree_create(create::CreateKind::Folder, window, cx);
+                        })),
+                )
+                .child(
+                    header_button(
+                        "files-search-toggle",
+                        "Search files",
+                        crate::icons::MAGNIFER,
+                    )
                     .when(search_open, |el| el.bg(crate::theme::wash(0.1)))
                     .on_click(cx.listener(|this, _, window, cx| {
                         cx.stop_propagation();
                         this.toggle_search(window, cx);
                     })),
-            );
+                );
         div()
             .flex_none()
             .w_full()

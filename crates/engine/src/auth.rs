@@ -359,7 +359,9 @@ impl Auth {
         Self::new(config)
     }
 
-    pub(crate) fn profile_dir(&self) -> &std::path::Path { &self.inner.config.data_dir }
+    pub(crate) fn profile_dir(&self) -> &std::path::Path {
+        &self.inner.config.data_dir
+    }
 
     pub fn workos_enabled(&self) -> bool {
         self.inner.workos.is_some()

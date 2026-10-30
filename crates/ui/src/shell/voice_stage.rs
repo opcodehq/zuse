@@ -27,7 +27,6 @@ pub(super) fn stage_reveal(open: bool, elapsed_ms: f32, reduced: bool) -> f32 {
 }
 
 impl Shell {
-
     /// Read whether this device's Codex can take a call; `force` re-reads it
     /// after Settings → Agents changes or on coming back to a window that
     /// hides voice (Codex may have been installed meanwhile).
@@ -586,8 +585,8 @@ fn round_control(id: &'static str, theme: &Theme, active: bool) -> gpui::Statefu
 
 #[cfg(test)]
 mod tests {
-    use zuse_protocol::voice::VoicePhase;
     use super::*;
+    use zuse_protocol::voice::VoicePhase;
 
     #[gpui::test]
     fn voice_stage_topbar_accepts_window_drag_presses(cx: &mut gpui::TestAppContext) {

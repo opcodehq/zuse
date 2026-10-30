@@ -36,7 +36,7 @@ struct Saved {
     progress: Option<Task<()>>,
 }
 fn matches(target: &CloudTarget, value: Value) -> bool {
-    value["user"]["id"].as_str()==Some(target.subject.as_str()) && value["orgId"].is_null()
+    value["user"]["id"].as_str() == Some(target.subject.as_str()) && value["orgId"].is_null()
 }
 impl Saved {
     fn new(target: CloudTarget, window: gpui::AnyWindowHandle, cx: &mut Context<Self>) -> Self {
@@ -196,11 +196,20 @@ impl Saved {
     fn connect(&self, session: String, cx: &mut Context<Self>) {
         self.connect_with_draft(session, None, cx);
     }
-    fn connect_with_draft(&self, session: String, draft: Option<(String, bool)>, cx: &mut Context<Self>) {
+    fn connect_with_draft(
+        &self,
+        session: String,
+        draft: Option<(String, bool)>,
+        cx: &mut Context<Self>,
+    ) {
         if self.authorized {
             let mut target = self.target.clone();
             target.initial_session = session.clone();
-            crate::open_cloud_window_with_draft(target, draft.map(|(text, send)| (session, text, send)), cx);
+            crate::open_cloud_window_with_draft(
+                target,
+                draft.map(|(text, send)| (session, text, send)),
+                cx,
+            );
             self.close(cx);
         }
     }

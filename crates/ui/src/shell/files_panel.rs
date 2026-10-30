@@ -346,7 +346,10 @@ impl Shell {
             self.files.insert(key.clone(), files);
             self.files_subs.insert(key.clone(), sub);
         }
-        push_unique_right_surface(self.right_tabs.entry(key.clone()).or_default(), RightSurface::Files);
+        push_unique_right_surface(
+            self.right_tabs.entry(key.clone()).or_default(),
+            RightSurface::Files,
+        );
         self.set_surfaces_open(true, cx);
         self.set_right_active(RightSurface::Files, cx);
         if let Some(files) = self.files.get(&key).cloned() {

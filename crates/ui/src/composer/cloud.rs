@@ -19,7 +19,9 @@ impl Composer {
     pub(crate) fn cloud_launch_pending(&self, cx: &App) -> bool {
         self.cloud.request.is_some() && self.state.read(cx).selected_chat.is_none()
     }
-    pub(super) fn cached_cloud(&self) -> bool { self.cloud.cached.is_some() }
+    pub(super) fn cached_cloud(&self) -> bool {
+        self.cloud.cached.is_some()
+    }
     pub(crate) fn set_cached_cloud(&mut self, paused: bool, cx: &mut Context<Self>) {
         if self.cloud.cached != Some(paused) {
             self.cloud.cached = Some(paused);
@@ -32,13 +34,32 @@ impl Composer {
         cx: &mut Context<Self>,
     ) -> Option<super::tray::TrayPill> {
         if let Some(paused) = self.cloud.cached {
-            return Some(super::tray::TrayPill::new("cached-cloud-connection", if paused { "Cloud workspace paused" } else { "Reconnect to cloud workspace" })
+            return Some(
+                super::tray::TrayPill::new(
+                    "cached-cloud-connection",
+                    if paused {
+                        "Cloud workspace paused"
+                    } else {
+                        "Reconnect to cloud workspace"
+                    },
+                )
                 .glyph(crate::icons::DITHER_CLOUD)
                 .subtitle("Sending a message will resume this workspace.")
-                .action(super::tray::tray_text_action("resume-cloud-workspace", if paused { "Resume" } else { "Reconnect" }, None, theme)
+                .action(
+                    super::tray::tray_text_action(
+                        "resume-cloud-workspace",
+                        if paused { "Resume" } else { "Reconnect" },
+                        None,
+                        theme,
+                    )
                     .on_click(cx.listener(|this, _, _, cx| {
-                        cx.emit(ComposerEvent::ResumeCloud { text: this.input.read(cx).text().to_owned(), send: false });
-                    }))));
+                        cx.emit(ComposerEvent::ResumeCloud {
+                            text: this.input.read(cx).text().to_owned(),
+                            send: false,
+                        });
+                    })),
+                ),
+            );
         }
         self.state.read(cx).engine()?.cloud_workspace()?;
         let busy = self.cloud.pause_task.is_some();
@@ -77,7 +98,8 @@ impl Composer {
         )
     }
     pub(crate) fn cloud_has_draft(&self, cx: &App) -> bool {
-        self.cloud.request.is_some() || self.has_draft(cx)
+        self.cloud.request.is_some()
+            || self.has_draft(cx)
             || self
                 .drafts
                 .iter()
@@ -169,7 +191,9 @@ impl Composer {
             return true;
         }
         if self.cloud.request.is_none() && !self.pickers.read(cx).cloud_model_ready(cx) {
-            self.failure = Some("Choose an available Cloud model before starting. Your draft is preserved.".into());
+            self.failure = Some(
+                "Choose an available Cloud model before starting. Your draft is preserved.".into(),
+            );
             self.failure_key = None;
             cx.notify();
             return true;
@@ -196,8 +220,14 @@ impl Composer {
                 ..Default::default()
             };
         }
-        if state.cloud_account.as_ref().is_some_and(|value|value["orgId"].is_string()) {
-            self.failure = Some("Switch to your personal account before starting this cloud workspace.".into());
+        if state
+            .cloud_account
+            .as_ref()
+            .is_some_and(|value| value["orgId"].is_string())
+        {
+            self.failure = Some(
+                "Switch to your personal account before starting this cloud workspace.".into(),
+            );
             self.failure_key = None;
             cx.notify();
             return true;
@@ -209,9 +239,16 @@ impl Composer {
             return true;
         }
         if self.cloud.request.is_none() {
-            self.cloud.issue = self.pickers.read(cx).source_issue(cx).map(|(number, markdown)| {
-                StagedAttachment::from_file(&format!("issue-{number}.md"), markdown.into_bytes())
-            });
+            self.cloud.issue = self
+                .pickers
+                .read(cx)
+                .source_issue(cx)
+                .map(|(number, markdown)| {
+                    StagedAttachment::from_file(
+                        &format!("issue-{number}.md"),
+                        markdown.into_bytes(),
+                    )
+                });
         }
         let mut staged = if self.cloud.request.is_some() {
             self.cloud.staged.clone()
@@ -222,9 +259,14 @@ impl Composer {
             staged.extend(self.cloud.issue.iter().cloned());
         }
         if self.cloud.request.is_none() {
-            let (base_ref, branch) = self.pickers.read(cx).source_cloud_ref(project["defaultBranch"].as_str().unwrap_or("main"), cx);
+            let (base_ref, branch) = self
+                .pickers
+                .read(cx)
+                .source_cloud_ref(project["defaultBranch"].as_str().unwrap_or("main"), cx);
             let config = self.pickers.read(cx).resolved(cx);
-            let (Some(agent), Some(model)) = (config.harness, config.model) else { return true; };
+            let (Some(agent), Some(model)) = (config.harness, config.model) else {
+                return true;
+            };
             let runtime_mode = match config.sandbox {
                 SandboxLevel::WorkspaceWrite => "approval-required",
                 SandboxLevel::Auto => "auto",
@@ -250,7 +292,8 @@ impl Composer {
             self.sync_attachment_chips(cx);
             cx.emit(ComposerEvent::CloudLaunchChanged);
         }
-        self.pickers.update(cx, |pickers, cx| pickers.freeze_cloud_launch(true, cx));
+        self.pickers
+            .update(cx, |pickers, cx| pickers.freeze_cloud_launch(true, cx));
         let request = self.cloud.request.clone().unwrap();
         let accepted = self.cloud.accepted.clone();
         self.cloud.message = Some(
@@ -373,7 +416,8 @@ impl Composer {
                         this.cloud.issue = None;
                         this.cloud.staged.clear();
                         this.cloud.task = None;
-                        this.pickers.update(cx, |pickers, cx| pickers.finish_cloud_launch(cx));
+                        this.pickers
+                            .update(cx, |pickers, cx| pickers.finish_cloud_launch(cx));
                         cx.emit(ComposerEvent::CloudLaunchChanged);
                         crate::open_cloud_window(target, cx);
                         cx.notify();
@@ -432,7 +476,8 @@ mod cached_tests {
         let chat = serde_json::from_value(json!({
             "id":"local-chat", "deviceId":"local",
             "createdAt":"2026-01-01T00:00:00Z", "archived":false
-        })).unwrap();
+        }))
+        .unwrap();
         let state = cx.new(|cx| crate::state::AppState::side_chat_state(&parent, chat, true, cx));
         let composer = cx.new(|cx| Composer::new(state.clone(), cx));
         composer.update(cx, |composer, cx| {
@@ -457,18 +502,28 @@ mod cached_tests {
         let composer = cx.new(|cx| Composer::new(state, cx));
         let actions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let captured = actions.clone();
-        let _subscription = cx.update(|cx| cx.subscribe(&composer, move |_, event, _| {
-            if let ComposerEvent::ResumeCloud { text, send } = event {
-                captured.borrow_mut().push((text.clone(), *send));
-            }
-        }));
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&composer, move |_, event, _| {
+                if let ComposerEvent::ResumeCloud { text, send } = event {
+                    captured.borrow_mut().push((text.clone(), *send));
+                }
+            })
+        });
         composer.update(cx, |composer, cx| {
             composer.set_cached_cloud(true, cx);
-            composer.input.update(cx, |input, cx| input.set_text("Continue the retained conversation", cx));
+            composer.input.update(cx, |input, cx| {
+                input.set_text("Continue the retained conversation", cx)
+            });
             composer.on_submit(cx);
-            assert_eq!(composer.input.read(cx).text(), "Continue the retained conversation");
+            assert_eq!(
+                composer.input.read(cx).text(),
+                "Continue the retained conversation"
+            );
             assert!(composer.failure.is_none());
         });
-        assert_eq!(&*actions.borrow(), &[("Continue the retained conversation".to_owned(), true)]);
+        assert_eq!(
+            &*actions.borrow(),
+            &[("Continue the retained conversation".to_owned(), true)]
+        );
     }
 }

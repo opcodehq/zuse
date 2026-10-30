@@ -19,7 +19,10 @@ struct Source {
     _watch: AbortOnDropHandle<()>,
 }
 fn binding(value: &Value) -> Option<(String, Option<String>)> {
-    Some((value["user"]["id"].as_str()?.to_owned(), value["orgId"].as_str().map(str::to_owned)))
+    Some((
+        value["user"]["id"].as_str()?.to_owned(),
+        value["orgId"].as_str().map(str::to_owned),
+    ))
 }
 
 impl Source {

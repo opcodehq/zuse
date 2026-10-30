@@ -109,7 +109,9 @@ pub fn matches(row: &Workspace, query: &str) -> bool {
             .contains(&query))
 }
 fn recovery_title(status: &CloudArchiveStatus) -> &'static str {
-    if status.error_code.is_some() {return "Recovery needs attention";}
+    if status.error_code.is_some() {
+        return "Recovery needs attention";
+    }
     match status.phase {
         Some(ArchivePhase::Uploading) => "Uploading backup",
         Some(ArchivePhase::Verifying) => "Verifying backup",
@@ -120,25 +122,62 @@ fn recovery_title(status: &CloudArchiveStatus) -> &'static str {
     }
 }
 fn recovery_details(row: &Workspace) -> Option<Div> {
-    let status=row.archive_status()?;
-    let mut details=div().flex().flex_col().gap(px(4.)).p(px(10.)).rounded(px(6.))
+    let status = row.archive_status()?;
+    let mut details = div()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .p(px(10.))
+        .rounded(px(6.))
         .bg(s::frame_bg().opacity(0.5))
-        .child(div().text_size(px(12.)).line_height(px(16.)).font_weight(FontWeight::MEDIUM)
-            .text_color(if status.error_code.is_some() {s::destructive_text()} else {rgb(TEXT).into()})
-            .child(recovery_title(status)))
-        .child(s::description_text(if status.compute_retired {"Compute retired"}
-            else if status.machine_retained {"Machine retained"} else {"No retained machine"}));
-    if status.backup_verified && recovery_title(status)!="Backup verified" {
-        details=details.child(s::description_text("Backup verified"));
+        .child(
+            div()
+                .text_size(px(12.))
+                .line_height(px(16.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(if status.error_code.is_some() {
+                    s::destructive_text()
+                } else {
+                    rgb(TEXT).into()
+                })
+                .child(recovery_title(status)),
+        )
+        .child(s::description_text(if status.compute_retired {
+            "Compute retired"
+        } else if status.machine_retained {
+            "Machine retained"
+        } else {
+            "No retained machine"
+        }));
+    if status.backup_verified && recovery_title(status) != "Backup verified" {
+        details = details.child(s::description_text("Backup verified"));
     }
-    if status.phase==Some(ArchivePhase::Verifying) && status.total_chunks>0 && status.verified_chunks<=status.total_chunks {
-        details=details.child(s::description_text(format!("{} of {} backup parts verified",status.verified_chunks,status.total_chunks)));
+    if status.phase == Some(ArchivePhase::Verifying)
+        && status.total_chunks > 0
+        && status.verified_chunks <= status.total_chunks
+    {
+        details = details.child(s::description_text(format!(
+            "{} of {} backup parts verified",
+            status.verified_chunks, status.total_chunks
+        )));
     }
-    if let Some(deadline)=status.retention_deadline.and_then(chrono::DateTime::from_timestamp_millis) {
-        details=details.child(s::description_text(format!("Compute retention deadline: {}",deadline.format("%b %-d, %Y at %H:%M UTC"))));
-        if !status.compute_retired {details=details.child(s::description_text("Retirement waits for a verified backup."));}
+    if let Some(deadline) = status
+        .retention_deadline
+        .and_then(chrono::DateTime::from_timestamp_millis)
+    {
+        details = details.child(s::description_text(format!(
+            "Compute retention deadline: {}",
+            deadline.format("%b %-d, %Y at %H:%M UTC")
+        )));
+        if !status.compute_retired {
+            details = details.child(s::description_text(
+                "Retirement waits for a verified backup.",
+            ));
+        }
     }
-    if status.error_code.is_some() {details=details.child(s::description_text("Refresh to check this archive again."));}
+    if status.error_code.is_some() {
+        details = details.child(s::description_text("Refresh to check this archive again."));
+    }
     Some(details)
 }
 fn control<C: 'static>(

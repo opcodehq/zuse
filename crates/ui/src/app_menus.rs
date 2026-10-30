@@ -138,9 +138,14 @@ fn close_active_window(cx: &mut App) {
 /// window/application lifecycle shortcuts remain macOS-only.
 pub fn bind_keys(cx: &mut App) {
     // Settings and Close tab are rebindable desktop commands.
-    cx.bind_keys(app_key_bindings(cfg!(target_os = "macos")).into_iter().filter(|binding| {
-        !binding.action().as_any().is::<shell::OpenSettings>() && !binding.action().as_any().is::<CloseWindow>()
-    }));
+    cx.bind_keys(
+        app_key_bindings(cfg!(target_os = "macos"))
+            .into_iter()
+            .filter(|binding| {
+                !binding.action().as_any().is::<shell::OpenSettings>()
+                    && !binding.action().as_any().is::<CloseWindow>()
+            }),
+    );
 }
 
 /// The binding table behind [`bind_keys`] — `KeyBinding` construction is pure
@@ -225,7 +230,10 @@ pub fn app_menus() -> Vec<Menu> {
             MenuItem::action("Minimize", Minimize),
             MenuItem::action("Zoom", Zoom),
             MenuItem::separator(),
-            MenuItem::action("Close Tab", shell::DesktopCommand(crate::settings::keybindings::Command::CloseTab)),
+            MenuItem::action(
+                "Close Tab",
+                shell::DesktopCommand(crate::settings::keybindings::Command::CloseTab),
+            ),
         ]));
     }
     menus

@@ -1491,7 +1491,9 @@ impl SessionsEngine {
         stoppable
     }
 
-    pub(crate) fn secret_namespace(&self) -> &str { &self.inner.secret_namespace }
+    pub(crate) fn secret_namespace(&self) -> &str {
+        &self.inner.secret_namespace
+    }
 
     pub(crate) async fn private_operation(
         &self,

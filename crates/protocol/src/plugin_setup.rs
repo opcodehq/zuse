@@ -93,8 +93,7 @@ impl ServerDraft {
 
 /// The Local form starts from this editable stdio configuration.
 pub const LOCAL_CONFIG_TEMPLATE: &str = r#"{"command":"","args":[]}"#;
-pub const LOCAL_CONFIG_INVALID: &str =
-    "Enter a valid stdio MCP configuration with one command, an args array, and optional env values.";
+pub const LOCAL_CONFIG_INVALID: &str = "Enter a valid stdio MCP configuration with one command, an args array, and optional env values.";
 
 /// A local stdio server form. Environment values may be secrets, so no Debug.
 #[derive(Default)]
@@ -309,8 +308,8 @@ mod tests {
             r#"{"type":"stdio","command":"uvx","args":["server",""],"env":{"KEY":"a=b"}}"#,
             r#"{"mcpServers":{"files":{"type":"stdio","command":"uvx","args":["server",""],"env":{"KEY":"a=b"}}}}"#,
         ] {
-            let value = serde_json::to_value(local(" Files ", config, "personal:user").unwrap())
-                .unwrap();
+            let value =
+                serde_json::to_value(local(" Files ", config, "personal:user").unwrap()).unwrap();
             assert_eq!(value["action"], "addLocalServer");
             assert_eq!(value["name"], "Files");
             assert_eq!(value["command"], "uvx");
@@ -359,9 +358,18 @@ mod tests {
             ("  ", r#"{"command":"npx"}"#),
             (&*"x".repeat(61), r#"{"command":"npx"}"#),
             ("Files", r#"{"command":"np\u0000x"}"#),
-            ("Files", r#"{"command":"npx","env":{"1BAD":"secret-value"}}"#),
-            ("Files", r#"{"command":"npx","env":{"BAD NAME":"secret-value"}}"#),
-            ("Files", r#"{"command":"npx","env":{"KEY":"secret-value\u0000"}}"#),
+            (
+                "Files",
+                r#"{"command":"npx","env":{"1BAD":"secret-value"}}"#,
+            ),
+            (
+                "Files",
+                r#"{"command":"npx","env":{"BAD NAME":"secret-value"}}"#,
+            ),
+            (
+                "Files",
+                r#"{"command":"npx","env":{"KEY":"secret-value\u0000"}}"#,
+            ),
         ] {
             let error = local(name, config, "personal:user").err().unwrap();
             assert!(!error.contains("secret-value"), "{config}");

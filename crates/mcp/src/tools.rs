@@ -704,7 +704,11 @@ impl Tools {
         catalog()
             .into_iter()
             .filter(|tool| {
-                in_chat || (tool.name != "request_secret" && tool.name != SHOW_VISUAL && !tool.name.starts_with("plugins_") && !tool.name.starts_with("device_"))
+                in_chat
+                    || (tool.name != "request_secret"
+                        && tool.name != SHOW_VISUAL
+                        && !tool.name.starts_with("plugins_")
+                        && !tool.name.starts_with("device_"))
             })
             .collect()
     }
@@ -1838,16 +1842,25 @@ mod tests {
             }
         }
         let capture = Arc::new(Capture::default());
-        let agent = Tools::new(Arc::new(Zuse::with_client(memory_client(capture.clone()), Origin {chat_id:Some("origin".into()),device_id:Some("host".into())})));
+        let agent = Tools::new(Arc::new(Zuse::with_client(
+            memory_client(capture.clone()),
+            Origin {
+                chat_id: Some("origin".into()),
+                device_id: Some("host".into()),
+            },
+        )));
         assert!(agent.has("request_secret"));
         agent.call("request_secret",json!({"chatId":"other","label":"Token","reason":"Access","method":"GET","url":"https://api.github.com/user"})).await.unwrap();
         let requests = capture.0.lock().unwrap().clone();
-        assert_eq!(requests[0]["chatId"],"origin");
-        assert_eq!(requests[0]["targetDeviceId"],"host");
-        let human = Tools::new(Arc::new(Zuse::with_client(memory_client(capture.clone()),Origin::default())));
+        assert_eq!(requests[0]["chatId"], "origin");
+        assert_eq!(requests[0]["targetDeviceId"], "host");
+        let human = Tools::new(Arc::new(Zuse::with_client(
+            memory_client(capture.clone()),
+            Origin::default(),
+        )));
         assert!(!human.has("request_secret"));
-        assert!(human.call("request_secret",json!({})).await.is_err());
-        assert_eq!(capture.0.lock().unwrap().len(),1);
+        assert!(human.call("request_secret", json!({})).await.is_err());
+        assert_eq!(capture.0.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

@@ -25,7 +25,10 @@ impl WorkspaceView {
             .child(
                 layout::surface()
                     .when(
-                        chrome && !self.plugins_browse && self.project_archive.project.is_none() && !self.usage_open,
+                        chrome
+                            && !self.plugins_browse
+                            && self.project_archive.project.is_none()
+                            && !self.usage_open,
                         |view| {
                             view.child(self.header(cx))
                                 .when(self.selected.is_some(), |view| {

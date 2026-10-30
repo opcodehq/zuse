@@ -141,23 +141,41 @@ pub async fn refresh_dictation_account(home: &std::path::Path) -> Result<(), Har
     refresh_dictation_account_using(&CodexHarness::new(), home).await
 }
 
-async fn refresh_dictation_account_using(harness: &CodexHarness, home: &std::path::Path) -> Result<(), HarnessError> {
+async fn refresh_dictation_account_using(
+    harness: &CodexHarness,
+    home: &std::path::Path,
+) -> Result<(), HarnessError> {
     let exe = harness.resolve_executable()?;
     let mut cmd = Command::new(&exe);
     crate::compose_child_path(&mut cmd, &exe);
-    cmd.arg("app-server").env("CODEX_HOME", home)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    cmd.arg("app-server")
+        .env("CODEX_HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
     let mut child = cmd.spawn()?;
     let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-        return Err(HarnessError::Protocol("Codex account service unavailable".into()));
+        return Err(HarnessError::Protocol(
+            "Codex account service unavailable".into(),
+        ));
     };
     let (client, mut incoming) = RpcClient::new(stdin, stdout);
     let refresh = async {
-        client.request("initialize", json!({"clientInfo":{"name":"zuse-native","version":env!("CARGO_PKG_VERSION")}})).await?;
+        client
+            .request(
+                "initialize",
+                json!({"clientInfo":{"name":"zuse-native","version":env!("CARGO_PKG_VERSION")}}),
+            )
+            .await?;
         client.notify("initialized", None);
-        let account = client.request("account/read", json!({"refreshToken":true})).await?;
+        let account = client
+            .request("account/read", json!({"refreshToken":true}))
+            .await?;
         if account["account"]["type"] != "chatgpt" {
-            return Err(HarnessError::Protocol("Sign in to Codex with your ChatGPT account to dictate.".into()));
+            return Err(HarnessError::Protocol(
+                "Sign in to Codex with your ChatGPT account to dictate.".into(),
+            ));
         }
         Ok(())
     };
@@ -173,7 +191,11 @@ async fn refresh_dictation_account_using(harness: &CodexHarness, home: &std::pat
         }
     }).await;
     shutdown_child(&mut child, Duration::from_secs(1)).await;
-    result.unwrap_or_else(|_| Err(HarnessError::Protocol("Codex account refresh timed out".into())))
+    result.unwrap_or_else(|_| {
+        Err(HarnessError::Protocol(
+            "Codex account refresh timed out".into(),
+        ))
+    })
 }
 
 /// The Codex harness. Construct with [`CodexHarness::new`]; tests point it at a
@@ -2415,7 +2437,9 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("codex");
-        std::fs::write(&script, r#"#!/usr/bin/env python3
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env python3
 import json,os,pathlib,sys
 for line in sys.stdin:
     request=json.loads(line)
@@ -2428,10 +2452,17 @@ for line in sys.stdin:
         pathlib.Path(os.environ['CODEX_HOME'],'refreshed').write_text('yes')
         print(json.dumps({'id':request['id'],'result':{'account':{'type':'chatgpt'}}}),flush=True)
     else: raise Exception('Unexpected method')
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
-        refresh_dictation_account_using(&CodexHarness::new().with_executable(script), dir.path()).await.unwrap();
-        assert_eq!(std::fs::read_to_string(dir.path().join("refreshed")).unwrap(), "yes");
+        refresh_dictation_account_using(&CodexHarness::new().with_executable(script), dir.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("refreshed")).unwrap(),
+            "yes"
+        );
     }
 
     #[test]
@@ -2457,10 +2488,34 @@ for line in sys.stdin:
         use zuse_protocol::SandboxLevel;
         for (sandbox, auto, policy, mode, reviewer) in [
             (SandboxLevel::ReadOnly, true, "never", "read-only", None),
-            (SandboxLevel::WorkspaceWrite, true, "on-request", "workspace-write", None),
-            (SandboxLevel::Auto, true, "on-request", "workspace-write", Some("auto_review")),
-            (SandboxLevel::DangerFullAccess, true, "never", "danger-full-access", None),
-            (SandboxLevel::DangerFullAccess, false, "on-request", "danger-full-access", None),
+            (
+                SandboxLevel::WorkspaceWrite,
+                true,
+                "on-request",
+                "workspace-write",
+                None,
+            ),
+            (
+                SandboxLevel::Auto,
+                true,
+                "on-request",
+                "workspace-write",
+                Some("auto_review"),
+            ),
+            (
+                SandboxLevel::DangerFullAccess,
+                true,
+                "never",
+                "danger-full-access",
+                None,
+            ),
+            (
+                SandboxLevel::DangerFullAccess,
+                false,
+                "on-request",
+                "danger-full-access",
+                None,
+            ),
         ] {
             let request: RunRequest = serde_json::from_value(
                 json!({"prompt":"","cwd":"/tmp","sandbox":sandbox,"autoApprove":auto}),

@@ -114,7 +114,8 @@ impl WorkspaceView {
         self.plugin_setup
             .as_ref()
             .is_some_and(|form| !form.read(cx).is_inline())
-            || (self.cloud_account["user"].is_object() && self.plugin_state.snapshot["canManage"] == false)
+            || (self.cloud_account["user"].is_object()
+                && self.plugin_state.snapshot["canManage"] == false)
             || self.plugin_state.notice.is_some()
             || self.cloud_account["error"].is_string()
             || self.cloud_account["login"]["url"].is_string()
@@ -410,78 +411,115 @@ impl WorkspaceView {
         items: Vec<PluginDefinition>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let rows = items.into_iter().enumerate().map(|(index, definition)| {
-                    let id = definition.id.clone();
-                    let connect = definition.clone();
-                    let connected = catalog::connected(&self.plugin_state.snapshot, &id);
-                    row()
-                        .id((key, index))
-                        .flex_1()
-                        .min_w_0()
-                        .gap_2()
-                        .p_2()
-                        .rounded(px(10.))
-                        .hover(|view| view.bg(s::frame_bg().opacity(0.45)))
-                        .child(
-                            row()
-                                .id((SharedString::from(format!("{key}-open")), index))
-                                .role(Role::Button)
-                                .aria_label(format!("Open {} details", definition.name))
-                                .tab_index(0)
-                                .cursor_pointer()
-                                .flex_1()
-                                .min_w_0()
-                                .gap_3()
-                                .child(catalog::logo(
-                                    &definition.domain,
-                                    &definition.name,
-                                    36.,
-                                    s::frame_bg(),
-                                    rgb(MUTED).into(),
-                                ))
-                                .child(catalog::title(&definition, rgb(TEXT).into(), rgb(MUTED).into(), s::frame_bg()))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.plugin_detail = Some(id.clone());
+        let rows = items
+            .into_iter()
+            .enumerate()
+            .map(|(index, definition)| {
+                let id = definition.id.clone();
+                let connect = definition.clone();
+                let connected = catalog::connected(&self.plugin_state.snapshot, &id);
+                row()
+                    .id((key, index))
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .p_2()
+                    .rounded(px(10.))
+                    .hover(|view| view.bg(s::frame_bg().opacity(0.45)))
+                    .child(
+                        row()
+                            .id((SharedString::from(format!("{key}-open")), index))
+                            .role(Role::Button)
+                            .aria_label(format!("Open {} details", definition.name))
+                            .tab_index(0)
+                            .cursor_pointer()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_3()
+                            .child(catalog::logo(
+                                &definition.domain,
+                                &definition.name,
+                                36.,
+                                s::frame_bg(),
+                                rgb(MUTED).into(),
+                            ))
+                            .child(catalog::title(
+                                &definition,
+                                rgb(TEXT).into(),
+                                rgb(MUTED).into(),
+                                s::frame_bg(),
+                            ))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.plugin_detail = Some(id.clone());
+                                this.plugin_detail_menu = Default::default();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        icon_button(
+                            (SharedString::from(format!("{key}-connect")), index),
+                            if connected { "check" } else { "plus" },
+                            if connected {
+                                "Connected"
+                            } else {
+                                "Connect plugin"
+                            },
+                        )
+                        .when(
+                            !connected
+                                && (self.plugin_request.is_some()
+                                    || self.plugin_state.active_attempt()
+                                    || self.plugin_state.snapshot["canManage"] == false),
+                            |v| v.opacity(0.5).cursor_default(),
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                if connected {
+                                    this.plugin_detail = Some(connect.id.clone());
                                     this.plugin_detail_menu = Default::default();
                                     cx.notify();
-                                })),
-                        )
-                        .child(
-                            icon_button(
-                                (SharedString::from(format!("{key}-connect")), index),
-                                if connected { "check" } else { "plus" },
-                                if connected {
-                                    "Connected"
                                 } else {
-                                    "Connect plugin"
-                                },
-                            )
-                            .when(!connected && (self.plugin_request.is_some() || self.plugin_state.active_attempt() || self.plugin_state.snapshot["canManage"] == false), |v|v.opacity(0.5).cursor_default())
-                            .on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    if connected {
-                                        this.plugin_detail = Some(connect.id.clone());
-                                        this.plugin_detail_menu = Default::default();
-                                        cx.notify();
-                                    } else { this.connect_plugin(connect.clone(), window, cx); }
-                                },
-                            )),
-                        )
-        }).collect::<Vec<_>>();
+                                    this.connect_plugin(connect.clone(), window, cx);
+                                }
+                            },
+                        )),
+                    )
+            })
+            .collect::<Vec<_>>();
         let mut entries = rows.into_iter();
         let mut grid = column().gap(px(2.));
         while let Some(left) = entries.next() {
-            if self.viewport_width < 1024. { grid = grid.child(left); }
-            else { grid = grid.child(row().gap(px(16.)).child(div().flex_1().min_w_0().child(left))
-                .child(div().flex_1().min_w_0().children(entries.next()))); }
+            if self.viewport_width < 1024. {
+                grid = grid.child(left);
+            } else {
+                grid = grid.child(
+                    row()
+                        .gap(px(16.))
+                        .child(div().flex_1().min_w_0().child(left))
+                        .child(div().flex_1().min_w_0().children(entries.next())),
+                );
+            }
         }
-        column().gap(px(4.))
-            .child(div().px(px(8.)).pb(px(4.)).text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(title))
-            .child(grid).into_any_element()
+        column()
+            .gap(px(4.))
+            .child(
+                div()
+                    .px(px(8.))
+                    .pb(px(4.))
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(title),
+            )
+            .child(grid)
+            .into_any_element()
     }
     pub(super) fn plugins_page_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let listing = catalog::browse(&self.plugin_state.snapshot,
-            &self.plugin_search.read(cx).value(cx), self.plugin_connected_only, self.plugin_catalog_page);
+        let listing = catalog::browse(
+            &self.plugin_state.snapshot,
+            &self.plugin_search.read(cx).value(cx),
+            self.plugin_connected_only,
+            self.plugin_catalog_page,
+        );
         let connected_count = catalog::connected_count(&self.plugin_state.snapshot);
         let query = self.plugin_search.read(cx).value(cx);
         let detail = self.plugin_detail.as_ref().and_then(|id| {
@@ -491,7 +529,8 @@ impl WorkspaceView {
         });
         let mut content = column()
             .flex_none()
-            .text_size(px(12.)).line_height(px(16.))
+            .text_size(px(12.))
+            .line_height(px(16.))
             .w_full()
             .max_w(px(768.))
             .mx_auto()
@@ -531,26 +570,67 @@ impl WorkspaceView {
                         .on_click(cx.listener(move|this,_,_,cx|{this.plugin_connected_only=connected;this.plugin_catalog_page=0;cx.notify();})))));
             content = content.children(status);
             if !self.cloud_account["user"].is_object() {
-                let busy = self.cloud_account.is_null() || self.cloud_account["login"].is_object()
-                    || self.pending.values().any(|method|method == methods::CLOUD_ACCOUNT_SIGN_IN);
-                content = content.child(catalog::signed_out(busy, |this,_,cx| {
-                    if this.cloud_account["user"].is_object() || this.cloud_account["login"].is_object()
-                        || this.pending.values().any(|method|method == methods::CLOUD_ACCOUNT_SIGN_IN) { return; }
-                    this.call(methods::CLOUD_ACCOUNT_SIGN_IN, json!({})); cx.notify();
-                }, cx));
+                let busy = self.cloud_account.is_null()
+                    || self.cloud_account["login"].is_object()
+                    || self
+                        .pending
+                        .values()
+                        .any(|method| method == methods::CLOUD_ACCOUNT_SIGN_IN);
+                content = content.child(catalog::signed_out(
+                    busy,
+                    |this, _, cx| {
+                        if this.cloud_account["user"].is_object()
+                            || this.cloud_account["login"].is_object()
+                            || this
+                                .pending
+                                .values()
+                                .any(|method| method == methods::CLOUD_ACCOUNT_SIGN_IN)
+                        {
+                            return;
+                        }
+                        this.call(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}));
+                        cx.notify();
+                    },
+                    cx,
+                ));
             } else if !self.plugin_state.snapshot["catalog"].is_array() {
-                content = content.child(div().py(px(32.)).text_color(rgb(MUTED))
-                    .child(if self.plugin_request.is_some() {"Loading plugins…"} else {"Plugins are unavailable. Refresh to try again."}));
+                content = content.child(div().py(px(32.)).text_color(rgb(MUTED)).child(
+                    if self.plugin_request.is_some() {
+                        "Loading plugins…"
+                    } else {
+                        "Plugins are unavailable. Refresh to try again."
+                    },
+                ));
             } else if listing.sections.is_empty() {
-                content = content.child(div().py(px(48.)).text_center().text_color(rgb(MUTED))
-                    .child(if query.trim().is_empty() {"No plugins connected yet"} else {"No plugins match your search"}));
+                content = content.child(
+                    div()
+                        .py(px(48.))
+                        .text_center()
+                        .text_color(rgb(MUTED))
+                        .child(if query.trim().is_empty() {
+                            "No plugins connected yet"
+                        } else {
+                            "No plugins match your search"
+                        }),
+                );
             } else {
                 for section in listing.sections {
-                    content = content.child(self.catalog_rows(section.title, section.key, section.items, cx));
+                    content = content.child(self.catalog_rows(
+                        section.title,
+                        section.key,
+                        section.items,
+                        cx,
+                    ));
                 }
                 if listing.more {
-                    content = content.child(s::button("plugins-show-more", "Show more").self_start()
-                        .on_click(cx.listener(|this,_,_,cx|{this.plugin_catalog_page += 1; cx.notify();})));
+                    content = content.child(
+                        s::button("plugins-show-more", "Show more")
+                            .self_start()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.plugin_catalog_page += 1;
+                                cx.notify();
+                            })),
+                    );
                 }
             }
         }

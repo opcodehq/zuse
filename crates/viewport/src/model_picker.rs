@@ -302,7 +302,9 @@ impl WorkspaceView {
         }
     }
     fn effort_control(&self) -> Option<zuse_protocol::presentation::ModelEffort> {
-        if !self.cloud_model_configuration_available() { return None; }
+        if !self.cloud_model_configuration_available() {
+            return None;
+        }
         zuse_protocol::presentation::model_effort(
             self.selected_model()?,
             self.reasoning,

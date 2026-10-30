@@ -188,26 +188,40 @@ impl ShortcutsPage {
     }
 
     pub(super) fn general_app_updates(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
-        widgets::group(theme, "About Zuse", "")
-            .child(widgets::section_card(theme).mt_0().child(
+        widgets::group(theme, "About Zuse", "").child(
+            widgets::section_card(theme).mt_0().child(
                 widgets::card_row(theme, true)
-                    .child(general_details(theme, "App updates", "Check for a newer version of Zuse."))
-                    .child(widgets::text_action(theme, widgets::ActionTone::Outlined, "Check for updates")
+                    .child(general_details(
+                        theme,
+                        "App updates",
+                        "Check for a newer version of Zuse.",
+                    ))
+                    .child(
+                        widgets::text_action(
+                            theme,
+                            widgets::ActionTone::Outlined,
+                            "Check for updates",
+                        )
                         .id("general-check-updates")
                         .debug_selector(|| "general-check-updates".into())
                         .track_focus(&self.general_updates_focus)
                         .tab_index(0)
-                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
-                            window.focus(&this.general_updates_focus, cx);
-                        }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                window.focus(&this.general_updates_focus, cx);
+                            }),
+                        )
                         .on_key_down(cx.listener(|_, event: &gpui::KeyDownEvent, _, cx| {
                             if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                                 crate::app_update::check_for_updates(cx);
                                 cx.stop_propagation();
                             }
                         }))
-                        .on_click(|_, _, cx| crate::app_update::check_for_updates(cx))),
-            ))
+                        .on_click(|_, _, cx| crate::app_update::check_for_updates(cx)),
+                    ),
+            ),
+        )
     }
 }
 fn contain_activation(event: &gpui::KeyDownEvent, _: &mut gpui::Window, cx: &mut gpui::App) {

@@ -75,7 +75,9 @@ impl Section {
 impl WorkspaceView {
     pub(super) fn select_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.settings_scroll.set_offset(point(px(0.), px(0.)));
-        if section != Section::Archived && self.project_archive.global {self.close_project_archives();}
+        if section != Section::Archived && self.project_archive.global {
+            self.close_project_archives();
+        }
         self.close_plugins_browse();
         self.plugins_add_menu = false;
         self.settings_section = section;
@@ -93,7 +95,9 @@ impl WorkspaceView {
             self.refresh_pairings();
             self.refresh_managed_access();
         }
-        if section == Section::Providers { self.refresh_custom_acp(cx); }
+        if section == Section::Providers {
+            self.refresh_custom_acp(cx);
+        }
         if matches!(section, Section::Providers | Section::Usage) {
             self.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":false}));
         }
@@ -260,57 +264,56 @@ impl WorkspaceView {
             Section::Shortcuts => self.shortcuts_settings(),
             Section::Archived => self.archive_list(window, cx),
         };
-        let content_panel =
-            if section == Section::Archived && self.project_archive.global {
-                self.project_archives_view(window,cx)
-            } else if section == Section::Archived && self.cloud_archive.state.head.is_some() {
-                self.cloud_archive_history(window, cx)
-            } else {
-                column()
-                    .id("settings-content")
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.settings_scroll)
-                    .p(px(if compact { 16. } else { 24. }))
-                    .child(
-                        column()
-                            .w_full()
-                            .max_w(px(if section == Section::Shortcuts {
-                                1152.
-                            } else {
-                                768.
-                            }))
-                            .mx_auto()
-                            .gap_5()
-                            .child(
-                                column()
-                                    .gap_1()
-                                    .border_b_1()
-                                    .border_color(rgb(BORDER))
-                                    .pb(px(16.))
-                                    .child(
-                                        div()
-                                            .text_size(px(20.))
-                                            .line_height(px(28.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(if section == Section::Cloud {
-                                                "Cloud workspaces (Beta)"
-                                            } else {
-                                                section.title()
-                                            }),
-                                    )
-                                    .child(
-                                        s::description_text(section.description())
-                                            .text_size(px(12.))
-                                            .line_height(px(20.)),
-                                    ),
-                            )
-                            .child(content),
-                    )
-                    .into_any_element()
-            };
+        let content_panel = if section == Section::Archived && self.project_archive.global {
+            self.project_archives_view(window, cx)
+        } else if section == Section::Archived && self.cloud_archive.state.head.is_some() {
+            self.cloud_archive_history(window, cx)
+        } else {
+            column()
+                .id("settings-content")
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .overflow_y_scroll()
+                .track_scroll(&self.settings_scroll)
+                .p(px(if compact { 16. } else { 24. }))
+                .child(
+                    column()
+                        .w_full()
+                        .max_w(px(if section == Section::Shortcuts {
+                            1152.
+                        } else {
+                            768.
+                        }))
+                        .mx_auto()
+                        .gap_5()
+                        .child(
+                            column()
+                                .gap_1()
+                                .border_b_1()
+                                .border_color(rgb(BORDER))
+                                .pb(px(16.))
+                                .child(
+                                    div()
+                                        .text_size(px(20.))
+                                        .line_height(px(28.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(if section == Section::Cloud {
+                                            "Cloud workspaces (Beta)"
+                                        } else {
+                                            section.title()
+                                        }),
+                                )
+                                .child(
+                                    s::description_text(section.description())
+                                        .text_size(px(12.))
+                                        .line_height(px(20.)),
+                                ),
+                        )
+                        .child(content),
+                )
+                .into_any_element()
+        };
         column()
             .id("workspace-settings")
             .relative()
@@ -359,7 +362,9 @@ impl WorkspaceView {
                             .child(icon("alt-arrow-left").size(px(14.)).text_color(rgb(MUTED)))
                             .child("Back to app")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                if this.project_archive.global {this.close_project_archives();}
+                                if this.project_archive.global {
+                                    this.close_project_archives();
+                                }
                                 this.settings = false;
                                 this.completion_preset_menu = false;
                                 this.default_permission_menu = false;
@@ -400,19 +405,52 @@ impl WorkspaceView {
                     .child(navigation)
                     .child(content_panel),
             )
-            .when_some((section == Section::Archived).then(|| self.archive_error.clone()).flatten(), |view, error| {
-                view.child(row().id("archive-error-notice").role(Role::Alert)
-                    .absolute().bottom(px(16.)).right(px(16.)).w(px(360.))
-                    .items_start().gap(px(8.)).p(px(12.)).rounded(px(10.))
-                    .border_1().border_color(s::destructive_text().opacity(0.35))
-                    .bg(s::card_bg()).shadow_lg().occlude()
-                    .child(div().flex_1().min_w_0().text_size(px(12.)).line_height(px(16.))
-                        .text_color(s::destructive_text()).child(error))
-                    .child(s::button("archive-error-dismiss", "").size(px(24.)).px_0()
-                        .tab_index(0).aria_label("Dismiss archive error")
-                        .child(icon("close").size(px(12.)))
-                        .on_click(cx.listener(|this, _, _, cx| {this.archive_error = None; cx.notify();}))))
-            })
+            .when_some(
+                (section == Section::Archived)
+                    .then(|| self.archive_error.clone())
+                    .flatten(),
+                |view, error| {
+                    view.child(
+                        row()
+                            .id("archive-error-notice")
+                            .role(Role::Alert)
+                            .absolute()
+                            .bottom(px(16.))
+                            .right(px(16.))
+                            .w(px(360.))
+                            .items_start()
+                            .gap(px(8.))
+                            .p(px(12.))
+                            .rounded(px(10.))
+                            .border_1()
+                            .border_color(s::destructive_text().opacity(0.35))
+                            .bg(s::card_bg())
+                            .shadow_lg()
+                            .occlude()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
+                                    .text_color(s::destructive_text())
+                                    .child(error),
+                            )
+                            .child(
+                                s::button("archive-error-dismiss", "")
+                                    .size(px(24.))
+                                    .px_0()
+                                    .tab_index(0)
+                                    .aria_label("Dismiss archive error")
+                                    .child(icon("close").size(px(12.)))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.archive_error = None;
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                },
+            )
             .into_any_element()
     }
     fn account_settings(&self, cx: &mut Context<Self>) -> AnyElement {

@@ -30,9 +30,11 @@ pub(super) struct PendingThreadAction {
     change: ThreadChange,
 }
 impl WorkspaceView {
-    pub(super) fn restoring_archived_chat(&self)->Option<&str> {
-        self.thread_action.as_ref().filter(|action|matches!(&action.change,ThreadChange::Archive(false)))
-            .and_then(|action|action.chat["id"].as_str())
+    pub(super) fn restoring_archived_chat(&self) -> Option<&str> {
+        self.thread_action
+            .as_ref()
+            .filter(|action| matches!(&action.change, ThreadChange::Archive(false)))
+            .and_then(|action| action.chat["id"].as_str())
     }
 
     pub(super) fn open_thread_actions(

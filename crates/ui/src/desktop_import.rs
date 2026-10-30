@@ -419,8 +419,10 @@ fn apply_preferences(state: &Entity<AppState>, prefs: &Value, cx: &mut App) -> R
             }))
             .map_err(|e| e.to_string())?;
     }
-    if let Some(value)=prefs.get("keybindings") {
-        current.keymap.import_desktop_rules(settings::keybindings::import(value)?);
+    if let Some(value) = prefs.get("keybindings") {
+        current
+            .keymap
+            .import_desktop_rules(settings::keybindings::import(value)?);
     }
     let state = state.read(cx);
     let dir = state
@@ -466,8 +468,8 @@ fn apply_preferences(state: &Entity<AppState>, prefs: &Value, cx: &mut App) -> R
     defaults.save(&dir).map_err(|e| e.to_string())?;
     let appearance = current.appearance;
     settings::replace(current, settings::SavePolicy::Immediate, cx);
-    let prefs=settings::current(cx);
-    crate::shell::apply_keymap(cx,&prefs.keymap,prefs.composer_send_behavior);
+    let prefs = settings::current(cx);
+    crate::shell::apply_keymap(cx, &prefs.keymap, prefs.composer_send_behavior);
     crate::appearance::set_mode(appearance, cx);
     Ok(())
 }

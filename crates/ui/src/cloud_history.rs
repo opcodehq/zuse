@@ -13,7 +13,11 @@ pub enum Event {
     Back,
     Restored(String),
     Connect(String),
-    Resume { session: String, text: String, send: bool },
+    Resume {
+        session: String,
+        text: String,
+        send: bool,
+    },
 }
 pub struct CloudHistory {
     root: EngineHandle,
@@ -41,10 +45,16 @@ impl CloudHistory {
     ) -> Self {
         let (state, view) = Self::frozen(&head, workspace.archived(), cx);
         let composer = cx.new(|cx| crate::composer::Composer::new(state.clone(), cx));
-        composer.update(cx, |composer, cx| composer.set_cached_cloud(workspace.state == "paused", cx));
+        composer.update(cx, |composer, cx| {
+            composer.set_cached_cloud(workspace.state == "paused", cx)
+        });
         let events = cx.subscribe(&composer, |this: &mut Self, _, event, cx| {
             if let crate::composer::ComposerEvent::ResumeCloud { text, send } = event {
-                cx.emit(Event::Resume { session: this.selected_session(cx), text: text.clone(), send: *send });
+                cx.emit(Event::Resume {
+                    session: this.selected_session(cx),
+                    text: text.clone(),
+                    send: *send,
+                });
             }
         });
         Self {
@@ -63,7 +73,11 @@ impl CloudHistory {
             session_task: None,
         }
     }
-    fn frozen(head: &Head, archived: bool, cx: &mut Context<Self>) -> (Entity<AppState>, Entity<Transcript>) {
+    fn frozen(
+        head: &Head,
+        archived: bool,
+        cx: &mut Context<Self>,
+    ) -> (Entity<AppState>, Entity<Transcript>) {
         let state = cx.new(|cx| {
             let mut state = AppState::new();
             state.connection = zuse_protocol::view::ConnectionStatus::Ready;
@@ -83,7 +97,9 @@ impl CloudHistory {
     }
     pub(crate) fn update_workspace(&mut self, workspace: Workspace, cx: &mut Context<Self>) {
         if workspace.workspace_id == self.workspace.workspace_id {
-            self.composer.update(cx, |composer, cx| composer.set_cached_cloud(workspace.state == "paused", cx));
+            self.composer.update(cx, |composer, cx| {
+                composer.set_cached_cloud(workspace.state == "paused", cx)
+            });
             self.workspace = workspace;
             cx.notify();
         }
@@ -182,7 +198,9 @@ impl Render for CloudHistory {
             .and_then(|c| c.title.clone())
             .unwrap_or_else(|| self.workspace.branch.clone());
         let content = div()
-            .size_full().bg(theme.bg).text_color(theme.text)
+            .size_full()
+            .bg(theme.bg)
+            .text_color(theme.text)
             .flex()
             .flex_col()
             .min_h_0()
@@ -205,10 +223,16 @@ impl Render for CloudHistory {
                             .justify_center()
                             .cursor_pointer()
                             .role(gpui::Role::Button)
-                            .aria_label("Back").tab_index(0).text_color(theme.text_muted)
-                            .hover(|view|view.bg(theme.element_hover))
+                            .aria_label("Back")
+                            .tab_index(0)
+                            .text_color(theme.text_muted)
+                            .hover(|view| view.bg(theme.element_hover))
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Back)))
-                            .child(icons::icon(icons::ALT_ARROW_LEFT).size(px(16.)).text_color(theme.text_muted)),
+                            .child(
+                                icons::icon(icons::ALT_ARROW_LEFT)
+                                    .size(px(16.))
+                                    .text_color(theme.text_muted),
+                            ),
                     )
                     .child(div().flex_1().text_size(px(13.)).child(title))
                     .child(
@@ -219,13 +243,24 @@ impl Render for CloudHistory {
                     ),
             )
             .child(zuse_viewport::cloud_archive_cards::sessions(
-                &self._state.read(cx).chats, &self.selected_session(cx), self.busy || self.reading,
-                |this,id,_,cx|this.select_session(id,cx), cx,
+                &self._state.read(cx).chats,
+                &self.selected_session(cx),
+                self.busy || self.reading,
+                |this, id, _, cx| this.select_session(id, cx),
+                cx,
             ))
             .child(div().flex_1().min_h_0().child(if self.reading {
-                div().size_full().flex().items_center().justify_center().text_color(theme.text_muted)
-                    .child("Loading saved conversation…").into_any_element()
-            } else {self.view.clone().into_any_element()}));
+                div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.text_muted)
+                    .child("Loading saved conversation…")
+                    .into_any_element()
+            } else {
+                self.view.clone().into_any_element()
+            }));
         if !self.workspace.archived() {
             return content.child(self.composer.clone()).into_any_element();
         }

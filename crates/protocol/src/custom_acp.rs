@@ -1,6 +1,6 @@
 //! Stable device-owned ACP identities and executable definitions.
-pub mod command;
 pub mod catalog;
+pub mod command;
 
 use crate::HarnessId;
 use serde::{Deserialize, Serialize};

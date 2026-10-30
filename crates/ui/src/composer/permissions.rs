@@ -140,7 +140,8 @@ impl Composer {
         let harness = resolved.harness;
         let selected = effective(resolved.sandbox, harness.as_ref());
         let pending = self.state.read(cx).configuration_saving();
-        let unconfirmed = !self.cached_cloud() && !pending && self.state.read(cx).configuration_blocked();
+        let unconfirmed =
+            !self.cached_cloud() && !pending && self.state.read(cx).configuration_blocked();
         // Safe modes rest muted and brighten on hover; full access stays in
         // the warning tone so the unlocked state is never mistaken for them.
         let full_access = selected == SandboxLevel::DangerFullAccess;
@@ -154,7 +155,9 @@ impl Composer {
             .id("composer-permissions")
             .relative()
             .flex_none()
-            .when(self.permission_inspector.is_none(), |view|view.track_focus(&self.permission_focus))
+            .when(self.permission_inspector.is_none(), |view| {
+                view.track_focus(&self.permission_focus)
+            })
             .on_key_down(cx.listener(Self::on_permission_key))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
@@ -354,7 +357,6 @@ impl Composer {
                     None,
                 ))
             })
-
     }
 }
 

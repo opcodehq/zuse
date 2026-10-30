@@ -18,19 +18,20 @@ impl Pickers {
         }
         self.ensure_refs(false, cx);
         let theme = Theme::of(cx).clone();
-        let mut trigger = self.tray_chip(
-            PickerKind::Checkout,
-            "picker-checkout",
-            if self.config.checkout == CheckoutKind::NewWorktree {
-                crate::icons::GIT_BRANCH
-            } else {
-                crate::icons::FOLDER
-            },
-            self.checkout_label().into(),
-            &theme,
-            cx,
-        )
-        .flex_none();
+        let mut trigger = self
+            .tray_chip(
+                PickerKind::Checkout,
+                "picker-checkout",
+                if self.config.checkout == CheckoutKind::NewWorktree {
+                    crate::icons::GIT_BRANCH
+                } else {
+                    crate::icons::FOLDER
+                },
+                self.checkout_label().into(),
+                &theme,
+                cx,
+            )
+            .flex_none();
         if self.mounted_kind() == Some(PickerKind::Checkout) {
             let content = self.render_checkout_popover(cx);
             let popup = self.popover_frame(224., content, cx);

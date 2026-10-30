@@ -4,8 +4,8 @@
 //! shell persists them and re-applies the app keymap.
 
 use gpui::{
-    Context, Entity, EventEmitter, FocusHandle, Keystroke, PathPromptOptions, SharedString, Window, div, prelude::*,
-    px,
+    Context, Entity, EventEmitter, FocusHandle, Keystroke, PathPromptOptions, SharedString, Window,
+    div, prelude::*, px,
 };
 
 use crate::appshots::{AppshotCapabilities, AppshotDestination};
@@ -654,7 +654,9 @@ fn refusal(
             .into(),
         );
     }
-    if !matches!(id, ShortcutId::Desktop(command) if command.context()==Some("MessageComposer")) && send_combo_is_reserved(behavior, combo) {
+    if !matches!(id, ShortcutId::Desktop(command) if command.context()==Some("MessageComposer"))
+        && send_combo_is_reserved(behavior, combo)
+    {
         return Some(format!("{} is reserved for the composer.", display_combo(combo)).into());
     }
     conflict_owner(keymap, id, combo).map(|owner| {
@@ -674,9 +676,13 @@ fn refusal(
 
 /// The shortcut (other than `id`) already bound to `combo`, if any. Pure.
 pub fn conflict_owner(keymap: &KeymapConfig, id: ShortcutId, combo: &str) -> Option<ShortcutId> {
-    ShortcutId::ALL
-        .into_iter()
-        .find(|&other| other.available() && other != id.canonical() && other.overlaps_context(id) && crate::settings::platform_combo(keymap.get(other)) == crate::settings::platform_combo(combo))
+    ShortcutId::ALL.into_iter().find(|&other| {
+        other.available()
+            && other != id.canonical()
+            && other.overlaps_context(id)
+            && crate::settings::platform_combo(keymap.get(other))
+                == crate::settings::platform_combo(combo)
+    })
 }
 
 pub fn send_combo_is_reserved(_behavior: ComposerSendBehavior, combo: &str) -> bool {
@@ -1078,10 +1084,16 @@ impl Render for ShortcutsPage {
                                             .into_any_element()
                                     }),
                                 ))
-                                .child(div().mb_3().flex().justify_end().child(
-                                    widgets::ghost_action(&theme).id("shortcuts-import-electron")
-                                        .child("Import from Electron…")
-                                        .on_click(cx.listener(|this,_,_,cx|this.import_shortcuts(cx)))))
+                                .child(
+                                    div().mb_3().flex().justify_end().child(
+                                        widgets::ghost_action(&theme)
+                                            .id("shortcuts-import-electron")
+                                            .child("Import from Electron…")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.import_shortcuts(cx)
+                                            })),
+                                    ),
+                                )
                                 .child(widgets::section_stack().children(groups))
                                 .child(
                                     div()
@@ -1520,30 +1532,48 @@ mod tests {
 
 impl ShortcutsPage {
     fn import_shortcuts(&mut self, cx: &mut Context<Self>) {
-        let paths=cx.prompt_for_paths(PathPromptOptions{files:true,directories:false,multiple:false,prompt:Some("Choose Electron keybindings.json".into())});
-        cx.spawn(async move |this,cx| {
-            let Ok(Ok(Some(paths)))=paths.await else{return;};
-            let Some(path)=paths.first().cloned() else{return;};
-            let result=cx.background_executor().spawn(async move {
-                let bytes=std::fs::read(path).map_err(|_|"Could not read the keyboard shortcuts file.".to_owned())?;
-                if bytes.len()>256*1024{return Err("The keyboard shortcuts file is too large.".to_owned());}
-                let value=serde_json::from_slice(&bytes).map_err(|_|"Choose a valid Electron keybindings.json file.".to_owned())?;
-                super::keybindings::import(&value)
-            }).await;
-            let _=this.update(cx,|this,cx| {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose Electron keybindings.json".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.first().cloned() else {
+                return;
+            };
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = std::fs::read(path)
+                        .map_err(|_| "Could not read the keyboard shortcuts file.".to_owned())?;
+                    if bytes.len() > 256 * 1024 {
+                        return Err("The keyboard shortcuts file is too large.".to_owned());
+                    }
+                    let value = serde_json::from_slice(&bytes)
+                        .map_err(|_| "Choose a valid Electron keybindings.json file.".to_owned())?;
+                    super::keybindings::import(&value)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
                 match result {
-                    Ok(rules)=>{
+                    Ok(rules) => {
                         // Electron defaults plus its ordered overrides replace the
                         // keyboard map; every unrelated GPUI preference stays.
-                        this.keymap=KeymapConfig::default();
+                        this.keymap = KeymapConfig::default();
                         this.keymap.import_desktop_rules(rules);
-                        this.conflict_notice=Some("Keyboard shortcuts imported from Electron.".into());
+                        this.conflict_notice =
+                            Some("Keyboard shortcuts imported from Electron.".into());
                         this.commit(cx);
                     }
-                    Err(message)=>this.conflict_notice=Some(message.into()),
+                    Err(message) => this.conflict_notice = Some(message.into()),
                 }
                 cx.notify();
             });
-        }).detach();
+        })
+        .detach();
     }
 }

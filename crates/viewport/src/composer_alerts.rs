@@ -95,19 +95,44 @@ impl WorkspaceView {
             view = view.child(self.cloud_notices(cx));
         }
         if self.cloud.guest && self.cloud.guest_status["state"] != "ready" {
-            let state = self.cloud.guest_status["state"].as_str().unwrap_or("connecting");
+            let state = self.cloud.guest_status["state"]
+                .as_str()
+                .unwrap_or("connecting");
             let retry = matches!(state, "blocked" | "failed" | "paused");
-            let title = if state == "paused" { "Cloud workspace paused" }
-                else if retry { "Cloud connection needs attention" }
-                else { "Resuming cloud workspace…" };
-            view = view.child(row().min_h(px(32.)).px_3().gap_2()
-                .child(icon("cloud-dither").size(px(14.)))
-                .child(column().flex_1().min_w_0().child(label(title))
-                    .when_some(self.cloud.guest_status["message"].as_str().map(str::to_owned), |view, detail| view.child(label(detail).text_size(px(11.)))))
-                .when(retry, |view| view.child(control("retry-cloud-connection", if state == "paused" { "Resume" } else { "Retry" })
-                    .on_click(cx.listener(|this, _, _, _| { let _ = this.requests.unbounded_send(json!({"ui":"resumeCloud"})); })) )));
+            let title = if state == "paused" {
+                "Cloud workspace paused"
+            } else if retry {
+                "Cloud connection needs attention"
+            } else {
+                "Resuming cloud workspace…"
+            };
+            view = view.child(
+                row()
+                    .min_h(px(32.))
+                    .px_3()
+                    .gap_2()
+                    .child(icon("cloud-dither").size(px(14.)))
+                    .child(
+                        column().flex_1().min_w_0().child(label(title)).when_some(
+                            self.cloud.guest_status["message"]
+                                .as_str()
+                                .map(str::to_owned),
+                            |view, detail| view.child(label(detail).text_size(px(11.))),
+                        ),
+                    )
+                    .when(retry, |view| {
+                        view.child(
+                            control(
+                                "retry-cloud-connection",
+                                if state == "paused" { "Resume" } else { "Retry" },
+                            )
+                            .on_click(cx.listener(|this, _, _, _| {
+                                let _ = this.requests.unbounded_send(json!({"ui":"resumeCloud"}));
+                            })),
+                        )
+                    }),
+            );
         }
-
 
         if let Some(notice) = &self.transcript_state.notice {
             view = view.child(

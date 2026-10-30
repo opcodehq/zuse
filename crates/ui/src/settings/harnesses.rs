@@ -356,20 +356,42 @@ impl HarnessesPage {
             .pb(px(16.))
             .when_some(accounts, |details, accounts| details.child(accounts))
             .child({
-                let expanded=self.open_options.contains(&harness);
-                let phase=self.updates.ready().and_then(|rows|rows.iter().find(|row|row.harness==harness)).map(|row|row.phase);
-                div().flex().flex_col().gap(px(8.))
-                    .child(zuse_viewport::provider_options::header(format!("provider-options-{harness:?}"),expanded,phase,true)
-                        .on_click(cx.listener(move|this,_,_,cx| {
+                let expanded = self.open_options.contains(&harness);
+                let phase = self
+                    .updates
+                    .ready()
+                    .and_then(|rows| rows.iter().find(|row| row.harness == harness))
+                    .map(|row| row.phase);
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(
+                        zuse_viewport::provider_options::header(
+                            format!("provider-options-{harness:?}"),
+                            expanded,
+                            phase,
+                            true,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
                             if !this.open_options.insert(harness) {
                                 this.open_options.remove(&harness);
                                 this.policy_selects.remove(&harness);
                             }
                             cx.notify();
-                        })))
-                    .when(expanded,|v|v.child(div().pl(px(30.)).flex().flex_col().gap(px(16.))
-                        .child(self.render_completion_for(harness,theme,cx))
-                        .children(self.render_updates_for(harness,theme,cx))))
+                        })),
+                    )
+                    .when(expanded, |v| {
+                        v.child(
+                            div()
+                                .pl(px(30.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(16.))
+                                .child(self.render_completion_for(harness, theme, cx))
+                                .children(self.render_updates_for(harness, theme, cx)),
+                        )
+                    })
             });
         if motion::reduced_motion(cx) {
             content.into_any_element()

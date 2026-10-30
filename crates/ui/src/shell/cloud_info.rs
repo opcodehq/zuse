@@ -306,7 +306,14 @@ impl Shell {
             .as_str()
             .unwrap_or("Cloud")
             .to_owned();
-        let status = match metadata["state"].as_str() { Some("ready") => "Running", Some("paused") => "Paused", Some("pausing") => "Pausing…", Some("failed") => "Failed", _ => "Starting…" }.to_owned();
+        let status = match metadata["state"].as_str() {
+            Some("ready") => "Running",
+            Some("paused") => "Paused",
+            Some("pausing") => "Pausing…",
+            Some("failed") => "Failed",
+            _ => "Starting…",
+        }
+        .to_owned();
         let created = metadata["createdAt"]
             .as_i64()
             .and_then(chrono::DateTime::from_timestamp_millis)

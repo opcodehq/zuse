@@ -54,7 +54,6 @@ pub fn secondary_button(theme: &Theme, id: impl Into<gpui::ElementId>) -> Statef
         .hover(move |s| s.bg(hover))
 }
 
-
 /// A square 28px ghost icon button.
 pub fn icon_button(
     theme: &Theme,

@@ -207,7 +207,14 @@ pub(crate) fn summary(view: EntityId, theme: &Theme, cx: &mut App) -> AnyElement
                 .text_color(theme.text_muted)
                 .child("Description"),
         )
-        .child(div().mt(px(8.0)).flex().flex_col().gap(px(12.0)).children(lines))
+        .child(
+            div()
+                .mt(px(8.0))
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .children(lines),
+        )
         .into_any_element()
 }
 

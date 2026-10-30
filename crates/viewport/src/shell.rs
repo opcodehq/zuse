@@ -244,8 +244,15 @@ impl WorkspaceView {
         column()
             .w_full()
             .max_w(px(if self.selected.is_none() && !starting {
-                composer::LANDING_WIDTH.min((self.content_width
-                    - 2. * if self.viewport_width <= 800. { 16. } else { 24. }).max(0.))
+                composer::LANDING_WIDTH.min(
+                    (self.content_width
+                        - 2. * if self.viewport_width <= 800. {
+                            16.
+                        } else {
+                            24.
+                        })
+                    .max(0.),
+                )
             } else {
                 composer::CONVERSATION_WIDTH + 24.
             }))
@@ -280,15 +287,22 @@ impl WorkspaceView {
                         .self_center()
                         .rounded_t(px(19.))
                         .bg(crate::palette::composer_toolbar())
-                        .when(starting, |tray| tray.overflow_hidden().border_1()
-                            .border_color(crate::palette::tone(gpui::white().opacity(0.06), crate::palette::composer_border()))
-                            .bg(crate::cloud_queue::background()))
+                        .when(starting, |tray| {
+                            tray.overflow_hidden()
+                                .border_1()
+                                .border_color(crate::palette::tone(
+                                    gpui::white().opacity(0.06),
+                                    crate::palette::composer_border(),
+                                ))
+                                .bg(crate::cloud_queue::background())
+                        })
                         .child(self.composer_notices(cx)),
                 )
             })
-            .when(self.selected.is_none() && !self.cloud.guest && !starting, |view| {
-                view.child(self.cloud_toolbar(cx))
-            })
+            .when(
+                self.selected.is_none() && !self.cloud.guest && !starting,
+                |view| view.child(self.cloud_toolbar(cx)),
+            )
             .when(!self.queue.is_empty(), |view| {
                 view.child(self.queue_view(cx))
             })
@@ -477,7 +491,14 @@ impl WorkspaceView {
                                 row()
                                     .id("model-picker")
                                     .relative()
-                                    .child({let bounds=self.picker_menu.trigger.clone();canvas(move|b,_,_|bounds.set(Some(b)),|_,_,_,_|{}).absolute().left_0().top_0().size_full()})
+                                    .child({
+                                        let bounds = self.picker_menu.trigger.clone();
+                                        canvas(move |b, _, _| bounds.set(Some(b)), |_, _, _, _| {})
+                                            .absolute()
+                                            .left_0()
+                                            .top_0()
+                                            .size_full()
+                                    })
                                     .role(Role::Button)
                                     .aria_label("Change model")
                                     .cursor_pointer()
@@ -494,7 +515,9 @@ impl WorkspaceView {
                                     })
                                     .child(
                                         icon(provider_icon(
-                                            provider.and_then(|p| p["id"].as_str()).unwrap_or_default(),
+                                            provider
+                                                .and_then(|p| p["id"].as_str())
+                                                .unwrap_or_default(),
                                         ))
                                         .size(px(12.))
                                         .text_color(rgb(MUTED)),
@@ -545,7 +568,9 @@ impl WorkspaceView {
                                         } else {
                                             "Send message"
                                         },
-                                        has_draft && (self.connected || self.cloud.cached) && !self.transcript_blocked()
+                                        has_draft
+                                            && (self.connected || self.cloud.cached)
+                                            && !self.transcript_blocked()
                                             && !self.cloud_model_change_pending(),
                                     )
                                     .on_click(cx.listener(
@@ -1141,25 +1166,35 @@ impl Render for WorkspaceView {
         if self.cloud.target.is_some() && !self.cloud_startup_pending() {
             return self.cloud_workspace(window, cx);
         }
-        if self.connected && !self.transcript_blocked()
-            && self.cloud.resume_draft.as_ref().is_some_and(|draft| self.selected.as_ref().and_then(|chat|chat["id"].as_str()) == Some(draft.0.as_str()))
+        if self.connected
+            && !self.transcript_blocked()
+            && self.cloud.resume_draft.as_ref().is_some_and(|draft| {
+                self.selected.as_ref().and_then(|chat| chat["id"].as_str())
+                    == Some(draft.0.as_str())
+            })
         {
             let (_, text, attachments, send) = self.cloud.resume_draft.take().unwrap();
             self.input.update(cx, |input, cx| input.set_value(text, cx));
             self.attachments = attachments;
-            if send { self.submit(&Submit, window, cx); }
+            if send {
+                self.submit(&Submit, window, cx);
+            }
         }
         self.sync_motion(cx);
         self.sync_browser_visibility();
         self.sync_browser_voice_visibility(cx);
-        let target = self.selected.as_ref().filter(|_| !self.cloud.cached).and_then(|chat| {
-            Some(crate::git_controls::Target {
-                chat_id: chat["id"].as_str()?.into(),
-                cwd: chat["cwd"].as_str()?.into(),
-                device_id: chat["deviceId"].as_str()?.into(),
-                archived: chat["archived"] == true,
-            })
-        });
+        let target = self
+            .selected
+            .as_ref()
+            .filter(|_| !self.cloud.cached)
+            .and_then(|chat| {
+                Some(crate::git_controls::Target {
+                    chat_id: chat["id"].as_str()?.into(),
+                    cwd: chat["cwd"].as_str()?.into(),
+                    device_id: chat["deviceId"].as_str()?.into(),
+                    archived: chat["archived"] == true,
+                })
+            });
 
         let colors = crate::plugin_setup::SetupColors {
             text: rgb(0xe8e9e7).into(),
@@ -1177,7 +1212,11 @@ impl Render for WorkspaceView {
             0.
         } else if self.right_tab == "browser" {
             (f32::from(window.viewport_size().width)
-                - if self.sidebar_open { self.sidebar_width() } else { 0. }
+                - if self.sidebar_open {
+                    self.sidebar_width()
+                } else {
+                    0.
+                }
                 - 380.)
                 .clamp(300., 640.)
         } else if self.open_file.is_some()
@@ -1191,7 +1230,11 @@ impl Render for WorkspaceView {
         };
         self.viewport_width = f32::from(window.viewport_size().width);
         self.content_height = f32::from(window.viewport_size().height)
-            - if self.settings { 0. } else { 2. * crate::workspace_style::GUTTER };
+            - if self.settings {
+                0.
+            } else {
+                2. * crate::workspace_style::GUTTER
+            };
         self.content_width = f32::from(window.viewport_size().width)
             - if self.sidebar_open && !self.settings {
                 self.sidebar_width()
@@ -1199,7 +1242,11 @@ impl Render for WorkspaceView {
                 0.
             }
             - panel_width
-            - if self.settings { 0. } else { 2. * crate::workspace_style::GUTTER };
+            - if self.settings {
+                0.
+            } else {
+                2. * crate::workspace_style::GUTTER
+            };
         div()
             .track_focus(&self.workspace_focus)
             .key_context("Workspace")
@@ -1208,8 +1255,14 @@ impl Render for WorkspaceView {
                     this.resize_sidebar(f32::from(event.position.x), cx);
                 }
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_sidebar_resize(cx)))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_sidebar_resize(cx)))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.end_sidebar_resize(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.end_sidebar_resize(cx)),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -1241,13 +1294,18 @@ impl Render for WorkspaceView {
             }))
             .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
                 if this.usage_open && !this.settings {
-                    if let Some(dashboard) = this.usage_dashboard.clone() { dashboard.update(cx, |dashboard,cx| dashboard.escape(window,cx)); }
+                    if let Some(dashboard) = this.usage_dashboard.clone() {
+                        dashboard.update(cx, |dashboard, cx| dashboard.escape(window, cx));
+                    }
                     return;
                 }
-                if this.cancel_sidebar_resize(cx) { return; }
-                if this.sidebar_controls.update(cx, |controls, cx| {
-                    controls.dismiss_on_escape(window, cx)
-                }) {
+                if this.cancel_sidebar_resize(cx) {
+                    return;
+                }
+                if this
+                    .sidebar_controls
+                    .update(cx, |controls, cx| controls.dismiss_on_escape(window, cx))
+                {
                     return;
                 }
                 if this.cloud.picker.take().is_some() {
@@ -1268,24 +1326,51 @@ impl Render for WorkspaceView {
                     return;
                 }
                 if this.plugin_state.confirmation.is_some() {
-                    if let Some(dialog)=this.plugin_detail_menu.removal.clone() {dialog.update(cx,|dialog,cx|dialog.cancel(window,cx));}
-                    cx.notify();return;
+                    if let Some(dialog) = this.plugin_detail_menu.removal.clone() {
+                        dialog.update(cx, |dialog, cx| dialog.cancel(window, cx));
+                    }
+                    cx.notify();
+                    return;
                 }
-                if this.project_archive.menu.take().is_some() {cx.notify();return;}
-                if this.plugins_add_menu { this.plugins_add_menu=false; cx.notify(); return; }
+                if this.project_archive.menu.take().is_some() {
+                    cx.notify();
+                    return;
+                }
+                if this.plugins_add_menu {
+                    this.plugins_add_menu = false;
+                    cx.notify();
+                    return;
+                }
                 if let Some(form) = this.plugin_setup.clone() {
-                    form.update(cx,|form,cx|form.cancel(window,cx));
-                    cx.notify();return;
+                    form.update(cx, |form, cx| form.cancel(window, cx));
+                    cx.notify();
+                    return;
                 }
                 if this.plugins_browse {
-                    if this.plugin_detail_menu.account.is_some() {this.plugin_detail_menu.close_account(true,window,cx);}
-                    else if this.plugin_detail_menu.open {this.plugin_detail_menu.close();}
-                    else if this.plugin_detail.take().is_none() { this.close_plugins_browse(); this.settings=true; }
-                    cx.notify(); return;
+                    if this.plugin_detail_menu.account.is_some() {
+                        this.plugin_detail_menu.close_account(true, window, cx);
+                    } else if this.plugin_detail_menu.open {
+                        this.plugin_detail_menu.close();
+                    } else if this.plugin_detail.take().is_none() {
+                        this.close_plugins_browse();
+                        this.settings = true;
+                    }
+                    cx.notify();
+                    return;
                 }
-                if this.dismiss_custom_acp(cx) { return; }
-                if this.settings && this.settings_section==crate::settings_view::Section::Providers && this.dismiss_provider_login(cx) {return;}
-                if this.project_archive.global {this.project_archive_escape(window,cx);return;}
+                if this.dismiss_custom_acp(cx) {
+                    return;
+                }
+                if this.settings
+                    && this.settings_section == crate::settings_view::Section::Providers
+                    && this.dismiss_provider_login(cx)
+                {
+                    return;
+                }
+                if this.project_archive.global {
+                    this.project_archive_escape(window, cx);
+                    return;
+                }
                 if this.remote_ui.dialog.is_some() {
                     this.close_remote_dialog(window, cx);
                     return;
@@ -1311,7 +1396,10 @@ impl Render for WorkspaceView {
                     cx.notify();
                     return;
                 }
-                if this.project_archive.project.is_some() {this.project_archive_escape(window,cx);return;}
+                if this.project_archive.project.is_some() {
+                    this.project_archive_escape(window, cx);
+                    return;
+                }
                 if this.queue_edit.is_some()
                     && this.input.focus_handle(cx).is_focused(window)
                     && !this.model_picker
@@ -1334,7 +1422,9 @@ impl Render for WorkspaceView {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
-                if this.usage_open {return;}
+                if this.usage_open {
+                    return;
+                }
                 if this.thread_dialog.is_none() && this.project_archive.project.is_none() {
                     this.save_file(cx);
                 }
@@ -1347,20 +1437,28 @@ impl Render for WorkspaceView {
             .font_family("Geist")
             .text_size(px(13.))
             .when(self.sidebar_open && !self.settings, |d| {
-                d.child(crate::workspace_style::column()
-                    .w(px(self.sidebar_width())).flex_none()
-                    .pl(px(crate::workspace_style::GUTTER)).child(self.sidebar(cx)))
-                    .child(self.sidebar_separator(cx))
+                d.child(
+                    crate::workspace_style::column()
+                        .w(px(self.sidebar_width()))
+                        .flex_none()
+                        .pl(px(crate::workspace_style::GUTTER))
+                        .child(self.sidebar(cx)),
+                )
+                .child(self.sidebar_separator(cx))
             })
             .child(self.workspace_main(window, cx))
             .when(
-                self.right_open && !self.settings && !self.project_picker && self.project_archive.project.is_none() && !self.usage_open,
+                self.right_open
+                    && !self.settings
+                    && !self.project_picker
+                    && self.project_archive.project.is_none()
+                    && !self.usage_open,
                 |d| d.child(self.workspace_panel(panel_width, cx)),
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {
                 d.child(self.preview_overlay(window, cx))
             })
-            .when_some(self.project_archive_menu_view(cx),|d,menu|d.child(menu))
+            .when_some(self.project_archive_menu_view(cx), |d, menu| d.child(menu))
             .when(self.thread_dialog.is_some(), |d| {
                 d.child(self.thread_dialog_view(cx))
             })

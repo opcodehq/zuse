@@ -13,7 +13,8 @@ async fn main() -> anyhow::Result<()> {
         HarnessId::ClaudeCode,
         None,
     )?;
-    core.account = Account::fixture_signed_in(&root, "https://account.example.test".into(), "user-bob");
+    core.account =
+        Account::fixture_signed_in(&root, "https://account.example.test".into(), "user-bob");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     std::fs::write(ready, listener.local_addr()?.port().to_string())?;
     zuse_rpc::serve_ws_listener(listener, core.rpc_service()).await;

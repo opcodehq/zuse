@@ -428,7 +428,9 @@ impl PluginsCard {
     }
 
     fn sign_in(&mut self, cx: &mut Context<Self>) {
-        if self.signed_in() || self.busy || self.account.login.is_some() { return; }
+        if self.signed_in() || self.busy || self.account.login.is_some() {
+            return;
+        }
         self.request(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}), cx);
     }
 
@@ -571,7 +573,12 @@ impl PluginsCard {
                     .into_any_element(),
             );
         }
-        if let Some(error) = self.account_watch_error.clone().or_else(|| self.error.clone()).or_else(|| self.account.error.clone()) {
+        if let Some(error) = self
+            .account_watch_error
+            .clone()
+            .or_else(|| self.error.clone())
+            .or_else(|| self.account.error.clone())
+        {
             items.push(widgets::error_strip(theme, error).mt_0().into_any_element());
         }
         if let Some(notice) = self.plugins.notice.clone() {
@@ -632,7 +639,8 @@ impl PluginsCard {
     fn render_sign_in_card(&self, _theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         zuse_viewport::plugin_catalog::signed_out(
             self.busy || !self.account_loaded || self.account.login.is_some(),
-            |this, _, cx| this.sign_in(cx), cx,
+            |this, _, cx| this.sign_in(cx),
+            cx,
         )
     }
 
@@ -676,7 +684,12 @@ impl PluginsCard {
                         &definition.name,
                         36.,
                     ))
-                    .child(zuse_viewport::plugin_catalog::title(&definition, theme.text, theme.text_muted, theme.settings_frame_bg()))
+                    .child(zuse_viewport::plugin_catalog::title(
+                        &definition,
+                        theme.text,
+                        theme.text_muted,
+                        theme.settings_frame_bg(),
+                    ))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.browse_selected = Some(selected.clone());
                         this.detail_menu = Default::default();
@@ -698,13 +711,21 @@ impl PluginsCard {
                         "Connect plugin"
                     },
                 )
-                .when(!connected && (self.busy || self.plugins.active_attempt() || self.plugins.snapshot["canManage"] == false), |v|v.opacity(0.5).cursor_default())
+                .when(
+                    !connected
+                        && (self.busy
+                            || self.plugins.active_attempt()
+                            || self.plugins.snapshot["canManage"] == false),
+                    |v| v.opacity(0.5).cursor_default(),
+                )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if connected {
                         this.browse_selected = Some(definition.id.clone());
                         this.detail_menu = Default::default();
                         cx.notify();
-                    } else { this.connect(definition.clone(), window, cx); }
+                    } else {
+                        this.connect(definition.clone(), window, cx);
+                    }
                 })),
             )
             .into_any_element()
@@ -786,9 +807,13 @@ impl PluginsCard {
                 grid = grid.child(left);
                 continue;
             }
-            grid = grid.child(div().flex().gap(px(16.))
-                .child(div().flex_1().min_w_0().child(left))
-                .child(div().flex_1().min_w_0().children(rows.next())));
+            grid = grid.child(
+                div()
+                    .flex()
+                    .gap(px(16.))
+                    .child(div().flex_1().min_w_0().child(left))
+                    .child(div().flex_1().min_w_0().children(rows.next())),
+            );
         }
         div()
             .flex()
@@ -818,8 +843,16 @@ impl PluginsCard {
         use zuse_viewport::plugin_catalog as catalog;
         let theme = Theme::of(cx).clone();
         let prefs = crate::settings::current(cx);
-        let sidebar = if prefs.sidebar_collapsed { 0. } else { prefs.sidebar_width };
-        let padding = if f32::from(window.viewport_size().width) - sidebar < 800. { 16. } else { 32. };
+        let sidebar = if prefs.sidebar_collapsed {
+            0.
+        } else {
+            prefs.sidebar_width
+        };
+        let padding = if f32::from(window.viewport_size().width) - sidebar < 800. {
+            16.
+        } else {
+            32.
+        };
         zuse_viewport::palette::set_light(theme.appearance.is_light());
         if let Some(definition) = self.browse_selected.as_ref().and_then(|id| {
             catalog::catalog(&self.plugins.snapshot, "", false)
@@ -864,32 +897,77 @@ impl PluginsCard {
                 .into_any_element();
         }
         let query = self.search.read(cx).text().trim().to_lowercase();
-        if query != self.browse_query { self.browse_query = query.clone(); self.browse_page = 0; }
-        let listing = catalog::browse(&self.plugins.snapshot, &query, self.connected_only, self.browse_page);
+        if query != self.browse_query {
+            self.browse_query = query.clone();
+            self.browse_page = 0;
+        }
+        let listing = catalog::browse(
+            &self.plugins.snapshot,
+            &query,
+            self.connected_only,
+            self.browse_page,
+        );
         let connected = self.connected_count();
         let mut sections: Vec<AnyElement> = Vec::new();
         if !self.signed_in() {
             sections.push(self.render_sign_in_card(&theme, cx).into_any_element());
         } else if !self.plugins.snapshot["catalog"].is_array() {
-            sections.push(div().py(px(32.)).text_color(theme.text_muted)
-                .child(if self.busy { "Loading plugins…" } else { "Plugins are unavailable. Refresh to try again." }).into_any_element());
+            sections.push(
+                div()
+                    .py(px(32.))
+                    .text_color(theme.text_muted)
+                    .child(if self.busy {
+                        "Loading plugins…"
+                    } else {
+                        "Plugins are unavailable. Refresh to try again."
+                    })
+                    .into_any_element(),
+            );
         } else if listing.sections.is_empty() {
-            sections.push(div().px(px(8.)).py(px(24.)).text_size(px(12.)).text_color(theme.text_muted)
-                .child(if self.connected_only && query.is_empty() {"No plugins connected yet"} else {"No plugins match your search"}).into_any_element());
+            sections.push(
+                div()
+                    .px(px(8.))
+                    .py(px(24.))
+                    .text_size(px(12.))
+                    .text_color(theme.text_muted)
+                    .child(if self.connected_only && query.is_empty() {
+                        "No plugins connected yet"
+                    } else {
+                        "No plugins match your search"
+                    })
+                    .into_any_element(),
+            );
         } else {
             for section in listing.sections {
-                sections.push(self.render_browse_section(&theme, section.title, section.key, section.items,
-                    window.viewport_size().width >= px(1024.), cx));
+                sections.push(self.render_browse_section(
+                    &theme,
+                    section.title,
+                    section.key,
+                    section.items,
+                    window.viewport_size().width >= px(1024.),
+                    cx,
+                ));
             }
             if listing.more {
-                sections.push(catalog_ui::secondary_button(&theme, "plugins-show-more").self_start().child("Show more")
-                    .on_click(cx.listener(|this,_,_,cx| { this.browse_page += 1; cx.notify(); })).into_any_element());
+                sections.push(
+                    catalog_ui::secondary_button(&theme, "plugins-show-more")
+                        .self_start()
+                        .child("Show more")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.browse_page += 1;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                );
             }
         }
         let tabs = catalog_ui::segmented_tabs(
             &theme,
             "plugins-tab",
-            &[("Browse", None), ("Connected", (connected > 0).then_some(connected))],
+            &[
+                ("Browse", None),
+                ("Connected", (connected > 0).then_some(connected)),
+            ],
             usize::from(self.connected_only),
             |index, tab| {
                 tab.on_click(cx.listener(move |this, _, _, cx| {
@@ -908,12 +986,17 @@ impl PluginsCard {
                 Some(224.),
                 self.search.clone().into_any_element(),
             ))
-            .when(self.signed_in(), |view| view.child(
-                catalog_ui::secondary_button(&theme, "add-hosted-server")
-                    .child("Add MCP server")
-                    .when(self.plugins.snapshot["canManage"] == false || self.busy, |v|v.opacity(0.5))
-                    .on_click(cx.listener(|this, _, window, cx| this.add_server(window, cx))),
-            ))
+            .when(self.signed_in(), |view| {
+                view.child(
+                    catalog_ui::secondary_button(&theme, "add-hosted-server")
+                        .child("Add MCP server")
+                        .when(
+                            self.plugins.snapshot["canManage"] == false || self.busy,
+                            |v| v.opacity(0.5),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| this.add_server(window, cx))),
+                )
+            })
             .child(
                 catalog_ui::icon_button(
                     &theme,

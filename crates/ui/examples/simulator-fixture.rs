@@ -87,7 +87,7 @@ fn main() -> anyhow::Result<()> {
         default_harness: zuse_protocol::HarnessId::Codex,
     };
     let handle = runtime.block_on(state::EngineHandle::bootstrap(boot.clone()))?;
-    let setup_handle=handle.clone();
+    let setup_handle = handle.clone();
     let chats = core.workspace.read_chats()?;
     let device = core.device_id.clone();
     let fail = Arc::new(std::sync::Mutex::new(None));

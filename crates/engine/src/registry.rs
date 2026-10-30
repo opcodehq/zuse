@@ -755,13 +755,11 @@ pub fn default_registry() -> HarnessRegistry {
         Box::new(|| zuse_providers::AcpHarness::antigravity().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::AcpHarness::antigravity()) as Arc<dyn Harness>)),
     );
-    for (id, name, build) in [
-        (
-            HarnessId::Kiro,
-            "Kiro CLI",
-            zuse_providers::AcpHarness::kiro as fn() -> zuse_providers::AcpHarness,
-        ),
-    ] {
+    for (id, name, build) in [(
+        HarnessId::Kiro,
+        "Kiro CLI",
+        zuse_providers::AcpHarness::kiro as fn() -> zuse_providers::AcpHarness,
+    )] {
         registry.register_lazy(
             HarnessDescriptor {
                 id,

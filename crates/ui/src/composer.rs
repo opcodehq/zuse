@@ -8,11 +8,11 @@
 //! the gpui element only feeds them measurements.
 
 mod archive;
-mod private_secrets;
-mod question_tray;
-mod permissions;
 mod permission_inspector;
 mod permission_prompt;
+mod permissions;
+mod private_secrets;
+mod question_tray;
 mod skill_completion;
 
 use std::collections::{HashMap, HashSet};
@@ -1498,7 +1498,8 @@ fn mention_display_labels(links: &[FileMentionLink]) -> Vec<String> {
                         .collect();
                     // A chat's "path" is its id: always show its title.
                     // A link's label is its own: never a path suffix.
-                    if duplicates.is_empty() || matches!(link.kind, ChipKind::Chat | ChipKind::Link) {
+                    if duplicates.is_empty() || matches!(link.kind, ChipKind::Chat | ChipKind::Link)
+                    {
                         return link.basename.clone();
                     }
                     let parts: Vec<_> = link.path.split('/').collect();
@@ -1766,7 +1767,11 @@ fn input_bindings(context: &'static str) -> Vec<KeyBinding> {
 pub fn init(cx: &mut App, send_behavior: ComposerSendBehavior) {
     init_with_keymap(cx, send_behavior, &crate::settings::current(cx).keymap);
 }
-pub fn init_with_keymap(cx: &mut App, send_behavior: ComposerSendBehavior, keymap: &crate::settings::KeymapConfig) {
+pub fn init_with_keymap(
+    cx: &mut App,
+    send_behavior: ComposerSendBehavior,
+    keymap: &crate::settings::KeymapConfig,
+) {
     let mut generic_bindings = input_bindings(GENERIC_COMPOSER_CONTEXT);
     generic_bindings.push(KeyBinding::new(
         "enter",
@@ -1776,14 +1781,32 @@ pub fn init_with_keymap(cx: &mut App, send_behavior: ComposerSendBehavior, keyma
 
     let mut message_bindings = input_bindings(MESSAGE_COMPOSER_CONTEXT);
     use crate::settings::keybindings::Command as Desktop;
-    let overridden = |command| keymap.desktop.contains_key(&command) || keymap.desktop_rules.iter().any(|rule|rule.command==command);
+    let overridden = |command| {
+        keymap.desktop.contains_key(&command)
+            || keymap
+                .desktop_rules
+                .iter()
+                .any(|rule| rule.command == command)
+    };
     message_bindings.retain(|binding| {
-        let key = binding.keystrokes().first().map(|key|key.unparse()).unwrap_or_default();
-        !((key=="shift-enter" && overridden(Desktop::ComposerNewline)) || key=="shift-tab")
+        let key = binding
+            .keystrokes()
+            .first()
+            .map(|key| key.unparse())
+            .unwrap_or_default();
+        !((key == "shift-enter" && overridden(Desktop::ComposerNewline)) || key == "shift-tab")
     });
     for binding in message_enter_bindings(send_behavior, &platform_combo("mod-enter")) {
-        if overridden(Desktop::ComposerSubmit) && matches!(binding.action, MessageEnterBindingAction::Submit) {continue;}
-        if overridden(Desktop::ComposerForceSubmit) && matches!(binding.action, MessageEnterBindingAction::ModifiedSubmit) {continue;}
+        if overridden(Desktop::ComposerSubmit)
+            && matches!(binding.action, MessageEnterBindingAction::Submit)
+        {
+            continue;
+        }
+        if overridden(Desktop::ComposerForceSubmit)
+            && matches!(binding.action, MessageEnterBindingAction::ModifiedSubmit)
+        {
+            continue;
+        }
 
         match binding.action {
             MessageEnterBindingAction::Submit => message_bindings.push(KeyBinding::new(
@@ -1871,8 +1894,15 @@ pub fn init_with_keymap(cx: &mut App, send_behavior: ComposerSendBehavior, keyma
     }
     let mut project_bindings = input_bindings("ProjectForm");
     project_bindings.retain(|binding| {
-        let key = binding.keystrokes().first().map(|key| key.unparse()).unwrap_or_default();
-        !matches!(key.as_str(), "tab" | "shift-tab" | "shift-enter" | "up" | "down")
+        let key = binding
+            .keystrokes()
+            .first()
+            .map(|key| key.unparse())
+            .unwrap_or_default();
+        !matches!(
+            key.as_str(),
+            "tab" | "shift-tab" | "shift-enter" | "up" | "down"
+        )
     });
     cx.bind_keys(project_bindings);
     cx.bind_keys(palette_bindings);
@@ -5611,7 +5641,10 @@ impl Render for ComposerInput {
 #[derive(Debug, Clone)]
 pub enum ComposerEvent {
     CloudLaunchChanged,
-    ResumeCloud { text: String, send: bool },
+    ResumeCloud {
+        text: String,
+        send: bool,
+    },
     WorkspaceCommand(WorkspaceCommand),
     /// Arm the shared-element transition before the draft route is replaced
     /// by the newly-created session. Emitting this before `select_chat` keeps
@@ -6585,19 +6618,32 @@ impl Composer {
             &pickers,
             |this: &mut Self, _, event: &crate::pickers::ReturnComposerFocus, cx| {
                 if event.pointer.is_none_or(|position| {
-                    this.surface_bounds.get().is_some_and(|bounds| bounds.contains(&position))
+                    this.surface_bounds
+                        .get()
+                        .is_some_and(|bounds| bounds.contains(&position))
                 }) {
                     this.focus_pending = true;
                     cx.notify();
                 }
             },
         );
-        cx.subscribe(&pickers, |this: &mut Self, _, event: &crate::pickers::CreationIssueTitle, cx| {
-            this.input.update(cx, |input,cx| {
-                let current = input.text().to_owned();
-                input.set_text(if current.is_empty() { event.0.clone() } else { format!("{current}\n{}",event.0) },cx);
-            });
-        }).detach();
+        cx.subscribe(
+            &pickers,
+            |this: &mut Self, _, event: &crate::pickers::CreationIssueTitle, cx| {
+                this.input.update(cx, |input, cx| {
+                    let current = input.text().to_owned();
+                    input.set_text(
+                        if current.is_empty() {
+                            event.0.clone()
+                        } else {
+                            format!("{current}\n{}", event.0)
+                        },
+                        cx,
+                    );
+                });
+            },
+        )
+        .detach();
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.on_state_changed(cx));
         let input_events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
             ComposerInputEvent::Submitted => this.on_submit(cx),
@@ -7178,7 +7224,8 @@ impl Composer {
                     .image()
                     .and(self.attachment_original_names.get(&att.id))
                     .cloned();
-                att.mention.map(|index| (index, (att.image().cloned(), name)))
+                att.mention
+                    .map(|index| (index, (att.image().cloned(), name)))
             })
             .collect();
         let scope = self.current_key.clone();
@@ -8512,7 +8559,9 @@ impl Composer {
             .unwrap_or_default();
         // Full pill width at the mention card's height budget — both composer
         // completions share the same surface shape.
-        let mut card = crate::popover::completion_card(theme).p(px(6.)).gap_0()
+        let mut card = crate::popover::completion_card(theme)
+            .p(px(6.))
+            .gap_0()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -8581,15 +8630,18 @@ impl Composer {
                 };
                 let selected = self.slash.active == Some(row_ix);
                 rows.push(
-                    skill_completion::row(theme,command,selected,row_ix)
-                        .on_mouse_move(cx.listener(move|this,_,_,cx|{
-                            if this.slash.active!=Some(row_ix) {
-                                this.slash.active=Some(row_ix);cx.notify();
+                    skill_completion::row(theme, command, selected, row_ix)
+                        .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                            if this.slash.active != Some(row_ix) {
+                                this.slash.active = Some(row_ix);
+                                cx.notify();
                             }
                         }))
-                        .on_click(cx.listener(move|this,_,_,cx|{
-                            this.slash.active=Some(row_ix);this.accept_slash(cx);
-                        })).into_any_element(),
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.slash.active = Some(row_ix);
+                            this.accept_slash(cx);
+                        }))
+                        .into_any_element(),
                 );
             }
             // Overflowing rows wheel-scroll inside a bounded viewport; the
@@ -8597,9 +8649,14 @@ impl Composer {
             card = card.child(
                 crate::popover::menu_scroll_host("slash-scroll-host")
                     .on_hover(cx.listener(Self::on_popup_list_hover))
-                    .child(crate::popover::faded_menu_list(&self.slash_scroll,
-                        crate::popover::menu_scroll_list("slash-list",&self.slash_scroll)
-                            .max_h(px(306.)).flex().flex_col().children(rows)))
+                    .child(crate::popover::faded_menu_list(
+                        &self.slash_scroll,
+                        crate::popover::menu_scroll_list("slash-list", &self.slash_scroll)
+                            .max_h(px(306.))
+                            .flex()
+                            .flex_col()
+                            .children(rows),
+                    ))
                     .children(crate::popover::rail(self, "slash-scrollbar", theme, cx)),
             );
         }
@@ -8908,10 +8965,19 @@ impl Composer {
         if self.queue_edit_finishing {
             return true;
         }
-        if self.cloud_launch_pending(cx) { return true; }
-        if self.cached_cloud() { return false; }
+        if self.cloud_launch_pending(cx) {
+            return true;
+        }
+        if self.cached_cloud() {
+            return false;
+        }
         let state = self.state.read(cx);
-        if state.selected_project_creation().is_some_and(|op| op.blocks_execution()) { return true; }
+        if state
+            .selected_project_creation()
+            .is_some_and(|op| op.blocks_execution())
+        {
+            return true;
+        }
         if state.configuration_blocked() {
             return true;
         }
@@ -9064,8 +9130,17 @@ impl Composer {
     /// is on), `Mutate createChat` with the `ChatConfig` + cwd, and the model /
     /// reasoning / options on the Run request itself (§1.7).
     fn send(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
-        if self.state.read(cx).selected_project_creation().is_some_and(|op| op.blocks_execution()) { return; }
-        if self.pickers.read(cx).preparing_source(cx) { return; }
+        if self
+            .state
+            .read(cx)
+            .selected_project_creation()
+            .is_some_and(|op| op.blocks_execution())
+        {
+            return;
+        }
+        if self.pickers.read(cx).preparing_source(cx) {
+            return;
+        }
         if self.send_cloud(text.clone(), cx) {
             return;
         }
@@ -9196,8 +9271,11 @@ impl Composer {
         self.attachment_drafts.remove(&self.current_key);
         let staged_appshots = self.appshots.remove(&self.current_key).unwrap_or_default();
         if is_new {
-            if let Some((number,markdown)) = self.pickers.read(cx).source_issue(cx) {
-                ordinary_staged.push(StagedAttachment::from_file(&format!("issue-{number}.md"),markdown.into_bytes()));
+            if let Some((number, markdown)) = self.pickers.read(cx).source_issue(cx) {
+                ordinary_staged.push(StagedAttachment::from_file(
+                    &format!("issue-{number}.md"),
+                    markdown.into_bytes(),
+                ));
             }
         }
         let mut staged = ordinary_staged.clone();
@@ -9954,7 +10032,9 @@ impl Composer {
             return;
         };
         let step = wizard.select(option_ix);
-        self.input.update(cx, |input, cx| input.set_placeholder("Type your own answer…", cx));
+        self.input.update(cx, |input, cx| {
+            input.set_placeholder("Type your own answer…", cx)
+        });
         match step {
             WizardStep::AutoAdvance => self.schedule_auto_advance(cx),
             WizardStep::Done(answers) => self.wizard_finish(answers, cx),
@@ -9974,7 +10054,9 @@ impl Composer {
     }
 
     fn wizard_advance(&mut self, cx: &mut Context<Self>) {
-        if self.private_question() { return; }
+        if self.private_question() {
+            return;
+        }
         let text = self.input.read(cx).text().to_string();
         let Some(wizard) = self.wizard.as_mut() else {
             return;
@@ -10003,7 +10085,9 @@ impl Composer {
 
     /// Submit RespondInput and retire the panel.
     fn wizard_finish(&mut self, answers: Vec<UserInputAnswer>, cx: &mut Context<Self>) {
-        if self.private_question() { return; }
+        if self.private_question() {
+            return;
+        }
         let Some(wizard) = self.wizard.take() else {
             return;
         };
@@ -10071,7 +10155,9 @@ impl Composer {
     }
 
     fn on_wizard_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
-        if self.private_question() { return; }
+        if self.private_question() {
+            return;
+        }
         // Keys bubbling out of the free-text input must not double-handle:
         // digits select options only while the input is empty, and Enter is the
         // input's own Submit action when it has focus.
@@ -10108,7 +10194,10 @@ impl Composer {
 
     /// Questions sit in a compact tray above the answer composer.
     fn render_wizard(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if self.wizard.as_ref().and_then(|wizard| wizard.current())
+        if self
+            .wizard
+            .as_ref()
+            .and_then(|wizard| wizard.current())
             .is_some_and(|question| question.approval_prompt.is_some())
         {
             return self.render_permission_prompt(window, cx);
@@ -10133,7 +10222,11 @@ impl Composer {
         {
             return;
         }
-        let engine = self.state.read(cx).engine().map(|engine| engine.controller());
+        let engine = self
+            .state
+            .read(cx)
+            .engine()
+            .map(|engine| engine.controller());
         self.input
             .update(cx, |input, cx| match input.dictation.phase {
                 Phase::Requesting => {
@@ -10251,14 +10344,32 @@ impl Composer {
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         use crate::dictation::{Phase, glass, waveform::Mode};
-        if self.wizard.is_some() { return None; }
+        if self.wizard.is_some() {
+            return None;
+        }
         if !crate::dictation::enabled(cx) {
             let theme = Theme::of(cx).clone();
-            return Some(div().id("composer-setup-dictation").debug_selector(|| "composer-microphone".into())
-                .role(gpui::Role::Button).aria_label("Set up dictation").size(px(28.)).flex().items_center().justify_center().rounded(px(6.)).cursor_pointer()
-                .tooltip(crate::settings::widgets::text_tooltip("Set up voice input"))
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(SetupDictation), cx))
-                .child(crate::icons::icon(crate::icons::MICROPHONE).size(px(15.)).text_color(theme.text_muted)).into_any_element());
+            return Some(
+                div()
+                    .id("composer-setup-dictation")
+                    .debug_selector(|| "composer-microphone".into())
+                    .role(gpui::Role::Button)
+                    .aria_label("Set up dictation")
+                    .size(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .tooltip(crate::settings::widgets::text_tooltip("Set up voice input"))
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(SetupDictation), cx))
+                    .child(
+                        crate::icons::icon(crate::icons::MICROPHONE)
+                            .size(px(15.))
+                            .text_color(theme.text_muted),
+                    )
+                    .into_any_element(),
+            );
         }
         let theme = Theme::of(cx).clone();
         let phase = self.input.read(cx).dictation.phase.clone();
@@ -10716,7 +10827,10 @@ pub(crate) fn send_circle(
             .border_color(theme.accent.opacity(0.4))
             .cursor_pointer()
             .hover(|s| s.opacity(0.88))
-            .child(zuse_viewport::dither::fill(SEND_DITHER_RGB, SEND_BUTTON_RADIUS))
+            .child(zuse_viewport::dither::fill(
+                SEND_DITHER_RGB,
+                SEND_BUTTON_RADIUS,
+            ))
         })
         .child(
             crate::icons::icon(crate::icons::SEND)
@@ -10758,15 +10872,26 @@ impl Focusable for Composer {
 
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let resume = self.state.read(cx).pending_cloud_resume.as_ref().filter(|(session, _, _)| {
-            self.current_key == *session && self.state.read(cx).engine().is_some()
-                && self.state.read(cx).connection == crate::state::ConnectionStatus::Ready
-                && !self.state.read(cx).configuration_blocked()
-        }).cloned();
+        let resume = self
+            .state
+            .read(cx)
+            .pending_cloud_resume
+            .as_ref()
+            .filter(|(session, _, _)| {
+                self.current_key == *session
+                    && self.state.read(cx).engine().is_some()
+                    && self.state.read(cx).connection == crate::state::ConnectionStatus::Ready
+                    && !self.state.read(cx).configuration_blocked()
+            })
+            .cloned();
         if let Some((_, text, send)) = resume {
-            self.state.update(cx, |state, _| state.pending_cloud_resume = None);
-            self.input.update(cx, |input, cx| input.set_text(text.clone(), cx));
-            if send && !text.trim().is_empty() { self.send(text, false, cx); }
+            self.state
+                .update(cx, |state, _| state.pending_cloud_resume = None);
+            self.input
+                .update(cx, |input, cx| input.set_text(text.clone(), cx));
+            if send && !text.trim().is_empty() {
+                self.send(text, false, cx);
+            }
         }
         let archived = self
             .state
@@ -10933,8 +11058,7 @@ impl Render for Composer {
             .flatten();
         let container = container.when_some(chips, |el, chips| el.child(chips));
         let embed_tray = new_chat && !self.cloud_launch_pending(cx);
-        let tray_stack =
-            self.render_tray_stack(show_queue_latest_shortcut, embed_tray, window, cx);
+        let tray_stack = self.render_tray_stack(show_queue_latest_shortcut, embed_tray, window, cx);
         let (embedded_tray, tray_stack) = if embed_tray {
             (tray_stack, None)
         } else {
@@ -10991,8 +11115,9 @@ impl Render for Composer {
         // AttachmentStrip).
         // Staged images and annotations live in the tray above the card;
         // only appshot cards still grow the card itself.
-        let strip_width_hint =
-            self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH) - 2.0 * COMPOSER_OUTER_PAD - 2.0;
+        let strip_width_hint = self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH)
+            - 2.0 * COMPOSER_OUTER_PAD
+            - 2.0;
         let appshot_count = self.staged_appshots().len();
         let base_height = if self.dock_frame.is_some() {
             dock_layout.height(dock_amount)
@@ -11424,18 +11549,20 @@ impl Render for Composer {
             // Last, so it paints over the editor and toolbar while a file is
             // carried over the card.
             .child(tray::drop_overlay(&theme));
-        let new_thread_target_selectors = (new_thread_chrome_opacity > 0.0 && !self.cloud_launch_pending(cx)).then(|| {
-            self.pickers.update(cx, |pickers, cx| {
-                pickers.render_new_thread_target_selectors(cx)
-            })
-        });
-        let new_thread_git_selectors = (new_thread_chrome_opacity > 0.0 && !self.cloud_launch_pending(cx))
-            .then(|| {
+        let new_thread_target_selectors =
+            (new_thread_chrome_opacity > 0.0 && !self.cloud_launch_pending(cx)).then(|| {
                 self.pickers.update(cx, |pickers, cx| {
-                    pickers.render_new_thread_git_selectors(cx)
+                    pickers.render_new_thread_target_selectors(cx)
                 })
+            });
+        let new_thread_git_selectors = (new_thread_chrome_opacity > 0.0
+            && !self.cloud_launch_pending(cx))
+        .then(|| {
+            self.pickers.update(cx, |pickers, cx| {
+                pickers.render_new_thread_git_selectors(cx)
             })
-            .flatten();
+        })
+        .flatten();
         // The file dropzone lives in the shell (the whole conversation column,
         // shell.rs `chat-dropzone`); drops land back here via `add_paths`.
         // The card shows the drop target itself (`tray::drop_overlay`).
@@ -11750,7 +11877,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn staged_images_live_in_the_tray_so_a_rewrap_never_moves_the_card(cx: &mut gpui::TestAppContext) {
+    fn staged_images_live_in_the_tray_so_a_rewrap_never_moves_the_card(
+        cx: &mut gpui::TestAppContext,
+    ) {
         let (_dir, handle) = composer_focus_window(cx);
         let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD,
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF1cAAAAASUVORK5CYII=").unwrap();
@@ -13770,9 +13899,14 @@ mod tests {
         let projection = TextProjection::project(raw, None, None, true, None, None);
         assert_eq!(projection.mentions.len(), 1);
         let (link, display) = &projection.mentions[0];
-        assert_eq!((link.kind, link.range.clone()), (ChipKind::Link, url.clone()));
+        assert_eq!(
+            (link.kind, link.range.clone()),
+            (ChipKind::Link, url.clone())
+        );
         assert_eq!(link.path, &raw[url.clone()]);
-        assert!(projection.display[display.clone()].ends_with(&format!("a/b#7{CHIP_TRAILING_PAD}")));
+        assert!(
+            projection.display[display.clone()].ends_with(&format!("a/b#7{CHIP_TRAILING_PAD}"))
+        );
         // Not atomic: the caret may step into a link.
         assert_eq!(projection.normalize_range(10..10), 10..10);
         assert_eq!(projection.previous_boundary(url.end), None);

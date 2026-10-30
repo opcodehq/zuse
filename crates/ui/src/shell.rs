@@ -24,9 +24,9 @@ use gpui::{
 
 use gpui_tokio::Tokio;
 use zuse_engine::InstanceLock;
-use zuse_protocol::{AuthState, WorkspaceScope};
 #[cfg(test)]
 use zuse_protocol::HarnessId;
+use zuse_protocol::{AuthState, WorkspaceScope};
 use zuse_rpc::methods;
 
 use crate::changes::{Changes, ChangesEvent, DiscardWorkingTreeRequest};
@@ -66,7 +66,6 @@ use crate::theme::Theme;
 use crate::transcript::{self, ForkTarget, Transcript, TranscriptEvent};
 
 mod actions_ui;
-mod project_setup;
 mod chat_dropzone;
 #[cfg(test)]
 mod chat_dropzone_tests;
@@ -77,37 +76,38 @@ mod command_palette;
 mod file_mutations;
 mod files_panel;
 mod harness_updates;
-mod main_tabs;
 mod keyboard_commands;
+mod main_tabs;
 mod navigation_focus;
 #[cfg(test)]
 mod navigation_tests;
+mod open_in;
 mod panel_layout;
 mod panel_menu;
 mod pr_watch;
-mod open_in;
+mod project_setup;
 use panel_layout::{AuxiliaryPanel, FitInputs, HorizontalPanelFit, panel_content_tween};
+mod archives;
 #[cfg(test)]
 mod panel_interaction_tests;
 pub(crate) mod project_icon;
 mod pull_request_pane;
 mod search_warm;
 mod session_info;
-mod summary_pull_request;
 mod side_chats;
-mod sidebar_pins;
 mod sidebar_controls;
-mod workspace_layout;
-mod workspace_storage;
+mod sidebar_pins;
 mod sidebar_sections;
 pub(crate) mod spaces;
-mod archives;
-mod usage_dashboard;
+mod summary_pull_request;
 mod thread_search;
+mod usage_dashboard;
+mod workspace_layout;
+mod workspace_storage;
 use side_chats::SideChatTab;
+mod cloud_info;
 mod tabs;
 mod top_bar;
-mod cloud_info;
 mod voice_stage;
 use voice_stage::VOICE_STAGE_ORB_SCALE;
 
@@ -454,21 +454,30 @@ pub fn apply_keymap(
     // key equivalents and must survive keymap re-application.
     crate::app_menus::bind_keys(cx);
     // Native-only additions remain available alongside the desktop command contract.
-    for id in [ShortcutId::RandomWallpaper, ShortcutId::ToggleFiles, ShortcutId::ArchiveSession, ShortcutId::OpenModelPicker] {
-        let combo=platform_combo(keymap.get(id));
-        if combo.is_empty() || Keystroke::parse(&combo).is_err(){continue;}
-        let binding=match id {
-            ShortcutId::RandomWallpaper=>KeyBinding::new(&combo,RandomWallpaper,None),
-            ShortcutId::ToggleFiles=>KeyBinding::new(&combo,ToggleFiles,None),
-            ShortcutId::ArchiveSession=>KeyBinding::new(&combo,ArchiveSession,None),
-            _=>KeyBinding::new(&combo,OpenModelPicker,None),
+    for id in [
+        ShortcutId::RandomWallpaper,
+        ShortcutId::ToggleFiles,
+        ShortcutId::ArchiveSession,
+        ShortcutId::OpenModelPicker,
+    ] {
+        let combo = platform_combo(keymap.get(id));
+        if combo.is_empty() || Keystroke::parse(&combo).is_err() {
+            continue;
+        }
+        let binding = match id {
+            ShortcutId::RandomWallpaper => KeyBinding::new(&combo, RandomWallpaper, None),
+            ShortcutId::ToggleFiles => KeyBinding::new(&combo, ToggleFiles, None),
+            ShortcutId::ArchiveSession => KeyBinding::new(&combo, ArchiveSession, None),
+            _ => KeyBinding::new(&combo, OpenModelPicker, None),
         };
         cx.bind_keys([binding]);
     }
     crate::browser::bind_keys(cx, keymap);
     for slot in 0..JUMP_SLOTS {
-        let combo=platform_combo(keymap.get(ShortcutId::JumpSession(slot)));
-        if !combo.is_empty() && Keystroke::parse(&combo).is_ok(){cx.bind_keys([KeyBinding::new(&combo,JumpSession(slot),None)]);}
+        let combo = platform_combo(keymap.get(ShortcutId::JumpSession(slot)));
+        if !combo.is_empty() && Keystroke::parse(&combo).is_ok() {
+            cx.bind_keys([KeyBinding::new(&combo, JumpSession(slot), None)]);
+        }
     }
     keyboard_commands::bind(cx, keymap);
     // Context-free bindings (the jumps above) match at the full focus depth,
@@ -825,7 +834,10 @@ pub enum NavEntry {
     Settings(SettingsSection),
     Plugins,
     Archives(String),
-    Usage { project: Option<String>, project_scope: bool },
+    Usage {
+        project: Option<String>,
+        project_scope: bool,
+    },
 }
 
 /// Browser-style navigation history for the titlebar back/forward buttons
@@ -2128,7 +2140,8 @@ pub struct Shell {
     usage_project: Option<String>,
     usage_project_scope: bool,
     usage_pending: bool,
-    project_archives: std::collections::HashMap<String, Entity<crate::project_archive::ProjectArchive>>,
+    project_archives:
+        std::collections::HashMap<String, Entity<crate::project_archive::ProjectArchive>>,
     project_archive_events: std::collections::HashMap<String, Subscription>,
     appearance_page: Option<Entity<AppearancePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
@@ -2492,8 +2505,10 @@ impl Shell {
         let composer_events = cx.subscribe(&composer, {
             let transcript = transcript.clone();
             move |this: &mut Shell, _, event: &ComposerEvent, cx| match event {
-                ComposerEvent::CloudLaunchChanged => { cx.notify(); },
-                ComposerEvent::ResumeCloud { .. } => {},
+                ComposerEvent::CloudLaunchChanged => {
+                    cx.notify();
+                }
+                ComposerEvent::ResumeCloud { .. } => {}
                 ComposerEvent::WorkspaceCommand(command) => {
                     this.pending_workspace_command = Some(*command);
                     cx.notify();
@@ -2603,7 +2618,10 @@ impl Shell {
             Route::PullRequests => NavEntry::PullRequests,
             Route::Plugins => NavEntry::Plugins,
             Route::Archives => NavEntry::Archives(String::new()),
-            Route::Usage => NavEntry::Usage { project: None, project_scope: false },
+            Route::Usage => NavEntry::Usage {
+                project: None,
+                project_scope: false,
+            },
             Route::Settings(section) => NavEntry::Settings(section),
         });
         // Parent notifications carry presentation changes (session status,
@@ -4656,7 +4674,9 @@ impl Shell {
                         serde_json::from_str(value.get("text")?.as_str()?).ok()?;
                     let update = zuse_doc::TranscriptUpdate {
                         replay_baseline: Some(zuse_doc::TranscriptBaseline::capture(&entries)),
-                        frame: zuse_doc::TranscriptFrame::Reset { reset: entries.into() },
+                        frame: zuse_doc::TranscriptFrame::Reset {
+                            reset: entries.into(),
+                        },
                         context_usage: None,
                     };
                     let prepared = crate::transcript::TranscriptPreparation::default()
@@ -4828,7 +4848,10 @@ impl Shell {
 
     pub(crate) fn cloud_pause_has_unsaved_work(&self, cx: &App) -> bool {
         !self.all_file_edits_flushed(cx)
-            || self.side_chats.values().any(|side| side.composer.read(cx).has_draft(cx))
+            || self
+                .side_chats
+                .values()
+                .any(|side| side.composer.read(cx).has_draft(cx))
     }
 
     pub fn prepare_window_close(&mut self, cx: &mut Context<Self>) -> bool {
@@ -5189,8 +5212,12 @@ impl Shell {
     // ---- routes / settings ----
 
     fn set_route(&mut self, route: Route, cx: &mut Context<Self>) {
-        if matches!(self.route,Route::Settings(SettingsSection::Archived)) && !matches!(route,Route::Settings(SettingsSection::Archived)) {
-            if let Some(page)=self.archived_page.clone() {page.update(cx,|page,cx|page.on_hidden(cx));}
+        if matches!(self.route, Route::Settings(SettingsSection::Archived))
+            && !matches!(route, Route::Settings(SettingsSection::Archived))
+        {
+            if let Some(page) = self.archived_page.clone() {
+                page.update(cx, |page, cx| page.on_hidden(cx));
+            }
         }
         self.command_palette = None;
         let was_pull_requests = matches!(self.route, Route::PullRequests);
@@ -5200,13 +5227,24 @@ impl Shell {
                 page.update(cx, |page, _| page.on_hidden());
             }
         }
-        if matches!(self.route,Route::Archives) && !matches!(route,Route::Archives) {
-            if let Some(page)=self.archive_project.as_ref().and_then(|id|self.project_archives.get(id)).cloned(){page.update(cx,|page,cx|page.on_hidden(cx));}
+        if matches!(self.route, Route::Archives) && !matches!(route, Route::Archives) {
+            if let Some(page) = self
+                .archive_project
+                .as_ref()
+                .and_then(|id| self.project_archives.get(id))
+                .cloned()
+            {
+                page.update(cx, |page, cx| page.on_hidden(cx));
+            }
         }
         if matches!(self.route, Route::Usage) && !matches!(route, Route::Usage) {
-            if let Some(dashboard) = self.usage_dashboard.clone() { dashboard.update(cx, |dashboard,cx| dashboard.hide(cx)); }
+            if let Some(dashboard) = self.usage_dashboard.clone() {
+                dashboard.update(cx, |dashboard, cx| dashboard.hide(cx));
+            }
         }
-        if matches!(route, Route::Usage) && !matches!(self.route, Route::Usage) { self.usage_pending = true; }
+        if matches!(route, Route::Usage) && !matches!(self.route, Route::Usage) {
+            self.usage_pending = true;
+        }
         self.route = route;
         if !was_pull_requests && will_show_pull_requests {
             if let Some(page) = self.pull_requests_page.as_ref().cloned() {
@@ -5803,16 +5841,27 @@ impl Shell {
                 self.pending_pull_request = Some((url, device));
             }
             NavEntry::Plugins => self.set_route(Route::Plugins, cx),
-            NavEntry::Usage { project, project_scope } => self.enter_usage(project, project_scope, cx),
+            NavEntry::Usage {
+                project,
+                project_scope,
+            } => self.enter_usage(project, project_scope, cx),
             NavEntry::Archives(project) => {
                 if self.archive_project.as_ref() != Some(&project) {
-                    if let Some(page) = self.archive_project.as_ref().and_then(|id| self.project_archives.get(id)).cloned() {
+                    if let Some(page) = self
+                        .archive_project
+                        .as_ref()
+                        .and_then(|id| self.project_archives.get(id))
+                        .cloned()
+                    {
                         page.update(cx, |page, cx| page.on_hidden(cx));
                     }
                 }
-                self.archive_project=Some(project.clone());self.set_route(Route::Archives,cx);
-                if let Some(page)=self.project_archives.get(&project).cloned(){page.update(cx,|page,cx|page.on_visible(cx));}
-            },
+                self.archive_project = Some(project.clone());
+                self.set_route(Route::Archives, cx);
+                if let Some(page) = self.project_archives.get(&project).cloned() {
+                    page.update(cx, |page, cx| page.on_visible(cx));
+                }
+            }
             NavEntry::Settings(section) => {
                 if !matches!(self.route, Route::Settings(_)) {
                     self.settings_return_route = self.route;
@@ -5869,9 +5918,9 @@ impl Shell {
             SettingsSection::Cloud => {
                 if self.cloud_billing_page.is_none() {
                     let state = self.state.clone();
-                    self.cloud_billing_page = Some(
-                        cx.new(|cx| settings::cloud_billing::CloudBillingPage::new(state, window, cx)),
-                    );
+                    self.cloud_billing_page = Some(cx.new(|cx| {
+                        settings::cloud_billing::CloudBillingPage::new(state, window, cx)
+                    }));
                 }
                 self.cloud_billing_page
                     .as_ref()
@@ -8057,7 +8106,9 @@ impl Shell {
         // activity/glyph personality independently of the selected variant.
         let inner = self.sidebar_pane.clone().cached(
             gpui::StyleRefinement::default()
-                .w(px((self.sidebar_content_width() - self.workspace_gutter()).max(0.)))
+                .w(px(
+                    (self.sidebar_content_width() - self.workspace_gutter()).max(0.)
+                ))
                 .h_full()
                 .flex_none(),
         );
@@ -8074,11 +8125,24 @@ impl Shell {
             .w(px(self.sidebar_now()))
             .flex()
             .flex_col()
-            .pl(px(if self.sidebar_now() > 0.5 { self.workspace_gutter() } else { 0. }))
+            .pl(px(if self.sidebar_now() > 0.5 {
+                self.workspace_gutter()
+            } else {
+                0.
+            }))
             .py(px(self.workspace_gutter()))
-            .child(self.workspace_surface(cx).child(
-                div().h_full().pt(px(if self.workspace_gutter() > 0. { 36. } else { Theme::TITLEBAR_HEIGHT })).child(inner)
-            ))
+            .child(
+                self.workspace_surface(cx).child(
+                    div()
+                        .h_full()
+                        .pt(px(if self.workspace_gutter() > 0. {
+                            36.
+                        } else {
+                            Theme::TITLEBAR_HEIGHT
+                        }))
+                        .child(inner),
+                ),
+            )
             .into_any_element()
     }
 
@@ -8414,7 +8478,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // The Plugins page owns the main area, so no chat reads as current.
-        let selected = selected && !matches!(self.route, Route::Plugins | Route::Archives | Route::Usage);
+        let selected =
+            selected && !matches!(self.route, Route::Plugins | Route::Archives | Route::Usage);
         // Activity, not position (t3code Sidebar): status is a small colored
         // word + glyph in the row's top-right corner — Working animates the
         // composer-strip spinner, Done wears a check; Idle rows show the
@@ -10031,7 +10096,9 @@ impl Shell {
         let github_star_banner = self.render_github_star_banner(update_strip.is_some(), theme, cx);
 
         div()
-            .w(px((self.sidebar_content_width() - self.workspace_gutter()).max(0.)))
+            .w(px(
+                (self.sidebar_content_width() - self.workspace_gutter()).max(0.)
+            ))
             .h_full()
             .flex()
             .flex_col()
@@ -10068,8 +10135,8 @@ impl Shell {
         // Organization switching requires capabilities from the General account.
         // The legacy device sync menu stays on the PR route; workspace routes
         // expose those controls in Remote access.
-        let workspace = (self.workspace_gutter() == 0.)
-            .then(|| self.render_workspace_switcher(theme, cx));
+        let workspace =
+            (self.workspace_gutter() == 0.).then(|| self.render_workspace_switcher(theme, cx));
         let new_chat_hint: SharedString =
             crate::settings::badge_combo(self.settings.keymap.get(ShortcutId::NewSession)).into();
         let plugins_open = matches!(self.route, Route::Plugins);
@@ -11362,9 +11429,9 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if event.keystroke.key == "escape"
-            && self.sidebar_controls.update(cx, |controls, cx| {
-                controls.dismiss_on_escape(window, cx)
-            })
+            && self
+                .sidebar_controls
+                .update(cx, |controls, cx| controls.dismiss_on_escape(window, cx))
         {
             cx.stop_propagation();
             return;
@@ -11385,30 +11452,46 @@ impl Shell {
             cx.stop_propagation();
             return;
         }
-        if let Some((project,_)) = self.space_menu.as_open().cloned() {
+        if let Some((project, _)) = self.space_menu.as_open().cloned() {
             match event.keystroke.key.as_str() {
                 "escape" => self.close_space_menu(cx),
-                "up" => self.space_menu_active=(self.space_menu_active+3)%4,
-                "down" => self.space_menu_active=(self.space_menu_active+1)%4,
-                "home" => self.space_menu_active=0,
-                "end" => self.space_menu_active=3,
+                "up" => self.space_menu_active = (self.space_menu_active + 3) % 4,
+                "down" => self.space_menu_active = (self.space_menu_active + 1) % 4,
+                "home" => self.space_menu_active = 0,
+                "end" => self.space_menu_active = 3,
                 "enter" | "space" => match self.space_menu_active {
-                    0 => self.open_rename_space(project,cx),
-                    1 => self.open_project_archives(project,window,cx),
-                    2 => self.open_usage(Some(project),true,cx),
-                    _ => {self.close_space_menu(cx);self.delete_space_confirm=Some(project);},
+                    0 => self.open_rename_space(project, cx),
+                    1 => self.open_project_archives(project, window, cx),
+                    2 => self.open_usage(Some(project), true, cx),
+                    _ => {
+                        self.close_space_menu(cx);
+                        self.delete_space_confirm = Some(project);
+                    }
                 },
                 _ => return,
             }
-            cx.notify();cx.stop_propagation();return;
+            cx.notify();
+            cx.stop_propagation();
+            return;
         }
         if event.keystroke.key == "escape" && matches!(self.route, Route::Usage) {
-            if let Some(dashboard) = self.usage_dashboard.clone() { dashboard.update(cx, |dashboard,cx| dashboard.escape(window,cx)); }
-            cx.stop_propagation(); return;
+            if let Some(dashboard) = self.usage_dashboard.clone() {
+                dashboard.update(cx, |dashboard, cx| dashboard.escape(window, cx));
+            }
+            cx.stop_propagation();
+            return;
         }
-        if event.keystroke.key=="escape" && matches!(self.route,Route::Archives) {
-            if let Some(page)=self.archive_project.as_ref().and_then(|id|self.project_archives.get(id)).cloned(){page.update(cx,|page,cx|page.dismiss_on_escape(cx));}
-            cx.stop_propagation();return;
+        if event.keystroke.key == "escape" && matches!(self.route, Route::Archives) {
+            if let Some(page) = self
+                .archive_project
+                .as_ref()
+                .and_then(|id| self.project_archives.get(id))
+                .cloned()
+            {
+                page.update(cx, |page, cx| page.dismiss_on_escape(cx));
+            }
+            cx.stop_propagation();
+            return;
         }
         if matches!(self.route, Route::Settings(_)) {
             return;
@@ -11890,10 +11973,21 @@ impl Shell {
                 .into_any_element();
         }
 
-        if matches!(self.route, Route::Usage) { return self.usage_view(window,cx); }
-        if matches!(self.route,Route::Archives) {
-            return self.archive_project.as_ref().and_then(|id|self.project_archives.get(id)).map(|page|page.clone().into_any_element())
-                .unwrap_or_else(||zuse_viewport::project_archive::centered("Select a project to view archived chats.").into_any_element());
+        if matches!(self.route, Route::Usage) {
+            return self.usage_view(window, cx);
+        }
+        if matches!(self.route, Route::Archives) {
+            return self
+                .archive_project
+                .as_ref()
+                .and_then(|id| self.project_archives.get(id))
+                .map(|page| page.clone().into_any_element())
+                .unwrap_or_else(|| {
+                    zuse_viewport::project_archive::centered(
+                        "Select a project to view archived chats.",
+                    )
+                    .into_any_element()
+                });
         }
         if matches!(self.route, Route::Plugins) {
             let page = settings::plugins::PluginsPage::shared(self.state.clone(), cx);
@@ -11945,10 +12039,11 @@ impl Shell {
             self.reduced_motion,
             frame_time,
         );
-        let dock_frame =
-            self.composer_dock
-                .borrow_mut()
-                .tick(has_selection || cloud_starting, self.reduced_motion, frame_time);
+        let dock_frame = self.composer_dock.borrow_mut().tick(
+            has_selection || cloud_starting,
+            self.reduced_motion,
+            frame_time,
+        );
         if dock_frame.active {
             self.motion_active.set(true);
         }
@@ -11976,9 +12071,22 @@ impl Shell {
             self.reduced_motion || self.viewport_resized || self.pane_resize_dragging.is_some();
         let composer_width = self.composer_dock.borrow_mut().layout_width(
             composer_target_width(
-                main_content_width - session_reserve
-                    - if has_selection || cloud_starting { 0. } else { 2. * if self.viewport_width <= 800. { 16. } else { 24. } },
-                if cloud_starting { zuse_viewport::composer_style::CONVERSATION_WIDTH } else { ui_settings.transcript_width },
+                main_content_width
+                    - session_reserve
+                    - if has_selection || cloud_starting {
+                        0.
+                    } else {
+                        2. * if self.viewport_width <= 800. {
+                            16.
+                        } else {
+                            24.
+                        }
+                    },
+                if cloud_starting {
+                    zuse_viewport::composer_style::CONVERSATION_WIDTH
+                } else {
+                    ui_settings.transcript_width
+                },
                 has_selection || cloud_starting,
             ),
             direct_width,
@@ -11997,36 +12105,37 @@ impl Shell {
                 ),
             )));
         let term_h = self.terminal_geometry.get().height;
-        let new_thread_background_layer = (!cloud_starting && (!has_selection || dock_frame.active)).then(|| {
-            if artwork_frame.active {
-                window.request_animation_frame();
-            }
-            let width = (self.viewport_width - self.sidebar_now()).max(0.0);
-            let bounds = self.composer.read(cx).surface_bounds();
-            let opacity = new_thread_background_opacity(theme.is_frost());
-            div()
-                .absolute()
-                .inset_0()
-                .child(new_thread_background(
-                    artwork_frame.previous,
-                    artwork_frame.previous_adjustment,
-                    self.viewport_height,
-                    width,
-                    bounds.clone(),
-                    dock_frame.dissolve(),
-                    (1.0 - artwork_frame.mix) * opacity,
-                ))
-                .child(new_thread_background(
-                    artwork_frame.current,
-                    artwork_frame.current_adjustment,
-                    self.viewport_height,
-                    width,
-                    bounds,
-                    dock_frame.dissolve(),
-                    artwork_frame.mix * opacity,
-                ))
-                .into_any_element()
-        });
+        let new_thread_background_layer =
+            (!cloud_starting && (!has_selection || dock_frame.active)).then(|| {
+                if artwork_frame.active {
+                    window.request_animation_frame();
+                }
+                let width = (self.viewport_width - self.sidebar_now()).max(0.0);
+                let bounds = self.composer.read(cx).surface_bounds();
+                let opacity = new_thread_background_opacity(theme.is_frost());
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(new_thread_background(
+                        artwork_frame.previous,
+                        artwork_frame.previous_adjustment,
+                        self.viewport_height,
+                        width,
+                        bounds.clone(),
+                        dock_frame.dissolve(),
+                        (1.0 - artwork_frame.mix) * opacity,
+                    ))
+                    .child(new_thread_background(
+                        artwork_frame.current,
+                        artwork_frame.current_adjustment,
+                        self.viewport_height,
+                        width,
+                        bounds,
+                        dock_frame.dissolve(),
+                        artwork_frame.mix * opacity,
+                    ))
+                    .into_any_element()
+            });
 
         // Content outlet: selected chat → transcript; nothing selected → the
         // centered new-thread composition; no spaces at all → the onboarding
@@ -12117,7 +12226,8 @@ impl Shell {
                                 .hover(|view| view.text_color(theme.text))
                                 .child("Start without a project")
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.state.update(cx, |state, cx| state.select_space(None, cx));
+                                    this.state
+                                        .update(cx, |state, cx| state.select_space(None, cx));
                                     this.focus_composer(cx);
                                 })),
                         ),
@@ -12125,10 +12235,16 @@ impl Shell {
                 .into_any_element()
         } else {
             let state = self.state.read(cx);
-            let project = state.cloud_project.as_ref()
+            let project = state
+                .cloud_project
+                .as_ref()
                 .and_then(|project| project["displayName"].as_str())
                 .map(str::to_owned)
-                .or_else(|| state.selected_space_row().map(|space| space.display_name().to_owned()));
+                .or_else(|| {
+                    state
+                        .selected_space_row()
+                        .map(|space| space.display_name().to_owned())
+                });
             div()
                 .size_full()
                 .flex()
@@ -12136,8 +12252,14 @@ impl Shell {
                 .items_center()
                 .justify_center()
                 .gap(px(12.))
-                .pb(px(self.composer.read(cx).surface_bounds().get()
-                    .map(|bounds| f32::from(bounds.size.height)).unwrap_or(106.) + 68.))
+                .pb(px(self
+                    .composer
+                    .read(cx)
+                    .surface_bounds()
+                    .get()
+                    .map(|bounds| f32::from(bounds.size.height))
+                    .unwrap_or(106.)
+                    + 68.))
                 .child(
                     div()
                         .text_size(crate::typography::text_2xl())
@@ -12182,11 +12304,12 @@ impl Shell {
         if has_selection {
             self.set_harness_updates_expanded(false, cx);
         }
-        let harness_update_card = if !cloud_starting && chip_opacity > 0.001 && (!has_selection || dock_frame.active) {
-            self.render_harness_update_card(window, main_content_width, cx)
-        } else {
-            None
-        };
+        let harness_update_card =
+            if !cloud_starting && chip_opacity > 0.001 && (!has_selection || dock_frame.active) {
+                self.render_harness_update_card(window, main_content_width, cx)
+            } else {
+                None
+            };
         // The notice rides above the composer's context tray (last frame's
         // measured card top), never under the card where it used to peek out.
         let composer_top = self.composer.read(cx).surface_bounds().get();
@@ -12689,8 +12812,8 @@ impl Shell {
     fn render_right_pane(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let exiting = self.fit_exit_width(1).is_some();
         let visible = self.horizontal_fit().right || exiting;
-        let showing = visible
-            && (self.right_pane_open(cx) || self.tween_active(self.right_tween) || exiting);
+        let showing =
+            visible && (self.right_pane_open(cx) || self.tween_active(self.right_tween) || exiting);
         // Only the tree on screen keeps its git status watch.
         let shown_tree = (showing
             && self.right_pane_open(cx)
@@ -12707,21 +12830,19 @@ impl Shell {
         let theme = Theme::of(cx).clone();
         let content: AnyElement = if showing {
             match self.resolved_right_active(cx) {
-                RightSurface::Files => {
-                    match self.files.get(&self.panel_key(cx)).cloned() {
-                        Some(files) => {
-                            if self.right_pane_open(cx) {
-                                files.update(cx, |files, cx| {
-                                    files.ensure_loaded(cx);
-                                    files.ensure_git_status(cx);
-                                });
-                            }
-                            self.sync_explorer_selection(cx);
-                            files.into_any_element()
+                RightSurface::Files => match self.files.get(&self.panel_key(cx)).cloned() {
+                    Some(files) => {
+                        if self.right_pane_open(cx) {
+                            files.update(cx, |files, cx| {
+                                files.ensure_loaded(cx);
+                                files.ensure_git_status(cx);
+                            });
                         }
-                        None => self.render_surface_picker(cx),
+                        self.sync_explorer_selection(cx);
+                        files.into_any_element()
                     }
-                }
+                    None => self.render_surface_picker(cx),
+                },
                 RightSurface::File(id) => {
                     if let Some(file) = self.file_surfaces.get(&id).cloned() {
                         // Keep the last file frame behind the closing mask. Loading
@@ -14365,7 +14486,11 @@ impl Render for Shell {
             // no-ops (zuse __root.tsx gates the hotkey on `!isSettings`, and
             // the terminal panel is only mounted on session routes). The
             // sidebar toggle stays live everywhere, as in the original.
-            .on_action(cx.listener(|this, _: &crate::composer::SetupDictation, _, cx| this.open_settings(SettingsSection::Voice, cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::composer::SetupDictation, _, cx| {
+                    this.open_settings(SettingsSection::Voice, cx)
+                }),
+            )
             .on_action(cx.listener(
                 |this, _: &crate::desktop_import::OpenDesktopImport, window, cx| {
                     this.desktop_import
@@ -14378,12 +14503,17 @@ impl Render for Shell {
                 }
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
-                if matches!(this.route,Route::Archives | Route::Usage){return;}
+                if matches!(this.route, Route::Archives | Route::Usage) {
+                    return;
+                }
                 if matches!(this.route, Route::Chat) {
-                    let file = this.active_main_file(cx).and_then(|id|this.file_surfaces.get(&id).cloned()).or_else(|| match this.resolved_right_active(cx) {
-                        RightSurface::File(id) => this.file_surfaces.get(&id).cloned(),
-                        _ => None,
-                    });
+                    let file = this
+                        .active_main_file(cx)
+                        .and_then(|id| this.file_surfaces.get(&id).cloned())
+                        .or_else(|| match this.resolved_right_active(cx) {
+                            RightSurface::File(id) => this.file_surfaces.get(&id).cloned(),
+                            _ => None,
+                        });
                     if let Some(file) = file {
                         file.update(cx, |file, cx| file.save_active_document(cx));
                     }
@@ -14730,7 +14860,10 @@ impl Render for Shell {
                     )
                 });
                 // A review or commit-diff tab stands in for the conversation.
-                let main = match matches!(self.route, Route::Chat).then(|| self.active_main_tab(cx)).flatten() {
+                let main = match matches!(self.route, Route::Chat)
+                    .then(|| self.active_main_tab(cx))
+                    .flatten()
+                {
                     Some(main_tabs::MainTab::Diff(id)) => self.render_main_diff(id, cx),
                     Some(main_tabs::MainTab::File(id)) => self.render_main_file(id, cx),
                     None => self.render_main(window, main_content_width, transcript_width, cx),
@@ -14836,9 +14969,15 @@ impl Render for Shell {
                 // (zero layout width, same idiom as the changes-pane grabber)
                 // so the sidebar's right gutter stays exactly as wide as its
                 // left one — a 5px flex child here read as lopsided spacing.
-                let sidebar_seam = div().w(px(self.workspace_gutter())).h_full().flex_none().relative().children(
-                    sidebar_handle.map(|handle| handle.left(px(-PANE_RESIZE_HITBOX_HALF_WIDTH))),
-                );
+                let sidebar_seam = div()
+                    .w(px(self.workspace_gutter()))
+                    .h_full()
+                    .flex_none()
+                    .relative()
+                    .children(
+                        sidebar_handle
+                            .map(|handle| handle.left(px(-PANE_RESIZE_HITBOX_HALF_WIDTH))),
+                    );
                 // Keep the right resize target outside the pane's
                 // overflow-hidden width container. This mirrors the sidebar
                 // seam and lets the target straddle both adjacent panes.
@@ -14881,8 +15020,17 @@ impl Render for Shell {
                             .flex_row()
                             .child(sidebar)
                             .child(sidebar_seam)
-                            .child(div().flex_1().min_w_0().h_full().flex().flex_col()
-                                .py(px(self.workspace_gutter())).pr(px(self.workspace_gutter())).child(card))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h_full()
+                                    .flex()
+                                    .flex_col()
+                                    .py(px(self.workspace_gutter()))
+                                    .pr(px(self.workspace_gutter()))
+                                    .child(card),
+                            )
                             // The right pane is ONE container: the surface
                             // host column and the docked explorer column
                             // sit side by side under a shared titlebar
@@ -14909,15 +15057,20 @@ impl Render for Shell {
                     // The stage covers the conversation's titlebar but never
                     // the cluster: the sidebar toggle and navigation stay live.
                     .children(voice_stage)
-                    .when(self.workspace_gutter() == 0. || self.sidebar_now() < 1., |view| {
-                        view.child(self.render_titlebar_cluster(cx))
-                            .children(self.render_sidebar_options_titlebar(cx))
-                    })
+                    .when(
+                        self.workspace_gutter() == 0. || self.sidebar_now() < 1.,
+                        |view| {
+                            view.child(self.render_titlebar_cluster(cx))
+                                .children(self.render_sidebar_options_titlebar(cx))
+                        },
+                    )
                     .child(self.workspace_sidebar_header(cx))
                     .child(self.workspace_native_actions(cx))
                     .children(overlays);
-                root.when(self.workspace_gutter() == 0., |view| view.child(sidebar_tone))
-                    .child(motion::fade_in("phase-app", page))
+                root.when(self.workspace_gutter() == 0., |view| {
+                    view.child(sidebar_tone)
+                })
+                .child(motion::fade_in("phase-app", page))
             }
             GatePhase::Loading => root, // splash overlay covers boot
             GatePhase::OrgGate => {
@@ -15231,7 +15384,9 @@ mod tests {
         // default gpui cannot parse would ship as a dead shortcut.
         for id in crate::settings::ShortcutId::ALL {
             let combo = platform_combo(id.default_combo());
-            if combo.is_empty(){continue;}
+            if combo.is_empty() {
+                continue;
+            }
             assert!(
                 Keystroke::parse(&combo).is_ok(),
                 "{} default {combo:?} does not parse",
@@ -15573,7 +15728,9 @@ mod tests {
             let panel_width = panel_width as f32;
             assert_eq!(
                 composer_target_width(panel_width, settings::TRANSCRIPT_WIDTH_DEFAULT, true),
-                panel_width.min(settings::TRANSCRIPT_WIDTH_DEFAULT + 2.0 * crate::composer::COMPOSER_OUTER_PAD),
+                panel_width.min(
+                    settings::TRANSCRIPT_WIDTH_DEFAULT + 2.0 * crate::composer::COMPOSER_OUTER_PAD
+                ),
                 "default width must preserve main's responsive layout at {panel_width}px"
             );
         }
@@ -19069,11 +19226,10 @@ impl Shell {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(200))
                     .await;
-                composer
-                    .update(cx, |composer, cx| {
-                        composer.fixture_set_permission(zuse_protocol::SandboxLevel::Auto, cx);
-                        composer.fixture_open_permissions(cx);
-                    });
+                composer.update(cx, |composer, cx| {
+                    composer.fixture_set_permission(zuse_protocol::SandboxLevel::Auto, cx);
+                    composer.fixture_open_permissions(cx);
+                });
             })
             .detach();
         } else if route.ends_with("access-menu") {
@@ -19236,7 +19392,9 @@ impl Shell {
                 if let Some(id) = self.active_main_file(cx)
                     && let Some(file) = self.file_surfaces.get(&id).cloned()
                 {
-                    file.update(cx, |file, cx| file.fixture_seed_document(FIXTURE_FILE_TEXT, cx));
+                    file.update(cx, |file, cx| {
+                        file.fixture_seed_document(FIXTURE_FILE_TEXT, cx)
+                    });
                 }
             }
             "main/review" => {
@@ -19420,7 +19578,11 @@ impl Shell {
             if variant == "transcript-card-git" {
                 self.session_info_folded.insert("background");
                 let now = Utc::now();
-                let task = |id: &str, description: &str, started: i64, ended: Option<(i64, zuse_protocol::BackgroundTaskOutcome)>, stoppable| {
+                let task = |id: &str,
+                            description: &str,
+                            started: i64,
+                            ended: Option<(i64, zuse_protocol::BackgroundTaskOutcome)>,
+                            stoppable| {
                     zuse_protocol::BackgroundTask {
                         id: id.into(),
                         kind: zuse_protocol::BackgroundTaskKind::Shell,
@@ -19438,8 +19600,20 @@ impl Shell {
                         background_tasks: vec![
                             task("bg-1", "pnpm dev --port 3000", 312, None, true),
                             task("bg-2", "cargo watch -x test", 95, None, true),
-                            task("bg-3", "npm run build", 400, Some((340, zuse_protocol::BackgroundTaskOutcome::Completed)), false),
-                            task("bg-4", "tail -f logs/server.log", 600, Some((420, zuse_protocol::BackgroundTaskOutcome::Stopped)), false),
+                            task(
+                                "bg-3",
+                                "npm run build",
+                                400,
+                                Some((340, zuse_protocol::BackgroundTaskOutcome::Completed)),
+                                false,
+                            ),
+                            task(
+                                "bg-4",
+                                "tail -f logs/server.log",
+                                600,
+                                Some((420, zuse_protocol::BackgroundTaskOutcome::Stopped)),
+                                false,
+                            ),
                         ],
                         chat_id: "browser-fixture".into(),
                         device_id: "local".into(),
@@ -20648,9 +20822,11 @@ mod settings_modal_regressions {
     #[gpui::test]
     fn navigation_shortcuts_work_from_settings(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
-        let mut saved=settings::UiSettings::default();
-        saved.keymap.set(ShortcutId::JumpSession(0),"mod-alt-1".into());
-        let keymap=saved.keymap.clone();
+        let mut saved = settings::UiSettings::default();
+        saved
+            .keymap
+            .set(ShortcutId::JumpSession(0), "mod-alt-1".into());
+        let keymap = saved.keymap.clone();
         init_settings_test(saved, dir.path(), cx);
         cx.update(|cx| apply_keymap(cx, &keymap, ComposerSendBehavior::default()));
         let window = cx.add_window(|_, cx| {

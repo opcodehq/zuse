@@ -76,7 +76,10 @@ impl WorkspaceView {
         if self.access_save.is_some() {
             return;
         }
-        if self.creating.is_some() || self.cloud_model_change_pending() || (self.selected.is_some() && !self.workspace_synced) {
+        if self.creating.is_some()
+            || self.cloud_model_change_pending()
+            || (self.selected.is_some() && !self.workspace_synced)
+        {
             self.error =
                 Some("Wait for the conversation to refresh before changing permissions.".into());
             cx.notify();

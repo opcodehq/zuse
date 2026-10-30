@@ -2737,14 +2737,24 @@ impl AgentAccounts {
     /// lock while Codex refreshes and reads it so account switching cannot race.
     pub(crate) async fn dictation_auth(&self) -> Result<(String, Option<String>), EngineError> {
         let _ops = self.inner.ops.lock().await;
-        zuse_providers::codex::refresh_dictation_account(&self.inner.config.codex_home).await
-            .map_err(|_| EngineError::Other("Sign in to Codex with your ChatGPT account to dictate.".into()))?;
-        let value = read_json(&self.inner.config.codex_auth_file())
-            .ok_or_else(|| EngineError::Other("Codex sign-in is unavailable. Sign in again in Settings → Agents.".into()))?;
+        zuse_providers::codex::refresh_dictation_account(&self.inner.config.codex_home)
+            .await
+            .map_err(|_| {
+                EngineError::Other("Sign in to Codex with your ChatGPT account to dictate.".into())
+            })?;
+        let value = read_json(&self.inner.config.codex_auth_file()).ok_or_else(|| {
+            EngineError::Other(
+                "Codex sign-in is unavailable. Sign in again in Settings → Agents.".into(),
+            )
+        })?;
         let tokens = value.get("tokens").unwrap_or(&value);
-        let token = str_field(tokens, "access_token").or_else(|| str_field(tokens, "accessToken"))
-            .ok_or_else(|| EngineError::Other("A ChatGPT Codex sign-in is required for dictation.".into()))?;
-        let account = str_field(tokens, "account_id").or_else(|| str_field(tokens, "accountId"))
+        let token = str_field(tokens, "access_token")
+            .or_else(|| str_field(tokens, "accessToken"))
+            .ok_or_else(|| {
+                EngineError::Other("A ChatGPT Codex sign-in is required for dictation.".into())
+            })?;
+        let account = str_field(tokens, "account_id")
+            .or_else(|| str_field(tokens, "accountId"))
             .or_else(|| str_field(tokens, "chatgpt_account_id"));
         Ok((token, account))
     }

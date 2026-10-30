@@ -5685,7 +5685,12 @@ impl DocHost {
                 request,
                 message_id,
             } => {
-                if self.inner.project_creation.get().is_some_and(|service| service.blocks_request(request)) {
+                if self
+                    .inner
+                    .project_creation
+                    .get()
+                    .is_some_and(|service| service.blocks_request(request))
+                {
                     return Err(EngineError::Other("Project files are not ready. Finish or retry project creation before sending.".into()));
                 }
                 let mut request = request.clone();

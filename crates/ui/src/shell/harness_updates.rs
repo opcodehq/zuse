@@ -648,7 +648,9 @@ impl Shell {
                                         .line_height(crate::typography::ui_rems(16.0))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .truncate()
-                                        .child(crate::pickers::harness_display_name(status.harness)),
+                                        .child(crate::pickers::harness_display_name(
+                                            status.harness,
+                                        )),
                                 )
                                 .when(device_count > 1, |el| {
                                     el.child(

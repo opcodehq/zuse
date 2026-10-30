@@ -1987,7 +1987,6 @@ impl Changes {
         }
     }
 
-
     /// Scope discriminant folded into the parse key, so a scope or base
     /// switch re-parses even when checksums collide.
     fn scope_key(&self) -> String {
@@ -3567,7 +3566,9 @@ impl Changes {
                     .border_color(theme.text_muted)
                     .when(reviewed, |v| {
                         v.bg(theme.accent).border_color(theme.accent).child(
-                            crate::icons::icon(crate::icons::CHECK).size(px(12.)).text_color(theme.bg),
+                            crate::icons::icon(crate::icons::CHECK)
+                                .size(px(12.))
+                                .text_color(theme.bg),
                         )
                     }),
             )

@@ -402,7 +402,8 @@ impl WorkspaceView {
         let (items, body_height) = self.picker_items(cx);
         let empty = items.is_empty();
         let providers = self.picker_providers_visible();
-        let options = !self.picker_in_settings() && self.cloud_model_configuration_available()
+        let options = !self.picker_in_settings()
+            && self.cloud_model_configuration_available()
             && self
                 .selected_model()
                 .is_some_and(|m| !m.reasoning_levels.is_empty() || !m.options.is_empty());
@@ -485,9 +486,18 @@ impl WorkspaceView {
             })
             .collect::<Vec<_>>();
         if !self.picker_in_settings() {
-            errors.extend(if self.cloud_models_active() { self.cloud_models.error.clone() } else { self.model_host.error.clone() });
+            errors.extend(if self.cloud_models_active() {
+                self.cloud_models.error.clone()
+            } else {
+                self.model_host.error.clone()
+            });
         }
-        let loading = (!self.picker_in_settings() && (if self.cloud_models_active() { self.cloud_models_loading() } else { self.model_host.request.is_some() }))
+        let loading = (!self.picker_in_settings()
+            && (if self.cloud_models_active() {
+                self.cloud_models_loading()
+            } else {
+                self.model_host.request.is_some()
+            }))
             || self
                 .active_picker_catalog()
                 .providers

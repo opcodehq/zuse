@@ -4,7 +4,10 @@ use zuse_viewport::workspace_style as layout;
 
 impl Shell {
     pub(super) fn workspace_gutter(&self) -> f32 {
-        if matches!(self.route, Route::Chat | Route::Plugins | Route::Archives | Route::Usage) {
+        if matches!(
+            self.route,
+            Route::Chat | Route::Plugins | Route::Archives | Route::Usage
+        ) {
             layout::GUTTER
         } else {
             0.

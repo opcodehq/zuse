@@ -19,6 +19,7 @@ pub mod account;
 pub mod agent_accounts;
 pub mod archives;
 pub mod auth;
+mod branch_graph;
 pub mod browser_access;
 mod change_request_store;
 pub mod change_requests;
@@ -29,7 +30,6 @@ pub mod diff_sync;
 pub mod doc_host;
 mod external_chats;
 mod fs_watch;
-mod branch_graph;
 mod git_workspace;
 pub mod harness_updates;
 pub(crate) mod home_index;
@@ -47,6 +47,7 @@ pub mod model_connections;
 #[cfg(unix)]
 mod native_harness;
 mod native_recovery;
+pub mod permission_rules;
 mod plugin_callback;
 pub mod plugins;
 pub mod pr_watch;
@@ -57,9 +58,8 @@ pub mod registry;
 pub mod repos;
 pub mod rpc;
 pub mod run_journal;
-pub mod sessions;
-pub mod permission_rules;
 mod secret_broker;
+pub mod sessions;
 pub mod source_control;
 pub mod spaces;
 pub mod terminals;
@@ -315,9 +315,9 @@ impl EngineCore {
             WorkspaceFiles::new(repos.clone(), workspace.clone(), device_id.clone());
         let terminals = Terminals::new();
         let project_actions = ProjectActionsStore::open(profile.store_root())?;
-        let project_creation = project_creation::ProjectCreationService::open(
-            profile.store_root(), device_id.clone(),
-        ).map_err(EngineError::Other)?;
+        let project_creation =
+            project_creation::ProjectCreationService::open(profile.store_root(), device_id.clone())
+                .map_err(EngineError::Other)?;
         doc_host.set_project_action_runtime(project_actions.clone(), terminals.clone());
         doc_host.set_project_creation(project_creation.clone());
         let previews = zuse_preview::PreviewService::new(
@@ -454,7 +454,9 @@ impl EngineCore {
             spaces_sync,
             uploads,
             visuals: visuals::Visuals::default(),
-            simulators: zuse_simulator::Simulators::managed(profile.store_root().join("simulator-tools")),
+            simulators: zuse_simulator::Simulators::managed(
+                profile.store_root().join("simulator-tools"),
+            ),
             agent_accounts,
             harness_updates,
             device_id,

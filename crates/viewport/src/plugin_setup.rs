@@ -522,81 +522,79 @@ impl Render for PluginSetup {
             .pb(px(16.));
         if self.offers_local() {
             body = body.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .id("plugin-transport-tabs")
-                            .role(Role::TabList)
-                            .aria_label("Connection type")
-                            .h(px(28.))
-                            .flex()
-                            .items_center()
-                            .p(px(2.))
-                            .gap(px(2.))
-                            .rounded(px(7.))
-                            .bg(crate::settings_style::frame_bg().opacity(0.55))
-                            .children(
-                                [(false, "Remote", "Remote"), (true, "Local", "Local command")]
-                                    .into_iter()
-                                    .enumerate()
-                                    .map(|(i, (local, key, title))| {
-                                        let handles = self.transport_focus.clone();
-                                        let selected = self.local == local;
-                                        div()
-                                            .id(("plugin-transport", i))
-                                            .debug_selector(move || {
-                                                format!("plugin-transport-{key}")
-                                            })
-                                            .role(Role::Tab)
-                                            .aria_label(title)
-                                            .aria_selected(selected)
-                                            .track_focus(
-                                                &self.transport_focus[i].clone().tab_stop(selected),
-                                            )
-                                            .tab_index(if selected { 0 } else { -1 })
-                                            .cursor_pointer()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .h(px(24.))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .px(px(10.))
-                                            .rounded(px(5.))
-                                            .text_size(px(11.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(if selected {
-                                                self.colors.text
-                                            } else {
-                                                self.colors.muted
-                                            })
-                                            .when(selected, |d| {
-                                                d.bg(crate::palette::rgb(crate::shell::BG))
-                                            })
-                                            .child(title)
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.set_local(local, cx)
-                                            }))
-                                            .on_key_down(cx.listener(
-                                                move |this, event: &KeyDownEvent, window, cx| {
-                                                    let index = match event.keystroke.key.as_str() {
-                                                        "right" | "left" => 1 - i,
-                                                        "home" => 0,
-                                                        "end" => 1,
-                                                        _ => return,
-                                                    };
-                                                    if !this.busy {
-                                                        this.set_local(index == 1, cx);
-                                                        window.focus(&handles[index], cx);
-                                                    }
-                                                    cx.stop_propagation();
-                                                },
-                                            ))
-                                    }),
-                            ),
-                    ),
+                div().flex().flex_col().child(
+                    div()
+                        .id("plugin-transport-tabs")
+                        .role(Role::TabList)
+                        .aria_label("Connection type")
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .p(px(2.))
+                        .gap(px(2.))
+                        .rounded(px(7.))
+                        .bg(crate::settings_style::frame_bg().opacity(0.55))
+                        .children(
+                            [
+                                (false, "Remote", "Remote"),
+                                (true, "Local", "Local command"),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, (local, key, title))| {
+                                let handles = self.transport_focus.clone();
+                                let selected = self.local == local;
+                                div()
+                                    .id(("plugin-transport", i))
+                                    .debug_selector(move || format!("plugin-transport-{key}"))
+                                    .role(Role::Tab)
+                                    .aria_label(title)
+                                    .aria_selected(selected)
+                                    .track_focus(
+                                        &self.transport_focus[i].clone().tab_stop(selected),
+                                    )
+                                    .tab_index(if selected { 0 } else { -1 })
+                                    .cursor_pointer()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h(px(24.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .px(px(10.))
+                                    .rounded(px(5.))
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(if selected {
+                                        self.colors.text
+                                    } else {
+                                        self.colors.muted
+                                    })
+                                    .when(selected, |d| d.bg(crate::palette::rgb(crate::shell::BG)))
+                                    .child(title)
+                                    .on_click(
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.set_local(local, cx)
+                                        }),
+                                    )
+                                    .on_key_down(cx.listener(
+                                        move |this, event: &KeyDownEvent, window, cx| {
+                                            let index = match event.keystroke.key.as_str() {
+                                                "right" | "left" => 1 - i,
+                                                "home" => 0,
+                                                "end" => 1,
+                                                _ => return,
+                                            };
+                                            if !this.busy {
+                                                this.set_local(index == 1, cx);
+                                                window.focus(&handles[index], cx);
+                                            }
+                                            cx.stop_propagation();
+                                        },
+                                    ))
+                            }),
+                        ),
+                ),
             );
         }
         body = body.child(field("Name", self.name.clone()));
@@ -1150,12 +1148,10 @@ mod tests {
                 let form = view.plugin_setup.clone().unwrap();
                 form.update(cx, |form, cx| {
                     assert!(form.local);
-                    assert_eq!(
-                        form.config.read(cx).value().as_ref(),
-                        LOCAL_CONFIG_TEMPLATE
-                    );
+                    assert_eq!(form.config.read(cx).value().as_ref(), LOCAL_CONFIG_TEMPLATE);
                     assert!(form.config.read(cx).focus_handle(cx).is_focused(window));
-                    form.config.update(cx, |input, cx| input.set_value("", window, cx));
+                    form.config
+                        .update(cx, |input, cx| input.set_value("", window, cx));
                 });
             })
             .unwrap();

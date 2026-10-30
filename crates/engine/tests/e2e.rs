@@ -3515,13 +3515,24 @@ async fn private_secret_submission_never_enters_durable_chat_data() {
     use serde_json::json;
     use zuse_rpc::methods;
     let dir = tempfile::tempdir().unwrap();
-    let core = assemble(dir.path(), Arc::new(ScriptedHarness {
-        script: vec![mock_script()[0].clone()],
-        step_delay: Duration::ZERO,
-        hang_until_interrupt: true,
-    }));
+    let core = assemble(
+        dir.path(),
+        Arc::new(ScriptedHarness {
+            script: vec![mock_script()[0].clone()],
+            step_delay: Duration::ZERO,
+            hang_until_interrupt: true,
+        }),
+    );
     let _handle = core.doc_host.open(CHAT).unwrap();
-    core.sessions.dispatch(CHAT, HarnessId::Mock, run_request("private operation"), Some("private-run".into())).await.unwrap();
+    core.sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            run_request("private operation"),
+            Some("private-run".into()),
+        )
+        .await
+        .unwrap();
     wait_for(|| core.sessions.turn_in_flight(CHAT), "active turn").await;
     let client = Arc::new(zuse_rpc::memory_client(core.rpc_service()));
     let operation_client = client.clone();
@@ -3530,27 +3541,86 @@ async fn private_secret_submission_never_enters_durable_chat_data() {
             "label":"API token","reason":"Check account access","method":"GET","url":"https://api.github.com/user"
         }})).await
     });
-    wait_for(|| entries_now(&core).iter().any(|e| e.parts.iter().any(|p| matches!(p,MessagePart::Input { resolved:false,.. }))), "private card").await;
-    let (request_id, question_id) = entries(&core).iter().find_map(|e| e.parts.iter().find_map(|p| match p {
-        MessagePart::Input { request_id,questions,resolved:false,.. } => Some((request_id.clone(),questions[0].id.clone())), _ => None,
-    })).unwrap();
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|e| {
+                e.parts.iter().any(|p| {
+                    matches!(
+                        p,
+                        MessagePart::Input {
+                            resolved: false,
+                            ..
+                        }
+                    )
+                })
+            })
+        },
+        "private card",
+    )
+    .await;
+    let (request_id, question_id) = entries(&core)
+        .iter()
+        .find_map(|e| {
+            e.parts.iter().find_map(|p| match p {
+                MessagePart::Input {
+                    request_id,
+                    questions,
+                    resolved: false,
+                    ..
+                } => Some((request_id.clone(), questions[0].id.clone())),
+                _ => None,
+            })
+        })
+        .unwrap();
     let secret_id = question_id.strip_prefix("private-secret:").unwrap();
     let sentinel = "private-e2e-sentinel-token\ninvalid-header";
     // Ordinary answers must be rejected before a durable command is created.
     assert!(client.call(methods::QUEUE_COMMAND,json!({"chatId":CHAT,"command":{"kind":"respondInput","requestId":request_id,"answers":[{"questionId":question_id,"labels":[sentinel]}]}})).await.is_err());
     assert!(client.call(methods::SUBMIT_PRIVATE_SECRET,json!({"chatId":CHAT,"requestId":"wrong-request","secretId":secret_id,"value":sentinel})).await.is_err());
-    client.call(methods::SUBMIT_PRIVATE_SECRET,json!({"chatId":CHAT,"requestId":request_id,"secretId":secret_id,"value":sentinel})).await.unwrap();
+    client
+        .call(
+            methods::SUBMIT_PRIVATE_SECRET,
+            json!({"chatId":CHAT,"requestId":request_id,"secretId":secret_id,"value":sentinel}),
+        )
+        .await
+        .unwrap();
     // Invalid header stops before network access, with a value-free error.
-    let error = tokio::time::timeout(Duration::from_secs(5),operation).await.unwrap().unwrap().unwrap_err().to_string();
+    let error = tokio::time::timeout(Duration::from_secs(5), operation)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err()
+        .to_string();
     assert!(!error.contains("sentinel"));
-    wait_for(|| entries_now(&core).iter().any(|e| e.parts.iter().any(|p| matches!(p,MessagePart::Input { resolved:true,.. }))), "resolved private card").await;
-    assert!(!serde_json::to_string(&entries(&core)).unwrap().contains("private-e2e-sentinel"));
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|e| {
+                e.parts
+                    .iter()
+                    .any(|p| matches!(p, MessagePart::Input { resolved: true, .. }))
+            })
+        },
+        "resolved private card",
+    )
+    .await;
+    assert!(
+        !serde_json::to_string(&entries(&core))
+            .unwrap()
+            .contains("private-e2e-sentinel")
+    );
     fn assert_no_secret(path: &std::path::Path) {
         for entry in std::fs::read_dir(path).unwrap().flatten() {
             let path = entry.path();
-            if path.is_dir() { assert_no_secret(&path); }
-            else if let Ok(bytes) = std::fs::read(&path) {
-                assert!(!bytes.windows(b"private-e2e-sentinel".len()).any(|w| w == b"private-e2e-sentinel"), "secret persisted in {}",path.display());
+            if path.is_dir() {
+                assert_no_secret(&path);
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                assert!(
+                    !bytes
+                        .windows(b"private-e2e-sentinel".len())
+                        .any(|w| w == b"private-e2e-sentinel"),
+                    "secret persisted in {}",
+                    path.display()
+                );
             }
         }
     }

@@ -2,46 +2,43 @@
 
 mod access;
 pub mod account_settings;
+pub mod acp_catalog;
+pub mod acp_command;
+pub mod acp_rows;
 pub mod activity;
+pub mod archive_cards;
 pub mod assets;
 #[cfg(test)]
 mod attachment_tests;
 pub mod branding;
 mod browser;
 mod cloud;
+pub mod cloud_archive_cards;
 mod cloud_billing;
 pub mod cloud_billing_view;
 mod cloud_history;
+pub mod cloud_queue;
 pub mod cloud_repositories;
 pub mod cloud_settings;
-pub mod cloud_queue;
 mod composer_alerts;
 pub mod composer_style;
-pub mod creation_style;
-pub mod creation_sources;
-pub mod import_chat;
-mod import_chat_adapter;
-mod creation_checkout;
-mod creation_source_adapter;
-pub mod dither;
-mod glass;
-pub mod sidebar_controls;
-mod sidebar_host;
-pub mod workspace_style;
-mod workspace_layout;
 mod connection;
 pub mod context_status;
+mod creation_checkout;
+mod creation_source_adapter;
+pub mod creation_sources;
+pub mod creation_style;
 mod custom_acp;
-pub mod acp_command;
-pub mod acp_catalog;
-pub mod acp_rows;
+pub mod dither;
 mod draft_journal;
 mod environment;
 pub mod git_controls;
+mod glass;
 mod history;
+pub mod import_chat;
+mod import_chat_adapter;
 pub mod input;
 mod managed_access;
-pub mod remote_access_style;
 mod model_catalog;
 mod model_config;
 mod model_picker;
@@ -53,20 +50,16 @@ pub mod palette;
 pub mod plugin_catalog;
 pub mod plugin_detail;
 mod plugin_management;
-pub mod plugin_setup;
 pub mod plugin_removal;
+pub mod plugin_setup;
 mod plugin_views;
 mod previews;
 mod project_actions;
 pub mod project_archive;
-pub mod usage_dashboard;
 mod project_archive_host;
-mod usage_host;
-mod provider_settings;
 pub mod provider_accounts;
 pub mod provider_options;
-pub mod archive_cards;
-pub mod cloud_archive_cards;
+mod provider_settings;
 pub mod provider_signin;
 mod provider_updates;
 mod pull_requests;
@@ -75,20 +68,27 @@ mod queue;
 mod queue_edit;
 mod queue_render;
 mod recovery;
+pub mod remote_access_style;
 pub mod settings_style;
 mod settings_view;
 mod shell;
+pub mod sidebar_controls;
+mod sidebar_host;
 pub mod styling;
 mod terminals;
 mod thread_actions;
 mod title_settings;
 mod tool_results;
 mod transcript;
+pub mod usage_dashboard;
+mod usage_host;
 mod visuals;
 mod voice;
 mod voice_orb;
 mod workspace;
+mod workspace_layout;
 mod workspace_review;
+pub mod workspace_style;
 mod worktree_settings;
 
 use futures::{
@@ -238,9 +238,9 @@ pub struct WorkspaceView {
     creation_checkout: creation_checkout::State,
     creation_source_picker: Entity<creation_sources::SourcePicker>,
     import_picker: Entity<import_chat::ImportMenu>,
-    import_requests: HashMap<u64,u64>,
-    creation_source_requests: HashMap<u64,u64>,
-    creation_source_checkout: Option<(String,String,String)>,
+    import_requests: HashMap<u64, u64>,
+    creation_source_requests: HashMap<u64, u64>,
+    creation_source_checkout: Option<(String, String, String)>,
     queue: Vec<Value>,
     queue_watch: Option<u64>,
     queue_edit: Option<queue_edit::QueueEdit>,
@@ -279,7 +279,7 @@ pub struct WorkspaceView {
     usage_pending: bool,
     usage_project: Option<String>,
     usage_project_scope: bool,
-    usage_requests: std::collections::BTreeMap<u64,u64>,
+    usage_requests: std::collections::BTreeMap<u64, u64>,
     plugin_search: Entity<input::TextInput>,
     plugin_installed_search: Entity<input::TextInput>,
     plugins_browse: bool,
@@ -396,15 +396,21 @@ impl WorkspaceView {
         cx.observe(&plugin_installed_search, |_, _, cx| cx.notify())
             .detach();
         let plugin_search = cx.new(|cx| input::TextInput::new("Search plugins", window, cx));
-        cx.observe(&plugin_search, |_: &mut Self, _, cx| cx.notify()).detach();
-        cx.subscribe(&plugin_search, |this: &mut Self, _, _: &input::Changed, cx| {
-            this.plugin_catalog_page = 0;
-            cx.notify();
-        }).detach();
-        let creation_source_picker=Self::new_creation_sources(cx);
-        let import_picker=Self::new_import_menu(cx);
+        cx.observe(&plugin_search, |_: &mut Self, _, cx| cx.notify())
+            .detach();
+        cx.subscribe(
+            &plugin_search,
+            |this: &mut Self, _, _: &input::Changed, cx| {
+                this.plugin_catalog_page = 0;
+                cx.notify();
+            },
+        )
+        .detach();
+        let creation_source_picker = Self::new_creation_sources(cx);
+        let import_picker = Self::new_import_menu(cx);
         let repository_panel = cx.new(|cx| cloud_repositories::RepositoryPanel::new(window, cx));
-        cx.observe(&repository_panel, |_,_,cx|cx.notify()).detach();
+        cx.observe(&repository_panel, |_, _, cx| cx.notify())
+            .detach();
         cx.subscribe(
             &repository_panel,
             |this, _, event: &cloud_repositories::Request, _cx| match event {
@@ -512,10 +518,22 @@ impl WorkspaceView {
         let recovery_output = cx.new(|cx| {
             input::TextInput::multiline("Describe the result you inspected…", window, cx)
         });
-        let input_text = cx.new(|cx| input::TextInput::multiline("Type your own answer…", window, cx));
-        let secret_text = cx.new(|cx| input::TextInput::password("Enter bearer token…", window, cx));
-        cx.subscribe_in(&input_text, window, |this, _, _: &input::Submitted, _, cx| this.send_question_answer(cx)).detach();
-        cx.subscribe_in(&secret_text, window, |this, _, _: &input::Submitted, _, cx| this.send_question_answer(cx)).detach();
+        let input_text =
+            cx.new(|cx| input::TextInput::multiline("Type your own answer…", window, cx));
+        let secret_text =
+            cx.new(|cx| input::TextInput::password("Enter bearer token…", window, cx));
+        cx.subscribe_in(
+            &input_text,
+            window,
+            |this, _, _: &input::Submitted, _, cx| this.send_question_answer(cx),
+        )
+        .detach();
+        cx.subscribe_in(
+            &secret_text,
+            window,
+            |this, _, _: &input::Submitted, _, cx| this.send_question_answer(cx),
+        )
+        .detach();
         let thread_title = cx.new(|cx| input::TextInput::new("Thread name", window, cx));
         cx.subscribe_in(
             &thread_title,
@@ -544,9 +562,17 @@ impl WorkspaceView {
                 this.status = "Disconnected".into();
                 this.connected = false;
                 let failed = std::mem::take(&mut this.usage_requests);
-                for (remote,local) in failed {
+                for (remote, local) in failed {
                     this.pending.remove(&remote);
-                    if let Some(dashboard) = this.usage_dashboard.clone() { dashboard.update(cx,|dashboard,cx| dashboard.receive(local,Err("Computer disconnected. Reconnect and refresh usage.".into()),cx)); }
+                    if let Some(dashboard) = this.usage_dashboard.clone() {
+                        dashboard.update(cx, |dashboard, cx| {
+                            dashboard.receive(
+                                local,
+                                Err("Computer disconnected. Reconnect and refresh usage.".into()),
+                                cx,
+                            )
+                        });
+                    }
                 }
                 this.sidebar_controls
                     .update(cx, |controls, cx| controls.interrupted(cx));
@@ -565,23 +591,43 @@ impl WorkspaceView {
         });
         let worktree_settings = worktree_settings::WorktreeSettingsView::new(window, cx);
         let browser = browser::Browser::new(window, cx);
-        let account_card=cx.new(|cx|account_settings::AccountCard::new(window,cx));
-        let account_card_events=cx.subscribe(&account_card,|this,_,event,cx|{
+        let account_card = cx.new(|cx| account_settings::AccountCard::new(window, cx));
+        let account_card_events = cx.subscribe(&account_card, |this, _, event, cx| {
             use account_settings::Event;
             match event {
-                Event::SignIn|Event::SignOut=>{
-                    if !this.connected || this.pending.values().any(|method|matches!(method.as_str(),methods::CLOUD_ACCOUNT_SIGN_IN|methods::CLOUD_ACCOUNT_SIGN_OUT)) {return;}
-                    this.account_action_error=None;
-                    this.call(if matches!(event,Event::SignIn){methods::CLOUD_ACCOUNT_SIGN_IN}else{methods::CLOUD_ACCOUNT_SIGN_OUT},json!({}));
+                Event::SignIn | Event::SignOut => {
+                    if !this.connected
+                        || this.pending.values().any(|method| {
+                            matches!(
+                                method.as_str(),
+                                methods::CLOUD_ACCOUNT_SIGN_IN | methods::CLOUD_ACCOUNT_SIGN_OUT
+                            )
+                        })
+                    {
+                        return;
+                    }
+                    this.account_action_error = None;
+                    this.call(
+                        if matches!(event, Event::SignIn) {
+                            methods::CLOUD_ACCOUNT_SIGN_IN
+                        } else {
+                            methods::CLOUD_ACCOUNT_SIGN_OUT
+                        },
+                        json!({}),
+                    );
                 }
-                Event::DisplayName{account,value}=>{
-                    if this.cloud_account["user"]["id"]!=account.as_str() {return;}
-                    this.preferences.display_name=value.clone();this.save_preferences();
+                Event::DisplayName { account, value } => {
+                    if this.cloud_account["user"]["id"] != account.as_str() {
+                        return;
+                    }
+                    this.preferences.display_name = value.clone();
+                    this.save_preferences();
                 }
             }
             cx.notify();
         });
-        let cloud_sync_path = cx.new(|cx| input::TextInput::new("Absolute folder on host", window, cx));
+        let cloud_sync_path =
+            cx.new(|cx| input::TextInput::new("Absolute folder on host", window, cx));
         let cloud_branch = cx.new(|cx| input::TextInput::new("Branch (main)", window, cx));
         let sidebar_controls = Self::create_sidebar_controls(cx);
         let view = Self {
@@ -597,7 +643,8 @@ impl WorkspaceView {
             billing: Default::default(),
             cloud_settings_focus: std::array::from_fn(|_| cx.focus_handle()),
             cloud_credit_focus: std::array::from_fn(|_| cx.focus_handle()),
-            billing_cap: cx.new(|cx| input::TextInput::new("Monthly overage cap in dollars", window, cx)),
+            billing_cap: cx
+                .new(|cx| input::TextInput::new("Monthly overage cap in dollars", window, cx)),
             cloud_branch,
             cloud_sync_path,
             cached_only: false,
@@ -899,8 +946,12 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
-        if self.receive_creation_source(&frame,cx){return;}
-        if self.receive_import_chat(&frame,cx){return;}
+        if self.receive_creation_source(&frame, cx) {
+            return;
+        }
+        if self.receive_import_chat(&frame, cx) {
+            return;
+        }
         if frame["id"]
             .as_u64()
             .and_then(|id| self.pending.get(&id))
@@ -939,7 +990,9 @@ impl WorkspaceView {
         if self.receive_cloud(&frame, cx) {
             return;
         }
-        if self.receive_project_archives(&frame,cx) {return;}
+        if self.receive_project_archives(&frame, cx) {
+            return;
+        }
         if self.receive_cloud_archive(&frame, cx) {
             return;
         }
@@ -1068,7 +1121,9 @@ impl WorkspaceView {
             }
             return;
         }
-        if self.receive_usage(id, &frame, cx) { return; }
+        if self.receive_usage(id, &frame, cx) {
+            return;
+        }
         if self.receive_sidebar_controls(id, &frame, cx) {
             return;
         }
@@ -1139,8 +1194,13 @@ impl WorkspaceView {
             return;
         }
         if let Some(error) = frame.get("err").and_then(Value::as_str) {
-            if matches!(method.as_str(),methods::CLOUD_ACCOUNT_SIGN_IN|methods::CLOUD_ACCOUNT_SIGN_OUT|methods::CLOUD_ACCOUNT_STATUS) {
-                self.account_action_error=Some(error.into());
+            if matches!(
+                method.as_str(),
+                methods::CLOUD_ACCOUNT_SIGN_IN
+                    | methods::CLOUD_ACCOUNT_SIGN_OUT
+                    | methods::CLOUD_ACCOUNT_STATUS
+            ) {
+                self.account_action_error = Some(error.into());
             }
             self.error = Some(error.into());
             if let Some(draft) = self.send_draft.remove(&id) {
@@ -1217,7 +1277,7 @@ impl WorkspaceView {
                 }
 
                 methods::CLOUD_ACCOUNT_SIGN_IN => {
-                    self.account_action_error=None;
+                    self.account_action_error = None;
                     if let Some(url) = value["url"]
                         .as_str()
                         .filter(|url| url.starts_with("https://"))
@@ -1229,7 +1289,9 @@ impl WorkspaceView {
                     let changed = self.cloud_account["user"]["id"] != value["user"]["id"];
                     self.cloud_account = value.clone();
                     self.update_sidebar_controls(cx);
-                    if changed || value["login"].is_object() {self.account_action_error=None;}
+                    if changed || value["login"].is_object() {
+                        self.account_action_error = None;
+                    }
                     self.managed_account_updated(changed);
                     if changed {
                         self.plugin_detail = None;
@@ -1355,7 +1417,8 @@ impl WorkspaceView {
                 }
                 methods::LIST_REPOS => self.repos = value.as_array().cloned().unwrap_or_default(),
                 methods::WATCH_DEVICES => {
-                    self.archive_devices=serde_json::from_value(value.clone()).unwrap_or_default();
+                    self.archive_devices =
+                        serde_json::from_value(value.clone()).unwrap_or_default();
                 }
                 methods::WATCH_SPACES => {
                     self.spaces = serde_json::from_value(value.clone()).unwrap_or_default()
@@ -1368,8 +1431,9 @@ impl WorkspaceView {
 
                 methods::LIST_AGENT_ACCOUNTS => {
                     self.accounts = value.clone();
-                    self.provider_logins.retain(|_,login|login["status"]!="done");
-                },
+                    self.provider_logins
+                        .retain(|_, login| login["status"] != "done");
+                }
                 methods::WATCH_QUEUE if self.queue_watch == Some(id) => {
                     if let Some(items) = value["items"].as_array() {
                         self.queue = items.clone();
@@ -1500,8 +1564,9 @@ impl WorkspaceView {
         self.close_project_archives();
         self.close_plugins_browse();
         self.stash_draft(cx);
-        self.creation_source_picker.update(cx,|picker,cx|picker.set_target(None,cx));
-        self.creation_source_checkout=None;
+        self.creation_source_picker
+            .update(cx, |picker, cx| picker.set_target(None, cx));
+        self.creation_source_checkout = None;
         self.composer_generation += 1;
         self.attachments.clear();
         self.uploading = 0;
@@ -1590,8 +1655,9 @@ impl WorkspaceView {
         }
         self.close_plugins_browse();
         self.stash_draft(cx);
-        self.creation_source_picker.update(cx,|picker,cx|picker.set_target(None,cx));
-        self.creation_source_checkout=None;
+        self.creation_source_picker
+            .update(cx, |picker, cx| picker.set_target(None, cx));
+        self.creation_source_checkout = None;
         self.composer_generation += 1;
         self.attachments.clear();
         self.uploading = 0;
@@ -1624,10 +1690,14 @@ impl WorkspaceView {
         if self.import_picker.read(cx).busy() {
             return;
         }
-        if self.project_archive.project.is_some() || self.usage_open {return;}
+        if self.project_archive.project.is_some() || self.usage_open {
+            return;
+        }
         if self.cloud.cached {
             if !self.input.read(cx).value(cx).trim().is_empty() || !self.attachments.is_empty() {
-                let _ = self.requests.unbounded_send(json!({"ui":"resumeCloud","send":true}));
+                let _ = self
+                    .requests
+                    .unbounded_send(json!({"ui":"resumeCloud","send":true}));
             }
             return;
         }
@@ -1719,7 +1789,9 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
-        if self.selected.is_none() && self.creation_source_picker.read(cx).is_preparing() { return; }
+        if self.selected.is_none() && self.creation_source_picker.read(cx).is_preparing() {
+            return;
+        }
         if self.creating.is_some() || self.uploading > 0 {
             return;
         }
@@ -1845,7 +1917,10 @@ pub fn initialize(cx: &mut App) {
     ];
     cx.text_system()
         .add_fonts(
-            fonts.iter().map(|font| std::borrow::Cow::Borrowed(*font)).collect(),
+            fonts
+                .iter()
+                .map(|font| std::borrow::Cow::Borrowed(*font))
+                .collect(),
         )
         .expect("bundled interface fonts");
 }

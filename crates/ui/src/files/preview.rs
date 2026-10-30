@@ -930,8 +930,17 @@ impl FilesSurface {
     }
 
     pub(crate) fn annotate_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.preview.active.clone() else { return; };
-        let Some(editor) = self.preview.documents.get(&path).and_then(|document| document.editor.as_ref()) else { return; };
+        let Some(path) = self.preview.active.clone() else {
+            return;
+        };
+        let Some(editor) = self
+            .preview
+            .documents
+            .get(&path)
+            .and_then(|document| document.editor.as_ref())
+        else {
+            return;
+        };
         let line = editor.read(cx).cursor_position().line as u32 + 1;
         self.open_editor_comment_draft(path, line, window, cx);
     }

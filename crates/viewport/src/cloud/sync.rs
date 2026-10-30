@@ -300,15 +300,25 @@ impl WorkspaceView {
                 );
             }
             if self.cloud.status["state"] == "ready" {
-                menu = menu.child(div().h(px(1.)).my_1().bg(rgb(BORDER)))
-                    .child(control("pause-cloud-workspace", "Pause workspace").w_full()
+                menu = menu.child(div().h(px(1.)).my_1().bg(rgb(BORDER))).child(
+                    control("pause-cloud-workspace", "Pause workspace")
+                        .w_full()
                         .on_click(cx.listener(|this, _, _, cx| {
                             let child = this.cloud.child.clone();
                             if let Some(child) = child {
                                 let session = child.update(cx, |view, cx| {
-                                    if view.file_navigation_blocked(cx) || view.queue_edit_navigation_blocked(cx) { return None; }
+                                    if view.file_navigation_blocked(cx)
+                                        || view.queue_edit_navigation_blocked(cx)
+                                    {
+                                        return None;
+                                    }
                                     view.stash_draft(cx);
-                                    Some(view.selected.as_ref().and_then(|chat|chat["id"].as_str()).map(str::to_owned))
+                                    Some(
+                                        view.selected
+                                            .as_ref()
+                                            .and_then(|chat| chat["id"].as_str())
+                                            .map(str::to_owned),
+                                    )
                                 });
                                 if let Some(session) = session {
                                     this.cloud.sync.open = false;
@@ -317,7 +327,8 @@ impl WorkspaceView {
                                     cx.notify();
                                 }
                             }
-                        })));
+                        })),
+                );
             }
             if let Some(error) = self
                 .cloud

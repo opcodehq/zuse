@@ -2525,9 +2525,36 @@ async fn rpc_dispatch_for_m5_methods() {
         .await
         .expect("OpenTerminal on canvas");
     assert_eq!(canvas["cwd"], repo_path);
-    assert_eq!(client.call(methods::LIST_TERMINALS, serde_json::json!({"chatId":"chat-term"})).await.unwrap(),serde_json::json!([session.clone()]));
-    assert_eq!(client.call(methods::LIST_TERMINALS, serde_json::json!({"chatId":"space-canvas:space-term"})).await.unwrap(),serde_json::json!([canvas.clone()]));
-    assert_eq!(client.call(methods::LIST_TERMINALS, serde_json::json!({"chatId":"another-chat"})).await.unwrap(),serde_json::json!([]));
+    assert_eq!(
+        client
+            .call(
+                methods::LIST_TERMINALS,
+                serde_json::json!({"chatId":"chat-term"})
+            )
+            .await
+            .unwrap(),
+        serde_json::json!([session.clone()])
+    );
+    assert_eq!(
+        client
+            .call(
+                methods::LIST_TERMINALS,
+                serde_json::json!({"chatId":"space-canvas:space-term"})
+            )
+            .await
+            .unwrap(),
+        serde_json::json!([canvas.clone()])
+    );
+    assert_eq!(
+        client
+            .call(
+                methods::LIST_TERMINALS,
+                serde_json::json!({"chatId":"another-chat"})
+            )
+            .await
+            .unwrap(),
+        serde_json::json!([])
+    );
     client
         .call(
             methods::CLOSE_TERMINAL,
@@ -2590,7 +2617,16 @@ async fn rpc_dispatch_for_m5_methods() {
         }
     }
     drop(stream);
-    assert_eq!(client.call(methods::LIST_TERMINALS, serde_json::json!({"chatId":"chat-term"})).await.unwrap(),serde_json::json!([session]));
+    assert_eq!(
+        client
+            .call(
+                methods::LIST_TERMINALS,
+                serde_json::json!({"chatId":"chat-term"})
+            )
+            .await
+            .unwrap(),
+        serde_json::json!([session])
+    );
     let resized = client
         .call(
             methods::RESIZE_TERMINAL,
@@ -2607,7 +2643,16 @@ async fn rpc_dispatch_for_m5_methods() {
         .await
         .expect("CloseTerminal");
     assert_eq!(closed["ok"], true);
-    assert_eq!(client.call(methods::LIST_TERMINALS, serde_json::json!({"chatId":"chat-term"})).await.unwrap(),serde_json::json!([]));
+    assert_eq!(
+        client
+            .call(
+                methods::LIST_TERMINALS,
+                serde_json::json!({"chatId":"chat-term"})
+            )
+            .await
+            .unwrap(),
+        serde_json::json!([])
+    );
     let err = client
         .call(
             methods::WRITE_TERMINAL,
@@ -2625,43 +2670,102 @@ async fn rpc_dispatch_for_m5_methods() {
         // Exercise snapshot capture and publication over the actual engine RPC.
         let mirror = tmp.path().join("cloud-mirror");
         let target = zuse_protocol::WorkspaceTarget {
-            chat_id: Some("chat-term".into()), space_id: None, checkout_path: None,
+            chat_id: Some("chat-term".into()),
+            space_id: None,
+            checkout_path: None,
         };
         let first = zuse_engine::cloud::mirror::sync_once(
-            &client, target.clone(), mirror.join(""), "cloud-workspace".into(),
-        ).await.expect("first verified cloud mirror");
+            &client,
+            target.clone(),
+            mirror.join(""),
+            "cloud-workspace".into(),
+        )
+        .await
+        .expect("first verified cloud mirror");
         assert!(first.files > 0);
-        assert_eq!(std::fs::read(mirror.join("file.txt")).unwrap(), std::fs::read(repo_dir.join("file.txt")).unwrap());
+        assert_eq!(
+            std::fs::read(mirror.join("file.txt")).unwrap(),
+            std::fs::read(repo_dir.join("file.txt")).unwrap()
+        );
         use std::os::unix::fs::MetadataExt;
         let unchanged_inode = std::fs::metadata(mirror.join("file.txt")).unwrap().ino();
-        let unchanged_time = std::fs::metadata(mirror.join("file.txt")).unwrap().modified().unwrap();
+        let unchanged_time = std::fs::metadata(mirror.join("file.txt"))
+            .unwrap()
+            .modified()
+            .unwrap();
         std::fs::write(mirror.join("local-only"), "preserve unrelated local work").unwrap();
         std::fs::create_dir(repo_dir.join("sync-parent")).unwrap();
         std::fs::write(repo_dir.join("sync-parent/sync-new"), "new cloud bytes").unwrap();
         let second = zuse_engine::cloud::mirror::sync_once(
-            &client, target.clone(), mirror.clone(), "cloud-workspace".into(),
-        ).await.expect("incremental cloud mirror");
+            &client,
+            target.clone(),
+            mirror.clone(),
+            "cloud-workspace".into(),
+        )
+        .await
+        .expect("incremental cloud mirror");
         assert_eq!(first.checkout_id, second.checkout_id);
         assert_eq!(second.transferred_bytes, "new cloud bytes".len() as u64);
         let unchanged = zuse_engine::cloud::mirror::sync_once(
-            &client, target.clone(), mirror.clone(), "cloud-workspace".into(),
-        ).await.expect("unchanged cloud mirror");
+            &client,
+            target.clone(),
+            mirror.clone(),
+            "cloud-workspace".into(),
+        )
+        .await
+        .expect("unchanged cloud mirror");
         assert_eq!(unchanged.transferred_bytes, 0);
-        assert_eq!(std::fs::metadata(mirror.join("file.txt")).unwrap().ino(), unchanged_inode);
-        assert_eq!(std::fs::metadata(mirror.join("file.txt")).unwrap().modified().unwrap(), unchanged_time);
+        assert_eq!(
+            std::fs::metadata(mirror.join("file.txt")).unwrap().ino(),
+            unchanged_inode
+        );
+        assert_eq!(
+            std::fs::metadata(mirror.join("file.txt"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            unchanged_time
+        );
         std::fs::remove_file(repo_dir.join("sync-parent/sync-new")).unwrap();
         zuse_engine::cloud::mirror::sync_once(
-            &client, target, mirror.clone(), "cloud-workspace".into(),
-        ).await.expect("cloud deletion reflected in mirror");
-        assert!(!mirror.join("sync-parent").exists(), "Empty parents of deleted cloud files are reclaimed");
-        let marker:serde_json::Value=serde_json::from_slice(&std::fs::read(mirror.join(".zuse-sync.json")).unwrap()).unwrap();
-        let hashes=marker["files"].as_array().unwrap().iter().filter(|entry|entry["link"].is_null()).map(|entry|entry["hash"].as_str().unwrap()).collect::<std::collections::HashSet<_>>();
-        let cache=std::path::PathBuf::from(format!("{}.zuse-sync-cache",mirror.display()));
-        let retained=std::fs::read_dir(cache.join("objects")).unwrap().map(|entry|entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
-        assert_eq!(retained.len(),hashes.len(),"Obsolete snapshot objects must not accumulate");
-        assert!(retained.iter().all(|hash|hashes.contains(hash.as_str())));
-        assert_eq!(std::fs::read_to_string(mirror.join("local-only")).unwrap(), "preserve unrelated local work");
-        zuse_engine::cloud::mirror::cleanup(&mirror, "cloud-workspace").expect("archive cleanup accepts synced ownership");
+            &client,
+            target,
+            mirror.clone(),
+            "cloud-workspace".into(),
+        )
+        .await
+        .expect("cloud deletion reflected in mirror");
+        assert!(
+            !mirror.join("sync-parent").exists(),
+            "Empty parents of deleted cloud files are reclaimed"
+        );
+        let marker: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(mirror.join(".zuse-sync.json")).unwrap())
+                .unwrap();
+        let hashes = marker["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["link"].is_null())
+            .map(|entry| entry["hash"].as_str().unwrap())
+            .collect::<std::collections::HashSet<_>>();
+        let cache = std::path::PathBuf::from(format!("{}.zuse-sync-cache", mirror.display()));
+        let retained = std::fs::read_dir(cache.join("objects"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            retained.len(),
+            hashes.len(),
+            "Obsolete snapshot objects must not accumulate"
+        );
+        assert!(retained.iter().all(|hash| hashes.contains(hash.as_str())));
+        assert_eq!(
+            std::fs::read_to_string(mirror.join("local-only")).unwrap(),
+            "preserve unrelated local work"
+        );
+        zuse_engine::cloud::mirror::cleanup(&mirror, "cloud-workspace")
+            .expect("archive cleanup accepts synced ownership");
         assert!(mirror.join("local-only").exists());
     }
 

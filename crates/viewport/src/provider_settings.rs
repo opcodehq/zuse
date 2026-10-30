@@ -6,23 +6,62 @@ use crate::{
     shell::{BORDER, MUTED, column, provider_icon, row},
 };
 impl WorkspaceView {
-    fn provider_account_action(&mut self, provider: &str, event: &crate::provider_accounts::Event, cx: &mut Context<Self>) {
+    fn provider_account_action(
+        &mut self,
+        provider: &str,
+        event: &crate::provider_accounts::Event,
+        cx: &mut Context<Self>,
+    ) {
         use crate::provider_accounts::Action;
-        if event.scope != self.connection_epoch.to_string() { return; }
-        let id=match &event.action { Action::Switch(id)|Action::Remove(id)=>id };
-        let account=self.accounts["accounts"].as_array().into_iter().flatten().find(|a|a["id"]==*id&&a["harness"]==provider).cloned();
-        let Some(account)=account else{
-            if let Some(rows)=self.provider_account_rows.get(provider){rows.update(cx,|rows,cx|rows.finish(Err("Refresh accounts before trying again.".into()),cx));}
-            return;
-        };
-        let provider=account["harness"].as_str().unwrap_or_default().to_owned();
-        let login_pending=self.provider_logins.get(&provider).is_some_and(|login|login["cancelled"]!=true&&matches!(login["status"].as_str(),Some("starting"|"pending")));
-        if !self.connected || self.provider_actions.values().any(|p|p==&provider) || login_pending || account["switchable"]!=true {
-            if let Some(rows)=self.provider_account_rows.get(&provider) { rows.update(cx,|rows,cx|rows.finish(Err("Reconnect and wait for the current account action to finish.".into()),cx)); }
+        if event.scope != self.connection_epoch.to_string() {
             return;
         }
-        let method=match event.action {Action::Switch(_)=>methods::ACTIVATE_AGENT_ACCOUNT,Action::Remove(_)=>methods::FORGET_AGENT_ACCOUNT};
-        self.provider_action(provider.clone(),method,json!({"id":id,"accountId":id,"harness":provider}));
+        let id = match &event.action {
+            Action::Switch(id) | Action::Remove(id) => id,
+        };
+        let account = self.accounts["accounts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|a| a["id"] == *id && a["harness"] == provider)
+            .cloned();
+        let Some(account) = account else {
+            if let Some(rows) = self.provider_account_rows.get(provider) {
+                rows.update(cx, |rows, cx| {
+                    rows.finish(Err("Refresh accounts before trying again.".into()), cx)
+                });
+            }
+            return;
+        };
+        let provider = account["harness"].as_str().unwrap_or_default().to_owned();
+        let login_pending = self.provider_logins.get(&provider).is_some_and(|login| {
+            login["cancelled"] != true
+                && matches!(login["status"].as_str(), Some("starting" | "pending"))
+        });
+        if !self.connected
+            || self.provider_actions.values().any(|p| p == &provider)
+            || login_pending
+            || account["switchable"] != true
+        {
+            if let Some(rows) = self.provider_account_rows.get(&provider) {
+                rows.update(cx, |rows, cx| {
+                    rows.finish(
+                        Err("Reconnect and wait for the current account action to finish.".into()),
+                        cx,
+                    )
+                });
+            }
+            return;
+        }
+        let method = match event.action {
+            Action::Switch(_) => methods::ACTIVATE_AGENT_ACCOUNT,
+            Action::Remove(_) => methods::FORGET_AGENT_ACCOUNT,
+        };
+        self.provider_action(
+            provider.clone(),
+            method,
+            json!({"id":id,"accountId":id,"harness":provider}),
+        );
         cx.notify();
     }
     pub(super) fn provider_action(
@@ -239,11 +278,28 @@ impl WorkspaceView {
                 | methods::COMPLETE_AGENT_LOGIN
                 | methods::CANCEL_AGENT_LOGIN
         );
-        if matches!(method.as_str(),methods::ACTIVATE_AGENT_ACCOUNT|methods::FORGET_AGENT_ACCOUNT) {
-            let result=if let Some(error)=frame["err"].as_str(){Err(error.to_owned())}
-                else {serde_json::from_value::<zuse_protocol::AgentAccountsSnapshot>(frame["ok"].clone()).map(|_|{self.accounts=frame["ok"].clone();}).map_err(|_|"Unable to read the updated account list. Refresh before trying again.".to_owned())};
-            if let Some(rows)=self.provider_account_rows.get(&provider){rows.update(cx,|rows,cx|rows.finish(result,cx));}
-            self.pending.remove(&id);cx.notify();return true;
+        if matches!(
+            method.as_str(),
+            methods::ACTIVATE_AGENT_ACCOUNT | methods::FORGET_AGENT_ACCOUNT
+        ) {
+            let result = if let Some(error) = frame["err"].as_str() {
+                Err(error.to_owned())
+            } else {
+                serde_json::from_value::<zuse_protocol::AgentAccountsSnapshot>(frame["ok"].clone())
+                    .map(|_| {
+                        self.accounts = frame["ok"].clone();
+                    })
+                    .map_err(|_| {
+                        "Unable to read the updated account list. Refresh before trying again."
+                            .to_owned()
+                    })
+            };
+            if let Some(rows) = self.provider_account_rows.get(&provider) {
+                rows.update(cx, |rows, cx| rows.finish(result, cx));
+            }
+            self.pending.remove(&id);
+            cx.notify();
+            return true;
         }
         if let Some(error) = frame["err"].as_str() {
             if is_login {

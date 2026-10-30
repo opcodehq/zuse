@@ -160,7 +160,10 @@ impl Shell {
         let tabs = self.main_tabs.entry(self.panel_key(cx)).or_default();
         tabs.tabs.push(MainTab::Diff(id));
         tabs.active = Some(MainTab::Diff(id));
-        changes.update(cx, |changes, cx| { changes.review_mode = true; changes.ensure_content(cx); });
+        changes.update(cx, |changes, cx| {
+            changes.review_mode = true;
+            changes.ensure_content(cx);
+        });
         cx.notify();
         id
     }
@@ -319,7 +322,14 @@ impl Shell {
             .flex()
             .flex_col()
             .pt(px(Theme::TITLEBAR_HEIGHT))
-            .child(crate::surface_chrome::toolbar(&theme).h(px(44.)).px(px(16.)).border_0().bg(theme.bg).child(controls))
+            .child(
+                crate::surface_chrome::toolbar(&theme)
+                    .h(px(44.))
+                    .px(px(16.))
+                    .border_0()
+                    .bg(theme.bg)
+                    .child(controls),
+            )
             .child(div().flex_1().min_h_0().child(changes))
             .into_any_element()
     }

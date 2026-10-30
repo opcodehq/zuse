@@ -24,7 +24,9 @@ pub fn load_plugin_icon(path: &str) -> Option<&'static [u8]> {
         "plugin-icons/posthog.com" => Some(include_bytes!("../assets/plugins/posthog.jpg")),
         "plugin-icons/workos.com" => Some(include_bytes!("../assets/plugins/workos.jpg")),
         "plugin-icons/customer.io" => Some(include_bytes!("../assets/plugins/customer-io.svg")),
-        "plugin-icons/betterstack.com" => Some(include_bytes!("../assets/plugins/better-stack.jpg")),
+        "plugin-icons/betterstack.com" => {
+            Some(include_bytes!("../assets/plugins/better-stack.jpg"))
+        }
         _ => None,
     }
 }

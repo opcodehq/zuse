@@ -1123,24 +1123,22 @@ impl Shell {
                             // second one on the slot stacked on the same
                             // pixels and read lighter than the seam beneath
                             // it (user report).
-                            .child(
-                                header_icon_button_with(
-                                    "toggle-changes",
-                                    icons::sidebar_glyph(
-                                        motion::state_t(
-                                            "toggle-changes",
-                                            self.right_pane_open(cx) && fit.right,
-                                            motion::GLYPH_STATE,
-                                            self.reduced_motion,
-                                        ),
-                                        true,
-                                        14.0,
-                                        theme.text_muted,
+                            .child(header_icon_button_with(
+                                "toggle-changes",
+                                icons::sidebar_glyph(
+                                    motion::state_t(
+                                        "toggle-changes",
+                                        self.right_pane_open(cx) && fit.right,
+                                        motion::GLYPH_STATE,
+                                        self.reduced_motion,
                                     ),
-                                    ShortcutId::ToggleChanges.label(),
-                                    cx.listener(|this, _, _, cx| this.toggle_right_pane(cx)),
+                                    true,
+                                    14.0,
+                                    theme.text_muted,
                                 ),
-                            ),
+                                ShortcutId::ToggleChanges.label(),
+                                cx.listener(|this, _, _, cx| this.toggle_right_pane(cx)),
+                            )),
                     )
                     .into_any_element(),
             )
@@ -1476,7 +1474,12 @@ impl Shell {
                     zuse_protocol::HarnessId::ClaudeCode,
                     2,
                 ),
-                ("thread-tests", "Add snapshot tests", zuse_protocol::HarnessId::Codex, 1),
+                (
+                    "thread-tests",
+                    "Add snapshot tests",
+                    zuse_protocol::HarnessId::Codex,
+                    1,
+                ),
             ] {
                 let mut chat = base.clone();
                 chat.id = id.into();

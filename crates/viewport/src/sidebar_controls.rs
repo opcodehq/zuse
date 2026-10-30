@@ -588,20 +588,15 @@ impl SidebarControls {
                         .on_click(cx.listener(|this, _, _, cx| this.load_usage(true, cx))),
                 )
                 .child(
-                    ui::option(
-                        "sidebar-usage-accounts",
-                        "Full usage",
-                        "analytics",
-                        false,
-                    )
-                    .role(Role::MenuItem)
-                    .when(self.active == providers().len() + 1, |v| {
-                        v.bg(s::frame_bg().opacity(0.6))
-                    })
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.close(window, cx);
-                        cx.emit(Event::FullUsage);
-                    })),
+                    ui::option("sidebar-usage-accounts", "Full usage", "analytics", false)
+                        .role(Role::MenuItem)
+                        .when(self.active == providers().len() + 1, |v| {
+                            v.bg(s::frame_bg().opacity(0.6))
+                        })
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.close(window, cx);
+                            cx.emit(Event::FullUsage);
+                        })),
                 ),
         )
         .into_any_element()
@@ -664,7 +659,9 @@ impl Render for SidebarControls {
                     .text_size(px(11.))
             })
             .when(!signed_in, |v| v.child(icon("login").size(px(16.))))
-            .when(label == "Cloud", |v| v.child(icon("cloud-dither").size(px(14.))))
+            .when(label == "Cloud", |v| {
+                v.child(icon("cloud-dither").size(px(14.)))
+            })
             .child(div().relative().child(label))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 if matches!(e.keystroke.key.as_str(), "enter" | "space") {
@@ -879,9 +876,17 @@ fn menu_surface(width: f32) -> Div {
 }
 
 fn account_plan_label(signed_in: bool, subscribed: Option<bool>, failed: bool) -> &'static str {
-    if !signed_in { "Sign in" }
-    else if failed { "Account" }
-    else { match subscribed { Some(true) => "Cloud", Some(false) => "Upgrade", None => "Checking plan" } }
+    if !signed_in {
+        "Sign in"
+    } else if failed {
+        "Account"
+    } else {
+        match subscribed {
+            Some(true) => "Cloud",
+            Some(false) => "Upgrade",
+            None => "Checking plan",
+        }
+    }
 }
 #[cfg(test)]
 mod account_label_tests {

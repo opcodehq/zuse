@@ -469,7 +469,11 @@ impl SimulatorPane {
                     .id("simulator-setup-agents")
                     .role(Role::Switch)
                     .aria_label("Allow agents to control devices")
-                    .aria_toggled(if agents { gpui::Toggled::True } else { gpui::Toggled::False })
+                    .aria_toggled(if agents {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
                     .tab_index(0)
                     .w_full()
                     .min_w_0()
@@ -485,7 +489,9 @@ impl SimulatorPane {
                             .gap(px(12.))
                             .child(div().flex_1().min_w_0().child("Allow agent control"))
                             .child(crate::settings::widgets::toggle_switch(
-                                &theme, agents, "simulator-setup-agents-switch",
+                                &theme,
+                                agents,
+                                "simulator-setup-agents-switch",
                             )),
                     )
                     .child(

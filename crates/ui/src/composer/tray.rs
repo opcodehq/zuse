@@ -557,34 +557,64 @@ impl Composer {
     ) -> Option<AnyElement> {
         let theme = Theme::of(cx).clone();
         let mut rows = Vec::new();
-        if let Some(request) = self.cloud.request.as_ref().filter(|_| self.state.read(cx).selected_chat.is_none()) {
-            rows.push(TrayRow::Element(zuse_viewport::cloud_queue::queue(
-                zuse_viewport::cloud_queue::Prompt::from_request(request),
-                self.cloud.message.clone().unwrap_or_else(|| if self.cloud.task.is_some() {
-                    "Preparing cloud workspace…".into()
-                } else {
-                    "Cloud startup needs attention. Your message is still queued.".into()
-                }),
-                self.cloud.task.is_some(), !crate::motion::reduced_motion(cx),
-                theme.text, theme.text_muted, theme.border.opacity(0.4),
-            ).into_any_element()));
+        if let Some(request) = self
+            .cloud
+            .request
+            .as_ref()
+            .filter(|_| self.state.read(cx).selected_chat.is_none())
+        {
+            rows.push(TrayRow::Element(
+                zuse_viewport::cloud_queue::queue(
+                    zuse_viewport::cloud_queue::Prompt::from_request(request),
+                    self.cloud.message.clone().unwrap_or_else(|| {
+                        if self.cloud.task.is_some() {
+                            "Preparing cloud workspace…".into()
+                        } else {
+                            "Cloud startup needs attention. Your message is still queued.".into()
+                        }
+                    }),
+                    self.cloud.task.is_some(),
+                    !crate::motion::reduced_motion(cx),
+                    theme.text,
+                    theme.text_muted,
+                    theme.border.opacity(0.4),
+                )
+                .into_any_element(),
+            ));
             if self.cloud.task.is_none() && self.visible_failure().is_none() {
-                rows.push(TrayRow::Element(div().w_full().flex().justify_end().px(px(12.)).py(px(4.))
-                    .child(tray_text_action("retry-cloud-launch", "Retry", None, &theme)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let text = this.input.read(cx).text().to_owned();
-                            this.send_cloud(text, cx);
-                        }))).into_any_element()));
+                rows.push(TrayRow::Element(
+                    div()
+                        .w_full()
+                        .flex()
+                        .justify_end()
+                        .px(px(12.))
+                        .py(px(4.))
+                        .child(
+                            tray_text_action("retry-cloud-launch", "Retry", None, &theme).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    let text = this.input.read(cx).text().to_owned();
+                                    this.send_cloud(text, cx);
+                                }),
+                            ),
+                        )
+                        .into_any_element(),
+                ));
             }
         } else if let Some((message, retry)) = self.pickers.read(cx).cloud_model_notice(cx) {
-            let row = TrayPill::new("native-cloud-models", message)
-                .glyph(crate::icons::DITHER_CLOUD);
+            let row =
+                TrayPill::new("native-cloud-models", message).glyph(crate::icons::DITHER_CLOUD);
             rows.push(TrayRow::Pill(if retry {
-                row.action(tray_text_action("retry-cloud-models", "Retry", None, &theme)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.pickers.update(cx, |picker, cx| picker.refresh_cloud_models(cx));
-                    })))
-            } else { row }));
+                row.action(
+                    tray_text_action("retry-cloud-models", "Retry", None, &theme).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.pickers
+                                .update(cx, |picker, cx| picker.refresh_cloud_models(cx));
+                        }),
+                    ),
+                )
+            } else {
+                row
+            }));
         }
         rows.extend(self.live_cloud_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.connection_row(cx).map(TrayRow::Pill));
@@ -627,7 +657,9 @@ impl Composer {
             );
         }
         let surface = tray_surface(&theme, cx.has_active_drag())
-            .when(self.cloud_launch_pending(cx), |surface| surface.bg(zuse_viewport::cloud_queue::background()))
+            .when(self.cloud_launch_pending(cx), |surface| {
+                surface.bg(zuse_viewport::cloud_queue::background())
+            })
             .debug_selector(|| "composer-tray".into())
             .children(rows);
         Some(
@@ -1177,14 +1209,23 @@ impl Composer {
         if let Some(message) = self.visible_failure() {
             let offline = message.as_ref() == "Engine not connected";
             let cloud_launch = self.cloud.request.is_some();
-            let sign_in = if cloud_launch { None } else { self.sign_in_row(None, harness, label, theme, cx) };
+            let sign_in = if cloud_launch {
+                None
+            } else {
+                self.sign_in_row(None, harness, label, theme, cx)
+            };
             let actions = if cloud_launch {
-                vec![tray_text_action("retry-cloud-launch", "Retry", None, theme)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        let text = this.input.read(cx).text().to_owned();
-                        this.send_cloud(text, cx);
-                    })).into_any_element()]
-            } else { Vec::new() };
+                vec![
+                    tray_text_action("retry-cloud-launch", "Retry", None, theme)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let text = this.input.read(cx).text().to_owned();
+                            this.send_cloud(text, cx);
+                        }))
+                        .into_any_element(),
+                ]
+            } else {
+                Vec::new()
+            };
             let (title, subtitle) = if offline {
                 ("Engine not connected", None)
             } else {

@@ -658,7 +658,8 @@ impl Element for DockedComposer {
         let y = if docked {
             f32::from(bounds.top())
         } else {
-            (self.viewport_height - f32::from(bounds.size.height) - self.floating_clearance).max(0.0)
+            (self.viewport_height - f32::from(bounds.size.height) - self.floating_clearance)
+                .max(0.0)
         };
         let position = state.position_at(x, y, self.reduced, self.now);
         state.last_geometry = Some(self.now);

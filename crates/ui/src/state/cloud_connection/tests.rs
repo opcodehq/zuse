@@ -93,7 +93,8 @@ async fn native_cloud_tools_share_workspace_authority_and_end_on_account_change(
     channel.outgoing.send(json!({"id":44,"method":methods::LIST_TERMINALS,"params":{"targetDeviceId":"cloud-local/session-one"}}).to_string()).await.unwrap();
     let reply: Value = serde_json::from_str(&channel.incoming.recv().await.unwrap()).unwrap();
     assert_eq!(reply, json!({"id":44,"ok":[],"done":true}));
-    root.account.send_replace(json!({"user":null,"login":null,"error":null}));
+    root.account
+        .send_replace(json!({"user":null,"login":null,"error":null}));
     tokio::time::timeout(std::time::Duration::from_secs(2), source.closed.cancelled())
         .await
         .unwrap();

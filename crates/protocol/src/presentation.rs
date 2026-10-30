@@ -565,7 +565,12 @@ mod permission_tests {
         assert_eq!(PermissionMode::Auto.label(), "Approve for me");
         assert_eq!(
             ACCESS_LEVELS.map(|level| access_details(level).label),
-            ["Ask for approval", "Approve for me", "Full access", "Read only"]
+            [
+                "Ask for approval",
+                "Approve for me",
+                "Full access",
+                "Read only"
+            ]
         );
     }
 }

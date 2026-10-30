@@ -291,6 +291,9 @@ fn audio_buffer_caps_recording_at_electron_duration_limit() {
         rate,
         &audio,
     );
-    assert_eq!(audio.samples.lock().unwrap().len(), rate as usize * MAX_SECONDS);
+    assert_eq!(
+        audio.samples.lock().unwrap().len(),
+        rate as usize * MAX_SECONDS
+    );
     assert!(audio.full.load(Ordering::Acquire));
 }

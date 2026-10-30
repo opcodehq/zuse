@@ -72,6 +72,7 @@ mod roll_text;
 pub mod rounded_clip;
 pub mod settings;
 pub mod shell;
+pub(crate) mod site_links;
 pub mod sound;
 pub mod state;
 pub(crate) mod surface_chrome;
@@ -85,9 +86,8 @@ pub(crate) mod tool_images;
 pub mod transcript;
 pub mod typography;
 pub mod visuals;
-mod workflow_board;
 pub mod voice;
-pub(crate) mod site_links;
+mod workflow_board;
 mod workspace_links;
 
 use std::path::PathBuf;
@@ -332,7 +332,11 @@ pub(crate) fn open_account_window(target: state::AccountTarget, cx: &mut App) {
 pub(crate) fn open_cloud_window(target: state::CloudTarget, cx: &mut App) {
     open_cloud_window_with_draft(target, None, cx);
 }
-pub(crate) fn open_cloud_window_with_draft(target: state::CloudTarget, draft: Option<(String, String, bool)>, cx: &mut App) {
+pub(crate) fn open_cloud_window_with_draft(
+    target: state::CloudTarget,
+    draft: Option<(String, String, bool)>,
+    cx: &mut App,
+) {
     let Some(reopen) = cx.try_global::<ReopenState>() else {
         return;
     };

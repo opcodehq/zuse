@@ -1,8 +1,8 @@
 //! Cloud launch and environment selection. Only interactive connection acquires compute.
-mod sync;
-mod uploads;
 mod creation;
 pub(super) mod models;
+mod sync;
+mod uploads;
 use super::*;
 use crate::assets::icon;
 use crate::shell::{BG, BORDER, MUTED, column, control, icon_button, label, row};
@@ -131,8 +131,12 @@ impl WorkspaceView {
         for (id, _) in self.cloud.forwards.drain().collect::<Vec<_>>() {
             self.cancel(id);
         }
-        for id in [self.cloud.sync.request, self.cloud.sync.metadata].into_iter().flatten() {
-            self.cancel(id); self.pending.remove(&id);
+        for id in [self.cloud.sync.request, self.cloud.sync.metadata]
+            .into_iter()
+            .flatten()
+        {
+            self.cancel(id);
+            self.pending.remove(&id);
         }
         self.cloud.sync = sync::SyncUi::default();
         self.cloud.child = None;
@@ -171,12 +175,17 @@ impl WorkspaceView {
             return;
         };
         if self.cloud.launch.is_none() && !self.cloud_model_ready() {
-            self.error = Some("Choose an available Cloud model before starting. Your draft is preserved.".into());
+            self.error = Some(
+                "Choose an available Cloud model before starting. Your draft is preserved.".into(),
+            );
             cx.notify();
             return;
         }
         if self.cloud.launch.is_none() {
-            let (base_ref, branch) = self.creation_source_picker.read(cx).cloud_ref(project["defaultBranch"].as_str().unwrap_or("main"));
+            let (base_ref, branch) = self
+                .creation_source_picker
+                .read(cx)
+                .cloud_ref(project["defaultBranch"].as_str().unwrap_or("main"));
             let model = self.selected_model().unwrap().id.clone();
             let configured = self.cloud_model_configuration_available();
             let mode = match self.sandbox {
@@ -184,7 +193,8 @@ impl WorkspaceView {
                 zuse_protocol::SandboxLevel::Auto => "auto",
                 zuse_protocol::SandboxLevel::DangerFullAccess => "full-access",
                 zuse_protocol::SandboxLevel::ReadOnly => {
-                    self.error = Some("Choose a supported permission mode before starting Cloud.".into());
+                    self.error =
+                        Some("Choose a supported permission mode before starting Cloud.".into());
                     cx.notify();
                     return;
                 }
@@ -200,8 +210,13 @@ impl WorkspaceView {
                 "expectedAccountId":self.cloud.account,
                 "attachmentTransfers":self.attachments.iter().map(|a| json!({"uploadId":a["uploadId"],"fileName":a["fileName"]})).collect::<Vec<_>>()
             }));
-            self.cloud.queued_prompt = self.cloud.launch.as_ref().map(crate::cloud_queue::Prompt::from_request);
-            self.input.update(cx, |input, cx| input.set_value(String::new(), cx));
+            self.cloud.queued_prompt = self
+                .cloud
+                .launch
+                .as_ref()
+                .map(crate::cloud_queue::Prompt::from_request);
+            self.input
+                .update(cx, |input, cx| input.set_value(String::new(), cx));
             self.attachments.clear();
             self.sync_previews(true, cx);
         }
@@ -239,7 +254,10 @@ impl WorkspaceView {
             .is_some_and(|m| m == methods::CLOUD_ACCOUNT_STATUS)
         {
             if let Some(value) = frame.get("ok").or_else(|| frame.get("item")) {
-                let owner = value["user"]["id"].as_str().filter(|_| value["orgId"].is_null()).map(str::to_owned);
+                let owner = value["user"]["id"]
+                    .as_str()
+                    .filter(|_| value["orgId"].is_null())
+                    .map(str::to_owned);
                 if self.cloud.account.is_some() && owner != self.cloud.account {
                     self.close_cloud();
                     self.cloud = Cloud::default();
@@ -247,7 +265,9 @@ impl WorkspaceView {
                 }
             }
         }
-        if self.receive_cloud_sync(frame) { return true; }
+        if self.receive_cloud_sync(frame) {
+            return true;
+        }
         let Some(id) = frame["id"].as_u64() else {
             return false;
         };
@@ -285,8 +305,13 @@ impl WorkspaceView {
         };
         if let Some(error) = frame.get("err") {
             if kind == 1 {
-                self.cloud_models.error = Some(error.as_str().or_else(|| error["message"].as_str())
-                    .unwrap_or("Couldn't load Cloud models. Retry when connected.").to_owned());
+                self.cloud_models.error = Some(
+                    error
+                        .as_str()
+                        .or_else(|| error["message"].as_str())
+                        .unwrap_or("Couldn't load Cloud models. Retry when connected.")
+                        .to_owned(),
+                );
                 self.invalidate_picker_menu();
             }
             if kind == 7 {
@@ -312,7 +337,9 @@ impl WorkspaceView {
                         self.cloud.workspaces.clear();
                     }
                     self.cloud.account = account;
-                    if self.cloud.launch.is_none() && self.cloud.target.is_none() { self.cloud.notice = None; }
+                    if self.cloud.launch.is_none() && self.cloud.target.is_none() {
+                        self.cloud.notice = None;
+                    }
                     self.cloud.projects = value["projects"].as_array().cloned().unwrap_or_default();
                     self.receive_cloud_models(value["agentCatalog"].clone(), cx);
                     self.cloud.project = self
@@ -334,7 +361,8 @@ impl WorkspaceView {
                         .collect()
                 }
                 3 => {
-                    self.creation_source_picker.update(cx, |picker, cx| picker.clear_selection(cx));
+                    self.creation_source_picker
+                        .update(cx, |picker, cx| picker.clear_selection(cx));
                     self.cloud.launch = None;
                     let queued = self.cloud.queued_prompt.take();
                     self.close_cloud();
@@ -346,7 +374,10 @@ impl WorkspaceView {
                 }
                 4 => {
                     if let Some(child) = &self.cloud.child {
-                        child.update(cx, |view, cx| { view.cloud.guest_status = value.clone(); cx.notify(); });
+                        child.update(cx, |view, cx| {
+                            view.cloud.guest_status = value.clone();
+                            cx.notify();
+                        });
                     }
                     let ready = value["state"] == "ready";
                     let epoch = value["epoch"].as_u64().unwrap_or(0);
@@ -391,7 +422,9 @@ impl WorkspaceView {
                     let child = self.cloud.child.take();
                     self.close_cloud();
                     self.cloud.child = child;
-                    if let Some(child) = &self.cloud.child { child.update(cx, |view, _| view.cloud.cached = true); }
+                    if let Some(child) = &self.cloud.child {
+                        child.update(cx, |view, _| view.cloud.cached = true);
+                    }
                     self.cloud.target = Some(value["workspace"].clone());
                     self.cloud.status = Value::Null;
                     let body = json!({"workspaceId":value["workspace"]["workspaceId"],"sessionId":session.unwrap_or_else(||value["workspace"]["initialSessionId"].as_str().unwrap_or_default().to_owned())});
@@ -476,7 +509,9 @@ impl WorkspaceView {
             .into_any_element()
     }
     fn cached_cloud_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(head) = self.cloud.head.clone() else { return; };
+        let Some(head) = self.cloud.head.clone() else {
+            return;
+        };
         let (requests, mut receiver) = futures::channel::mpsc::unbounded::<Value>();
         let (_, events) = futures::channel::mpsc::unbounded();
         let child = self.cloud.child.clone().unwrap_or_else(|| {
@@ -530,8 +565,17 @@ impl WorkspaceView {
             view.providers = self.providers.clone();
             view.preferences = self.preferences.clone();
             view.connected = false;
-            view.status = if status["state"] == "paused" { "Paused" } else { "Saved history" }.into();
-            view.model = head.chat.config.as_ref().and_then(|config| config.model.clone());
+            view.status = if status["state"] == "paused" {
+                "Paused"
+            } else {
+                "Saved history"
+            }
+            .into();
+            view.model = head
+                .chat
+                .config
+                .as_ref()
+                .and_then(|config| config.model.clone());
             cx.notify();
         });
         self.cloud.child = Some(child);
@@ -558,7 +602,8 @@ impl WorkspaceView {
         }));
     }
     fn cloud_reconnect_tray(&self, cx: &mut Context<Self>) -> AnyElement {
-        let state = self.cloud.status["state"].as_str()
+        let state = self.cloud.status["state"]
+            .as_str()
             .filter(|state| !state.is_empty())
             .or_else(|| self.cloud.target.as_ref().and_then(|t| t["state"].as_str()))
             .unwrap_or("paused");
@@ -676,7 +721,10 @@ impl WorkspaceView {
                 view.cloud.guest = true;
                 view.cloud.guest_status = self.cloud.status.clone();
                 view.cloud.resume_draft = resumed;
-                if let Some((open, tab)) = panel { view.right_open = open; view.right_tab = tab; }
+                if let Some((open, tab)) = panel {
+                    view.right_open = open;
+                    view.right_tab = tab;
+                }
 
                 view.cloud.guest_workspace = self
                     .cloud
@@ -743,14 +791,39 @@ impl WorkspaceView {
         } else if !ready && (self.cloud.child.is_none() || self.cloud.refresh_cached) {
             self.cloud.refresh_cached = false;
             self.cached_cloud_view(window, cx);
-        } else if !ready && self.cloud.child.as_ref().is_some_and(|child|child.read(cx).cloud.cached) {
-            let mut state = if self.cloud.status_request.is_some() { self.cloud.status.clone() } else { self.cloud.target.as_ref().cloned().unwrap_or_default() };
-            if state["state"] == "ready" || state["state"].is_null() { state["state"] = json!("blocked"); }
-            self.cloud.child.as_ref().unwrap().update(cx, |view, _|view.cloud.guest_status = state);
+        } else if !ready
+            && self
+                .cloud
+                .child
+                .as_ref()
+                .is_some_and(|child| child.read(cx).cloud.cached)
+        {
+            let mut state = if self.cloud.status_request.is_some() {
+                self.cloud.status.clone()
+            } else {
+                self.cloud.target.as_ref().cloned().unwrap_or_default()
+            };
+            if state["state"] == "ready" || state["state"].is_null() {
+                state["state"] = json!("blocked");
+            }
+            self.cloud
+                .child
+                .as_ref()
+                .unwrap()
+                .update(cx, |view, _| view.cloud.guest_status = state);
         }
-        let live = self.cloud.child.as_ref().is_some_and(|child| !child.read(cx).cached_only);
-        let branch = self.cloud.target.as_ref()
-            .and_then(|t| t["branch"].as_str()).unwrap_or("Cloud workspace").to_owned();
+        let live = self
+            .cloud
+            .child
+            .as_ref()
+            .is_some_and(|child| !child.read(cx).cached_only);
+        let branch = self
+            .cloud
+            .target
+            .as_ref()
+            .and_then(|t| t["branch"].as_str())
+            .unwrap_or("Cloud workspace")
+            .to_owned();
         column()
             .relative()
             .size_full()

@@ -22,13 +22,20 @@ struct TestIdentity;
 #[async_trait]
 impl Identity for TestIdentity {
     async fn verify(&self, token: &str) -> Result<Principal, ApiError> {
-        let token = if std::env::var_os("ZUSE_CLOUD_MODEL_ACCEPTANCE").is_some() && token.starts_with("fixture.") && token.ends_with(".signature") {
+        let token = if std::env::var_os("ZUSE_CLOUD_MODEL_ACCEPTANCE").is_some()
+            && token.starts_with("fixture.")
+            && token.ends_with(".signature")
+        {
             use base64::Engine as _;
-            let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token.split('.').nth(1).unwrap()).unwrap();
+            let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(token.split('.').nth(1).unwrap())
+                .unwrap();
             let claims: Value = serde_json::from_slice(&payload).unwrap();
             assert_eq!(claims["sub"], "user-bob");
             "bob"
-        } else { token };
+        } else {
+            token
+        };
         let token = if token == "dev-user"
             && std::env::var_os("ZUSE_CLOUD_BILLING_UI_FIXTURE_FILE").is_some()
         {
@@ -1788,10 +1795,14 @@ mod runtime_engine {
         async fn inspect_retained(
             &self,
             id: &str,
-        ) -> Result<Option<zuse_cloud::providers::Machine>, zuse_cloud::providers::ProviderError> {
+        ) -> Result<Option<zuse_cloud::providers::Machine>, zuse_cloud::providers::ProviderError>
+        {
             Ok(self.machine.lock().unwrap().clone().filter(|m| m.id == id))
         }
-        async fn pause_retained(&self, id: &str) -> Result<(), zuse_cloud::providers::ProviderError> {
+        async fn pause_retained(
+            &self,
+            id: &str,
+        ) -> Result<(), zuse_cloud::providers::ProviderError> {
             if let Some(mut child) = self.child.lock().await.take() {
                 stop_guest(&mut child).await;
             }
@@ -1936,7 +1947,10 @@ mod runtime_engine {
             .await
             .unwrap();
         sqlx::raw_sql("CREATE TABLE api_cloud_auth_authorities(account_id text PRIMARY KEY,storage_incarnation_id text NOT NULL,auth_epoch bigint NOT NULL,state text NOT NULL); INSERT INTO api_cloud_auth_authorities VALUES('user-bob','original-auth-storage',1,'ready'); UPDATE api_cloud_project_builds SET settings=settings||'{\"providerAuthDeliveryVersion\":1}'::jsonb WHERE build_id='rust-build';").execute(&api.pool).await.unwrap();
-        sqlx::raw_sql(zuse_cloud::runtime::assets::MIGRATION).execute(&api.pool).await.unwrap();
+        sqlx::raw_sql(zuse_cloud::runtime::assets::MIGRATION)
+            .execute(&api.pool)
+            .await
+            .unwrap();
         sqlx::query("UPDATE api_cloud_project_builds SET settings=settings||'{\"rustLaunchAssetsVersion\":1}'::jsonb WHERE build_id='rust-build'").execute(&api.pool).await.unwrap();
         if std::env::var_os("ZUSE_CLOUD_MODEL_ACCEPTANCE").is_some() {
             sqlx::query("UPDATE api_cloud_project_builds SET settings=settings||'{\"rustLaunchModelConfigVersion\":1}'::jsonb WHERE build_id='rust-build'").execute(&api.pool).await.unwrap();
@@ -1953,20 +1967,42 @@ mod runtime_engine {
             .keep();
         let provider = allocation_fixture(&api, root.as_path(), false).await;
         if std::env::var_os("ZUSE_CLOUD_SOURCE_ACCEPTANCE").is_some() {
-            for args in [
-                vec!["switch", "-c", "feature/from-pr"],
-            ] {
-                assert!(std::process::Command::new("git").arg("-C").arg(&provider.checkout).args(args).status().unwrap().success());
+            for args in [vec!["switch", "-c", "feature/from-pr"]] {
+                assert!(
+                    std::process::Command::new("git")
+                        .arg("-C")
+                        .arg(&provider.checkout)
+                        .args(args)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
             }
-            std::fs::write(provider.checkout.join("tracked"), "selected Cloud source bytes").unwrap();
+            std::fs::write(
+                provider.checkout.join("tracked"),
+                "selected Cloud source bytes",
+            )
+            .unwrap();
             for args in [
                 vec!["commit", "-am", "Selected source"],
                 vec!["update-ref", "refs/remotes/origin/feature/from-pr", "HEAD"],
-                vec!["update-ref", "refs/remotes/origin/feature/available", "HEAD"],
+                vec![
+                    "update-ref",
+                    "refs/remotes/origin/feature/available",
+                    "HEAD",
+                ],
                 vec!["update-ref", "refs/pull/84/head", "HEAD"],
                 vec!["switch", "main"],
             ] {
-                assert!(std::process::Command::new("git").arg("-C").arg(&provider.checkout).args(args).status().unwrap().success());
+                assert!(
+                    std::process::Command::new("git")
+                        .arg("-C")
+                        .arg(&provider.checkout)
+                        .args(args)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
             }
         }
         provider.uncertain_create.store(false, Ordering::SeqCst);
@@ -2641,11 +2677,16 @@ for line in sys.stdin:
                     let projection_lost_ack = projection_lost_ack.clone();
                     let quiesced_lost_ack = quiesced_lost_ack.clone();
                     async move {
-                        if let Some(path)=std::env::var_os("ZUSE_CLOUD_TEST_HTTP_TRACE") {
+                        if let Some(path) = std::env::var_os("ZUSE_CLOUD_TEST_HTTP_TRACE") {
                             use std::io::Write;
                             if request.uri().path().starts_with("/v1/cloud/workspaces/") {
-                                let mut file=std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
-                                writeln!(file,"{} {}",request.method(),request.uri().path()).unwrap();
+                                let mut file = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(path)
+                                    .unwrap();
+                                writeln!(file, "{} {}", request.method(), request.uri().path())
+                                    .unwrap();
                             }
                         }
                         let (request, quiesced) = if quiesced_lost_ack.load(Ordering::SeqCst)
@@ -4716,16 +4757,33 @@ async fn authenticated_creation_is_atomic_idempotent_and_honors_existing_billing
     let mut body = json!({"projectId":"create-project","providerId":"boxd","baseRef":"main","branch":"cloud/created","agent":"codex","model":"fixture","firstMessage":"Original retained prompt","idempotencyKey":"create-once"});
     let (_, context) = request(&app, "/v1/cloud/context", "bob", None).await;
     assert_eq!(context["projects"][0]["supportsModelConfiguration"], false);
-    let catalog: zuse_protocol::cloud_catalog::CloudAgentCatalog = serde_json::from_value(context["agentCatalog"].clone()).unwrap();
+    let catalog: zuse_protocol::cloud_catalog::CloudAgentCatalog =
+        serde_json::from_value(context["agentCatalog"].clone()).unwrap();
     assert_eq!(catalog.providers.len(), 1);
-    assert_eq!(catalog.providers[0].id, zuse_protocol::HarnessId::ClaudeCode);
-    assert!(catalog.providers[0].resolve_model(&catalog.providers[0].default_model).is_some());
+    assert_eq!(
+        catalog.providers[0].id,
+        zuse_protocol::HarnessId::ClaudeCode
+    );
+    assert!(
+        catalog.providers[0]
+            .resolve_model(&catalog.providers[0].default_model)
+            .is_some()
+    );
     body["reasoning"] = json!("high");
     body["modelOptions"] = json!({"contextWindow":"1m","fastMode":"on"});
     let endpoint = "/v1/cloud/workspaces";
-    assert_eq!(runtime_post(&app, endpoint, "bob", &body).await.1["error"], "cloud_model_configuration_runtime_update_required");
-    let allocations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM zuse_rust_allocations").fetch_one(&pool).await.unwrap();
-    assert_eq!(allocations, 0, "Unsupported image must not allocate compute");
+    assert_eq!(
+        runtime_post(&app, endpoint, "bob", &body).await.1["error"],
+        "cloud_model_configuration_runtime_update_required"
+    );
+    let allocations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM zuse_rust_allocations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        allocations, 0,
+        "Unsupported image must not allocate compute"
+    );
     sqlx::query("UPDATE api_cloud_project_builds SET settings=settings||'{\"rustLaunchModelConfigVersion\":1}'::jsonb WHERE build_id='rust-build'").execute(&pool).await.unwrap();
     let (_, context) = request(&app, "/v1/cloud/context", "bob", None).await;
     assert_eq!(context["projects"][0]["supportsModelConfiguration"], true);

@@ -28,7 +28,9 @@ impl WorkspaceView {
         }
     }
     pub(super) fn composer_providers(&self) -> &[Value] {
-        if self.cloud_models_active() { return &self.cloud_models.providers; }
+        if self.cloud_models_active() {
+            return &self.cloud_models.providers;
+        }
         if self.model_host.target.is_some() {
             &self.model_host.rows
         } else {
@@ -58,7 +60,9 @@ impl WorkspaceView {
         }
     }
     pub(super) fn composer_catalog(&self) -> &PickerCatalog {
-        if self.cloud_models_active() { return &self.cloud_models.catalog; }
+        if self.cloud_models_active() {
+            return &self.cloud_models.catalog;
+        }
         if self.model_host.target.is_some() {
             &self.model_host.catalog
         } else {

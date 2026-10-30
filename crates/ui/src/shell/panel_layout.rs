@@ -536,8 +536,11 @@ impl Shell {
     /// the mask, including after expansion settles and during reversals.
     pub(super) fn main_content_width(&self, target: f32, cx: &App) -> f32 {
         if self.main_takeover_active() {
-            let available =
-                (self.viewport_width - self.files_reserved_width(cx) - self.sidebar_now() - 2. * self.workspace_gutter()).max(0.0);
+            let available = (self.viewport_width
+                - self.files_reserved_width(cx)
+                - self.sidebar_now()
+                - 2. * self.workspace_gutter())
+            .max(0.0);
             let retained = self
                 .main_takeover_tween
                 .map(|tween| {
@@ -548,7 +551,9 @@ impl Shell {
                         // conversation will rest, which a panel opening or
                         // closing meanwhile may have moved.
                         let settled = conversation_width(
-                            self.viewport_width - self.files_settled_width(cx) - 2. * self.workspace_gutter(),
+                            self.viewport_width
+                                - self.files_settled_width(cx)
+                                - 2. * self.workspace_gutter(),
                             self.sidebar_target(),
                             self.right_settled_target(cx),
                         );
