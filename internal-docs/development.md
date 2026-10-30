@@ -170,3 +170,36 @@ An interrupted or malformed acknowledgement triggers a fresh read and discards q
 The composer’s context ring reads `contextUsage` from the selected execution host’s `WatchDocMessages` stream. The card shows reported tokens/capacity, a 38-segment meter and remaining capacity. It distinguishes zero usage from unknown usage, hides unreported or zero capacity, clamps the displayed percentage and saturates remaining capacity at zero. It never derives occupancy from cumulative billing totals or guesses a capacity from a model name.
 
 Changing conversations or execution hosts clears the previous measurement. Disconnection preserves the last reported value with an offline label; reconnecting keeps it marked as refreshing until a valid transcript update arrives. Malformed transcript updates do not replace the last valid measurement. The card is read-only and shares its GPU ring painter with the native indicators.
+
+### Device simulator development
+
+The host controller is `zuse-simulator`; its `Runner` trait allows boot, input,
+serial mapping, screenshots and missing-tool states to be tested without Xcode
+or an Android SDK. Start with `cargo test -p zuse-simulator --lib`,
+`cargo test -p zuse-rpc --lib simulator`, `cargo test -p zuse-mcp --lib simulator`,
+`cargo test -p zuse-engine --lib simulator`, and
+`cargo test -p zuse-ui --lib simulator`. Device setup and Mac/Android hardware
+acceptance are documented in [device-simulators.md](device-simulators.md).
+
+For visual snapshots on a host with a display (or Xvfb), run
+`cargo run -p zuse-ui --example simulator-fixture --features simulator-fixture -- .context/simulator-shots`.
+The fixture uses the production chat shell with synthetic setup, picker and
+screen data. Focused native pane images cover onboarding, checking, Device Hub
+installation/startup/discovery, agent installation, and both retry states. The
+full-shell captures cover picker and dark/light viewer; the fixture also opens
+and dismisses the overflow menu. These are scripted host states, not a recording
+of real downloads or device execution. It does not boot a device.
+The synthetic app image has an editable source at
+`crates/ui/examples/simulator-sample.svg` and a checked-in PNG used by the fixture.
+
+On Linux, use X11 (unset `WAYLAND_DISPLAY`) or Xvfb and install ImageMagick:
+the fixture explicitly presents each frame, then captures its X11 window with
+`import` because GPUI's X11
+backend does not implement `render_to_image`. This capture dependency is only
+for the visual fixture, not the simulator pane.
+
+The optional real helper smoke test downloads the exact reference versions into
+a temporary prefix, verifies the agent CLI, reads a real loopback hub catalog,
+and prepares/stops a supervised agent daemon without sending device commands:
+`cargo test -p zuse-simulator --lib setup::smoke::pinned_helpers_install_verify_and_start_on_linux -- --ignored --nocapture`.
+It requires Node.js 22.12+, npm, and network; it is ignored in the normal suite.

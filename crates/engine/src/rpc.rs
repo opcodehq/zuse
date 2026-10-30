@@ -56,6 +56,7 @@ mod desktop_import;
 mod dictation;
 mod external_chats;
 mod git_workspace;
+mod simulators;
 mod visuals;
 mod voice_chat;
 mod voice_remote;
@@ -721,6 +722,7 @@ pub struct EngineRpc {
     plugins: Option<crate::plugins::Plugins>,
     voice: crate::voice::VoiceManager,
     visuals: crate::visuals::Visuals,
+    simulators: zuse_simulator::Simulators,
     sessions: SessionsEngine,
     doc_host: DocHost,
     workspace: WorkspaceHost,
@@ -783,6 +785,7 @@ impl EngineRpc {
             plugins: None,
             voice: sessions.voice_manager(),
             visuals: crate::visuals::Visuals::default(),
+            simulators: zuse_simulator::Simulators::default(),
             sessions,
             doc_host,
             workspace,
@@ -820,6 +823,11 @@ impl EngineRpc {
 
     pub fn with_desktop_import(mut self, profile: std::path::PathBuf) -> Self {
         self.desktop_import_profile = Some(profile);
+        self
+    }
+
+    pub(crate) fn with_simulators(mut self, simulators: zuse_simulator::Simulators) -> Self {
+        self.simulators = simulators;
         self
     }
 
@@ -1229,6 +1237,7 @@ impl EngineRpc {
             if matches!(
                 method,
                 methods::OWN_VOICE_V2
+                    | methods::SIMULATOR_FRAMES
                     | methods::WATCH_CHECKOUT_CHANGE_REQUEST
                     | methods::WATCH_WORKSPACE_GIT_STATUS
                     | methods::WATCH_HARNESS_UPDATES
@@ -1471,6 +1480,7 @@ impl EngineRpc {
             MutateParams::DeleteChat { chat_id } => {
                 self.voice.retire_chat(&chat_id);
                 self.workspace.delete_chat(&chat_id).map_err(failed)?;
+                self.simulators.forget_chat(&chat_id);
                 self.doc_host.purge_chat(&chat_id);
                 Ok(())
             }
@@ -1598,6 +1608,11 @@ where
 }
 
 fn forward_deadline(method: &str) -> std::time::Duration {
+    // Hub cold boots and the first agent XCTest preparation need room for
+    // discovery, native readiness checks and an already admitted operation.
+    if simulators::handles(method) {
+        return Duration::from_secs(8 * 60);
+    }
     if method == methods::PREPARE_VOICE_V2 {
         return Duration::from_secs(65);
     }
@@ -1643,7 +1658,7 @@ fn forwardable_request(method: &str, params: &serde_json::Value) -> bool {
 }
 
 fn forwardable(method: &str) -> bool {
-    if voice_remote::handles(method) {
+    if simulators::handles(method) || voice_remote::handles(method) {
         return true;
     }
     matches!(
@@ -1786,7 +1801,7 @@ fn forwardable(method: &str) -> bool {
 
 /// Forwardable methods whose reply is a stream (proxied item-by-item).
 fn is_stream_method(method: &str) -> bool {
-    if method == methods::OWN_VOICE_V2 {
+    if method == methods::SIMULATOR_FRAMES || method == methods::OWN_VOICE_V2 {
         return true;
     }
     matches!(
@@ -5242,6 +5257,14 @@ impl RpcService for EngineRpc {
                 .map_err(failed)?;
                 RpcReply::value(&chunk)
             }
+            methods::SIMULATOR_STATE
+            | methods::CONFIGURE_SIMULATORS
+            | methods::OPEN_SIMULATOR
+            | methods::CLOSE_SIMULATOR
+            | methods::SIMULATOR_INPUT
+            | methods::SIMULATOR_SCREENSHOT
+            | methods::SIMULATOR_FRAMES
+            | methods::SIMULATOR_TOOL => self.simulator_rpc(method, params).await,
             methods::OPEN_VISUAL | methods::CONTROL_VISUAL | methods::DRAW_VISUAL => {
                 self.visual_rpc(method, params).await
             }

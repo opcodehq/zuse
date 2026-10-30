@@ -9,6 +9,7 @@ publish.workspace = true
 test-support = []
 
 [dependencies]
+zuse-simulator.workspace = true
 zuse-usage.workspace = true
 zuse-cloud-projection.workspace = true
 jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto"] }
