@@ -191,8 +191,7 @@ impl Repos {
     }
 
     /// Where projectless chats' folders live on this host: the engine data
-    /// dir's `scratch` (`~/.zuse/scratch` for the default data dir), as
-    /// t3code keeps its under `~/.t3/scratch`.
+    /// dir's `scratch` (`~/.zuse/scratch` for the default data dir).
     pub(crate) fn scratch_root(&self) -> PathBuf {
         self.inner.data_dir.join("scratch")
     }
@@ -1367,7 +1366,7 @@ impl Repos {
     }
 
     /// Switch the checkout at `cwd` (a main folder OR a linked worktree) to
-    /// `ref_name` — the t3code `switchRef` port: an existing local branch is
+    /// `ref_name`: an existing local branch is
     /// checked out directly; a remote-only branch gets a local tracking
     /// branch (`checkout --track origin/<ref>`). A dirty tree or a branch
     /// already checked out in another worktree fails with git's own message.

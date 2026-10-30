@@ -394,7 +394,7 @@ impl WorkspaceDoc {
     }
 
     /// Retarget the chat onto another folder — the mid-session "switch to an
-    /// existing worktree" move (t3code `reuseExistingWorktree`). LWW set;
+    /// existing worktree" move. LWW set;
     /// `false` when no such row. Harness resume is cwd-scoped, so the next
     /// run in the new folder starts a fresh harness conversation by design.
     pub fn set_chat_cwd(&self, chat_id: &str, cwd: &str) -> Result<bool, DocError> {
