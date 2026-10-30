@@ -184,8 +184,11 @@ acceptance are documented in [device-simulators.md](device-simulators.md).
 For visual snapshots on a host with a display (or Xvfb), run
 `cargo run -p zuse-ui --example simulator-fixture --features simulator-fixture -- .context/simulator-shots`.
 The fixture uses the production chat shell with synthetic setup, picker and
-screen data; it writes dark/light viewer images, clicks the overflow toolbar
-button and captures its menu, then dismisses it. It does not boot a device.
+screen data. Focused native pane images cover onboarding, checking, Device Hub
+installation/startup/discovery, agent installation, and both retry states. The
+full-shell captures cover picker and dark/light viewer; the fixture also opens
+and dismisses the overflow menu. These are scripted host states, not a recording
+of real downloads or device execution. It does not boot a device.
 The synthetic app image has an editable source at
 `crates/ui/examples/simulator-sample.svg` and a checked-in PNG used by the fixture.
 
@@ -194,3 +197,9 @@ the fixture explicitly presents each frame, then captures its X11 window with
 `import` because GPUI's X11
 backend does not implement `render_to_image`. This capture dependency is only
 for the visual fixture, not the simulator pane.
+
+The optional real helper smoke test downloads the exact reference versions into
+a temporary prefix, verifies the agent CLI, reads a real loopback hub catalog,
+and prepares/stops a supervised agent daemon without sending device commands:
+`cargo test -p zuse-simulator --lib setup::smoke::pinned_helpers_install_verify_and_start_on_linux -- --ignored --nocapture`.
+It requires Node.js 22.12+, npm, and network; it is ignored in the normal suite.

@@ -447,7 +447,7 @@ impl EngineCore {
             spaces_sync,
             uploads,
             visuals: visuals::Visuals::default(),
-            simulators: zuse_simulator::Simulators::default(),
+            simulators: zuse_simulator::Simulators::managed(profile.store_root().join("simulator-tools")),
             agent_accounts,
             harness_updates,
             device_id,

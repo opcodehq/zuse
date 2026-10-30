@@ -1608,10 +1608,10 @@ where
 }
 
 fn forward_deadline(method: &str) -> std::time::Duration {
-    // Simulator boot can take two minutes; serialized device operations also
-    // need headroom for discovery and an already admitted boot on the host.
+    // Hub cold boots and the first agent XCTest preparation need room for
+    // discovery, native readiness checks and an already admitted operation.
     if simulators::handles(method) {
-        return Duration::from_secs(5 * 60);
+        return Duration::from_secs(8 * 60);
     }
     if method == methods::PREPARE_VOICE_V2 {
         return Duration::from_secs(65);

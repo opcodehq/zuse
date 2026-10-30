@@ -14145,9 +14145,14 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "futures",
+ "libc",
+ "reqwest",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
+ "tokio-tungstenite 0.24.0",
  "zuse-protocol",
 ]
 

@@ -63,14 +63,11 @@ impl EngineRpc {
             return RpcReply::value(&self.simulators.state(&p.chat_id).await);
         }
         if method == methods::CONFIGURE_SIMULATORS {
-            let enabled = p
-                .enabled
-                .ok_or_else(|| RpcError::BadParams("enabled is required".into()))?;
-            let access = p
-                .agent_access
-                .ok_or_else(|| RpcError::BadParams("agentAccess is required".into()))?;
+            let current = self.simulators.preferences(&p.chat_id);
+            let enabled = p.enabled.unwrap_or(current.0);
+            let access = p.agent_access.unwrap_or(current.1);
             self.simulators.configure(&p.chat_id, enabled, access).await;
-            return RpcReply::value(&self.simulators.state(&p.chat_id).await);
+            return RpcReply::value(&self.simulators.snapshot(&p.chat_id));
         }
         let agent = method == methods::SIMULATOR_TOOL;
         let (action, device_id, input, shutdown) = if agent {
@@ -224,7 +221,18 @@ mod tests {
         core.workspace
             .create_chat("remote", None, Some("another-host"), None, None)
             .unwrap();
-        let rpc = core.rpc_service();
+        let simulator = zuse_simulator::Simulators::new(
+            Arc::new(Fixture),
+            zuse_simulator::Toolchain {
+                macos: true,
+                ..Default::default()
+            },
+        );
+        let rpc = core
+            .rpc_service()
+            .as_ref()
+            .clone()
+            .with_simulators(simulator.clone());
         assert!(
             rpc.simulator_rpc(
                 methods::SIMULATOR_TOOL,
@@ -243,7 +251,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        core.simulators.configure("chat", true, true).await;
+        simulator.configure("chat", true, true).await;
         let result = rpc
             .simulator_rpc(
                 methods::SIMULATOR_TOOL,
@@ -251,10 +259,33 @@ mod tests {
             )
             .await;
         assert!(matches!(result,Err(RpcError::Failed(message)) if message.contains("plan mode")));
+        let RpcReply::Value(updated) = rpc
+            .simulator_rpc(
+                methods::CONFIGURE_SIMULATORS,
+                json!({"chatId":"chat","agentAccess":false}),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("configure must return state")
+        };
+        assert_eq!(updated["enabled"], true);
+        assert_eq!(updated["agentAccess"], false);
+        let RpcReply::Value(updated) = rpc
+            .simulator_rpc(
+                methods::CONFIGURE_SIMULATORS,
+                json!({"chatId":"chat","enabled":false}),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("configure must return state")
+        };
+        assert_eq!(updated["enabled"], false);
         assert!(super::super::forwardable(methods::SIMULATOR_TOOL));
         assert_eq!(
             super::super::forward_deadline(methods::OPEN_SIMULATOR),
-            Duration::from_secs(300)
+            Duration::from_secs(480)
         );
         assert!(super::super::is_stream_method(methods::SIMULATOR_FRAMES));
     }

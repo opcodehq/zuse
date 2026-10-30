@@ -320,5 +320,13 @@ boot, input, image bounds and shutdown. RPC tests cover owning-host routing,
 read-only agent mutation denial and stream revocation. MCP/native tools preserve
 screenshot image content; the simulator RPC queue is capped independently of
 ordinary stream queues. UI geometry excludes letterboxed margins from taps.
-Real iOS/Xcode/idb and Android/KVM execution remain required acceptance gates;
+Real iOS/Xcode/Device Hub HID and Android/KVM execution remain required acceptance gates;
 [device-simulators.md](device-simulators.md) contains the exact manual checklist.
+
+The simulator installer additionally has fake tests for read-only prerequisites,
+pinned/atomic cache publication, duplicate requests, cancellation and late-ready
+protection, separate agent installation/revocation, and multi-chat ownership. An
+explicit real-package smoke test verifies both pinned installs, hub HTTP startup,
+and owned agent-daemon registration without device input. Native capture fixtures
+show onboarding, all helper installation phases, and retry states. Mac/XCTest,
+Android SDK/KVM, and remote-host hardware acceptance remain on the simulator checklist.

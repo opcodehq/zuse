@@ -31,6 +31,8 @@ pub struct Device {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct State {
+    #[serde(default)]
+    pub setup: Option<Setup>,
     pub enabled: bool,
     pub agent_access: bool,
     pub requirements: Vec<Requirement>,
@@ -76,4 +78,62 @@ pub struct Frame {
 pub enum FrameEvent {
     Frame { frame: Frame },
     Error { message: String },
+}
+
+/// Progress comes from the host installer; the renderer never advances it on a timer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SetupStatus {
+    #[default]
+    Disabled,
+    Checking,
+    Installing,
+    Starting,
+    Discovering,
+    Ready,
+    Unavailable,
+    Error,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentStatus {
+    #[default]
+    Off,
+    Installing,
+    Ready,
+    Error,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupRequirement {
+    pub label: String,
+    pub ready: bool,
+    pub detail: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Setup {
+    #[serde(default)]
+    pub step: usize,
+    pub status: SetupStatus,
+    pub detail: String,
+    pub requirements: Vec<SetupRequirement>,
+    pub agent_status: AgentStatus,
+    pub agent_detail: String,
+    pub hub_version: String,
+    pub agent_version: String,
+}
+impl Default for Setup {
+    fn default() -> Self {
+        Self {
+            step: 0,
+            status: SetupStatus::Disabled,
+            detail: String::new(),
+            requirements: Vec::new(),
+            agent_status: AgentStatus::Off,
+            agent_detail: String::new(),
+            hub_version: "0.15.3".into(),
+            agent_version: "0.21.23".into(),
+        }
+    }
 }

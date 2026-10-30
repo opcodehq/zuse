@@ -87,6 +87,7 @@ fn main() -> anyhow::Result<()> {
         default_harness: zuse_protocol::HarnessId::Codex,
     };
     let handle = runtime.block_on(state::EngineHandle::bootstrap(boot.clone()))?;
+    let setup_handle=handle.clone();
     let chats = core.workspace.read_chats()?;
     let device = core.device_id.clone();
     let fail = Arc::new(std::sync::Mutex::new(None));
@@ -116,6 +117,29 @@ fn main() -> anyhow::Result<()> {
                     cx.background_executor().timer(Duration::from_millis(600)).await;
                     capture(window.into(),cx,&output.join(format!("{name}.png"))).await?;
                 }
+                use zuse_protocol::simulators::{Setup, SetupStatus, AgentStatus, SetupRequirement};
+                let host_requirements=vec![
+                    SetupRequirement{label:"Node.js".into(),ready:true,detail:"v24.22.1".into()},
+                    SetupRequirement{label:"npm".into(),ready:true,detail:"Available".into()},
+                    SetupRequirement{label:"Device platform".into(),ready:true,detail:"Xcode and Android SDK tools available".into()},
+                ];
+                let setup_window=cx.update(|cx|cx.open_window(WindowOptions{window_bounds:Some(WindowBounds::Windowed(Bounds::new(gpui::point(px(30.),px(30.)),size(px(400.),px(720.))))),..Default::default()},|window,cx|cx.new(|cx|simulator::SimulatorPane::new(setup_handle.clone(),"simulator-fixture".into(),device.clone(),window,cx))))?;
+                for (name,status,step,agent_status,detail) in [
+                    ("simulator-onboarding",SetupStatus::Disabled,0,AgentStatus::Off,""),
+                    ("simulator-checking",SetupStatus::Checking,0,AgentStatus::Off,"Checking this host…"),
+                    ("simulator-installing-hub",SetupStatus::Installing,1,AgentStatus::Off,"Installing Device Hub 0.15.3…"),
+                    ("simulator-starting-hub",SetupStatus::Starting,2,AgentStatus::Off,"Starting Device Hub…"),
+                    ("simulator-discovering",SetupStatus::Discovering,3,AgentStatus::Off,"Finding available devices…"),
+                    ("simulator-installing-agent",SetupStatus::Ready,4,AgentStatus::Installing,"Device Hub is ready"),
+                    ("simulator-install-error",SetupStatus::Error,1,AgentStatus::Off,"Device setup failed: npm could not reach the package registry. Check your connection and try again."),
+                    ("simulator-agent-error",SetupStatus::Ready,4,AgentStatus::Error,"Device Hub is ready"),
+                ] {
+                    let setup=Setup{status,step,agent_status,detail:detail.into(),requirements:host_requirements.clone(),agent_detail:if agent_status==AgentStatus::Error {"Agent tool setup failed: package verification failed. Try again to download a fresh copy.".into()} else {"Installing agent-device 0.21.23…".into()},..Default::default()};
+                    setup_window.update(cx,|pane,_,cx|pane.fixture_load(zuse_protocol::simulators::State{enabled:status!=SetupStatus::Disabled,agent_access:true,setup:Some(setup),..Default::default()},None,cx))?;
+                    cx.background_executor().timer(Duration::from_millis(350)).await;
+                    capture(setup_window.into(),cx,&output.join(format!("{name}.png"))).await?;
+                }
+                setup_window.update(cx,|_,window,_|window.remove_window())?;
                 let pixels=image::load_from_memory(include_bytes!("simulator-sample.png"))?.to_rgba8();
                 let mut png=std::io::Cursor::new(Vec::new());image::DynamicImage::ImageRgba8(pixels).write_to(&mut png,image::ImageFormat::Png)?;
                 use base64::Engine as _;
@@ -139,7 +163,7 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
-                std::fs::write(output.join("result.txt"),"Production Shell and SimulatorPane with synthetic setup/picker/viewer data. No real device execution.\n")?;Ok(())
+                std::fs::write(output.join("result.txt"),"Production Shell and SimulatorPane with scripted onboarding, helper installation/progress/failure, picker and viewer states. No real device execution.\n")?;Ok(())
             }.await;
             if let Err(error)=run {*result.lock().unwrap()=Some(format!("{error:#}"));}
             let _=window.update(cx,|_,w,_|w.remove_window());cx.update(|cx|cx.quit());

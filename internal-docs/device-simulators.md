@@ -1,180 +1,207 @@
 # Device simulator pane
 
-The chat's right-pane launcher and `+` menu offer **Simulator**. Enable device
-support, inspect setup requirements, and choose an iOS Simulator or Android AVD.
-The screen stays beside the conversation. Touch the displayed image to tap;
-use the text field and Send/Enter, Home, Screenshot, and Android Back/Recents.
-Screenshot copies the PNG to the clipboard. The overflow menu contains agent
-control, Reconnect, Disconnect, Shut down, and Disable devices. Disconnect
-releases the chat's session;
-Shut down also powers off the device. Reconnect rediscovers and boots the same
-stable device id after a stopped device or replaced Android serial.
+Open **Simulator** from the chat's right-pane launcher or `+` menu. The centered
+onboarding checks Node.js, npm, and the execution host's device tools. Choose
+**Allow agent control**, then **Turn on devices**. This explicitly authorizes
+Zuse to install the pinned helpers in its private tool directory.
 
-Device support and **Agent access** default off, separately for each chat. Consent
-and open sessions are in engine memory and reset when that engine restarts.
-Engine shutdown cancels in-flight capture/boot commands and retires streams;
-already booted devices stay running.
-Disabling support releases sessions but leaves devices running. Consent changes
-take effect immediately, including while another request is booting a device. Hiding the pane
-suspends its catalog poll and cancels its frame subscription; it does not shut
-down devices. Closing a tab releases that chat's sessions after any in-flight boot completes. A device shared
-with another chat cannot be shut down until the other chat releases it. Deleting
-a chat releases its consent and sessions; streams also check membership on each
-frame to catch deletion or host changes arriving through sync.
+The pane shows host-reported progress through checking requirements, installing
+Device Hub, starting it, finding devices, and optionally installing agent tools.
+**Cancel setup** withdraws this chat's request. Failures show the failing step,
+the host's error, **Try again**, and **Turn off**. An agent-only install/failure also offers
+**Continue without agent tools**, keeping the ready hub and manual viewing. A missing Node.js installation
+has a download action. Checking and opening the onboarding do not install tools
+or boot a device. Completed helper installations are reused on retry/restart.
+
+## Managed helpers
+
+| Helper | Version | Installed entry |
+| --- | --- | --- |
+| `expo-device-hub` | `0.15.3` | `dist/server/cli.mjs` |
+| `agent-device` | `0.21.23` | `bin/agent-device.mjs` |
+
+These are the exact versions in the original app's simulator toolchain. The
+installer requires Node.js 22.12 or newer, npm, and at least one usable platform:
+Xcode simulator tools on macOS, or Android Platform-Tools plus Emulator. An empty
+device list does not block helper setup; create a runtime/device in the host tools.
+
+Each environment stores helpers beneath
+`<profile store>/simulator-tools/<package>/<version>/`. npm installs into a private
+staging directory with `--save-exact`, `--no-audit`, and `--no-fund`. The installer
+checks the pinned manifest version, entry file, and completion marker before
+publishing the directory atomically. It verifies the agent CLI before marking its
+install complete. npm runs from the staging directory, independently of project
+npm configuration. No global npm installation or administrator access is required.
+
+The enabled chats share one host setup job. One chat cannot cancel another chat's
+hub. Agent installation is separate: revoking the last agent consent cancels that
+installation while manual viewing can continue. Cancel, disable, chat deletion,
+and engine shutdown invalidate in-flight work before it can publish a late
+ready state. Completed caches remain; partial staging directories are removed.
+Owned helpers, npm commands, and agent CLI commands run in isolated process groups
+and have bounded lifetimes/output. Cancelling an owned process group also stops
+its descendants. Hiding the pane suspends UI polling and frame delivery; a setup
+that the user explicitly requested can continue on the host.
 
 ## Design
 
-The pane follows the reference’s 36px device toolbar, 14px icon actions with
-tooltips, runtime-grouped compact device rows, and rounded, proportionally fitted
-screen. Infrequent lifecycle and consent actions live in the overflow menu.
-The picker keeps agent consent in its bottom footer. Fixture captures use an
-explicitly synthetic sample app screen; they do not demonstrate a real emulator.
-
 ```text
-SimulatorPane (crates/ui/src/simulator.rs)
-  → device-addressed RPC (crates/protocol/src/simulators.rs, methods.rs)
-    → EngineRpc (crates/engine/src/rpc/simulators.rs)
-      → Simulators (crates/simulator/)
-        ├─ iOS: xcrun simctl → installed idb for input
-        └─ Android: SDK emulator / avdmanager / adb
-MCP device_* → SimulatorTool → same controller
-Native harness zuse_device_* → application-tool policy → same MCP catalog
+SimulatorPane → device-addressed engine RPC → Simulators
+  State.setup ← DeviceSetup (setup.rs)
+                 ├─ read-only Node/npm/platform checks
+                 ├─ staged pinned npm installation
+                 ├─ supervised loopback Device Hub + health checks
+                 └─ optional pinned agent installation
+  open/close   → Device Hub boot/shutdown + native readiness/identity checks
+  manual input → iOS hub HID socket / Android adb
+  capture      → xcrun simctl / adb → bounded progressive PNG frames
+  agent input  → Agents (agents.rs)
+                  └─ owned per-chat/device daemon + fixed-target CLI
+MCP device_* / native zuse_device_* → same owning engine and consent policy
 ```
 
-The engine validates chat membership and execution-host ownership before every
-request. The UI addresses that host with `targetDeviceId`; simulator methods and
-frame streams forward over existing peer RPC. Unary simulator requests have
-five minutes of forwarding headroom for discovery and a cold boot. Agent requests take their chat and
-host from the MCP origin, require the user's per-chat consent, and cannot change
-consent. Native harness mutations follow the existing approval policy. The engine
-independently denies agent open/close/input for read-only (plan) chat configs.
-Discovery and screenshots remain reads. Screenshot tools return actual image
-content in MCP and native model inputs, with dimensions as MCP text metadata.
+The engine checks chat membership and execution-host ownership on every request.
+Agent tools take chat/host identity from their MCP origin; they cannot configure
+consent. Read-only (plan) chats cannot use agent open/close/input operations.
+Device support and agent consent default off per chat and reset with the engine;
+the completed package cache persists. Configure accepts partial updates, so
+changing consent preserves the current enabled state.
 
-Capture is a progressive PNG stream: one capture followed by a 500ms delay
-(up to approximately 2 fps), not the original's H.264/video helper transport.
-Capture commands have deadlines and output bounds; PNGs are at most 5 MiB, 8192
-pixels per axis, and 32 million pixels. Base64 frames fit the workspace gateway's
-8 MiB payload limit. Image decoding is off the UI thread and bounded. Simulator
-checked RPC subscriptions queue at most two frames and discard excess frames without
-blocking other replies. Stream errors clear the image and offer Reconnect.
-Dropping the subscription cancels capture; there is no detached capture producer.
-The pane polls the catalog every four seconds while visible to notice devices
-opened by agents. It retains one rendered image and evicts replaced GPU images.
+The agent helper is used for agent input. Each chat/device has a separate private
+state directory, empty managed configuration, and supervised daemon. Its
+registration must match the owned PID and supply a valid loopback port/token.
+The CLI receives fixed platform, UDID/emulator serial, session, config, and state
+flags. Ambient `AGENT_DEVICE_*` configuration is removed; caller text remains a
+positional argument. Closing a session or revoking consent cancels the CLI,
+daemon startup, and owned descendants, including XCTest workers. The first iOS
+agent interaction can prepare an XCTest runner and take several minutes.
+
+The picker uses compact runtime groups and a bottom agent-consent footer. The
+viewer has one 36px icon toolbar, a proportionally fitted rounded screen, and a
+quiet text field. Lifecycle and consent controls live in the overflow menu.
+Tap the image, send text with Enter, use Home and Android Back/Recents, copy a
+screenshot, reconnect, disconnect, or explicitly shut down the device. A device
+also viewed by another chat cannot be shut down by this chat.
+
+Capture remains a progressive PNG stream: one capture plus a 500ms delay, up to
+about 2 fps. Each capture is bounded; PNGs are at most 5 MiB, 8192 pixels per axis,
+and 32 million pixels. Decoding happens off the UI thread. The simulator RPC
+queue holds at most two frames and discards excess frames without blocking
+unrelated replies. Hidden/dropped viewers cancel subscriptions and evict their
+rendered image. UI progress polls every 350ms; the ready catalog polls every four
+seconds. Progress comes from the host, never from client-side simulated timers.
+Forwarded simulator operations have eight minutes of headroom for cold boots,
+native readiness checks, and first-agent preparation.
 
 ## Host setup
 
-Nothing installs tools, accepts licenses, creates AVDs, or boots a device during
-discovery. Commands use argument arrays; only `adb shell input text` needs device
-shell quoting, which is escaped before dispatch. Physical Android phones are
-excluded. Android actions verify the serial still belongs to the selected AVD
-before acting; a stale session can always be closed without shutdown.
+Install Node.js 22.12+ with npm on the execution host and make it available to
+the engine, including launches outside a terminal. Restart the engine after
+changing its PATH or SDK environment. The in-app **Turn on devices** action
+handles the two pinned helpers; these prerequisites still belong to the host.
 
-### iOS
+On **macOS**, install/select full Xcode, finish its first-launch/license steps,
+and install an iOS runtime/device. Device Hub boots and attaches its native iOS
+helper. Manual taps/Home/ASCII keyboard input use its input-only HID socket;
+a separate idb installation is not required by the production engine. Screenshots
+use `xcrun simctl io <UDID> screenshot`. iOS requires macOS. The direct native
+constructor used by command-runner fixtures retains its idb fallback.
 
-Use macOS with full Xcode selected by `xcode-select`; complete Xcode's first
-launch and license flow yourself. Install an iOS runtime and create a device in
-Xcode's device settings. Discovery uses `xcrun simctl list devices available
---json`, filters unavailable and non-iOS devices, and groups newest runtimes first.
-Boot uses `simctl boot` then `bootstatus -b`; shutdown and PNG screenshots also
-use `simctl` with an explicit UDID.
+For **Android**, install SDK Platform-Tools, Emulator, a system image, and an AVD;
+accept SDK licenses interactively. Set `ANDROID_HOME`/`ANDROID_SDK_ROOT`, or use
+the usual per-user SDK location. Zuse passes a resolved SDK root to its helpers.
+Java/Command-line Tools are needed for AVD management, rather than for running
+an existing AVD. Device Hub boots the AVD; native adb checks its name/serial and
+`sys.boot_completed`. The stable app id is `android:<AVD name>`. Reused serials
+are rejected before capture, input, or shutdown. Physical phones are excluded.
+Linux requires working emulator hardware acceleration/KVM. Manual adb text
+supports printable ASCII without `%`; agent input uses the installed helper.
 
-Touch, typing, and Home require an installed [idb and idb_companion](https://fbidb.io/docs/installation/)
-and a companion connected for that UDID. Make `idb` available on the execution
-host's PATH, including when launching the app outside a terminal; restart the
-host after changing its PATH. The pane reports a missing CLI and
-returns companion guidance when input fails. Normalized image taps convert to
-logical points using `SIMULATOR_MAINSCREEN_SCALE`. idb text input supports ASCII;
-Unicode input through a device IME is deferred. The helper is not bundled or
-automatically installed. iOS does not appear bootable on Linux or Windows.
-
-### Android
-
-Install Android Studio, SDK Platform-Tools, Emulator, and a system image. Create
-an AVD in Device Manager (or with `avdmanager`). Accept required SDK licenses
-interactively. Set `ANDROID_SDK_ROOT` or `ANDROID_HOME`, or put SDK tools on PATH.
-The controller also checks the usual per-user SDK directories on each platform.
-Restart the Zuse host after installing tools or changing its SDK/PATH environment,
-then use Refresh; command paths are resolved when that engine starts.
-Command-line AVD management requires a compatible JDK through JAVA_HOME/PATH and Android
-SDK Command-line Tools; that optional prerequisite is shown independently.
-A preconfigured emulator does not need Java to run.
-
-Discovery uses `emulator -list-avds`, probes `avdmanager list avd -c`, and maps
-`adb devices` emulator serials to AVD names with `adb -s <serial> emu avd name`.
-AVD ids stay stable across boots (`android:<AVD name>`). Boot runs `emulator -avd
-<name> -no-window -no-audio` and waits for the selected AVD's
-`sys.boot_completed=1`. This may take two minutes. Hardware acceleration/KVM must
-be available on Linux. Screenshots use `adb exec-out screencap -p`; taps, text,
-and buttons use `adb shell input`. Text currently supports printable ASCII
-without `%`; unsupported text returns an explicit error rather than being
-silently mangled. Unicode Android IME support is deferred.
+Closing a pane does not issue a device-shutdown request. Explicit shutdown uses
+the hub after cross-chat ownership checks. Engine shutdown stops owned helpers;
+verify native helper/device lifetime on macOS and a real Android SDK host before
+claiming hardware acceptance.
 
 ## Agent tools
 
-| Tool | Arguments | Effect |
-| --- | --- | --- |
-| `device_list` | none | Setup requirements, devices, this chat's sessions |
-| `device_open` | `deviceId` | Boot and register a chat session |
-| `device_screenshot` | `deviceId` | PNG image and dimensions |
-| `device_input` | `deviceId`, `input` | `{type:"tap",x,y}` (0–1), `{type:"text",text}`, or `{type:"home"}`; Android also `back`, `recents` |
-| `device_close` | `deviceId`, optional `shutdown` | Release the session, optionally power off |
+| Tool | Effect |
+| --- | --- |
+| `device_list` | Requirements, setup progress, devices, this chat's sessions |
+| `device_open` | Boot/register a session and prepare the owned agent daemon |
+| `device_screenshot` | Actual PNG image content and dimensions |
+| `device_input` | Normalized tap, text, Home; Android Back/Recents |
+| `device_close` | Disconnect; optional explicit device shutdown |
 
-Native harness names carry the existing `zuse_` prefix. The separate native
-filesystem/process tool module needs no device dependency: application tools
-already bridge the engine MCP catalog and its approval categories.
+Native application tools use the existing `zuse_` prefix and approval categories.
+The engine keeps the CLI target private and fixed; generic shell launchers and
+arbitrary agent CLI arguments are not exposed through these tools.
 
-## Validation and remaining acceptance
+## Validation and captures
 
-Linux fixtures cover device discovery and physical-phone exclusion, boot serial
-correlation, iOS boot waiting and pixel-to-point taps, text quoting, platform
-gates, consent and session membership, revocation, cross-chat shutdown, reused
-serials, malformed images/coordinates, command deadlines, and output bounds.
-Engine tests exercise RPC ownership, plan mode, screenshot/frame dispatch and
-revocation. MCP tests check origin binding and image content; the RPC queue test
-checks a slow device viewer cannot block another reply. UI tests check frame
-validation, letterboxing, selection, and hidden-view cancellation.
+`cargo test -p zuse-simulator --lib` covers platform discovery, native and managed
+boot paths, serial correlation, consent, cache validity, duplicate installations,
+late cancellation, agent-install revocation, cross-chat setup ownership, helper
+versions, input bounds, and descendant-process termination. Engine tests check
+RPC ownership, partial configuration, plan mode, frames, and revocation. UI tests
+check frame bounds, taps, selection, hidden subscriptions, and setup-step states.
 
-The production-shell visual fixture renders synthetic device data. Its captured
-[setup](screenshots/device-simulator/simulator-setup.png),
-[picker](screenshots/device-simulator/simulator-picker.png),
-[dark viewer](screenshots/device-simulator/simulator-viewer-dark.png),
-[overflow menu](screenshots/device-simulator/simulator-menu.png), and
-[light viewer](screenshots/device-simulator/simulator-viewer-light.png) show layout
-and theme behavior, including the device text field. They do not show a live device.
-See the development guide for the reproduction command.
+An explicit network smoke test installs both real pinned packages into a temporary
+prefix, verifies the agent CLI version, starts the loopback hub and reads its
+catalog, then starts/stops an owned agent daemon. It sends no boot/shutdown/input
+requests. It is ignored in the default suite because it needs Node/npm/network:
 
-Before claiming hardware acceptance, verify on a Mac:
+```sh
+cargo test -p zuse-simulator --lib setup::smoke::pinned_helpers_install_verify_and_start_on_linux -- --ignored --nocapture
+```
 
-1. Missing Xcode, unselected developer directory, incomplete first launch, no
-   installed runtime, and missing idb/companion show actionable setup states.
-2. Boot a shut-down iPhone and iPad, watch live frames, tap all corners, type,
-   press Home, copy a screenshot, close, reopen, and shut down. Check Retina
-   scale and orientation after rotation in the system Simulator application.
-3. Enable agent access and drive/inspect the same device from both an external
-   MCP harness and a native harness; plan-mode mutations must fail.
-4. Hide/switch/close panes and windows; check capture processes stop, frame
-   memory stays bounded, and the device remains running unless shut down.
-5. Test a real Android AVD on macOS and Linux with KVM, including a cold boot,
-   serial change, Back/Recents, typing/quoting, screenshot, and host routing.
-6. Exercise a remote chat over the peer link and a slow connection, including
-   disconnect/reconnect and two chats viewing one device.
+The production native pane fixture captures scripted host-progress states:
+[onboarding](screenshots/device-simulator/simulator-onboarding.png),
+[checking](screenshots/device-simulator/simulator-checking.png),
+[hub installation](screenshots/device-simulator/simulator-installing-hub.png),
+[hub startup](screenshots/device-simulator/simulator-starting-hub.png),
+[device discovery](screenshots/device-simulator/simulator-discovering.png),
+[agent installation](screenshots/device-simulator/simulator-installing-agent.png),
+[hub failure/retry](screenshots/device-simulator/simulator-install-error.png), and
+[agent failure/retry](screenshots/device-simulator/simulator-agent-error.png).
+These are native UI renders with fixture progress, rather than a recording of
+the network smoke test. The picker and dark/light viewer use synthetic device
+and sample app data. No real simulator/emulator execution is implied by captures.
 
-Automatic tool downloads/fixes, settings-wide simulator preferences, H.264/high
-frame-rate transport, gestures/rotation controls, accessibility snapshots,
-Unicode IME input, and device app install/launch wrappers are deferred.
-No hardware run is claimed by the Linux fake-device tests.
+## Mac and real-emulator acceptance
+
+1. Check missing/old Node, missing npm, no SDK/Xcode, and empty device catalogs.
+   Opening/rechecking onboarding must not install or boot anything. Verify the
+   Node download action and engine restart after PATH changes.
+2. Enable with agent access off: install/start the pinned hub, show each host
+   phase, and reach the picker without installing agent tools. Re-enable with
+   warm caches and confirm reuse. Then allow agents and verify the separate install.
+3. Cancel hub download/startup and agent install; retry network/verification
+   failures. Check staging cleanup, process groups, no late-ready state, and that
+   another enabled chat keeps its shared hub running.
+4. On a Mac, boot iPhone/iPad, watch frames, tap corners, type ASCII punctuation,
+   use Home, copy a screenshot, reconnect, disconnect, and shut down. Verify Retina
+   scaling, orientation, native HID readiness, and helper recovery after a crash.
+5. Use both MCP and native agent tools on a real device. Verify first XCTest
+   preparation, fixed target/config/session, real CLI click/type/Home, plan-mode
+   denial, and immediate daemon/worker termination on consent revocation.
+6. Run an Android AVD on macOS and Linux/KVM: cold boot, serial changes,
+   Back/Recents, text, screenshot, and shutdown. Hide/close panes and stop the
+   engine; check helper cleanup and expected persistence of booted devices.
+7. Exercise remote-host routing, a slow peer connection, and two chats viewing
+   one device. Agent sessions and package installation must stay on the owning host.
+
+Automatic SDK/JDK/Xcode installation or license acceptance, global persisted
+simulator preferences, high-frame-rate/H.264 transport, gestures/rotation controls,
+accessibility snapshot tools, manual Unicode IME input, and app install/launch
+wrappers remain deferred.
 
 ## Reference audit
 
-Behavior reference: [original PR #908](https://github.com/swarajbachu/zuse/pull/908)
-and [Java/setup follow-up #915](https://github.com/swarajbachu/zuse/pull/915).
-Inspected the current original app's `apps/renderer/src/components/simulator/*`,
-`apps/renderer/src/lib/simulator-{client-bus,view}.ts`, settings simulator pane,
-`packages/contracts/src/simulators.ts`, `apps/server/src/simulators/*`,
-`packages/client-runtime/src/simulators/{video,reveal}.ts`, and
-`packages/agents/src/drivers/simulator-tools.ts`. The original registers tools
-through its MCP gateway/provider-MCP session and native harness app-tools bridge;
-`device_open` returns an agent-device launcher. This port exposes direct bounded
-input and screenshot tools instead. It reuses behavior and theme conventions,
-not the original Node helper implementation.
+Reference: [original PR #908](https://github.com/swarajbachu/zuse/pull/908) and
+[setup/Java follow-up #915](https://github.com/swarajbachu/zuse/pull/915).
+The setup port follows the current original's `simulator-pane.tsx`,
+`simulator-parts.tsx`, `simulator-view.ts`, simulator contracts, server controller,
+`toolchain.ts`, `npm-tool-installer.ts`, and session `launcher.ts`. The original
+also exposes an agent CLI launcher and accessibility tools; this port keeps the
+typed MCP/native tool interface while using the same installed agent helper for
+input. Rust owns process lifetime, consent, state, and progressive PNG transport.

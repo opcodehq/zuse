@@ -402,3 +402,47 @@ async fn closing_a_pane_during_boot_releases_the_late_session() {
     sim.configure("chat", true, true).await;
     assert!(!sim.state("chat").await.enabled);
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn cancelling_a_bounded_command_kills_its_descendants() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("child-pid");
+    let args = vec![
+        "-c".into(),
+        "sleep 30 & echo $! > \"$1\"; wait".into(),
+        "device-test".into(),
+        file.to_string_lossy().into_owned(),
+    ];
+    let job =
+        tokio::spawn(async move { SystemRunner.run("sh", &args, Duration::from_secs(30)).await });
+    let pid = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(pid) = std::fs::read_to_string(&file) {
+                if let Ok(pid) = pid.trim().parse::<u32>() {
+                    break pid;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    job.abort();
+    let _ = job.await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok();
+            if state.as_ref().is_none_or(|s| {
+                s.rsplit_once(')').is_some_and(|(_, tail)| {
+                    matches!(tail.split_whitespace().next(), Some("Z" | "X"))
+                })
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+}

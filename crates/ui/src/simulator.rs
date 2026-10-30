@@ -9,7 +9,9 @@ use gpui::{
 use gpui_base::input::{Input as TextInput, InputEditorStyle, InputEvent, InputState};
 use serde_json::{Value, json};
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
-use zuse_protocol::simulators::{Device, Frame, FrameEvent, Input, Platform, State};
+use zuse_protocol::simulators::{
+    AgentStatus, Device, Frame, FrameEvent, Input, Platform, Setup, SetupStatus, State,
+};
 use zuse_rpc::methods;
 
 pub struct SimulatorPane {
@@ -24,6 +26,7 @@ pub struct SimulatorPane {
     active: bool,
     busy: bool,
     menu_open: bool,
+    setup_agents: Option<bool>,
     error: Option<String>,
     notice: Option<String>,
     image: Option<Arc<RenderImage>>,
@@ -61,6 +64,7 @@ impl SimulatorPane {
             active: false,
             busy: false,
             menu_open: false,
+            setup_agents: None,
             error: None,
             notice: None,
             image: None,
@@ -158,7 +162,20 @@ impl SimulatorPane {
                 {
                     return;
                 }
-                cx.background_executor().timer(Duration::from_secs(4)).await;
+                let preparing = this
+                    .update(cx, |this, _| {
+                        this.state
+                            .as_ref()
+                            .is_some_and(|state| state.enabled && setup_pending(state))
+                    })
+                    .unwrap_or(false);
+                cx.background_executor()
+                    .timer(if preparing {
+                        Duration::from_millis(350)
+                    } else {
+                        Duration::from_secs(4)
+                    })
+                    .await;
             }
         }));
     }
@@ -226,6 +243,9 @@ impl SimulatorPane {
         if self.busy {
             return;
         }
+        if method == methods::CONFIGURE_SIMULATORS {
+            self.watch = None;
+        }
         let mut params = self.params();
         if let Some(device) = &self.selected {
             params["deviceId"] = json!(device.id);
@@ -284,6 +304,9 @@ impl SimulatorPane {
                     }
                     Err(error) => this.error = Some(error),
                 }
+                if method == methods::CONFIGURE_SIMULATORS && this.active {
+                    this.watch(cx);
+                }
                 cx.notify();
             });
         }));
@@ -300,6 +323,281 @@ impl SimulatorPane {
         if !text.is_empty() {
             self.send_input(Input::Text { text }, cx);
         }
+    }
+    fn render_setup(
+        &self,
+        setup: &Setup,
+        enabled: bool,
+        agents: bool,
+        cx: &Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = Theme::of(cx);
+        let failed = matches!(setup.status, SetupStatus::Error | SetupStatus::Unavailable)
+            || setup.agent_status == AgentStatus::Error;
+        let agents = if enabled {
+            agents
+        } else {
+            self.setup_agents.unwrap_or(agents)
+        };
+        let checking = setup.requirements.is_empty();
+        let blocked = !checking && setup.requirements.iter().any(|r| !r.ready);
+        let mut card = div().flex_none().w_full().max_w(px(320.)).mx_auto().flex().flex_col().gap(px(20.))
+            .child(div().flex().flex_col().items_center().gap(px(12.))
+                .child(crate::icons::icon(crate::icons::SMARTPHONE).size(px(40.)).text_color(theme.text_muted))
+                .child(div().text_size(px(14.)).child(if !enabled {"Set up devices"} else if failed {"Device setup needs attention"} else {"Preparing your devices"}))
+                .child(div().text_center().text_color(theme.text_muted).line_height(px(20.)).child(if !enabled {
+                    "Run your app beside the chat. Zuse installs and starts the device helpers on this host."
+                } else if failed {"Fix the issue below, then try again."} else if agents {"Setting up Device Hub and your agent tools. You can cancel at any time."} else {"Setting up Device Hub. You can cancel at any time."})));
+        if !enabled || blocked {
+            let mut list = div()
+                .rounded(px(8.))
+                .bg(theme.muted_fill())
+                .px(px(12.))
+                .py(px(6.))
+                .flex()
+                .flex_col()
+                .gap(px(4.));
+            if checking {
+                list = list.child(
+                    div()
+                        .py(px(8.))
+                        .text_color(theme.text_muted)
+                        .child("Checking this host…"),
+                );
+            }
+            for requirement in &setup.requirements {
+                list = list.child(
+                    div()
+                        .py(px(5.))
+                        .flex()
+                        .items_start()
+                        .gap(px(10.))
+                        .child(
+                            crate::icons::icon(if requirement.ready {
+                                crate::icons::QUEUE_CHECK
+                            } else {
+                                crate::icons::QUEUE_CLOSE
+                            })
+                            .size(px(14.))
+                            .text_color(if requirement.ready {
+                                theme.text_muted
+                            } else {
+                                theme.danger
+                            }),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(3.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .child(div().flex_1().child(requirement.label.clone()))
+                                        .when(requirement.ready, |row| {
+                                            row.child(
+                                                div()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .text_size(px(11.))
+                                                    .text_color(theme.text_muted)
+                                                    .child(requirement.detail.clone()),
+                                            )
+                                        }),
+                                )
+                                .when(!requirement.ready, |column| {
+                                    column.child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .line_height(px(16.))
+                                            .text_color(theme.text_muted)
+                                            .child(requirement.detail.clone()),
+                                    )
+                                }),
+                        ),
+                );
+            }
+            card = card.child(list);
+        } else {
+            let mut list = div()
+                .rounded(px(8.))
+                .bg(theme.muted_fill())
+                .px(px(12.))
+                .py(px(6.))
+                .flex()
+                .flex_col();
+            for (label, status) in setup_steps(setup, agents) {
+                let (icon, color) = match status {
+                    SetupStep::Done => (crate::icons::QUEUE_CHECK, theme.success),
+                    SetupStep::Active => (crate::icons::CLOCK_CIRCLE, theme.text),
+                    SetupStep::Failed => (crate::icons::QUEUE_CLOSE, theme.danger),
+                    SetupStep::Pending => (crate::icons::CLOCK_CIRCLE, theme.text_muted),
+                };
+                list = list.child(
+                    div()
+                        .h(px(30.))
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(crate::icons::icon(icon).size(px(14.)).text_color(color))
+                        .child(div().min_w_0().truncate().text_color(color).child(label)),
+                );
+            }
+            card = card.child(list);
+        }
+        if blocked
+            && setup
+                .requirements
+                .iter()
+                .any(|r| r.label == "Node.js" && !r.ready)
+        {
+            card = card.child(
+                self.button("simulator-get-node", "Get Node.js", cx, |_, _, cx| {
+                    cx.open_url("https://nodejs.org/en/download")
+                }),
+            );
+        }
+        if !enabled {
+            card=card.child(div().id("simulator-setup-agents").role(Role::Switch).aria_label("Allow agents to control devices").aria_toggled(if agents {gpui::Toggled::True} else {gpui::Toggled::False}).tab_index(0)
+                .flex().items_start().gap(px(12.)).cursor_pointer()
+                .child(div().flex_1().flex().flex_col().gap(px(4.))
+                    .child("Allow agent control")
+                    .child(div().text_size(px(11.)).line_height(px(16.)).text_color(theme.text_muted).child("Let agents inspect and interact with the device in this chat.")))
+                .child(crate::settings::widgets::toggle_switch(&theme,agents,"simulator-setup-agents-switch"))
+                .on_click(cx.listener(move |this,_,_,cx| {this.setup_agents=Some(!agents);cx.notify();})));
+            if blocked || checking {
+                card = card.child(self.button(
+                    "simulator-check-again",
+                    "Check again",
+                    cx,
+                    |this, _, cx| {
+                        this.error = None;
+                        this.watch(cx);
+                    },
+                ));
+            } else {
+                card = card.child(self.button(
+                    "simulator-enable",
+                    "Turn on devices",
+                    cx,
+                    move |this, _, cx| {
+                        this.request(
+                            methods::CONFIGURE_SIMULATORS,
+                            json!({"enabled":true,"agentAccess":agents}),
+                            cx,
+                        )
+                    },
+                ));
+            }
+            card=card.child(div().text_size(px(11.)).line_height(px(16.)).text_center().text_color(theme.text_muted).child(if blocked {
+                "Finish the host requirements, then check again. Nothing has been installed.".to_owned()
+            } else if agents {
+                format!("Installs Device Hub {} and agent-device {} in Zuse’s private tool directory.",setup.hub_version,setup.agent_version)
+            } else {
+                format!("Installs Device Hub {} in Zuse’s private tool directory.",setup.hub_version)
+            }));
+        } else if failed {
+            let detail = if setup.agent_status == AgentStatus::Error {
+                &setup.agent_detail
+            } else {
+                &setup.detail
+            };
+            card = card
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .line_height(px(16.))
+                        .text_color(theme.danger)
+                        .child(detail.clone()),
+                )
+                .child(
+                    self.button("simulator-retry", "Try again", cx, move |this, _, cx| {
+                        this.request(
+                            methods::CONFIGURE_SIMULATORS,
+                            json!({"enabled":true,"agentAccess":agents}),
+                            cx,
+                        )
+                    }),
+                )
+                .child(self.button("simulator-off", "Turn off", cx, |this, _, cx| {
+                    this.request(
+                        methods::CONFIGURE_SIMULATORS,
+                        json!({"enabled":false,"agentAccess":false}),
+                        cx,
+                    )
+                }));
+        } else {
+            let detail = if setup.agent_status == AgentStatus::Installing {
+                &setup.agent_detail
+            } else {
+                &setup.detail
+            };
+            card = card
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .line_height(px(16.))
+                        .text_center()
+                        .text_color(theme.text_muted)
+                        .child(detail.clone()),
+                )
+                .child(
+                    self.button("simulator-cancel", "Cancel setup", cx, |this, _, cx| {
+                        this.request(
+                            methods::CONFIGURE_SIMULATORS,
+                            json!({"enabled":false,"agentAccess":false}),
+                            cx,
+                        )
+                    }),
+                );
+        }
+        if enabled
+            && setup.status == SetupStatus::Ready
+            && agents
+            && matches!(
+                setup.agent_status,
+                AgentStatus::Installing | AgentStatus::Error
+            )
+        {
+            card = card.child(self.button(
+                "simulator-manual",
+                "Continue without agent tools",
+                cx,
+                |this, _, cx| {
+                    this.request(
+                        methods::CONFIGURE_SIMULATORS,
+                        json!({"enabled":true,"agentAccess":false}),
+                        cx,
+                    )
+                },
+            ));
+        }
+        if let Some(error) = &self.error {
+            card = card.child(
+                div()
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .text_color(theme.danger)
+                    .child(error.clone()),
+            );
+        }
+        div()
+            .id("simulator-installation")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .px(px(20.))
+            .py(px(32.))
+            .child(div().flex_1().min_h(px(10.)))
+            .child(card)
+            .child(div().flex_1().min_h(px(10.)))
+            .into_any_element()
     }
     fn icon_button(
         &self,
@@ -344,6 +642,7 @@ impl SimulatorPane {
         click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> Stateful<Div> {
         let theme = Theme::of(cx);
+        let primary = matches!(id, "simulator-enable" | "simulator-retry");
         div()
             .id(id)
             .role(Role::Button)
@@ -351,19 +650,80 @@ impl SimulatorPane {
             .px(px(8.0))
             .py(px(5.0))
             .rounded(px(5.0))
-            .text_color(theme.text)
-            .bg(theme.surface_raised)
+            .text_center()
+            .text_color(if primary { theme.bg } else { theme.text })
+            .bg(if primary {
+                theme.text
+            } else {
+                theme.surface_raised
+            })
             .cursor_pointer()
             .when(!self.busy, |d| {
                 d.tab_index(0)
                     .on_key_down(contain_activation)
                     .focus_visible(|s| s.border_1().border_color(theme.accent))
-                    .hover(|s| s.bg(theme.surface_card))
+                    .hover(|s| {
+                        s.bg(if primary {
+                            theme.text_strong
+                        } else {
+                            theme.surface_card
+                        })
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
             })
             .when(self.busy, |d| d.opacity(0.5))
             .child(label)
     }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetupStep {
+    Done,
+    Active,
+    Pending,
+    Failed,
+}
+fn setup_pending(state: &State) -> bool {
+    state.setup.as_ref().is_some_and(|s| {
+        s.status != SetupStatus::Ready || state.agent_access && s.agent_status != AgentStatus::Ready
+    })
+}
+fn setup_steps(setup: &Setup, agents: bool) -> Vec<(String, SetupStep)> {
+    let failed = matches!(setup.status, SetupStatus::Error | SetupStatus::Unavailable);
+    let mut steps = vec![
+        "Check host requirements".to_owned(),
+        format!("Install Device Hub {}", setup.hub_version),
+        "Start Device Hub".to_owned(),
+        "Find available devices".to_owned(),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, label)| {
+        (
+            label,
+            if index < setup.step {
+                SetupStep::Done
+            } else if index == setup.step && failed {
+                SetupStep::Failed
+            } else if index == setup.step {
+                SetupStep::Active
+            } else {
+                SetupStep::Pending
+            },
+        )
+    })
+    .collect::<Vec<_>>();
+    if agents {
+        steps.push((
+            format!("Install agent-device {}", setup.agent_version),
+            match setup.agent_status {
+                AgentStatus::Off => SetupStep::Pending,
+                AgentStatus::Installing => SetupStep::Active,
+                AgentStatus::Ready => SetupStep::Done,
+                AgentStatus::Error => SetupStep::Failed,
+            },
+        ));
+    }
+    steps
 }
 fn contain_activation(event: &KeyDownEvent, _: &mut Window, cx: &mut App) {
     if matches!(event.keystroke.key.as_str(), "enter" | "space") {
@@ -371,7 +731,7 @@ fn contain_activation(event: &KeyDownEvent, _: &mut Window, cx: &mut App) {
     }
 }
 fn selected_session(state: &State, previous: Option<&str>, picker: bool) -> Option<Device> {
-    if !state.enabled || picker {
+    if !state.enabled || picker || setup_pending(state) {
         return None;
     }
     state
@@ -440,6 +800,7 @@ impl Render for SimulatorPane {
         });
         let mut body = div()
             .size_full()
+            .font_family(crate::typography::effective_family_name(cx))
             .flex()
             .flex_col()
             .text_size(crate::typography::text_sm())
@@ -455,6 +816,15 @@ impl Render for SimulatorPane {
             }));
         let enabled = self.state.as_ref().is_some_and(|s| s.enabled);
         let agents = self.state.as_ref().is_some_and(|s| s.agent_access);
+        if let Some(state) = &self.state {
+            if let Some(setup) = &state.setup {
+                if !state.enabled || setup_pending(state) {
+                    return body
+                        .child(self.render_setup(setup, state.enabled, state.agent_access, cx))
+                        .into_any_element();
+                }
+            }
+        }
         if self.selected.is_none() {
             body = body.child(
                 div()
@@ -1138,5 +1508,117 @@ mod tests {
                 assert!(pane.image.is_none());
             })
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod installation_tests {
+    use super::*;
+    #[test]
+    fn setup_steps_follow_host_progress_and_keep_agent_install_separate() {
+        for (status, step) in [
+            (SetupStatus::Checking, 0),
+            (SetupStatus::Installing, 1),
+            (SetupStatus::Starting, 2),
+            (SetupStatus::Discovering, 3),
+        ] {
+            let state = Setup {
+                status,
+                step,
+                ..Default::default()
+            };
+            let steps = setup_steps(&state, true);
+            assert_eq!(steps.len(), 5);
+            assert_eq!(steps[step].1, SetupStep::Active);
+            assert!(steps[..step].iter().all(|s| s.1 == SetupStep::Done));
+            assert_eq!(steps[4].1, SetupStep::Pending);
+        }
+        let state = Setup {
+            status: SetupStatus::Error,
+            step: 1,
+            ..Default::default()
+        };
+        assert_eq!(setup_steps(&state, false)[1].1, SetupStep::Failed);
+        let state = Setup {
+            status: SetupStatus::Ready,
+            step: 4,
+            agent_status: AgentStatus::Installing,
+            ..Default::default()
+        };
+        assert!(
+            setup_steps(&state, true)[..4]
+                .iter()
+                .all(|s| s.1 == SetupStep::Done)
+        );
+        assert_eq!(setup_steps(&state, true)[4].1, SetupStep::Active);
+        assert!(setup_pending(&State {
+            enabled: true,
+            agent_access: true,
+            setup: Some(state),
+            ..Default::default()
+        }));
+    }
+}
+
+#[cfg(test)]
+mod setup_render_tests {
+    use super::*;
+    #[gpui::test]
+    fn simulator_setup_and_retry_surfaces_build_for_all_host_phases(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+        });
+        let (out, _requests) = tokio::sync::mpsc::channel(16);
+        let (_replies, inbound) = tokio::sync::mpsc::channel(16);
+        let engine = EngineHandle::from_test_client(zuse_rpc::RpcClient::new(out, inbound));
+        let window = cx.add_window(|window, cx| {
+            SimulatorPane::new(engine, "chat".into(), "host".into(), window, cx)
+        });
+        for status in [
+            SetupStatus::Disabled,
+            SetupStatus::Checking,
+            SetupStatus::Installing,
+            SetupStatus::Starting,
+            SetupStatus::Discovering,
+            SetupStatus::Ready,
+            SetupStatus::Error,
+            SetupStatus::Unavailable,
+        ] {
+            for agent_status in [
+                AgentStatus::Off,
+                AgentStatus::Installing,
+                AgentStatus::Ready,
+                AgentStatus::Error,
+            ] {
+                window
+                    .update(cx, |pane, window, cx| {
+                        pane.state = Some(State {
+                            enabled: status != SetupStatus::Disabled,
+                            agent_access: true,
+                            setup: Some(Setup {
+                                status,
+                                step: if status == SetupStatus::Ready { 4 } else { 1 },
+                                agent_status,
+                                requirements: vec![zuse_protocol::simulators::SetupRequirement {
+                                    label: "Node.js".into(),
+                                    ready: status != SetupStatus::Unavailable,
+                                    detail: "fixture".into(),
+                                }],
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        });
+                        // Building a GPUI tree also validates interactivity composition (including hover styles).
+                        let _ = pane.render(window, cx).into_any_element();
+                    })
+                    .unwrap();
+            }
+        }
     }
 }

@@ -1,5 +1,7 @@
 //! Host simulator controller. No tools are installed and no devices boot on discovery.
+mod agents;
 mod process;
+mod setup;
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 pub use process::{Runner, SystemRunner, Toolchain};
@@ -20,6 +22,9 @@ struct Inner {
     stop: tokio::sync::watch::Sender<bool>,
     runner: Arc<dyn Runner>,
     tools: Toolchain,
+    setup: Option<setup::DeviceSetup>,
+    agents: Option<agents::Agents>,
+    catalog: std::sync::Mutex<(Vec<Requirement>, Vec<Device>)>,
     chats: std::sync::Mutex<HashMap<String, Chat>>,
     /// Serializes lifecycle and input against shutdown; each capture is bounded.
     operation: Mutex<()>,
@@ -37,18 +42,66 @@ impl Simulators {
             stop: tokio::sync::watch::channel(false).0,
             runner,
             tools,
+            setup: None,
+            agents: None,
+            catalog: std::sync::Mutex::new((Vec::new(), Vec::new())),
             chats: std::sync::Mutex::new(HashMap::new()),
             operation: Mutex::new(()),
         }))
+    }
+    pub fn managed(root: std::path::PathBuf) -> Self {
+        let tools = Toolchain::default();
+        let mut simulators = Self::new(Arc::new(SystemRunner), tools.clone());
+        let inner = Arc::get_mut(&mut simulators.0).unwrap();
+        inner.setup = Some(setup::DeviceSetup::system(root.clone(), tools.clone()));
+        inner.agents = Some(agents::Agents::new(root, tools));
+        simulators
+    }
+    fn sync_setup(&self) {
+        if let Some(setup) = &self.0.setup {
+            let chats = self.chats();
+            if self.is_stopped() {
+                setup.stop();
+                return;
+            }
+            setup.configure(
+                chats.values().any(|c| c.enabled),
+                chats.values().any(|c| c.enabled && c.agent_access),
+            );
+        }
+    }
+    pub fn preferences(&self, chat_id: &str) -> (bool, bool) {
+        self.chats()
+            .get(chat_id)
+            .map(|c| (c.enabled, c.agent_access))
+            .unwrap_or_default()
     }
     fn chats(&self) -> std::sync::MutexGuard<'_, HashMap<String, Chat>> {
         self.0.chats.lock().unwrap_or_else(|e| e.into_inner())
     }
     pub fn forget_chat(&self, chat_id: &str) {
         self.chats().remove(chat_id);
+        if let Some(agents) = &self.0.agents {
+            agents.revoke_chat(chat_id);
+        }
+        self.reconcile_setup();
     }
     pub fn retain_chats(&self, ids: &std::collections::HashSet<String>) {
         self.chats().retain(|id, _| ids.contains(id));
+        if let Some(agents) = &self.0.agents {
+            agents.retain(ids);
+        }
+        self.reconcile_setup();
+    }
+    fn reconcile_setup(&self) {
+        if let Some(setup) = &self.0.setup {
+            let chats = self.chats();
+            if !chats.values().any(|c| c.enabled) {
+                setup.stop();
+            } else if !chats.values().any(|c| c.enabled && c.agent_access) {
+                setup.revoke_agents();
+            }
+        }
     }
     fn is_stopped(&self) -> bool {
         *self.0.stop.borrow()
@@ -60,6 +113,12 @@ impl Simulators {
     pub fn shutdown(&self) {
         self.0.stop.send_replace(true);
         self.chats().clear();
+        if let Some(agents) = &self.0.agents {
+            agents.shutdown();
+        }
+        if let Some(setup) = &self.0.setup {
+            setup.stop();
+        }
     }
     async fn command(&self, program: &str, args: &[String], timeout: Duration) -> Result<Vec<u8>> {
         tokio::select! {biased;
@@ -95,12 +154,24 @@ impl Simulators {
             return;
         }
         let mut chats = self.chats();
+        if self.is_stopped() {
+            return;
+        }
         let chat = chats.entry(chat_id.into()).or_default();
         chat.enabled = enabled;
         chat.agent_access = enabled && agent_access;
         if !enabled {
             chat.sessions.clear();
         }
+        if let Some(agents) = &self.0.agents {
+            if enabled && agent_access {
+                agents.allow(chat_id);
+            } else {
+                agents.revoke_chat(chat_id);
+            }
+        }
+        drop(chats);
+        self.sync_setup();
     }
     pub async fn authorize(&self, chat_id: &str, agent: bool) -> Result<()> {
         ensure!(!self.is_stopped(), "Simulator host stopped");
@@ -122,19 +193,49 @@ impl Simulators {
         if self.is_stopped() {
             return State::default();
         }
-        let (requirements, devices) = self.discover().await;
-        let chats = self.chats();
-        let chat = chats.get(chat_id);
-        let mut sessions: Vec<Device> = chat
-            .map(|c| c.sessions.values().cloned().collect())
-            .unwrap_or_default();
+        let (enabled, agents) = self.preferences(chat_id);
+        if let Some(setup) = &self.0.setup {
+            if !enabled {
+                setup.inspect().await;
+            }
+        }
+        let setup = self.0.setup.as_ref().map(|s| s.snapshot(agents));
+        let preparing = setup.as_ref().is_some_and(|s| {
+            enabled
+                && (s.status != zuse_protocol::simulators::SetupStatus::Ready
+                    || agents && s.agent_status != zuse_protocol::simulators::AgentStatus::Ready)
+        });
+        if !preparing {
+            let catalog = self.discover().await;
+            *self.0.catalog.lock().unwrap() = catalog;
+        }
+        self.snapshot(chat_id)
+    }
+    /// Mutation replies must remain immediate even if host discovery is slow.
+    pub fn snapshot(&self, chat_id: &str) -> State {
+        if self.is_stopped() {
+            return State::default();
+        }
+        let (enabled, agent_access, mut sessions) = {
+            let chats = self.chats();
+            let chat = chats.get(chat_id);
+            (
+                chat.is_some_and(|c| c.enabled),
+                chat.is_some_and(|c| c.agent_access),
+                chat.map(|c| c.sessions.values().cloned().collect::<Vec<Device>>())
+                    .unwrap_or_default(),
+            )
+        };
         sessions.sort_by(|a, b| a.id.cmp(&b.id));
+        let (requirements, devices) = self.0.catalog.lock().unwrap().clone();
+        let setup = self.0.setup.as_ref().map(|s| s.snapshot(agent_access));
         State {
-            enabled: chat.is_some_and(|c| c.enabled),
-            agent_access: chat.is_some_and(|c| c.agent_access),
+            enabled,
+            agent_access,
+            sessions,
             requirements,
             devices,
-            sessions,
+            setup,
         }
     }
     async fn discover(&self) -> (Vec<Requirement>, Vec<Device>) {
@@ -149,8 +250,10 @@ impl Simulators {
                 }
                 Err(error) => requirements.push(requirement(Platform::Ios, false, &format!("Install Xcode, select it with xcode-select, and complete first launch: {error}"))),
             }
-            let input = self.run(&self.0.tools.idb, &["--help"]).await.is_ok();
-            requirements.push(requirement(Platform::Ios, input, if input { "idb input helper available" } else { "For touch and typing, install idb and idb_companion: https://fbidb.io/docs/installation/" }));
+            if self.0.setup.is_none() {
+                let input = self.run(&self.0.tools.idb, &["--help"]).await.is_ok();
+                requirements.push(requirement(Platform::Ios, input, if input { "idb input helper available" } else { "For touch and typing, install idb and idb_companion: https://fbidb.io/docs/installation/" }));
+            }
         } else {
             requirements.push(requirement(
                 Platform::Ios,
@@ -230,6 +333,15 @@ impl Simulators {
             .into_iter()
             .find(|d| d.id == target.device_id)
             .context("Device not found; refresh the simulator list")?;
+        if let Some(setup) = &self.0.setup {
+            if device.platform == Platform::Ios || !device.booted {
+                tokio::select! {biased;
+                    _=self.stopped()=>bail!("Simulator host stopped"),
+                    result=setup.boot(device.platform, &device.id, &device.name)=>result?
+                }
+                device.booted = true;
+            }
+        }
         match device.platform {
             Platform::Ios => {
                 if !device.booted {
@@ -247,7 +359,7 @@ impl Simulators {
             }
             Platform::Android => {
                 self.run(&self.0.tools.adb, &["version"]).await?;
-                if device.serial.is_none() {
+                if device.serial.is_none() && self.0.setup.is_none() {
                     let args = ["-avd", &device.name, "-no-window", "-no-audio"]
                         .map(String::from)
                         .to_vec();
@@ -276,6 +388,18 @@ impl Simulators {
                 device.serial = Some(tokio::time::timeout(BOOT_TIMEOUT, ready).await.context("Emulator boot timed out; check hardware acceleration, SDK licenses, and the AVD in Android Studio")??);
                 device.booted = true;
             }
+        }
+        if agent && let Some(agents) = &self.0.agents {
+            self.authorize(&target.chat_id, true).await?;
+            ensure!(
+                self.0
+                    .setup
+                    .as_ref()
+                    .is_some_and(|s| s.snapshot(true).agent_status
+                        == zuse_protocol::simulators::AgentStatus::Ready),
+                "Finish installing agent tools in the Simulator pane"
+            );
+            tokio::select! {biased;_=self.stopped()=>bail!("Simulator host stopped"),result=agents.prepare(target,&device)=>result?};
         }
         let mut chats = self.chats();
         let chat = chats
@@ -311,12 +435,22 @@ impl Simulators {
     }
     /// Release viewers after any in-flight boot, without powering off the device.
     pub async fn close_chat(&self, chat_id: &str) {
+        if let Some(agents) = &self.0.agents {
+            agents.close_chat(chat_id);
+        }
         let _operation = self.0.operation.lock().await;
+        if let Some(agents) = &self.0.agents {
+            agents.close_chat(chat_id);
+        }
         if let Some(chat) = self.chats().get_mut(chat_id) {
             chat.sessions.clear();
         }
     }
     pub async fn close(&self, target: &Target, shutdown: bool, agent: bool) -> Result<()> {
+        self.authorize(&target.chat_id, agent).await?;
+        if let Some(agents) = &self.0.agents {
+            agents.close(target);
+        }
         let _operation = self.0.operation.lock().await;
         let device = self.session(target, agent).await?;
         if shutdown {
@@ -329,18 +463,25 @@ impl Simulators {
                         && c.sessions.contains_key(&target.device_id)),
                 "Device is also open in another chat; close this viewer without shutting down"
             );
-            match device.platform {
-                Platform::Ios => {
-                    self.simctl(&["shutdown", &device.id]).await?;
-                }
-                Platform::Android => {
-                    self.adb(
-                        device.serial.as_deref().context("Emulator has no serial")?,
-                        &["emu", "kill"],
-                    )
-                    .await?;
+            if let Some(setup) = &self.0.setup {
+                setup.shutdown_device(&device).await?;
+            } else {
+                match device.platform {
+                    Platform::Ios => {
+                        self.simctl(&["shutdown", &device.id]).await?;
+                    }
+                    Platform::Android => {
+                        self.adb(
+                            device.serial.as_deref().context("Emulator has no serial")?,
+                            &["emu", "kill"],
+                        )
+                        .await?;
+                    }
                 }
             }
+        }
+        if let Some(agents) = &self.0.agents {
+            agents.close(target);
         }
         if let Some(chat) = self.chats().get_mut(&target.chat_id) {
             chat.sessions.remove(&target.device_id);
@@ -380,6 +521,60 @@ impl Simulators {
         let _operation = self.0.operation.lock().await;
         let device = self.session(target, agent).await?;
         self.verify_device(&device).await?;
+        if agent && let Some(agents) = &self.0.agents {
+            ensure!(
+                self.0.setup.as_ref().is_some_and(|s| {
+                    let state = s.snapshot(true);
+                    state.status == zuse_protocol::simulators::SetupStatus::Ready
+                        && state.agent_status == zuse_protocol::simulators::AgentStatus::Ready
+                }),
+                "Finish installing agent tools in the Simulator pane"
+            );
+            let args = match &input {
+                Input::Tap { x, y } => {
+                    let frame = self.capture(&device).await?;
+                    let scale = if device.platform == Platform::Ios {
+                        let bytes = self
+                            .simctl(&["getenv", &device.id, "SIMULATOR_MAINSCREEN_SCALE"])
+                            .await?;
+                        let scale = std::str::from_utf8(&bytes)?.trim().parse::<f64>()?;
+                        ensure!(
+                            scale.is_finite() && (1.0..=4.0).contains(&scale),
+                            "Invalid simulator display scale"
+                        );
+                        scale
+                    } else {
+                        1.
+                    };
+                    vec![
+                        "click".into(),
+                        (x * (frame.width as f64 / scale - 1.).max(0.))
+                            .round()
+                            .to_string(),
+                        (y * (frame.height as f64 / scale - 1.).max(0.))
+                            .round()
+                            .to_string(),
+                    ]
+                }
+                Input::Text { text } => vec!["type".into(), "--".into(), text.clone()],
+                Input::Home => vec!["home".into()],
+                Input::Back => vec!["back".into(), "--system".into()],
+                Input::Recents => vec!["app-switcher".into()],
+            };
+            tokio::select! {biased;_=self.stopped()=>bail!("Simulator host stopped"),result=agents.input(target,&device,args)=>result?};
+            self.authorize(&target.chat_id, true).await?;
+            return Ok(());
+        }
+        if device.platform == Platform::Ios
+            && let Some(setup) = &self.0.setup
+        {
+            tokio::select! {biased;
+                _=self.stopped()=>bail!("Simulator host stopped"),
+                result=tokio::time::timeout(Duration::from_secs(30),setup.ios_input(&device.id,&input))=>result.context("Simulator input timed out")??
+            }
+            self.authorize(&target.chat_id, agent).await?;
+            return Ok(());
+        }
         let args = match input {
             Input::Tap { x, y } => {
                 let frame = self.capture(&device).await?;

@@ -166,3 +166,9 @@ report iOS as unavailable and probe Android SDK tools without installing them.
 The managed cloud WebSocket path's smaller message cap is not hardware-verified;
 use peer routing for large PNG frames. See [device-simulators.md](device-simulators.md)
 for scope and remaining acceptance.
+
+Simulator helper setup runs on the execution host through the same addressed RPC:
+pinned npm installs are profile-scoped, shared across that host's enabled chats,
+and supervised by its engine. Progress is returned in `State.setup`; configure
+returns promptly while the host job runs. Remote host installation, native-device
+operation, and long/slow cold boots still need the hardware acceptance checklist.

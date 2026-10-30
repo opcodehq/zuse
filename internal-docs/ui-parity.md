@@ -443,3 +443,9 @@ Home, Android Back/Recents, clipboard screenshots, reconnect, and shutdown use
 this app's surface and text tokens. Agent access is separately enabled per chat.
 See [device-simulators.md](device-simulators.md) for original PR #908/#915 mapping,
 progressive PNG transport, deferred original controls, and host acceptance gates.
+
+Simulator onboarding now follows the original centered setup surface: read-only
+requirements, optional agent consent, pinned helper disclosure, host-driven
+installation/startup/discovery steps, cancel, and separate hub/agent failure retry.
+The captures in `screenshots/device-simulator/simulator-{onboarding,installing-hub,installing-agent,install-error}.png`
+are scripted native pane renders. The real installer has a separate Linux smoke test.
