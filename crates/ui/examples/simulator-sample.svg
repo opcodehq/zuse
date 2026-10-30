@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844">
+<rect width="390" height="844" fill="#f8f8f6"/>
+<g font-family="DejaVu Sans" fill="#252723">
+<text x="28" y="34" font-size="14" font-weight="bold">9:41</text><path d="M309 30v-4m5 4v-7m5 7V20" stroke="#252723" stroke-width="3"/>
+<rect x="343" y="21" width="23" height="11" rx="3" fill="none" stroke="#252723"/><rect x="345" y="23" width="17" height="7" rx="1"/>
+<text x="26" y="96" font-size="12" fill="#767b72">FRIDAY, OCTOBER 30</text>
+<text x="26" y="133" font-size="30" font-weight="bold">Today</text>
+<circle cx="344" cy="112" r="21" fill="#e5e9e0"/><text x="334" y="117" font-size="13">JD</text>
+<rect x="24" y="162" width="342" height="157" rx="20" fill="#e5ebdf"/>
+<text x="44" y="196" font-size="12" fill="#5c6951">YOUR WEEK</text>
+<text x="44" y="237" font-size="28" font-weight="bold">Room to focus.</text>
+<text x="44" y="263" font-size="13" fill="#5c6951">You’ve finished 8 of 12 tasks.</text>
+<rect x="44" y="287" width="302" height="5" rx="2.5" fill="#cad5c1"/><rect x="44" y="287" width="201" height="5" rx="2.5" fill="#647c51"/>
+<text x="26" y="364" font-size="18" font-weight="bold">Coming up</text><text x="313" y="364" font-size="12" fill="#777e72">View all</text>
+<rect x="24" y="384" width="342" height="86" rx="16" fill="white" stroke="#e6e8e2"/>
+<circle cx="50" cy="417" r="10" fill="none" stroke="#bcc4b5" stroke-width="1.5"/><text x="73" y="418" font-size="14">Review the new mobile layout</text><text x="73" y="444" font-size="12" fill="#858b7e">Design · 10:00 AM</text>
+<rect x="24" y="482" width="342" height="86" rx="16" fill="white" stroke="#e6e8e2"/>
+<circle cx="50" cy="515" r="10" fill="none" stroke="#bcc4b5" stroke-width="1.5"/><text x="73" y="516" font-size="14">Take a walk</text><text x="73" y="542" font-size="12" fill="#858b7e">Personal · 12:30 PM</text>
+<rect x="24" y="580" width="342" height="86" rx="16" fill="white" stroke="#e6e8e2"/>
+<circle cx="50" cy="613" r="10" fill="none" stroke="#bcc4b5" stroke-width="1.5"/><text x="73" y="614" font-size="14">Plan next week</text><text x="73" y="640" font-size="12" fill="#858b7e">Workspace · 3:00 PM</text>
+<path d="M0 760h390" stroke="#e7e9e3"/>
+<g fill="none" stroke="#78836f" stroke-width="1.7"><path d="m61 791 9-7 9 7v10H61z"/><rect x="184" y="784" width="22" height="19" rx="4"/><path d="M184 790h22M190 781v6m10-6v6"/><circle cx="320" cy="790" r="5"/><path d="M310 804c0-10 20-10 20 0"/></g>
+<text x="54" y="823" font-size="10" fill="#5c6951">Today</text><text x="175" y="823" font-size="10" fill="#858b7e">Calendar</text><text x="306" y="823" font-size="10" fill="#858b7e">Profile</text>
+<rect x="137" y="833" width="116" height="4" rx="2"/>
+</g></svg>

@@ -184,7 +184,10 @@ acceptance are documented in [device-simulators.md](device-simulators.md).
 For visual snapshots on a host with a display (or Xvfb), run
 `cargo run -p zuse-ui --example simulator-fixture --features simulator-fixture -- .context/simulator-shots`.
 The fixture uses the production chat shell with synthetic setup, picker and
-screen data; it writes dark/light viewer images and does not boot a device.
+screen data; it writes dark/light viewer images, clicks the overflow toolbar
+button and captures its menu, then dismisses it. It does not boot a device.
+The synthetic app image has an editable source at
+`crates/ui/examples/simulator-sample.svg` and a checked-in PNG used by the fixture.
 
 On Linux, use X11 (unset `WAYLAND_DISPLAY`) or Xvfb and install ImageMagick:
 the fixture explicitly presents each frame, then captures its X11 window with

@@ -111,24 +111,33 @@ fn main() -> anyhow::Result<()> {
                 });
                 cx.background_executor().timer(Duration::from_millis(200)).await;
                 let requirements=vec![zuse_protocol::simulators::Requirement{platform:zuse_protocol::simulators::Platform::Ios,ready:false,message:"iOS Simulator requires a Mac with Xcode".into()},zuse_protocol::simulators::Requirement{platform:zuse_protocol::simulators::Platform::Android,ready:false,message:"Install Android SDK Platform-Tools and Emulator, then create an AVD in Android Studio".into()}];
-                for (name,state) in [("simulator-setup",zuse_protocol::simulators::State{requirements:requirements.clone(),..Default::default()}),("simulator-picker",zuse_protocol::simulators::State{enabled:true,devices:vec![zuse_protocol::simulators::Device{id:"android:Fixture_Pixel".into(),name:"Fixture Pixel".into(),platform:zuse_protocol::simulators::Platform::Android,runtime:"Android AVD".into(),booted:false,serial:None}],..Default::default()})] {
+                for (name,state) in [("simulator-setup",zuse_protocol::simulators::State{requirements:requirements.clone(),..Default::default()}),("simulator-picker",zuse_protocol::simulators::State{enabled:true,devices:vec![zuse_protocol::simulators::Device{id:"ios:fixture".into(),name:"iPhone 17 Pro".into(),platform:zuse_protocol::simulators::Platform::Ios,runtime:"iOS 26.0".into(),booted:false,serial:None},zuse_protocol::simulators::Device{id:"android:Fixture_Pixel".into(),name:"Pixel 9".into(),platform:zuse_protocol::simulators::Platform::Android,runtime:"Android 16".into(),booted:true,serial:Some("emulator-5554".into())},zuse_protocol::simulators::Device{id:"android:Fixture_Pixel_Tablet".into(),name:"Pixel Tablet".into(),platform:zuse_protocol::simulators::Platform::Android,runtime:"Android 16".into(),booted:false,serial:None}],..Default::default()})] {
                     window.update(cx,|shell,window,cx|shell.fixture_simulator(state,None,window,cx))?;
                     cx.background_executor().timer(Duration::from_millis(600)).await;
                     capture(window.into(),cx,&output.join(format!("{name}.png"))).await?;
                 }
-                let pixels=image::RgbaImage::from_fn(390,844,|x,y| {
-                    image::Rgba(if y < 80 {[28,32,40,255]} else if x > 24 && x < 366 && ((110..250).contains(&y) || (280..420).contains(&y) || (450..590).contains(&y)) {[48,116,218,255]} else {[238,241,247,255]})
-                });
+                let pixels=image::load_from_memory(include_bytes!("simulator-sample.png"))?.to_rgba8();
                 let mut png=std::io::Cursor::new(Vec::new());image::DynamicImage::ImageRgba8(pixels).write_to(&mut png,image::ImageFormat::Png)?;
                 use base64::Engine as _;
                 let frame=zuse_protocol::simulators::Frame{data:base64::engine::general_purpose::STANDARD.encode(png.into_inner()),mime_type:"image/png".into(),width:390,height:844};
-                let device=zuse_protocol::simulators::Device{id:"android:Fixture_Pixel".into(),name:"Fixture Pixel · synthetic screen".into(),platform:zuse_protocol::simulators::Platform::Android,runtime:"Android AVD".into(),booted:true,serial:Some("emulator-5554".into())};
+                let device=zuse_protocol::simulators::Device{id:"android:Fixture_Pixel".into(),name:"Pixel 9".into(),platform:zuse_protocol::simulators::Platform::Android,runtime:"Android 16".into(),booted:true,serial:Some("emulator-5554".into())};
                 let state=zuse_protocol::simulators::State{enabled:true,agent_access:true,devices:vec![device.clone()],sessions:vec![device],..Default::default()};
                 window.update(cx,|shell,w,cx|shell.fixture_simulator(state,Some(frame),w,cx))?;
                 for (name,mode) in [("simulator-viewer-dark",appearance::AppearanceMode::Dark),("simulator-viewer-light",appearance::AppearanceMode::Light)] {
                     cx.update(|cx|appearance::set_mode(mode,cx));
                     cx.background_executor().timer(Duration::from_millis(600)).await;
                     capture(window.into(),cx,&output.join(format!("{name}.png"))).await?;
+                    if name == "simulator-viewer-dark" {
+                        // Exercise the actual toolbar hit target, then dismiss in the letterbox.
+                        for (position, capture_menu) in [(gpui::point(px(1261.),px(55.)),true),(gpui::point(px(800.),px(300.)),false)] {
+                            gpui::AnyWindowHandle::from(window).update(cx,|_,w,cx| {
+                                w.dispatch_event(gpui::PlatformInput::MouseDown(gpui::MouseDownEvent{position,button:gpui::MouseButton::Left,click_count:1,..Default::default()}),cx);
+                                w.dispatch_event(gpui::PlatformInput::MouseUp(gpui::MouseUpEvent{position,button:gpui::MouseButton::Left,click_count:1,..Default::default()}),cx);
+                            })?;
+                            cx.background_executor().timer(Duration::from_millis(200)).await;
+                            if capture_menu {capture(window.into(),cx,&output.join("simulator-menu.png")).await?;}
+                        }
+                    }
                 }
                 std::fs::write(output.join("result.txt"),"Production Shell and SimulatorPane with synthetic setup/picker/viewer data. No real device execution.\n")?;Ok(())
             }.await;

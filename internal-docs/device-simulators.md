@@ -3,8 +3,10 @@
 The chat's right-pane launcher and `+` menu offer **Simulator**. Enable device
 support, inspect setup requirements, and choose an iOS Simulator or Android AVD.
 The screen stays beside the conversation. Touch the displayed image to tap;
-use the text field and Type/Enter, Home, Screenshot, and Android Back/Recents.
-Screenshot copies the PNG to the clipboard. Close releases the chat's session;
+use the text field and Send/Enter, Home, Screenshot, and Android Back/Recents.
+Screenshot copies the PNG to the clipboard. The overflow menu contains agent
+control, Reconnect, Disconnect, Shut down, and Disable devices. Disconnect
+releases the chat's session;
 Shut down also powers off the device. Reconnect rediscovers and boots the same
 stable device id after a stopped device or replaced Android serial.
 
@@ -21,6 +23,12 @@ a chat releases its consent and sessions; streams also check membership on each
 frame to catch deletion or host changes arriving through sync.
 
 ## Design
+
+The pane follows the reference’s 36px device toolbar, 14px icon actions with
+tooltips, runtime-grouped compact device rows, and rounded, proportionally fitted
+screen. Infrequent lifecycle and consent actions live in the overflow menu.
+The picker keeps agent consent in its bottom footer. Fixture captures use an
+explicitly synthetic sample app screen; they do not demonstrate a real emulator.
 
 ```text
 SimulatorPane (crates/ui/src/simulator.rs)
@@ -130,7 +138,8 @@ validation, letterboxing, selection, and hidden-view cancellation.
 The production-shell visual fixture renders synthetic device data. Its captured
 [setup](screenshots/device-simulator/simulator-setup.png),
 [picker](screenshots/device-simulator/simulator-picker.png),
-[dark viewer](screenshots/device-simulator/simulator-viewer-dark.png), and
+[dark viewer](screenshots/device-simulator/simulator-viewer-dark.png),
+[overflow menu](screenshots/device-simulator/simulator-menu.png), and
 [light viewer](screenshots/device-simulator/simulator-viewer-light.png) show layout
 and theme behavior, including the device text field. They do not show a live device.
 See the development guide for the reproduction command.

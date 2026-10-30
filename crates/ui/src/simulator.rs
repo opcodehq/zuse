@@ -23,6 +23,7 @@ pub struct SimulatorPane {
     picker: bool,
     active: bool,
     busy: bool,
+    menu_open: bool,
     error: Option<String>,
     notice: Option<String>,
     image: Option<Arc<RenderImage>>,
@@ -59,6 +60,7 @@ impl SimulatorPane {
             picker: false,
             active: false,
             busy: false,
+            menu_open: false,
             error: None,
             notice: None,
             image: None,
@@ -299,6 +301,41 @@ impl SimulatorPane {
             self.send_input(Input::Text { text }, cx);
         }
     }
+    fn icon_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        icon: &'static str,
+        cx: &Context<Self>,
+        click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> Stateful<Div> {
+        let theme = Theme::of(cx);
+        div()
+            .id(id)
+            .role(Role::Button)
+            .aria_label(label)
+            .tab_index(0)
+            .on_key_down(contain_activation)
+            .size(px(26.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.))
+            .cursor_pointer()
+            .tooltip(crate::settings::widgets::text_tooltip(label))
+            .focus_visible(|s| s.border_1().border_color(theme.accent))
+            .hover(|s| s.bg(theme.muted_fill()))
+            .child(
+                crate::icons::icon(icon)
+                    .size(px(14.))
+                    .text_color(theme.text_muted),
+            )
+            .when(!self.busy, |d| {
+                d.on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
+            })
+            .when(self.busy, |d| d.opacity(0.4))
+    }
     fn button(
         &self,
         id: &'static str,
@@ -407,31 +444,58 @@ impl Render for SimulatorPane {
             .flex_col()
             .text_size(crate::typography::text_sm())
             .text_color(theme.text)
-            .bg(theme.bg);
+            .bg(theme.bg)
+            .relative()
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && this.menu_open {
+                    this.menu_open = false;
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }));
         let enabled = self.state.as_ref().is_some_and(|s| s.enabled);
         let agents = self.state.as_ref().is_some_and(|s| s.agent_access);
-        body = body.child(
-            crate::surface_chrome::toolbar(&theme)
-                .child(div().flex_1().child("Simulator"))
-                .child(
-                    self.button("simulator-refresh", "Refresh", cx, |this, _, cx| {
-                        this.error = None;
-                        this.watch(cx);
-                    }),
-                )
-                .child(self.button(
-                    "simulator-enabled",
-                    if enabled { "Disable" } else { "Enable" },
-                    cx,
-                    move |this, _, cx| {
-                        this.request(
-                            methods::CONFIGURE_SIMULATORS,
-                            json!({"enabled":!enabled,"agentAccess":false}),
-                            cx,
-                        )
-                    },
-                )),
-        );
+        if self.selected.is_none() {
+            body = body.child(
+                div()
+                    .h(px(36.))
+                    .flex_none()
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(div().child("Devices"))
+                    .child(
+                        div().text_size(px(11.)).text_color(theme.text_muted).child(
+                            self.state
+                                .as_ref()
+                                .map(|s| s.devices.len().to_string())
+                                .unwrap_or_default(),
+                        ),
+                    )
+                    .child(div().flex_1())
+                    .child(self.icon_button(
+                        "simulator-refresh",
+                        "Refresh devices",
+                        crate::icons::REFRESH,
+                        cx,
+                        |this, _, cx| {
+                            this.error = None;
+                            this.watch(cx);
+                        },
+                    ))
+                    .child(self.icon_button(
+                        "simulator-settings",
+                        "Device options",
+                        crate::icons::MORE_HORIZONTAL,
+                        cx,
+                        |this, _, cx| {
+                            this.menu_open = !this.menu_open;
+                            cx.notify();
+                        },
+                    )),
+            );
+        }
         if let Some(error) = &self.error {
             body = body.child(
                 div()
@@ -463,92 +527,134 @@ impl Render for SimulatorPane {
         };
         if !enabled {
             let requirements = state.requirements.clone();
-            return body.child(div().id("simulator-setup").flex_1().min_h_0().overflow_y_scroll().p(px(20.0)).flex().flex_col().gap(px(12.0))
-                .child(div().text_size(crate::typography::text_md()).child("Run a device beside your chat"))
-                .child(div().text_color(theme.text_muted).child("Enable device support, then choose an iOS Simulator or Android emulator on this chat's execution host."))
-                .children(requirements.into_iter().map(|r| div().child(format!("{} · {}",if r.ready {"Ready"} else {"Setup"},r.message)))))
-                .into_any_element();
-        }
-        body = body.child(
-            div()
-                .px(px(12.0))
-                .py(px(8.0))
+            body = body.child(
+                div()
+                    .id("simulator-setup")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px(px(24.))
+                    .py(px(40.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .child(
+                        crate::icons::icon(crate::icons::SMARTPHONE)
+                            .size(px(28.))
+                            .text_color(theme.text_muted),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .child("Your app, right beside your chat"),
+                    )
+                    .child(
+                        div()
+                            .text_color(theme.text_muted)
+                            .line_height(px(20.))
+                            .child("Run an iOS Simulator or Android emulator on this chat’s host."),
+                    )
+                    .child(
+                        self.button("simulator-enable", "Enable devices", cx, |this, _, cx| {
+                            this.request(methods::CONFIGURE_SIMULATORS, json!({"enabled":true}), cx)
+                        })
+                        .self_start(),
+                    )
+                    .child(
+                        div()
+                            .mt(px(16.))
+                            .text_size(px(11.))
+                            .text_color(theme.text_muted)
+                            .child("REQUIREMENTS"),
+                    )
+                    .children(requirements.into_iter().map(|r| {
+                        div()
+                            .text_color(theme.text_muted)
+                            .line_height(px(20.))
+                            .child(r.message)
+                    })),
+            );
+        } else if let Some(device) = self.selected.clone() {
+            let mut controls = div()
+                .h(px(36.))
+                .flex_none()
+                .px(px(6.))
                 .flex()
                 .items_center()
-                .gap(px(8.0))
-                .child(self.button(
-                    "simulator-agents",
-                    if agents {
-                        "Agent access: on"
-                    } else {
-                        "Agent access: off"
-                    },
+                .gap(px(2.))
+                .child(self.icon_button(
+                    "simulator-devices",
+                    "All devices",
+                    crate::icons::ARROW_LEFT,
                     cx,
-                    move |this, _, cx| {
-                        this.request(
-                            methods::CONFIGURE_SIMULATORS,
-                            json!({"enabled":true,"agentAccess":!agents}),
-                            cx,
-                        )
-                    },
-                )),
-        );
-        if let Some(device) = self.selected.clone() {
-            let mut controls = div()
-                .px(px(12.0))
-                .py(px(6.0))
-                .flex()
-                .flex_wrap()
-                .gap(px(6.0))
-                .child(
-                    self.button("simulator-devices", "Devices", cx, |this, _, cx| {
+                    |this, _, cx| {
                         this.picker = true;
                         this.selected = None;
                         this.frames = None;
                         this.clear_image(cx);
                         cx.notify();
-                    }),
-                )
-                .child(self.button("simulator-home", "Home", cx, |this, _, cx| {
-                    this.send_input(Input::Home, cx)
-                }))
+                    },
+                ))
                 .child(
-                    self.button("simulator-screenshot", "Screenshot", cx, |this, _, cx| {
-                        this.request(methods::SIMULATOR_SCREENSHOT, json!({}), cx)
-                    }),
-                )
-                .child(
-                    self.button("simulator-reconnect", "Reconnect", cx, |this, _, cx| {
-                        this.frames = None;
-                        this.clear_image(cx);
-                        this.request(methods::OPEN_SIMULATOR, json!({}), cx);
-                    }),
-                )
-                .child(self.button("simulator-close", "Close", cx, |this, _, cx| {
-                    this.request(methods::CLOSE_SIMULATOR, json!({"shutdown":false}), cx)
-                }))
-                .child(
-                    self.button("simulator-shutdown", "Shut down", cx, |this, _, cx| {
-                        this.request(methods::CLOSE_SIMULATOR, json!({"shutdown":true}), cx)
-                    }),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(div().truncate().child(device.name.clone()))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(px(11.))
+                                .text_color(theme.text_muted)
+                                .child(device.runtime.clone()),
+                        ),
                 );
             if device.platform == Platform::Android {
-                controls = controls
-                    .child(self.button("simulator-back", "Back", cx, |this, _, cx| {
-                        this.send_input(Input::Back, cx)
-                    }))
-                    .child(
-                        self.button("simulator-recents", "Recents", cx, |this, _, cx| {
-                            this.send_input(Input::Recents, cx)
-                        }),
-                    );
+                controls = controls.child(self.icon_button(
+                    "simulator-back",
+                    "Back",
+                    crate::icons::RESTORE,
+                    cx,
+                    |this, _, cx| this.send_input(Input::Back, cx),
+                ));
             }
-            body = body.child(controls).child(
-                div()
-                    .px(px(12.0))
-                    .text_color(theme.text_muted)
-                    .child(format!("{} · {}", device.name, device.runtime)),
-            );
+            controls = controls.child(self.icon_button(
+                "simulator-home",
+                "Home",
+                crate::icons::DEVICE_HOME,
+                cx,
+                |this, _, cx| this.send_input(Input::Home, cx),
+            ));
+            if device.platform == Platform::Android {
+                controls = controls.child(self.icon_button(
+                    "simulator-recents",
+                    "Recent apps",
+                    crate::icons::DEVICE_RECENTS,
+                    cx,
+                    |this, _, cx| this.send_input(Input::Recents, cx),
+                ));
+            }
+            controls = controls
+                .child(self.icon_button(
+                    "simulator-screenshot",
+                    "Copy screenshot",
+                    crate::icons::DEVICE_CAMERA,
+                    cx,
+                    |this, _, cx| this.request(methods::SIMULATOR_SCREENSHOT, json!({}), cx),
+                ))
+                .child(self.icon_button(
+                    "simulator-options",
+                    "Device options",
+                    crate::icons::MORE_HORIZONTAL,
+                    cx,
+                    |this, _, cx| {
+                        this.menu_open = !this.menu_open;
+                        cx.notify();
+                    },
+                ));
+            body = body.child(controls);
             let measure = self.bounds.clone();
             let mut viewport = div()
                 .id("simulator-screen")
@@ -570,10 +676,31 @@ impl Render for SimulatorPane {
                     }),
                 );
             if let Some(image) = &self.image {
+                let bounds = *self.bounds.borrow();
+                let available_w = f32::from(bounds.size.width).max(1.);
+                let available_h = f32::from(bounds.size.height).max(1.);
+                let scale = (available_w / self.dimensions.0.max(1) as f32)
+                    .min(available_h / self.dimensions.1.max(1) as f32);
+                let width = self.dimensions.0 as f32 * scale;
+                let height = self.dimensions.1 as f32 * scale;
                 viewport = viewport.child(
-                    img(image.clone())
-                        .size_full()
-                        .object_fit(ObjectFit::Contain),
+                    div()
+                        .absolute()
+                        .left(px((available_w - width) / 2.))
+                        .top(px((available_h - height) / 2.))
+                        .w(px(width))
+                        .h(px(height))
+                        .rounded(px(width.min(height) * 0.12))
+                        .overflow_hidden()
+                        .border_1()
+                        .border_color(theme.border)
+                        .shadow_lg()
+                        .child(
+                            img(image.clone())
+                                .size_full()
+                                .rounded(px(width.min(height) * 0.12))
+                                .object_fit(ObjectFit::Contain),
+                        ),
                 );
             } else {
                 viewport = viewport.child(
@@ -592,7 +719,10 @@ impl Render for SimulatorPane {
             }
             viewport = viewport.child(
                 canvas(
-                    move |bounds, _, _| {
+                    move |bounds, window, _| {
+                        if *measure.borrow() != bounds {
+                            window.refresh();
+                        }
                         *measure.borrow_mut() = bounds;
                     },
                     |_, _, _, _| {},
@@ -602,38 +732,54 @@ impl Render for SimulatorPane {
                 .left_0()
                 .size_full(),
             );
-            body = body.child(viewport).child(
-                div()
-                    .p(px(8.0))
-                    .flex()
-                    .gap(px(6.0))
-                    .items_center()
-                    .child(
-                        div()
-                            .id("simulator-text")
-                            .flex_1()
-                            .min_w_0()
-                            .h(px(32.0))
-                            .px(px(8.0))
-                            .flex()
-                            .items_center()
-                            .rounded(px(5.0))
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.input_glass_bg())
-                            .cursor_text()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.input.update(cx, |input, cx| input.focus(window, cx));
-                                }),
-                            )
-                            .child(TextInput::new(&self.input)),
-                    )
-                    .child(self.button("simulator-type", "Type", cx, |this, _, cx| {
-                        this.type_text(cx)
-                    })),
-            );
+            body = body
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .px(px(20.))
+                        .pt(px(8.))
+                        .pb(px(16.))
+                        .flex()
+                        .child(viewport),
+                )
+                .child(
+                    div()
+                        .px(px(16.0))
+                        .pb(px(12.0))
+                        .flex()
+                        .gap(px(6.0))
+                        .items_center()
+                        .child(
+                            div()
+                                .id("simulator-text")
+                                .flex_1()
+                                .min_w_0()
+                                .h(px(28.0))
+                                .px(px(8.0))
+                                .flex()
+                                .items_center()
+                                .rounded(px(5.0))
+                                .border_1()
+                                .border_color(theme.border)
+                                .bg(theme.surface)
+                                .cursor_text()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.input.update(cx, |input, cx| input.focus(window, cx));
+                                    }),
+                                )
+                                .child(TextInput::new(&self.input)),
+                        )
+                        .child(self.icon_button(
+                            "simulator-type",
+                            "Send text",
+                            crate::icons::RETURN,
+                            cx,
+                            |this, _, cx| this.type_text(cx),
+                        )),
+                );
         } else {
             let state = self.state.as_ref().unwrap();
             let mut picker = div()
@@ -644,54 +790,224 @@ impl Render for SimulatorPane {
                 .p(px(16.0))
                 .flex()
                 .flex_col()
-                .gap(px(10.0));
+                .gap(px(2.0));
             for platform in [Platform::Ios, Platform::Android] {
-                picker = picker.child(div().text_color(theme.text_muted).child(
-                    if platform == Platform::Ios {
-                        "iOS Simulators"
-                    } else {
-                        "Android emulators"
-                    },
-                ));
-                for device in state.devices.iter().filter(|d| d.platform == platform) {
-                    let id = device.id.clone();
+                let devices: Vec<_> = state
+                    .devices
+                    .iter()
+                    .filter(|d| d.platform == platform)
+                    .cloned()
+                    .collect();
+                let mut runtimes: Vec<_> = devices.iter().map(|d| d.runtime.clone()).collect();
+                runtimes.sort();
+                runtimes.dedup();
+                for runtime in runtimes {
                     picker = picker.child(
                         div()
-                            .id(SharedString::from(format!("device-{id}")))
-                            .role(Role::Button)
-                            .tab_index(0)
-                            .on_key_down(contain_activation)
-                            .focus_visible(|s| s.border_1().border_color(theme.accent))
-                            .aria_label(format!("Open {}", device.name))
-                            .p(px(12.0))
-                            .rounded(px(8.0))
-                            .bg(theme.surface_card)
-                            .cursor_pointer()
-                            .child(format!(
-                                "{} · {} · {}",
-                                device.name,
-                                device.runtime,
-                                if device.booted {
-                                    "Running"
-                                } else {
-                                    "Shut down"
-                                }
-                            ))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.request(methods::OPEN_SIMULATOR, json!({"deviceId":id}), cx)
-                            })),
+                            .h(px(28.))
+                            .flex()
+                            .items_center()
+                            .text_size(px(11.))
+                            .text_color(theme.text_muted)
+                            .child(runtime.clone()),
                     );
+                    for device in devices.iter().filter(|d| d.runtime == runtime) {
+                        let id = device.id.clone();
+                        picker = picker.child(
+                            div()
+                                .id(SharedString::from(format!("device-{id}")))
+                                .role(Role::Button)
+                                .tab_index(0)
+                                .on_key_down(contain_activation)
+                                .focus_visible(|s| s.border_1().border_color(theme.accent))
+                                .aria_label(format!("Open {}", device.name))
+                                .h(px(34.))
+                                .px(px(8.))
+                                .rounded(px(6.))
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(theme.muted_fill()))
+                                .child(
+                                    crate::icons::icon(crate::icons::SMARTPHONE)
+                                        .size(px(14.))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child(div().flex_1().child(device.name.clone()))
+                                .child(div().text_size(px(11.)).text_color(theme.text_muted).child(
+                                    if device.booted {
+                                        "● Running"
+                                    } else {
+                                        "Start →"
+                                    },
+                                ))
+                                .when(!self.busy, |row| {
+                                    row.on_click(cx.listener(move |this, _, _, cx| {
+                                        this.request(
+                                            methods::OPEN_SIMULATOR,
+                                            json!({"deviceId":id}),
+                                            cx,
+                                        )
+                                    }))
+                                }),
+                        );
+                    }
                 }
                 for r in state
                     .requirements
                     .iter()
                     .filter(|r| r.platform == platform && !r.ready)
                 {
-                    picker =
-                        picker.child(div().text_color(theme.text_muted).child(r.message.clone()));
+                    picker = picker.child(
+                        div()
+                            .py(px(8.))
+                            .text_color(theme.text_muted)
+                            .line_height(px(20.))
+                            .child(r.message.clone()),
+                    );
                 }
             }
+            if state.devices.is_empty() && state.requirements.iter().all(|r| r.ready) {
+                picker = picker.child(div().py(px(24.)).text_color(theme.text_muted).child("No devices found. Create a simulator in Xcode or an AVD in Android Studio, then refresh."));
+            }
             body = body.child(picker);
+        }
+        if enabled && self.selected.is_none() {
+            body = body.child(
+                div()
+                    .h(px(42.))
+                    .flex_none()
+                    .px(px(16.))
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(11.))
+                            .text_color(theme.text_muted)
+                            .child(if agents {
+                                "Agent control enabled"
+                            } else {
+                                "Agents can’t control devices"
+                            }),
+                    )
+                    .child(self.button(
+                        "simulator-agents",
+                        if agents { "Revoke" } else { "Allow" },
+                        cx,
+                        move |this, _, cx| {
+                            this.request(
+                                methods::CONFIGURE_SIMULATORS,
+                                json!({"enabled":true,"agentAccess":!agents}),
+                                cx,
+                            )
+                        },
+                    )),
+            );
+        }
+        if self.menu_open {
+            let mut menu = crate::popover::popover_card(&theme.for_popup())
+                .id("simulator-menu")
+                .occlude()
+                .absolute()
+                .top(px(34.))
+                .right(px(8.))
+                .w(px(210.))
+                .flex()
+                .flex_col()
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.menu_open = false;
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.menu_open = false;
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }));
+            let mut actions = vec![(
+                "simulator-menu-agents",
+                if agents {
+                    "Revoke agent control"
+                } else {
+                    "Allow agent control"
+                },
+                methods::CONFIGURE_SIMULATORS,
+                json!({"enabled":true,"agentAccess":!agents}),
+            )];
+            if self.selected.is_some() {
+                actions.extend([
+                    (
+                        "simulator-reconnect",
+                        "Reconnect",
+                        methods::OPEN_SIMULATOR,
+                        json!({}),
+                    ),
+                    (
+                        "simulator-close",
+                        "Disconnect",
+                        methods::CLOSE_SIMULATOR,
+                        json!({"shutdown":false}),
+                    ),
+                    (
+                        "simulator-shutdown",
+                        "Shut down device",
+                        methods::CLOSE_SIMULATOR,
+                        json!({"shutdown":true}),
+                    ),
+                ]);
+            }
+            actions.push((
+                "simulator-enabled",
+                if enabled {
+                    "Disable devices"
+                } else {
+                    "Enable devices"
+                },
+                methods::CONFIGURE_SIMULATORS,
+                json!({"enabled":!enabled,"agentAccess":false}),
+            ));
+            for (id, label, method, params) in actions {
+                menu = menu.child(
+                    crate::popover::menu_row(&theme, false, id)
+                        .id(id)
+                        .role(Role::Button)
+                        .aria_label(label)
+                        .tab_index(0)
+                        .on_key_down(contain_activation)
+                        .focus_visible(|s| s.border_1().border_color(theme.accent))
+                        .when(id == "simulator-shutdown", |row| {
+                            row.text_color(theme.danger)
+                        })
+                        .child(label)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.menu_open = false;
+                            if this.busy {
+                                cx.notify();
+                                return;
+                            }
+                            if method == methods::OPEN_SIMULATOR {
+                                this.frames = None;
+                                this.clear_image(cx);
+                            }
+                            this.request(method, params.clone(), cx);
+                        })),
+                );
+            }
+            body = body.child(
+                gpui::deferred(crate::frost::floating_glass(
+                    crate::popover::CARD_RADIUS,
+                    crate::frost::MENU_BLUR,
+                    menu,
+                ))
+                .with_priority(1),
+            );
         }
         body.into_any_element()
     }
