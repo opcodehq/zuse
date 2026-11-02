@@ -10,6 +10,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  localization:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 scripts/check-localization.py
+      - run: python3 -m unittest discover -s scripts -p test_localization.py
+      - run: cargo test -p zuse-i18n
+
   packaging:
     runs-on: ubuntu-24.04
     steps:
@@ -41,6 +51,7 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo check -p zuse-cli -p zuse-relay
       - run: cargo test -p zuse-cli --test startup
+      - run: cargo test -p zuse-cli --bin zuse-server localization_tests
       - run: cargo test -p zuse-relay --test startup
       - run: cargo test -p zuse-remote
       - run: cargo test -p zuse-plugins
@@ -122,6 +133,11 @@ jobs:
         run: |
           cargo test -p zuse-ui --lib state::account_connection::tests
           cargo test -p zuse-ui --lib native_paired_reconnect_uses_fresh_encryption
+      - name: Language persistence, drafts and offline font coverage
+        run: |
+          cargo test -p zuse-ui --lib localization::tests
+          cargo test -p zuse-viewport --lib localization::tests
+          cargo test -p zuse-viewport --lib language_fonts::tests
       - name: Browser motion settings
         if: runner.os == 'Linux'
         run: cargo test -p zuse-viewport --lib environment::tests

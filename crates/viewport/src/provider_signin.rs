@@ -1,6 +1,8 @@
 //! The inline provider sign-in states shared by desktop and browser settings.
+use crate::localization::message as tr;
 use crate::{acp_catalog::spinner, assets::icon, palette::rgb, settings_style as s, shell::MUTED};
 use gpui::{prelude::*, *};
+use zuse_i18n::messages as msg;
 use zuse_protocol::HarnessId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,7 +176,7 @@ pub fn render<C: 'static>(
                     .text_size(px(11.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(MUTED))
-                    .child("Sign in"),
+                    .child(tr(cx, msg::common::signIn)),
             );
             let mut choices = div().flex().flex_wrap().items_center().gap(px(8.));
             for (i, option) in login_options(data.harness).into_iter().enumerate() {
@@ -328,7 +330,7 @@ pub fn render<C: 'static>(
                         hsla(160. / 360., 0.5, 0.12, 1.),
                         hsla(160. / 360., 0.5, 0.95, 1.),
                     ))
-                    .child("Signed in. Refreshing…"),
+                    .child(tr(cx, msg::providers::provider_card_signed_in_refreshing)),
             );
         }
     }

@@ -1,0 +1,1088 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+projects-browser_profile_select_browser_profile = ブラウザプロファイル
+
+projects-browser_profile_select_no_supported_profile_found = サポートされているプロファイルが見つかりません
+
+projects-browser_profile_select_default = { " " }(デフォルト)
+
+projects-file_tag_popover_files = ファイル
+
+projects-project_plan_tray_completed = 完了しました
+
+projects-project_plan_tray_pending = 保留中
+
+projects-diff_pane_no_project_selected = プロジェクトが選択されていません
+
+projects-diff_pane_open_review = オープンレビュー
+
+projects-diff_pane_next_unviewed = 次の未視聴
+
+projects-diff_pane_compared_with_head = ヘッドとの比較
+
+projects-diff_pane_loading_changes = 変更をロードしています
+
+projects-diff_pane_no_changes = 変更なし
+
+projects-diff_pane_merge_changes = 変更をマージする
+
+projects-diff_pane_changes = 変更点
+
+projects-diff_pane_deselect_all = すべての選択を解除します
+
+projects-diff_pane_select_all = すべて選択
+
+projects-diff_pane_discard_all = すべて破棄
+
+projects-diff_pane_no_active_chat = アクティブなチャットはありません
+
+projects-diff_pane_no_comments_yet = まだコメントはありません
+
+projects-diff_pane_annotations_for_ai = AIのアノテーション
+
+projects-diff_pane_edit_comment = コメントの編集
+
+projects-diff_pane_delete_comment = コメントの削除
+
+projects-diff_pane_pull_request_feedback = プルリクエストのフィードバック
+
+projects-diff_pane_reverting = 元に戻しています...
+
+projects-diff_pane_files_with_merge_conflicts = マージ競合のあるファイル
+
+projects-diff_pane_changed_files = 変更されたファイル
+
+projects-diff_pane_push_commits_to_origin = コミットをオリジンにプッシュする
+
+projects-diff_pane_no_commits_ahead_of_upstream = アップストリームの前にコミットはありません
+
+projects-diff_pane_push = プッシュ
+
+projects-diff_pane_commit_message = コミットメッセージ
+
+projects-diff_pane_nothing_to_commit = コミットするものは何もありません
+
+projects-diff_pane_commit = コミット
+
+projects-file_editor_no_file_open = ファイルが開いていません。
+
+projects-file_editor_loading_image = 画像を読み込み中…
+
+projects-file_editor_add_a_comment = コメントを追加…
+
+projects-file_editor_loading_diff = 差分を読み込み中…
+
+projects-file_editor_no_changes_vs_head = HEADと比べて変化なし。
+
+projects-file_editor_binary_file_diff_preview_not_supported = バイナリ ファイル — 差分プレビューはサポートされていません。
+
+projects-file_editor_no_diff_content = 差分コンテンツはありません。
+
+projects-file_editor_loading_preview = プレビューを読み込み中…
+
+projects-file_editor_s_to_save = ⌘S を保存
+
+projects-file_editor_diff = 差分
+
+projects-file_editor_preview = プレビュー
+
+projects-file_editor_saving = 保存中…
+
+projects-file_editor_dismiss = 却下
+
+projects-file_search_search_project_files = プロジェクトファイルの検索
+
+projects-file_search_search_files = ファイルを検索…
+
+projects-file_tree_project_files_are_unavailable = プロジェクト ファイルは使用できません。
+
+projects-file_tree_loading_project_files = プロジェクトファイルのロード
+
+projects-file_tree_open_in_editor = エディタで開く
+
+projects-file_tree_rename = 名前の変更
+
+projects-file_tree_attach_to_chat = チャットに添付する
+
+projects-file_tree_copy_path = パスをコピーする
+
+projects-file_tree_new_file = 新しいファイル
+
+projects-file_tree_new_folder = 新しいフォルダー
+
+projects-file_tree_files = ファイル
+
+projects-file_tree_partial = { " " }(一部)
+
+projects-file_tree_search_files = ファイルの検索
+
+projects-file_tree_open_in = で開く
+
+projects-file_tree_delete_2 = 削除{ " " }
+
+projects-file_tree_folder = フォルダ
+
+projects-file_tree_file = ファイル
+
+projects-git_init_cta_this_folder_isn_t_a_git_repository = このフォルダーは Git リポジトリではありません
+
+projects-git_init_cta_initialize_git_to_track_changes_commit_and_open_pull_requests = Git を初期化して、変更を追跡し、コミットし、プル リクエストをオープンします。
+
+projects-git_init_cta_initialize_git_repository = Git リポジトリの初期化
+
+projects-pr_pane_select_a_project_to_see_its_pr_here = ここでプロジェクトを選択すると、その PR が表示されます。
+
+projects-pr_pane_reading_branch_state = ブランチ状態を読み取り中…
+
+projects-pr_pane_branch = 支店
+
+projects-pr_pane_name = 名前
+
+projects-pr_pane_local_changes = ローカルな変更
+
+projects-pr_pane_clean = きれいな
+
+projects-pr_pane_ahead_of_upstream = 上流の先にある
+
+projects-pr_pane_in_sync = 同期中
+
+projects-pr_pane_no_pull_request_open_for_this_branch = このブランチに対して開いているプル リクエストはありません。
+
+projects-pr_pane_no_title = (タイトルなし)
+
+projects-pr_pane_open_in_browser = ブラウザで開く
+
+projects-pr_pane_loading_pr_details = PR 詳細を読み込み中…
+
+projects-pr_pane_description = 説明
+
+projects-pr_pane_add_all_feedback_to_chat = すべてのフィードバックをチャットに追加
+
+projects-pr_pane_add_all = すべて追加
+
+projects-pr_pane_checks = チェック
+
+projects-pr_pane_draft = 下書き
+
+projects-pr_pane_no_checks_configured = チェックが設定されていません
+
+projects-pr_pane_resolve_review_feedback = レビューのフィードバックを解決する
+
+projects-pr_pane_resolve = 解決する
+
+projects-pr_pane_add_review_to_chat = チャットにレビューを追加
+
+projects-pr_pane_added = 追加されました
+
+projects-pr_pane_add_to_chat = チャットに追加
+
+projects-pr_pane_approved = 承認済み
+
+projects-pr_pane_changes_requested = 変更要求
+
+projects-pr_pane_dismissed = 解雇された
+
+projects-pr_pane_commented = コメント付き
+
+projects-pr_pane_resolve_comment_feedback = コメントのフィードバックを解決する
+
+projects-pr_pane_add_comment_to_chat = チャットにコメントを追加する
+
+projects-pr_pane_claude = Claude
+
+projects-pr_pane_open_workflow_run = ワークフローの実行を開く
+
+projects-pr_pane_open_check_details = オープンチェックの詳細
+
+projects-pr_pane_merged = マージ済み
+
+projects-pr_pane_closed = クローズ
+
+projects-pr_pane_open_conflicts = オープン・コンフリクト
+
+projects-pr_pane_open_checks_failed = オープン・チェックに失敗しました
+
+projects-pr_pane_open_checks_running = オープン・チェック実行中
+
+projects-project_add_menu_add_project = プロジェクトの追加
+
+projects-project_setup_dialog_add_project = プロジェクトの追加
+
+projects-project_setup_dialog_quick_start = クイックスタート
+
+projects-project_setup_dialog_add_existing_folder = 既存のフォルダーを追加する
+
+projects-project_setup_dialog_choose_a_computer_and_prepare_a_project_on_it = コンピューターを選択し、その上でプロジェクトを準備します。
+
+projects-project_setup_dialog_create_on = 作成日
+
+projects-project_setup_dialog_this_computer = このコンピュータ
+
+projects-project_setup_dialog_this_computer_is_unavailable = このコンピュータは使用できません。
+
+projects-project_setup_dialog_retrying = 再試行中…
+
+projects-project_setup_dialog_retry_connection = 接続を再試行します
+
+projects-project_setup_dialog_create_from_a_template = テンプレートから作成する
+
+projects-project_setup_dialog_clone_repository = リポジトリのクローンを作成する
+
+projects-project_setup_dialog_clone_with_git_or_github = Git または GitHub でクローンを作成します
+
+projects-project_setup_dialog_existing_folder = 既存のフォルダー
+
+projects-project_setup_dialog_open_a_project_on_disk = ディスク上のプロジェクトを開く
+
+projects-project_setup_dialog_repository_url = リポジトリ URL
+
+projects-project_setup_dialog_git_github_com_owner_project_git = git@github.com:owner/project.git
+
+projects-project_setup_dialog_loading_repositories = リポジトリをロード中…
+
+projects-project_setup_dialog_github_is_unavailable_you_can_still_paste_a_repository_url = GitHubは使用できません。リポジトリ URL は引き続き貼り付けることができます。
+
+projects-project_setup_dialog_enter_a_repository_url_sign_in_with_the_github_cli_on_this_computer_to = リポジトリ URL を入力します。最近のリポジトリを表示するには、このコンピューターに GitHub CLI を使用してサインインします。
+
+projects-project_setup_dialog_project_name = プロジェクト名
+
+projects-project_setup_dialog_my_project = 私のプロジェクト
+
+projects-project_setup_dialog_use_lowercase_letters_numbers_dashes_or_underscores = 小文字、数字、ダッシュ、またはアンダースコアを使用してください。
+
+projects-project_setup_dialog_project_template = プロジェクトテンプレート
+
+projects-project_setup_dialog_also_create_a_private_github_repository = プライベート GitHub リポジトリも作成します
+
+projects-project_setup_dialog_project_folder = プロジェクトフォルダー
+
+projects-project_setup_dialog_parent_folder = 親フォルダー
+
+projects-project_setup_dialog_working = 働いています…
+
+projects-project_setup_dialog_clone_project = クローンプロジェクト
+
+projects-project_setup_dialog_create_project = プロジェクトの作成
+
+projects-projects_sidebar_computers = コンピュータ
+
+projects-projects_sidebar_projects = プロジェクト
+
+projects-projects_sidebar_loading_projects = プロジェクトを読み込み中…
+
+projects-projects_sidebar_this_computer_couldn_t_load_its_projects = このコンピュータはプロジェクトをロードできませんでした。
+
+projects-projects_sidebar_no_projects_yet = まだプロジェクトはありません
+
+projects-projects_sidebar_use_to_add_a_repository = + を使用してリポジトリを追加します。
+
+projects-projects_sidebar_new_project_group = 新しいプロジェクトグループ
+
+projects-projects_sidebar_rename_group = グループ名の変更
+
+projects-projects_sidebar_name_a_group_to_collect_projects_in_the_sidebar = サイドバーでプロジェクトを収集するグループに名前を付けます。
+
+projects-projects_sidebar_this_name_is_only_shown_in_the_sidebar = この名前はサイドバーにのみ表示されます。
+
+projects-projects_sidebar_group_name = グループ名
+
+projects-projects_sidebar_new_group = 新しいグループ
+
+projects-projects_sidebar_icon_color = アイコンの色
+
+projects-projects_sidebar_default_icon_color = デフォルトのアイコンの色
+
+projects-projects_sidebar_rename = 名前の変更
+
+projects-projects_sidebar_ungroup = グループを解除する
+
+projects-projects_sidebar_drag_projects_here = プロジェクトをここにドラッグします
+
+projects-projects_sidebar_new_chat = 新しいチャット
+
+projects-projects_sidebar_new_project = 新しいプロジェクト
+
+projects-projects_sidebar_plugins = プラグイン
+
+projects-projects_sidebar_usage = 使用法
+
+projects-projects_sidebar_zuse_account = Zuseアカウント
+
+projects-projects_sidebar_sign_out_of_this_browser = このブラウザからサインアウトします
+
+projects-projects_sidebar_project_settings = プロジェクト設定
+
+projects-projects_sidebar_no_chats_yet = まだチャットはありません。
+
+projects-projects_sidebar_agent_running = エージェントの実行中
+
+projects-projects_sidebar_repository_settings = リポジトリ設定
+
+projects-projects_sidebar_retry_archive = アーカイブを再試行する
+
+projects-projects_sidebar_archive = アーカイブ
+
+projects-projects_sidebar_add_to_group = グループに追加
+
+projects-projects_sidebar_archived_chats = アーカイブされたチャット
+
+projects-projects_sidebar_remove_from_group = グループから削除
+
+projects-projects_sidebar_remove_project = プロジェクトの削除
+
+projects-projects_sidebar_rename_chat = チャットの名前を変更する
+
+projects-projects_sidebar_change_the_name_shown_in_the_projects_sidebar = プロジェクトのサイドバーに表示される名前を変更します。
+
+projects-projects_sidebar_chat_name = チャット名
+
+projects-projects_sidebar_unarchive = アーカイブを解除する
+
+projects-worktree_setup_card_delete_workspace = ワークスペースの削除
+
+projects-worktree_setup_card_preparing_cloud_workspace = クラウドワークスペースの準備
+
+projects-worktree_setup_card_starting_secure_cloud_runtime = セキュアなクラウド ランタイムの開始
+
+projects-worktree_setup_card_preparing_repository = リポジトリの準備中
+
+projects-worktree_setup_card_branching_a_fresh_worktree = 新しいワークツリーを分岐しています…
+
+projects-worktree_setup_card_environment_setup_failed = 環境セットアップに失敗しました
+
+projects-worktree_setup_card_environment_setup_complete = 環境設定完了
+
+projects-worktree_setup_card_running_environment_setup = 実行環境のセットアップ
+
+projects-worktree_setup_card_detecting_setup_script = セットアップ スクリプトを検出しています…
+
+projects-worktree_setup_card_setup_output = セットアップ出力
+
+projects-worktree_setup_card_rerun_setup = セットアップを再実行する
+
+projects-diff_pane_commit_2 = { $selectedCount }をコミット
+
+projects-file_editor_preview_2 = { $name }{ " " }プレビュー
+
+projects-file_search_project_files = プロジェクトファイル
+
+projects-file_tree_finder = ファインダー
+
+projects-file_tree_open_in_2 = { $value1 }{ " " }を開きます
+
+projects-pr_pane_no_active_chat = アクティブなチャットはありません
+
+projects-pr_pane_open_a_chat_before_attaching_pr_feedback = PR フィードバックを添付する前にチャットを開いてください。
+
+projects-pr_pane_couldn_t_attach_feedback = フィードバックを添付できませんでした
+
+projects-pr_pane_the_pr_feedback_file_could_not_be_created = PR フィードバック ファイルを作成できませんでした。
+
+projects-pr_pane_attached = { $label }付属
+
+projects-pr_pane_added_to_the_composer = コンポーザーに{ $relPath }を追加しました。
+
+projects-pr_pane_feedback_attached = フィードバックが添付されました
+
+projects-pr_pane_added_file_to_the_composer = { $count }{ " " }ファイルをコンポーザーに追加しました。
+
+projects-project_setup_dialog_clone = クローン{ $value1 }
+
+projects-projects_sidebar_chats_2 = { $displayName }{ " " }チャット
+
+projects-projects_sidebar_settings_for = { $displayName }の設定
+
+projects-projects_sidebar_cloud_chat_could_not_refresh = クラウド チャットを更新できませんでした
+
+projects-projects_sidebar_cloud_chat_could_not_be_archived = クラウド チャットをアーカイブできませんでした
+
+projects-projects_sidebar_chat_could_not_be_restored = チャットを復元できませんでした
+
+projects-projects_sidebar_runs_on = { $title }{ "\u000A" }{ $environmentLabel }で動作します
+
+projects-tool_file_block_copy = { $name }をコピー
+
+projects-worktree_setup_card_couldn_t_retry_cloud_workspace = クラウド ワークスペースを再試行できませんでした
+
+projects-branch_workflow_check_failing = { $checksFailing }{ " " }チェックが失敗する
+
+projects-branch_workflow_check_running = { $checksRunning }{ " " }チェックが実行中です
+
+projects-branch_workflow_checks_passed = 小切手に合格しました
+
+projects-git_workspace_client_bus_merged = { $value1 }が統合されました
+
+projects-git_workspace_client_bus_closed = { $value1 }{ " " }閉店
+
+projects-project_setup_dialog_creates_sentence = <part0>{ $value }</part0> を作成します
+
+projects-file_editor_binary_file_bytes_preview_not_supported_sentence = バイナリ ファイル ({ $value }{ " " }バイト) — プレビューはサポートされていません。
+
+projects-file_editor_modified_sentence = <part0>●</part0>改
+
+projects-diff_pane_of_selected_to_commit_sentence = { $value }{ " " }中の{ " " }{ $selectedCount }{ " " }がコミット対象として選択されました
+
+projects-file_tree_will_be_permanently_deleted_this_cannot_be_undone_sentence = <part0>{ $name }</part0> は完全に削除されます。{ " " }{ $detail }{ " " }これは元に戻すことができません。
+
+projects-pr_pane_gh_couldn_t_read_pr_details_sentence = <part0>{ $code0 }</part0> は PR の詳細を読み取れませんでした。
+
+projects-pr_pane_total_sentence = { $value }合計
+
+projects-pr_pane_failing_sentence = { $value }{ " " }が失敗しました
+
+projects-pr_pane_running_sentence = { $value }{ " " }実行中
+
+projects-pr_pane_passed_sentence = { $value }{ " " }合格
+
+projects-pr_pane_skipped_sentence = { $value }{ " " }スキップされました
+
+projects-pr_pane_added_file_to_the_composer_one = { $count }{ " " }ファイルをコンポーザーに追加しました。
+
+projects-pr_pane_added_file_to_the_composer_other = { $count }{ " " }ファイルをコンポーザーに追加しました。
+
+projects-branch_workflow_check_failing_one = { $checksFailing }{ " " }チェックに失敗しました
+
+projects-branch_workflow_check_failing_other = { $checksFailing }{ " " }チェックが失敗しました
+
+projects-branch_workflow_check_running_one = { $checksRunning }{ " " }チェック実行中
+
+projects-branch_workflow_check_running_other = { $checksRunning }{ " " }チェックが実行中です
+
+projects-pr_pane_file_plural0_sentence = { $dirtyFiles }{ " " }ファイル
+
+projects-pr_pane_file_plural0_sentence_one = { $dirtyFiles }{ " " }ファイル
+
+projects-pr_pane_file_plural0_sentence_other = { $dirtyFiles }{ " " }ファイル
+
+projects-pr_pane_commit_plural0_sentence = { $ahead }{ " " }コミット
+
+projects-pr_pane_commit_plural0_sentence_one = { $ahead }{ " " }コミット
+
+projects-pr_pane_commit_plural0_sentence_other = { $ahead }{ " " }コミット
+
+projects-project_plan_tray_project_plan = プロジェクト計画
+
+projects-diff_pane_base = ベース{ " " }{ $value1 }
+
+projects-diff_pane_viewed = { " " }・{ $value1 }/{ $value2 }閲覧
+
+projects-diff_pane_unknown_author = 作者不明
+
+projects-diff_pane_resolve_merge_conflict_in = { $value1 }{ " " }のマージ競合を解決する
+
+projects-diff_pane_open_changes_for = { $value1 }{ " " }の未解決の変更
+
+projects-diff_pane_detached = (切り離された)
+
+projects-pr_pane_detached = (切り離された)
+
+projects-pr_pane_feedback = フィードバック ({ $feedbackCount })
+
+projects-pr_pane_checks_2 = チェック ({ $value1 })
+
+projects-projects_sidebar_icon_color_2 = { $id }{ " " }アイコンの色
+
+projects-projects_sidebar_new_chat_in = { $value1 }{ " " }の新しいチャット
+
+projects-worktree_setup_card_creating_a_new_copy_of = { $repoName }{ " " }の新しいコピーを作成しています…
+
+projects-worktree_setup_card_created_a_new_copy_of_called = { $name }{ " " }という名前の{ " " }{ $repoName }{ " " }の新しいコピーを作成しました
+
+projects-worktree_setup_card_branched_from = { $value2 }{ " " }から{ " " }{ $branch }{ " " }に分岐
+
+projects-worktree_setup_card_created_and_copying_files = { $name }{ " " }を作成し、ファイルをコピーしています…
+
+projects-diff_pane_selection_summary = { $total }{ " " }件中{ " " }{ $selected }{ " " }件を選択 · ⌘↵
+
+projects-projects_sidebar_chat_count = { $count }{ " " }件のチャット
+
+projects-projects_sidebar_chat_count_one = { $count }{ " " }件のチャット
+
+projects-projects_sidebar_chat_count_other = { $count }{ " " }件のチャット
+
+projects-github_create_branch = ブランチを作成
+
+projects-github_continue_branch = 現在のブランチから続行します。
+
+projects-github_origin_branch_help = origin/main を取得して新しいブランチを作成します。先にローカルの変更をコミットまたはスタッシュしてください。
+
+projects-github_creating = 作成中…
+
+projects-github_create_checkout = 作成してチェックアウト
+
+projects-github_open_github = GitHub で開く
+
+projects-github_stack = GitHub スタック
+
+projects-github_updating_stack = スタックを更新中…
+
+projects-github_base = ベース：
+
+projects-github_needs_rebase = リベースが必要
+
+projects-github_new_stack_branch = 新しいスタックブランチ
+
+projects-github_submit_stack = スタックを公開
+
+projects-github_start_stack = このブランチからスタックを開始
+
+projects-github_stack_help = GitHub スタックの設定とヘルプ ↗
+
+projects-github_pr_number = PR #{ $number }
+
+projects-github_view_pr = PR を表示
+
+projects-github_code_changes = コードの変更
+
+projects-github_repair = 修正
+
+projects-github_comments = コメント
+
+projects-github_failing_checks = 失敗したチェック
+
+projects-github_everything = すべて
+
+projects-github_disable_auto_merge = 自動マージを無効化
+
+projects-github_enable_auto_merge = 自動マージを有効化
+
+projects-github_status = 状態
+
+projects-github_ready_review = レビュー準備完了
+
+projects-github_reopen = 再開
+
+projects-github_refresh_failed = この PR を更新できませんでした。
+
+projects-github_watch_ci = CI を監視
+
+projects-github_auto_fix_on = 自動修正オン
+
+projects-github_off = オフ
+
+projects-github_watch_help = Zuse を開いている間監視します。エージェントが待機中に新しい CI エラーを修正、検証、プッシュします。3 回の修正後に一時停止します。
+
+projects-github_stop_watching = 監視を停止
+
+projects-github_resume_auto_fix = 自動修正を再開
+
+projects-github_watch_auto_fix = 監視して自動修正
+
+projects-github_new_branch = 新しいブランチを作成してチェックアウト…
+
+projects-github_new_origin_branch = origin/main から新しいブランチ…
+
+projects-github_continue_tooltip = origin/main から新しいブランチを作成してチェックアウト
+
+projects-github_auto_fix = 自動修正
+
+projects-projects_sidebar_cloud = クラウド
+
+projects-projects_sidebar_started_from_slack = Slack から開始
+
+projects-github_action_failed = GitHub 操作に失敗しました
+
+projects-github_repair_state_changed = チャット、ブランチ、またはエージェントの状態が変わりました。現在の PR から修復を再実行してください。
+
+projects-github_attach_failed = PR のコンテキストを添付できませんでした。
+
+projects-github_repair_send_failed = 修復を送信できませんでした。チャットを確認して再試行してください。
+
+projects-github_watch_update_failed = CI 監視を更新できませんでした
+
+projects-worktree_setup_card_worktree_creation_failed = ワークツリーの作成に失敗しました
+
+projects-worktree_setup_card_workspace_ready = ワークスペースの準備が完了しました
+
+projects-worktree_setup_card_creating_worktree = { $repoName }{ " " }のワークツリーを作成中…
+
+projects-worktree_setup_card_preparing_directory = このチャット用の独立した作業ディレクトリを準備しています。
+
+projects-worktree_setup_card_no_setup_script = セットアップスクリプトは不要です。
+
+projects-worktree_setup_card_workspace_ready_description = ワークスペースの準備が完了しました。
+
+projects-worktree_setup_card_preparing_environment = ワークスペースの環境を準備しています。
+
+projects-github_submit_stack_help = すべてのブランチをプッシュし、GitHub 上のプルリクエストを更新します。プルリクエストがないブランチには、レビュー準備前のドラフトを作成します。既存のオープンなプルリクエストはそのまま維持されます。
+
+projects-projects_sidebar_upgrade = アップグレード
+
+projects-projects_sidebar_plan_cloud = Cloud
+
+projects-projects_sidebar_plan_cloud_tooltip = Zuse Cloud プラン · 請求を管理
+
+projects-project_setup_dialog_in_other_workspace = このフォルダーは既に別のワークスペースのプロジェクトです。ここに移動しますか？チャットも一緒に移動します。
+
+projects-project_setup_dialog_move_here = ここに移動
+
+projects-github_observation_monitoring_paused = GitHub の監視を一時停止中 · 再試行
+
+projects-github_observation_authentication = GitHub に再接続
+
+projects-github_observation_access = GitHub にアクセスできません
+
+projects-github_observation_rate_limited = GitHub のレート制限 · 更新を一時停止中
+
+projects-github_observation_offline = GitHub がオフライン · キャッシュ済みの状態
+
+projects-github_observation_timeout = GitHub がタイムアウト · キャッシュ済みの状態
+
+projects-github_observation_unavailable = GitHub の状態を取得できません
+
+projects-github_observation_loading = GitHub の状態を読み込み中…
+
+projects-github_observation_cached = キャッシュ済みの GitHub の状態
+
+projects-github_observation_incomplete_checks = チェックが不完全です
+
+projects-github_observation_refreshing = GitHub を更新中…
+
+projects-projects_sidebar_threads = スレッド
+
+projects-projects_sidebar_no_threads_yet = スレッドはまだありません
+
+projects-projects_sidebar_start_a_chat_to_see_it_here = いずれかのプロジェクトでチャットを開始すると、ここに表示されます。
+
+projects-projects_sidebar_show_all_threads = { $count }{ " " }件のスレッドをすべて表示
+
+projects-pr_pane_no_pull_request = プルリクエストなし
+
+projects-pr_pane_conflicts_with_base = ベースブランチと競合しています
+
+projects-pr_pane_reviews = レビュー
+
+projects-pr_pane_draft_checks_hint = PR がレビュー可能になるとチェックが開始されます
+
+projects-pr_pane_no_description = 説明はありません。
+
+projects-pr_pane_show_fewer = 表示を減らす
+
+projects-pr_pane_show_all = すべて表示 ({ $total })
+
+projects-pr_pane_feedback_title = フィードバック
+
+projects-pr_pane_all_checks_passed = すべてのチェックに合格しました
+
+projects-pr_pane_more_actions = その他の操作
+
+projects-pr_pane_merge_blocked_conflicts = マージする前に競合を解決してください。
+
+projects-pr_pane_merge_blocked_checks_failing = マージする前に失敗したチェックを修正してください。
+
+projects-pr_pane_merge_blocked_checks_running = チェックはまだ実行中です。合格時にマージするには、操作メニューから自動マージを有効にしてください。
+
+projects-pr_pane_merge_blocked_not_mergeable = GitHub はまだこの PR をマージ可能と判定していません。
+
+projects-pr_pane_merging = マージ中…
+
+projects-diff_pane_files = ファイル
+
+projects-diff_pane_filter_files = ファイルを絞り込む
+
+projects-diff_pane_no_matching_files = 一致するファイルはありません
+
+projects-diff_pane_tree_view = ツリー表示
+
+projects-diff_pane_list_view = リスト表示
+
+projects-pr_pane_show_more = さらに表示
+
+projects-pr_pane_show_less = 表示を減らす
+
+projects-pr_pane_merge_blocked_stale = GitHub のステータスが古い可能性があります。マージする前に更新してください。
+
+projects-projects_sidebar_star_on_github = GitHub でスターを付ける
+
+projects-projects_sidebar_dismiss_star_prompt = GitHub スターの案内を閉じる
+
+projects-projects_sidebar_github_open_failed = GitHub を開けませんでした
+
+projects-projects_sidebar_github_starring = スターを追加中…
+
+projects-new_chat_without_project = プロジェクトなしで新しいチャット
+
+projects-no_project = プロジェクトなし
+
+projects-masters_create_master = 新しい Zot
+
+projects-masters_master_name = Zot 名
+
+projects-masters_this_environment = この環境
+
+projects-masters_repositories = リポジトリ
+
+projects-masters_open_a_repository_in_zuse_to_add_it_here = Zuse でリポジトリを開くと、ここに追加できます。
+
+projects-masters_instructions = 指示
+
+projects-masters_generated_screen = 生成された画面
+
+projects-masters_generated_screen_unavailable = このプレビューでは生成された画面は実行されません。代わりにソースを表示しています。
+
+projects-masters_show_screen = 画面を表示
+
+projects-masters_hide_screen = 画面を非表示
+
+projects-masters_this_screen_requests_an_action = この画面が操作を要求しています
+
+projects-masters_run_action = 操作を実行
+
+projects-masters_decline = 拒否
+
+projects-masters_master_generated_screen = Zot が生成した画面
+
+projects-masters_masters = Zots
+
+projects-masters_one_conversation_to_coordinate_your_work = 1 つの会話で作業を調整。
+
+projects-masters_retry = 再試行
+
+projects-masters_pause = 一時停止
+
+projects-masters_resume = 再開
+
+projects-masters_stop_all = すべて停止
+
+projects-masters_some_environments_are_offline_their_workers_remain_attached_reconnect_to_refresh_their_status = 一部の環境はオフラインです。エージェントの関連付けは維持されています。再接続すると状態が更新されます。
+
+projects-masters_slaves = Slaves
+
+projects-masters_fresh_chat = 新しいチャット
+
+projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents = Zot に作業を依頼してください。個別のエージェントが必要なタスクを判断します。
+
+projects-masters_open_chat = チャットを開く
+
+projects-masters_stop_agent = エージェントを停止
+
+projects-masters_mark_done = 完了にする
+
+projects-masters_earlier_conversations_remain_readable_only_the_current_conversation_coordinates_work = 過去の会話は引き続き閲覧できます。作業を調整するのは現在の会話だけです。
+
+projects-masters_current = 現在
+
+projects-masters_artifacts = 成果物
+
+projects-masters_working = 作業中
+
+projects-masters_needs_attention = 要確認
+
+projects-masters_loading = Zot を読み込み中…
+
+projects-masters_offline = オフライン
+
+projects-masters_idle = 待機
+
+projects-masters_conversation_number = 会話{ " " }{ $number }
+
+projects-masters_pending_action = { $kind }{ " " }·{ " " }{ $state }
+
+projects-masters_move_home = 実行環境を移動
+
+projects-masters_move_help = 両方の環境がオンラインである必要があります。先にコーディネーターのターンを完了または中断してください。エージェントは現在の環境に残ります。
+
+projects-masters_status_active = 有効
+
+projects-masters_status_paused = 一時停止中
+
+projects-masters_status_stopped = 停止中
+
+projects-masters_status_moving = 移動中
+
+projects-masters_worker_paused = 一時停止中
+
+projects-masters_worker_done = 完了
+
+projects-masters_pin = ピン留め
+
+projects-masters_unpin = ピン留め解除
+
+projects-masters_regenerate = 再生成
+
+projects-masters_renew_suggestion = 会話が長くなっています。新しいチャットを開始すると、チェックポイントから続けられます。
+
+projects-masters_screen_failed = この画面は応答していません。標準の操作は引き続き利用できます。
+
+projects-masters_close = 閉じる
+
+projects-masters_empty_prompt = { $name }{ " " }に何を任せますか？
+
+projects-masters_more_actions = その他の操作
+
+projects-masters_pinned = ピン留め
+
+projects-masters_previous_conversations = 以前の会話
+
+projects-masters_add_work_model = モデルを追加
+
+projects-masters_auto_follow_ups = 自動フォローアップ
+
+projects-masters_auto_follow_ups_help = Zot があなたに確認する前に、自分から Slave にメッセージを送れる回数です。
+
+projects-masters_limits = 上限
+
+projects-masters_no_skills_installed = インストール済みのスキルはありません
+
+projects-masters_parallel_slaves = 同時に作業する Slaves
+
+projects-masters_parallel_slaves_help = 超えたタスクは Slave が終わるまで待機します。
+
+projects-masters_remove_work_model = モデルを削除
+
+projects-masters_runs_on = 実行場所
+
+projects-masters_skills = スキル
+
+projects-masters_work_kind = 作業の種類
+
+projects-masters_work_kind_placeholder = 例: コードレビュー
+
+projects-masters_work_models = 作業ごとのモデル
+
+projects-masters_add_repository = リポジトリを追加
+
+projects-masters_color = 色
+
+projects-masters_create_failed = Zot を作成できませんでした
+
+projects-masters_details = 詳細
+
+projects-masters_hero_no_repositories = 詳細でリポジトリを追加すると{ " " }{ $name }{ " " }が Slaves を開始できます。そのまま質問しても OK です。
+
+projects-masters_hide_details = 詳細を隠す
+
+projects-masters_mascot = マスコット
+
+projects-masters_needs_setup = この Zot を開始するには、詳細で設定を保存してください。
+
+projects-masters_remove_repository = { $name }{ " " }を削除
+
+projects-masters_save = 保存
+
+projects-masters_save_restarts_chat = 保存すると、この設定で新しいチャットを開始します。
+
+projects-masters_show_details = 詳細を表示
+
+projects-masters_memory = メモリ
+
+projects-masters_memory_supported = テキストのみの統合には Claude または Zuse を選択してください。
+
+projects-masters_memory_automatic = 新しい知見を自動的に統合
+
+projects-masters_memory_consolidate = 統合
+
+projects-masters_memory_cancel = キャンセル
+
+projects-masters_memory_run_queued = 待機中
+
+projects-masters_memory_run_running = 統合中
+
+projects-masters_memory_run_done = 統合済み
+
+projects-masters_memory_run_failed = 統合に失敗
+
+projects-masters_memory_run_cancelled = キャンセル済み
+
+projects-masters_memory_search = メモリを検索
+
+projects-masters_memory_archived = アーカイブ済み
+
+projects-masters_memory_empty = 学習したトピックはまだありません。
+
+projects-masters_memory_previous = 前へ
+
+projects-masters_memory_next = 次へ
+
+projects-masters_memory_content = メモリの内容
+
+projects-masters_memory_restore = 復元
+
+projects-masters_memory_archive = アーカイブ
+
+projects-masters_memory_sources = 出典
+
+projects-masters_back = 戻る
+
+projects-masters_cancel = キャンセル
+
+projects-masters_composer_placeholder = { $name }{ " " }にメッセージ
+
+projects-masters_conversation_lost = { $name }{ " " }の会話が失われました
+
+projects-masters_conversation_lost_help = 設定・リポジトリ・Slaves は無事です。新しいチャットを始めると続きから再開できます。
+
+projects-masters_edit_identity = 名前と見た目を編集
+
+projects-masters_start_fresh_chat = 新しいチャットを開始
+
+projects-masters_instructions_placeholder = # 指示{ "\u000A" }- マージ前に確認する。{ "\u000A" }- 小さく焦点を絞ったプルリクエストを優先する。
+
+projects-masters_memory_tidy = 整理
+
+projects-masters_memory_tidy_model = モデル
+
+projects-masters_no_matching_skills = 一致するスキルはありません
+
+projects-masters_preferences = 環境設定
+
+projects-masters_resize_details = 詳細の幅を変更
+
+projects-masters_search_skills = スキルを検索
+
+projects-masters_skills_selected = { $count }{ " " }件オン
+
+projects-masters_mascot_daemon = Daemon
+
+projects-masters_mascot_nib = Nib
+
+projects-masters_mascot_ping = Ping
+
+projects-masters_mascot_fuzz = Fuzz
+
+projects-masters_mascot_cache = Cache
+
+projects-masters_color_coral = コーラル
+
+projects-masters_color_yellow = イエロー
+
+projects-masters_color_green = グリーン
+
+projects-masters_color_lime = ライム
+
+projects-masters_color_violet = バイオレット
+
+projects-masters_color_teal = ティール
+
+projects-masters_color_blue = ブルー
+
+projects-masters_color_pink = ピンク
+
+projects-masters_no_signed_in_agent = Zot を作成する前にエージェントにサインインしてください。
+
+projects-masters_skills_failed = スキルを読み込めませんでした。
+
+projects-masters_home_only_note = このプレビューでは、Slaves はこの Zot と同じコンピューターで動作します。
+
+projects-masters_guide_open = Zot ガイド
+
+projects-masters_guide_how = Zots の仕組み
+
+projects-masters_guide_step_count = { $current }{ " " }/{ " " }{ $total }
+
+projects-masters_guide_skip = ガイドをスキップ
+
+projects-masters_guide_not_now = 後で
+
+projects-masters_guide_start = 案内を見る
+
+projects-masters_guide_back = 戻る
+
+projects-masters_guide_next = 次へ
+
+projects-masters_guide_done = 完了
+
+projects-masters_guide_target_hidden = この項目は現在表示されていません。開いているページを閉じるか、詳細を表示してください。
+
+projects-masters_guide_welcome_title = Zot について
+
+projects-masters_guide_welcome_body = Zot は 1 つの依頼を連携した作業に変えます。計画を立て、Slaves と呼ばれる別々のチャットに作業を任せ、進み具合を確認します。
+
+projects-masters_guide_welcome_preview = プレビュー: Zot とその Slaves は Zot を作成したコンピューターで動作します。起動したまま接続しておいてください。
+
+projects-masters_guide_repositories_title = リポジトリを選ぶ
+
+projects-masters_guide_repositories_summary = Zot が作業できる場所を決めます。
+
+projects-masters_guide_repositories_body = Zot はここで追加したリポジトリでのみ作業します。追加しても、既存のチャットには何も送信されません。
+
+projects-masters_guide_repositories_empty = まだない場合は、まず Zuse でリポジトリを開いてから、ここで追加してください。
+
+projects-masters_guide_repositories_optional = いつでも変更できます。
+
+projects-masters_guide_brief_title = 依頼内容を書く
+
+projects-masters_guide_brief_summary = 目指す結果を書きます。
+
+projects-masters_guide_brief_body = 完了の状態を書いてください。結果、範囲、制約があれば、Zot がそこから計画して作業を割り当てます。
+
+projects-masters_guide_brief_model = モデル選択で Zot が計画に使うモデルを設定できます。常に守らせたい指示は環境設定にあります。
+
+projects-masters_guide_brief_example = 例を試す
+
+projects-masters_guide_brief_example_hint = 編集できるテキストを追加します。送信はされません。
+
+projects-masters_guide_example_delegate = 計画して割り当てる
+
+projects-masters_guide_example_delegate_text = このリポジトリを確認して計画を提案し、独立した修正は別々のチャットに任せてください。範囲の変更やマージの前には確認してください。
+
+projects-masters_guide_example_tests = 失敗しているテストを直す
+
+projects-masters_guide_example_tests_text = 失敗しているテストを見つけて原因ごとにまとめ、それぞれを別々のチャットで修正してください。最後に変更内容をまとめてください。
+
+projects-masters_guide_example_reviews = プルリクエストの障害を解消
+
+projects-masters_guide_example_reviews_text = オープンなプルリクエストを確認し、それぞれの障害を一覧にして、簡単なものは別々のチャットで解消してください。マージの前には確認してください。
+
+projects-masters_guide_slaves_title = Slaves を見守る
+
+projects-masters_guide_slaves_summary = 各作業を確認して指示します。
+
+projects-masters_guide_slaves_body = Slave は 1 つの作業を担当する別々のチャットです。開くと進み具合の確認、指示、権限リクエストへの回答ができます。
+
+projects-masters_guide_slaves_controls = 一時停止すると新しい作業は割り当てられません。停止すると実行中の作業も中断します。
+
+projects-masters_guide_continuity_title = コンテキストを保ったまま新しく始める
+
+projects-masters_guide_continuity_summary = 状況を見失わずに新しいチャットを始めます。
+
+projects-masters_guide_continuity_body = 会話が長くなったら、ここで「新しいチャット」を選んでください。リポジトリ、実行中の Slaves、決定事項、メモリは引き継がれます。
+
+projects-masters_guide_continuity_memory = このガイドはいつでもこのメニューから再表示できます。
+
+projects-masters_paused_notice = 一時停止中です。Zot は返信できますが、再開するまで Slaves の開始やメッセージ送信は行いません。
+
+projects-masters_stopped_notice = 停止中です。Zot は返信できますが、再開するまで Slaves の開始やメッセージ送信は行いません。
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-pr_pane_added_file_to_the_composer-plural =
+    { $count ->
+       [one] { $count }{ " " }ファイルをコンポーザーに追加しました。
+       *[other] { $count }{ " " }ファイルをコンポーザーに追加しました。
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-branch_workflow_check_failing-plural =
+    { $count ->
+       [one] { $checksFailing }{ " " }チェックに失敗しました
+       *[other] { $checksFailing }{ " " }チェックが失敗しました
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-branch_workflow_check_running-plural =
+    { $count ->
+       [one] { $checksRunning }{ " " }チェック実行中
+       *[other] { $checksRunning }{ " " }チェックが実行中です
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-pr_pane_file_plural0_sentence-plural =
+    { $count ->
+       [one] { $dirtyFiles }{ " " }ファイル
+       *[other] { $dirtyFiles }{ " " }ファイル
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-pr_pane_commit_plural0_sentence-plural =
+    { $count ->
+       [one] { $ahead }{ " " }コミット
+       *[other] { $ahead }{ " " }コミット
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-projects_sidebar_chat_count-plural =
+    { $count ->
+       [one] { $count }{ " " }件のチャット
+       *[other] { $count }{ " " }件のチャット
+    }

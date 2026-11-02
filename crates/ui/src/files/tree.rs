@@ -1,7 +1,9 @@
+use crate::localization::message as tr;
 use gpui::{
     AnyElement, Context, KeyDownEvent, ListSizingBehavior, MouseButton, Window, div, list,
     prelude::*, px,
 };
+use zuse_i18n::messages as msg;
 use zuse_protocol::WorkspaceEntryKind;
 
 use super::{
@@ -195,7 +197,7 @@ impl FilesSurface {
             .on_drag_move::<WorkspacePathDrag>(cx.listener(Self::on_tree_drag_move))
             .on_drop::<WorkspacePathDrag>(cx.listener(Self::on_tree_drop))
             .role(gpui::Role::Tree)
-            .aria_label("Workspace file tree")
+            .aria_label(tr(cx, msg::native::workspace_file_tree))
             .relative()
             .flex_1()
             .min_h_0()
@@ -503,7 +505,7 @@ impl FilesSurface {
                     div()
                         .text_size(px(10.5))
                         .text_color(theme.text_muted)
-                        .child("Load more…"),
+                        .child(tr(cx, msg::native::load_more)),
                 )
                 .into_any_element(),
         };

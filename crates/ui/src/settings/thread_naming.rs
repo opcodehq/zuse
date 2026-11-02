@@ -1,8 +1,10 @@
 //! Settings → General → Thread naming: which agent and model title new
 //! threads, chosen with the composer's own model picker (title-bound mode).
 
+use crate::localization::message as tr;
 use gpui::{AnyElement, Context, Entity, Subscription, Task, div, prelude::*, px};
 use zuse_engine::registry::TitleSettings;
+use zuse_i18n::messages as msg;
 use zuse_rpc::methods;
 
 use crate::pickers::{Pickers, TitleModelPicked};
@@ -172,28 +174,36 @@ impl Render for ThreadNamingCard {
                 .gap(px(4.0))
                 .when(!follows_session, |row| {
                     row.child(
-                        widgets::text_action(&theme, widgets::ActionTone::Quiet, "Reset")
-                            .id("thread-naming-reset")
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .aria_label("Name threads with the session agent")
-                            .focus_visible(|s| s.border_2().border_color(theme.accent))
-                            .on_click(cx.listener(|card, _, _, cx| {
-                                card.call(Some(TitleSettings::default()), cx)
-                            })),
+                        widgets::text_action(
+                            &theme,
+                            widgets::ActionTone::Quiet,
+                            tr(cx, msg::chat::chat_composer_reset),
+                        )
+                        .id("thread-naming-reset")
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .aria_label(tr(cx, msg::native::name_threads_with_the_session_agent))
+                        .focus_visible(|s| s.border_2().border_color(theme.accent))
+                        .on_click(cx.listener(|card, _, _, cx| {
+                            card.call(Some(TitleSettings::default()), cx)
+                        })),
                     )
                 })
                 .child(self.picker.clone())
                 .into_any_element(),
-            Loadable::Error(_) => widgets::text_action(&theme, widgets::ActionTone::Quiet, "Retry")
-                .id("thread-naming-retry")
-                .role(gpui::Role::Button)
-                .aria_label("Retry thread naming settings")
-                .on_click(cx.listener(|this, _, _, cx| this.call(None, cx)))
-                .into_any_element(),
+            Loadable::Error(_) => widgets::text_action(
+                &theme,
+                widgets::ActionTone::Quiet,
+                tr(cx, msg::settings::sharing_retry),
+            )
+            .id("thread-naming-retry")
+            .role(gpui::Role::Button)
+            .aria_label(tr(cx, msg::native::retry_thread_naming_settings))
+            .on_click(cx.listener(|this, _, _, cx| this.call(None, cx)))
+            .into_any_element(),
             Loadable::Idle | Loadable::Loading => div()
                 .text_color(theme.text_muted)
-                .child("Loading…")
+                .child(tr(cx, msg::common::loading))
                 .into_any_element(),
         };
         let description = if follows_session {
@@ -201,7 +211,7 @@ impl Render for ThreadNamingCard {
         } else {
             "A small model keeps titles fast and cheap."
         };
-        widgets::group(&theme, "Thread names", "").child(
+        widgets::group(&theme, tr(cx, msg::native::thread_names), "").child(
             widgets::section_card(&theme)
                 .mt_0()
                 .child(
@@ -210,7 +220,10 @@ impl Render for ThreadNamingCard {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .child(widgets::row_title(&theme, "Thread naming"))
+                                .child(widgets::row_title(
+                                    &theme,
+                                    tr(cx, msg::native::thread_naming),
+                                ))
                                 .child(widgets::meta_line(
                                     &theme,
                                     vec![div().child(description).into_any_element()],
@@ -221,11 +234,15 @@ impl Render for ThreadNamingCard {
                 .when_some(self.error.clone(), |view, error| {
                     view.child(
                         widgets::error_strip(&theme, error).child(
-                            widgets::text_action(&theme, widgets::ActionTone::Quiet, "Refresh")
-                                .id("thread-naming-refresh")
-                                .role(gpui::Role::Button)
-                                .aria_label("Refresh saved naming choice")
-                                .on_click(cx.listener(|this, _, _, cx| this.call(None, cx))),
+                            widgets::text_action(
+                                &theme,
+                                widgets::ActionTone::Quiet,
+                                tr(cx, msg::settings::organizations_refresh),
+                            )
+                            .id("thread-naming-refresh")
+                            .role(gpui::Role::Button)
+                            .aria_label(tr(cx, msg::native::refresh_saved_naming_choice))
+                            .on_click(cx.listener(|this, _, _, cx| this.call(None, cx))),
                         ),
                     )
                 }),

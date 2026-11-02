@@ -11,6 +11,8 @@
 //! in free functions with unit tests; RPC results land in [`Loadable`] slots
 //! rendered as skeletons / inline errors with Retry.
 
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 mod cloud;
 mod cloud_models;
 mod compact;
@@ -3152,9 +3154,9 @@ impl Pickers {
                     .text_size(px(12.))
                     .text_color(theme.text_muted)
                     .child(if self.search.read(cx).text().is_empty() {
-                        "No projects yet."
+                        crate::localization::text("chat-chat_landing_no_projects_yet", cx)
                     } else {
-                        "No projects match."
+                        ("No projects match.").to_string()
                     }),
             );
         }
@@ -4229,7 +4231,7 @@ impl Pickers {
                         } else {
                             theme.text_muted
                         })
-                        .child("All"),
+                        .child(tr(cx, msg::settings::pokedex_pane_all)),
                 ),
         );
         for (ix, descriptor) in descriptors.iter().enumerate() {
@@ -6392,9 +6394,9 @@ impl Render for Pickers {
                     .hover(|view| view.bg(theme.settings_frame_bg()))
                     .track_focus(&self.settings_model.trigger)
                     .aria_label(if self.settings_model.defaults {
-                        "Default model"
+                        crate::localization::text("onboarding-defaults_default_model", cx)
                     } else {
-                        "Thread naming model"
+                        ("Thread naming model").to_string()
                     })
                     .when(self.settings_model.pending.is_some(), |view| {
                         view.opacity(0.6)

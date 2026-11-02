@@ -170,68 +170,87 @@ fn app_key_bindings(macos: bool) -> Vec<KeyBinding> {
 
 /// The zuse menu bar. macOS renders this natively; mac-only entries are gated
 /// at runtime (`cfg!`) so the whole module compiles and tests on Linux.
-pub fn app_menus() -> Vec<Menu> {
+pub fn app_menus(cx: &App) -> Vec<Menu> {
+    let localizer = cx
+        .try_global::<crate::localization::Localization>()
+        .map(|s| s.localizer.clone())
+        .unwrap_or_default();
+    localized_menus(&localizer)
+}
+
+fn localized_menus(l10n: &zuse_i18n::Localizer) -> Vec<Menu> {
     let macos = cfg!(target_os = "macos");
 
     // macOS titles the first menu with the bundle/process name regardless of
     // what we pass, but gpui still wants a name.
     let mut app_items = vec![
         // The native AppKit about panel; no equivalent elsewhere yet.
-        MenuItem::action("About Zuse", About).disabled(!macos),
+        MenuItem::action(l10n.text("native-about_zuse"), About).disabled(!macos),
         // Sparkle's placement: directly under About. Other platforms reach
         // the same check from the account menu.
-        MenuItem::action("Check for Updates…", CheckForUpdates),
+        MenuItem::action(l10n.text("desktop-check_for_updates"), CheckForUpdates),
         MenuItem::separator(),
-        MenuItem::action("Settings", shell::OpenSettings),
+        MenuItem::action(
+            l10n.text("commands-default_keybindings_settings"),
+            shell::OpenSettings,
+        ),
         MenuItem::separator(),
     ];
     if macos {
         app_items.extend([
-            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::os_submenu(l10n.text("native-services"), SystemMenuType::Services),
             MenuItem::separator(),
-            MenuItem::action("Hide Zuse", Hide),
-            MenuItem::action("Hide Others", HideOthers),
-            MenuItem::action("Show All", ShowAll),
+            MenuItem::action(l10n.text("native-hide_zuse"), Hide),
+            MenuItem::action(l10n.text("native-hide_others"), HideOthers),
+            MenuItem::action(l10n.text("native-show_all"), ShowAll),
             MenuItem::separator(),
         ]);
     }
-    app_items.push(MenuItem::action("Quit Zuse", Quit));
+    app_items.push(MenuItem::action(l10n.text("native-quit_zuse"), Quit));
 
     let mut menus = vec![
-        Menu::new("Zuse").items(app_items),
+        Menu::new(l10n.text("common-startup_surface_zuse")).items(app_items),
         // Standard clipboard verbs tied to the composer's existing actions via
         // their native selectors (`OsAction` → cut:/copy:/paste:/selectAll:),
         // so the OS Edit menu routes through the responder chain to the focused
         // input — zed wires its editor actions identically
         // (crates/zed/src/zed/app_menus.rs, Edit/Selection menus).
-        Menu::new("Edit").items([
+        Menu::new(l10n.text("common-edit")).items([
             // Undo/Redo have no `OsAction` counterpart — they dispatch as plain
             // actions to the focused input, same as the composer keymap.
-            MenuItem::action("Undo", composer::Undo),
-            MenuItem::action("Redo", composer::Redo),
+            MenuItem::action(l10n.text("native-undo"), composer::Undo),
+            MenuItem::action(l10n.text("native-redo"), composer::Redo),
             MenuItem::separator(),
-            MenuItem::os_action("Cut", composer::Cut, OsAction::Cut),
-            MenuItem::os_action("Copy", composer::Copy, OsAction::Copy),
-            MenuItem::os_action("Paste", composer::Paste, OsAction::Paste),
+            MenuItem::os_action(l10n.text("native-cut"), composer::Cut, OsAction::Cut),
+            MenuItem::os_action(
+                l10n.text("chat-selection_menu_copy"),
+                composer::Copy,
+                OsAction::Copy,
+            ),
+            MenuItem::os_action(l10n.text("native-paste"), composer::Paste, OsAction::Paste),
             MenuItem::separator(),
-            MenuItem::os_action("Select All", composer::SelectAll, OsAction::SelectAll),
+            MenuItem::os_action(
+                l10n.text("native-select_all"),
+                composer::SelectAll,
+                OsAction::SelectAll,
+            ),
         ]),
     ];
     // Appearance lives under View on every platform — it is the only View verb
-    // today, but "Appearance" as a top-level menu would read oddly next to Edit.
-    menus.push(Menu::new("View").items([
-        MenuItem::action("Appearance: System", AppearanceSystem),
-        MenuItem::action("Appearance: Light", AppearanceLight),
-        MenuItem::action("Appearance: Dark", AppearanceDark),
+    // today, but l10n.text("settings-settings_page_appearance") as a top-level menu would read oddly next to Edit.
+    menus.push(Menu::new(l10n.text("desktop-view")).items([
+        MenuItem::action(l10n.text("native-appearance_system"), AppearanceSystem),
+        MenuItem::action(l10n.text("native-appearance_light"), AppearanceLight),
+        MenuItem::action(l10n.text("native-appearance_dark"), AppearanceDark),
     ]));
     if macos {
         // Standard Window menu; macOS appends the open-window list itself.
-        menus.push(Menu::new("Window").items([
-            MenuItem::action("Minimize", Minimize),
-            MenuItem::action("Zoom", Zoom),
+        menus.push(Menu::new(l10n.text("desktop-window")).items([
+            MenuItem::action(l10n.text("native-minimize"), Minimize),
+            MenuItem::action(l10n.text("native-zoom"), Zoom),
             MenuItem::separator(),
             MenuItem::action(
-                "Close Tab",
+                l10n.text("desktop-close_tab"),
                 shell::DesktopCommand(crate::settings::keybindings::Command::CloseTab),
             ),
         ]));
@@ -256,7 +275,7 @@ mod tests {
 
     #[test]
     fn app_menu_ends_with_quit() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         assert_eq!(menus[0].name.as_ref(), "Zuse");
         let Some(MenuItem::Action { name, action, .. }) = menus[0].items.last() else {
             panic!("last app-menu item must be an action");
@@ -267,7 +286,7 @@ mod tests {
 
     #[test]
     fn app_menu_offers_settings() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         assert!(
             menus[0].items.iter().any(|item| matches!(
                 item,
@@ -280,7 +299,7 @@ mod tests {
 
     #[test]
     fn about_enabled_only_on_macos() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         let Some(first @ MenuItem::Action { action, .. }) = menus[0].items.first() else {
             panic!("first app-menu item must be an action");
         };
@@ -290,7 +309,7 @@ mod tests {
 
     #[test]
     fn check_for_updates_follows_about() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         let Some(MenuItem::Action {
             name,
             action,
@@ -307,7 +326,7 @@ mod tests {
 
     #[test]
     fn edit_menu_uses_composer_clipboard_os_actions() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         let edit = menus
             .iter()
             .find(|m| m.name.as_ref() == "Edit")
@@ -341,7 +360,7 @@ mod tests {
 
     #[test]
     fn view_menu_offers_all_three_appearance_modes() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         let view = menus
             .iter()
             .find(|m| m.name.as_ref() == "View")

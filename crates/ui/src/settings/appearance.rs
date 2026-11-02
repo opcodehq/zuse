@@ -1,11 +1,13 @@
 //! Settings → Appearance: system behavior, independent light/dark variants,
 //! and the optional interactive accent overlay.
 
+use crate::localization::message as tr;
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use zuse_i18n::messages as msg;
 
 use gpui::{
     AnyElement, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
@@ -463,7 +465,10 @@ impl AppearancePage {
                 div()
                     .flex_1()
                     .min_w(px(200.0))
-                    .child(widgets::row_title(theme, "Conversation width"))
+                    .child(widgets::row_title(
+                        theme,
+                        tr(cx, msg::native::conversation_width),
+                    ))
                     .child(widgets::meta_line(
                         theme,
                         vec![
@@ -512,7 +517,7 @@ impl AppearancePage {
                                         );
                                         cx.notify();
                                     }))
-                                    .child("Reset"),
+                                    .child(tr(cx, msg::chat::chat_composer_reset)),
                             ),
                     )
                     .child(slider)
@@ -2407,7 +2412,10 @@ impl AppearancePage {
                             .mt(px(1.0))
                             .flex_none(),
                     )
-                    .child("Zuse finds light and dark variants automatically."),
+                    .child(tr(
+                        cx,
+                        msg::native::zuse_finds_light_and_dark_variants_automatically,
+                    )),
             );
         }
 
@@ -2728,11 +2736,11 @@ impl AppearancePage {
                         .text_size(typography::text_xs())
                         .text_color(theme.text_muted)
                         .child(if !same_image {
-                            "Background changed. Close and adjust the new image."
+                            ("Background changed. Close and adjust the new image.").to_string()
                         } else if !available {
-                            "Image unavailable. Choose a replacement or remove it."
+                            ("Image unavailable. Choose a replacement or remove it.").to_string()
                         } else {
-                            "Preparing preview…"
+                            crate::localization::text("native-preparing_preview", cx)
                         }),
                 )
             })
@@ -2783,7 +2791,7 @@ impl AppearancePage {
             .track_focus(&zoom_focus)
             .tab_index(0)
             .role(gpui::Role::Slider)
-            .aria_label("Background zoom")
+            .aria_label(tr(cx, msg::native::background_zoom))
             .aria_numeric_value(f64::from(draft.zoom * 100.0))
             .aria_min_numeric_value(f64::from(
                 crate::settings::NewThreadBackgroundAdjustment::MIN_ZOOM * 100.0,
@@ -2889,7 +2897,7 @@ impl AppearancePage {
                         compact_action(theme, "−", "new-thread-background-adjustment-zoom-out")
                             .tab_index(0)
                             .role(gpui::Role::Button)
-                            .aria_label("Zoom out")
+                            .aria_label(tr(cx, msg::chat::markdown_body_zoom_out))
                             .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let Some(dialog) = this.background_adjustment_dialog.as_ref()
@@ -2915,7 +2923,7 @@ impl AppearancePage {
                         compact_action(theme, "+", "new-thread-background-adjustment-zoom-in")
                             .tab_index(0)
                             .role(gpui::Role::Button)
-                            .aria_label("Zoom in")
+                            .aria_label(tr(cx, msg::chat::markdown_body_zoom_in))
                             .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 let Some(dialog) = this.background_adjustment_dialog.as_ref()
@@ -2951,23 +2959,27 @@ impl AppearancePage {
                     })),
             )
             .child(
-                widgets::text_action(theme, widgets::ActionTone::Solid, "Apply")
-                    .id("new-thread-background-adjustment-apply")
-                    .h(px(34.0))
-                    .px(px(14.0))
-                    .py(px(0.0))
-                    .flex()
-                    .items_center()
-                    .when(!ready, |button| button.opacity(0.45))
-                    .when(ready, |button| {
-                        button
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.apply_background_adjustment(window, cx)
-                            }))
-                    }),
+                widgets::text_action(
+                    theme,
+                    widgets::ActionTone::Solid,
+                    tr(cx, msg::native::apply),
+                )
+                .id("new-thread-background-adjustment-apply")
+                .h(px(34.0))
+                .px(px(14.0))
+                .py(px(0.0))
+                .flex()
+                .items_center()
+                .when(!ready, |button| button.opacity(0.45))
+                .when(ready, |button| {
+                    button
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.apply_background_adjustment(window, cx)
+                        }))
+                }),
             );
 
         let header = div()
@@ -2999,7 +3011,7 @@ impl AppearancePage {
                     .hover(|style| style.bg(theme.surface_raised_hover))
                     .tab_index(0)
                     .role(gpui::Role::Button)
-                    .aria_label("Close background adjustment")
+                    .aria_label(tr(cx, msg::native::close_background_adjustment))
                     .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.dismiss_background_adjustment(window, cx)
@@ -3137,15 +3149,19 @@ impl AppearancePage {
         }
         card = card.child(
             div().mt(px(16.0)).flex().justify_end().child(
-                widgets::text_action(theme, widgets::ActionTone::Solid, "Done")
-                    .id("theme-review-close")
-                    .tab_index(0)
-                    .role(gpui::Role::Button)
-                    .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.review_entry = None;
-                        cx.notify();
-                    })),
+                widgets::text_action(
+                    theme,
+                    widgets::ActionTone::Solid,
+                    tr(cx, msg::settings::cloud_api_keys_done),
+                )
+                .id("theme-review-close")
+                .tab_index(0)
+                .role(gpui::Role::Button)
+                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.review_entry = None;
+                    cx.notify();
+                })),
             ),
         );
         Some(popover::modal(
@@ -3355,7 +3371,7 @@ impl AppearancePage {
                     .border_color(widgets::row_divider(theme))
                     .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
-                    .child("Imported")
+                    .child(tr(cx, msg::native::imported))
                     .into_any_element(),
             );
             rows.extend(
@@ -3374,7 +3390,7 @@ impl AppearancePage {
                     .border_color(widgets::row_divider(theme))
                     .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
-                    .child("Linked")
+                    .child(tr(cx, msg::native::linked))
                     .into_any_element(),
             );
             rows.extend(
@@ -3496,7 +3512,7 @@ impl Render for AppearancePage {
                     div()
                         .flex_1()
                         .min_w(px(160.0))
-                        .child(widgets::row_title(&theme, "Accent color"))
+                        .child(widgets::row_title(&theme, tr(cx, msg::native::accent_color)))
                         .child(widgets::meta_line(
                             &theme,
                             vec![
@@ -3523,7 +3539,7 @@ impl Render for AppearancePage {
         settings_rows.push(
             widgets::card_row(&theme, false)
                 .child(div().flex_1().min_w_0()
-                    .child(widgets::row_title(&theme, "Match wallpaper colors"))
+                    .child(widgets::row_title(&theme, tr(cx, msg::native::match_wallpaper_colors)))
                     .child(widgets::meta_line(&theme, vec![div()
                         .child("Use wallpaper colors for accents, highlights, and subtle surface tints.")
                         .into_any_element()])))
@@ -3531,7 +3547,7 @@ impl Render for AppearancePage {
                     .id("wallpaper-theme-colors-toggle")
                     .tab_index(0)
                     .role(gpui::Role::Switch)
-                    .aria_label("Match wallpaper colors")
+                    .aria_label(tr(cx, msg::native::match_wallpaper_colors))
                     .focus_visible(|s| s.border_2().border_color(theme.accent))
                     .cursor_pointer()
                     .aria_toggled(if match_wallpaper { gpui::Toggled::True } else { gpui::Toggled::False })
@@ -3549,7 +3565,7 @@ impl Render for AppearancePage {
                     div()
                         .flex_1()
                         .min_w(px(160.0))
-                        .child(widgets::row_title(&theme, "Glass"))
+                        .child(widgets::row_title(&theme, tr(cx, msg::native::glass)))
                         .child(widgets::meta_line(
                             &theme,
                             vec![
@@ -3609,7 +3625,10 @@ impl Render for AppearancePage {
                     div()
                         .flex_1()
                         .min_w(px(160.0))
-                        .child(widgets::row_title(&theme, "New thread background"))
+                        .child(widgets::row_title(
+                            &theme,
+                            tr(cx, msg::native::new_thread_background),
+                        ))
                         .child(widgets::meta_line(&theme, background_meta)),
                 )
                 .child(
@@ -3705,7 +3724,10 @@ impl Render for AppearancePage {
                     div()
                         .flex_1()
                         .min_w(px(160.0))
-                        .child(widgets::row_title(&theme, "Wallpaper folder"))
+                        .child(widgets::row_title(
+                            &theme,
+                            tr(cx, msg::native::wallpaper_folder),
+                        ))
                         .child(widgets::meta_line(
                             &theme,
                             vec![
@@ -3776,7 +3798,10 @@ impl Render for AppearancePage {
                         div()
                             .flex_1()
                             .min_w(px(160.0))
-                            .child(widgets::row_title(&theme, "Background effect"))
+                            .child(widgets::row_title(
+                                &theme,
+                                tr(cx, msg::native::background_effect),
+                            ))
                             .child(widgets::meta_line(
                                 &theme,
                                 vec![
@@ -4029,16 +4054,16 @@ impl Render for AppearancePage {
                             widgets::settings_page_column(window)
                                 .child(widgets::section_title(
                                     &theme,
-                                    "Appearance",
-                                    "Themes, colors, fonts and motion for this app.",
+                                    &tr(cx, msg::settings::settings_page_appearance),
+                                    &tr(cx, msg::native::themes_colors_fonts_and_motion_for_this_app),
                                 ))
                                 .child(
                                     widgets::section_stack()
                                         .child(
                                             widgets::group(
                                                 &theme,
-                                                "Theme",
-                                                "Follow your system, or pin a light or dark scheme.",
+                                                tr(cx, msg::settings::settings_page_theme),
+                                                tr(cx, msg::native::follow_your_system_or_pin_a_light_or_dark_scheme),
                                             )
                                             .child(
                                                 widgets::section_card(&theme)
@@ -4063,7 +4088,7 @@ impl Render for AppearancePage {
                                         ))
                                         .child(widgets::section(
                                             &theme,
-                                            "Motion",
+                                            crate::localization::text("native-motion", cx),
                                             widgets::section_card(&theme)
                                                 .mt_0()
                                                 .children(motion_rows),

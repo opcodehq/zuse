@@ -1,4 +1,5 @@
 //! Shared ACP command dialog; the connected host owns persistence and revisions.
+use crate::localization::message as tr;
 use crate::{
     input::{self, TextInput},
     palette::rgb,
@@ -6,6 +7,7 @@ use crate::{
     shell::{MUTED, TEXT},
 };
 use gpui::{prelude::*, *};
+use zuse_i18n::messages as msg;
 use zuse_protocol::custom_acp::{CustomAcpAgent, command};
 fn popup_bg() -> Hsla {
     crate::palette::tone(hsla(132. / 360., 0.05, 0.105, 1.), white())
@@ -219,24 +221,28 @@ impl Render for CommandDialog {
                             agent.env.keys().cloned().collect::<Vec<_>>().join(", ")
                         ))
                         .child(
-                            s::button("clear-acp-environment", "Clear")
-                                .tab_index(0)
-                                .h(px(16.))
-                                .px_0()
-                                .border_0()
-                                .bg(transparent_black())
-                                .text_size(px(10.))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if !this.busy {
-                                        this.clear_environment = true;
-                                        cx.notify();
-                                    }
-                                })),
+                            s::button(
+                                "clear-acp-environment",
+                                tr(cx, msg::settings::acp_agents_clear_variables),
+                            )
+                            .tab_index(0)
+                            .h(px(16.))
+                            .px_0()
+                            .border_0()
+                            .bg(transparent_black())
+                            .text_size(px(10.))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if !this.busy {
+                                    this.clear_environment = true;
+                                    cx.notify();
+                                }
+                            })),
                         ),
                 );
             } else if self.clear_environment {
                 environment = environment.child(
-                    s::description_text("Saved variables will be cleared.").text_size(px(10.)),
+                    s::description_text(tr(cx, msg::native::saved_variables_will_be_cleared))
+                        .text_size(px(10.)),
                 );
             }
         }
@@ -351,9 +357,9 @@ impl Render for CommandDialog {
                         s::button(
                             "acp-command-advanced",
                             if self.advanced {
-                                "Hide advanced"
+                                ("Hide advanced").to_string()
                             } else {
-                                "Advanced"
+                                crate::localization::text("chat-chat_composer_advanced", cx)
                             },
                         )
                         .tab_index(0)
@@ -373,7 +379,7 @@ impl Render for CommandDialog {
                             .items_center()
                             .gap(px(6.))
                             .child(
-                                s::button("cancel-acp-command", "Cancel")
+                                s::button("cancel-acp-command", tr(cx, msg::common::cancel))
                                     .track_focus(&self.cancel)
                                     .tab_index(0)
                                     .text_size(px(11.))
@@ -383,7 +389,7 @@ impl Render for CommandDialog {
                                     .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
                             )
                             .child(
-                                s::button("save-acp-command", "Save")
+                                s::button("save-acp-command", tr(cx, msg::common::save))
                                     .track_focus(&self.save)
                                     .tab_index(if self.busy { -1 } else { 0 })
                                     .text_size(px(11.))

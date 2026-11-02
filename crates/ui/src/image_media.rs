@@ -1,9 +1,11 @@
 //! Bounded media decoding. SVG resources are resolved in memory, never on the UI host.
+use crate::localization::message as tr;
 use gpui::{Image, ImageFormat};
 use std::{
     io::Cursor,
     sync::{Arc, OnceLock},
 };
+use zuse_i18n::messages as msg;
 
 pub(crate) fn release_media(images: impl IntoIterator<Item = MediaImage>, cx: &mut gpui::App) {
     let images: Vec<_> = images.into_iter().map(|media| media.image).collect();
@@ -141,27 +143,50 @@ pub(crate) fn preview_element(
     id: gpui::SharedString,
     on_click: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
 ) -> gpui::AnyElement {
-    use gpui::{InteractiveElement as _, IntoElement as _, StyledImage as _, prelude::*};
-    gpui::div()
-        .id(id)
-        .w_full()
-        .max_w(gpui::px(loaded.width))
-        .mx_auto()
-        .max_h(gpui::px(480.0))
-        .aspect_ratio(loaded.width / loaded.height)
-        .cursor_pointer()
-        .role(gpui::Role::Button)
-        .aria_label("Enlarge image")
-        .on_click(move |_, window, cx| {
-            cx.stop_propagation();
-            on_click(window, cx);
-        })
-        .child(
-            gpui::img(loaded.image.clone())
-                .size_full()
-                .object_fit(gpui::ObjectFit::Contain),
-        )
-        .into_any_element()
+    use gpui::IntoElement as _;
+    MediaPreview {
+        loaded: loaded.clone(),
+        id,
+        on_click: std::rc::Rc::new(on_click),
+    }
+    .into_any_element()
+}
+
+#[derive(gpui::IntoElement)]
+struct MediaPreview {
+    loaded: MediaImage,
+    id: gpui::SharedString,
+    on_click: std::rc::Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>,
+}
+impl gpui::RenderOnce for MediaPreview {
+    fn render(self, _: &mut gpui::Window, cx: &mut gpui::App) -> impl gpui::IntoElement {
+        let Self {
+            loaded,
+            id,
+            on_click,
+        } = self;
+        use gpui::{InteractiveElement as _, IntoElement as _, StyledImage as _, prelude::*};
+        gpui::div()
+            .id(id)
+            .w_full()
+            .max_w(gpui::px(loaded.width))
+            .mx_auto()
+            .max_h(gpui::px(480.0))
+            .aspect_ratio(loaded.width / loaded.height)
+            .cursor_pointer()
+            .role(gpui::Role::Button)
+            .aria_label(tr(cx, msg::native::enlarge_image))
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                on_click(window, cx);
+            })
+            .child(
+                gpui::img(loaded.image.clone())
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Contain),
+            )
+            .into_any_element()
+    }
 }
 
 pub(crate) fn svg_options() -> usvg::Options<'static> {

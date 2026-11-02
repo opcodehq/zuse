@@ -1,4 +1,5 @@
 //! First-run Electron migration and the reusable Settings entrypoint.
+use crate::localization::message as tr;
 use crate::{
     popover, settings,
     state::{AppState, EngineHandle, EngineMode},
@@ -6,6 +7,7 @@ use crate::{
 };
 use gpui::{prelude::*, *};
 use serde_json::{Value, json};
+use zuse_i18n::messages as msg;
 use zuse_protocol::{HarnessId, methods};
 
 gpui::actions!(desktop_import, [OpenDesktopImport]);
@@ -491,7 +493,7 @@ impl Render for Onboarding {
         if let Some(result) = &self.result {
             let report = &result["report"];
             card=card.child(div().mt_4().text_color(theme.text).child(format!("{} chats · {} sessions · {} projects",report["threads"],report["sessions"],report["projects"])))
-                .child(div().mt_2().text_color(theme.text_muted).child("Your account plugins are available when you sign in with the same Zuse account."));
+                .child(div().mt_2().text_color(theme.text_muted).child(tr(cx, msg::native::your_account_plugins_are_available_when_you_sign_in_with_the_same_zuse_account)));
             if report["missingAttachments"]
                 .as_array()
                 .is_some_and(|v| !v.is_empty())
@@ -502,10 +504,10 @@ impl Render for Onboarding {
                 .as_array()
                 .is_some_and(|v| !v.is_empty())
             {
-                card=card.child(div().mt_2().text_color(theme.text_muted).child("Electron-only preferences were preserved with the backup. They have not been applied as GPUI settings."));
+                card=card.child(div().mt_2().text_color(theme.text_muted).child(tr(cx, msg::native::electron_only_preferences_were_preserved_with_the_backup_they_have_not_been_appl_1276c192)));
             }
             if result["localPlugins"].as_u64().unwrap_or(0) > 0 {
-                card = card.child(div().mt_2().text_color(theme.text_muted).child("Local plugin definitions are backed up. Command-based Electron plugins are not yet supported in GPUI."));
+                card = card.child(div().mt_2().text_color(theme.text_muted).child(tr(cx, msg::native::local_plugin_definitions_are_backed_up_command_based_electron_plugins_are_not_ye_76dff728)));
             }
             card = card.child(
                 div().mt_4().child(
@@ -533,27 +535,23 @@ impl Render for Onboarding {
                         .text_color(theme.text)
                         .child(self.progress.clone()),
                 )
-                .child(
-                    div()
-                        .mt_2()
-                        .text_color(theme.text_muted)
-                        .child("You can retry an interrupted import without duplicating chats."),
-                );
+                .child(div().mt_2().text_color(theme.text_muted).child(tr(
+                    cx,
+                    msg::native::you_can_retry_an_interrupted_import_without_duplicating_chats,
+                )));
         } else {
             if self.loading {
                 card = card.child(
                     div()
                         .mt_4()
                         .text_color(theme.text_muted)
-                        .child("Looking for Electron data…"),
+                        .child(tr(cx, msg::native::looking_for_electron_data)),
                 );
             } else if self.sources.is_empty() {
-                card = card.child(
-                    div()
-                        .mt_4()
-                        .text_color(theme.text_muted)
-                        .child("No Electron profile was detected on this computer."),
-                );
+                card = card.child(div().mt_4().text_color(theme.text_muted).child(tr(
+                    cx,
+                    msg::native::no_electron_profile_was_detected_on_this_computer,
+                )));
             } else if !self.review {
                 for (index, source) in self.sources.iter().enumerate() {
                     let selected = self.selected == index;
@@ -626,9 +624,9 @@ impl Render for Onboarding {
                     )));
                 }
                 if source["localPlugins"].as_u64().unwrap_or(0) > 0 {
-                    card = card.child(div().mt_2().text_color(theme.text_muted).child("Local plugin definitions will be backed up. Command-based Electron plugins are not yet supported in GPUI."));
+                    card = card.child(div().mt_2().text_color(theme.text_muted).child(tr(cx, msg::native::local_plugin_definitions_will_be_backed_up_command_based_electron_plugins_are_no_37441bc7)));
                 }
-                card = card.child(div().mt_2().text_color(theme.text_muted).child("Imported settings replace matching GPUI preferences. Other GPUI preferences stay as they are."));
+                card = card.child(div().mt_2().text_color(theme.text_muted).child(tr(cx, msg::native::imported_settings_replace_matching_gpui_preferences_other_gpui_preferences_stay_3e190ea2)));
                 card = card.child(div().mt_4().child(self.account.clone()));
             }
             if let Some(error) = &self.error {
@@ -653,9 +651,13 @@ impl Render for Onboarding {
                     .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
                 )
                 .child(
-                    popover::btn_ghost(&theme, "Choose folder…", "desktop-import-browse")
-                        .id("desktop-import-browse")
-                        .on_click(cx.listener(|this, _, _, cx| this.browse(cx))),
+                    popover::btn_ghost(
+                        &theme,
+                        &tr(cx, msg::native::choose_folder),
+                        "desktop-import-browse",
+                    )
+                    .id("desktop-import-browse")
+                    .on_click(cx.listener(|this, _, _, cx| this.browse(cx))),
                 );
             if !self.sources.is_empty() && !self.loading {
                 buttons = buttons.child(

@@ -1,6 +1,8 @@
 //! Device workspace storage controls; account sign-in lives in General.
 use super::*;
+use crate::localization::message as tr;
 use gpui::{EventEmitter, KeyDownEvent, MouseButton};
+use zuse_i18n::messages as msg;
 use zuse_viewport::settings_style as s;
 
 #[derive(Clone, PartialEq)]
@@ -65,7 +67,7 @@ impl DevicesPage {
             );
         }
         let frame = s::frame()
-            .child(s::header("Workspace sync", ""))
+            .child(s::header(tr(cx, msg::native::workspace_sync), ""))
             .child(s::card().child(row));
         Some(frame.into_any_element())
     }

@@ -1,6 +1,8 @@
 use super::*;
 use crate::composer::ComposerInputEvent;
+use crate::localization::message as tr;
 use gpui::Focusable;
+use zuse_i18n::messages as msg;
 
 impl PullRequestDetailPage {
     pub(super) fn comment_event(&mut self, event: &ComposerInputEvent, cx: &mut Context<Self>) {
@@ -273,7 +275,11 @@ impl PullRequestDetailPage {
                         cx.entity_id(),
                         cx,
                     ))
-                    .child(div().flex_none().child("Posting comment"))
+                    .child(
+                        div()
+                            .flex_none()
+                            .child(tr(cx, msg::native::posting_comment)),
+                    )
                     .child(
                         div()
                             .min_w_0()
@@ -303,7 +309,10 @@ impl PullRequestDetailPage {
                         .p(px(12.0))
                         .text_size(px(12.0))
                         .text_color(theme.text_muted)
-                        .child("No matching participants. You can type any @username."),
+                        .child(tr(
+                            cx,
+                            msg::native::no_matching_participants_you_can_type_any_username,
+                        )),
                 );
             }
             for (index, login) in self.mention_choices.iter().enumerate() {

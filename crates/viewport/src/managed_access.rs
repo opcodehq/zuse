@@ -206,6 +206,7 @@ impl WorkspaceView {
                     } else {
                         "Set up"
                     },
+                    cx,
                 )
                 .when(busy, |v| v.opacity(0.5))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -233,7 +234,7 @@ impl WorkspaceView {
                     .gap(px(10.))
                     .child(
                         r::details(
-                            "Zuse account",
+                            crate::localization::text("projects-projects_sidebar_zuse_account", cx),
                             self.cloud_account["user"]["email"]
                                 .as_str()
                                 .map(zuse_protocol::presentation::masked_email)
@@ -245,11 +246,11 @@ impl WorkspaceView {
                         r::button(
                             "managed-account-sign-in",
                             if busy {
-                                "Working…"
+                                crate::localization::text("settings-model_connections_working", cx)
                             } else if signed_in {
-                                "Sign out"
+                                crate::localization::text("common-signOut", cx)
                             } else {
-                                "Sign in"
+                                crate::localization::text("common-signIn", cx)
                             },
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -299,8 +300,8 @@ impl WorkspaceView {
             &self.managed_access.computers,
             &self.managed_access.saved,
         );
-        r::frame("Other computers","Projects and chats from connected computers stay in the same sidebar.",Some(add))
-            .child(s::card().when(rows.is_empty(),|v|v.child(r::empty_computers()))
+        r::frame(crate::localization::text("settings-remote_other_computers", cx),crate::localization::text("settings-using_computers_card_projects_and_chats_from_connected_computers_stay_in_the_same_sidebar", cx),Some(add))
+            .child(s::card().when(rows.is_empty(),|v|v.child(r::empty_computers(cx)))
                 .children(rows.into_iter().enumerate().map(|(index,computer)|{
                     let id=computer["environmentId"].as_str().unwrap_or_default().to_owned();let environment=id.clone();
                     let remembered=self.managed_access.saved.iter().any(|saved|saved["environmentId"]==computer["environmentId"]);
@@ -309,7 +310,7 @@ impl WorkspaceView {
                     let description=if current {"This computer"}else if connect {computer["serviceState"].as_str().unwrap_or("Availability checked on connect")}else{"Update Zuse on this computer to connect."};
                     crate::shell::row().min_h(px(48.)).px(px(12.)).py(px(8.)).gap(px(10.)).when(index>0,|v|v.border_t_1().border_color(s::card_border().opacity(0.4)))
                         .child(crate::assets::icon("monitor").size(px(16.))).child(r::details(label.clone(),description.to_owned()).flex_1())
-                        .when(connect,|v|v.child(r::button(("connect-account-computer",index),"Connect").on_click(cx.listener(move|this,_,_,_|{let _=this.requests.unbounded_send(json!({"ui":"openAccountComputer","environmentId":environment,"expectedSubject":connect_subject,"label":label}));}))))
+                        .when(connect,|v|v.child(r::button(("connect-account-computer",index),crate::localization::text("common-connect", cx)).on_click(cx.listener(move|this,_,_,_|{let _=this.requests.unbounded_send(json!({"ui":"openAccountComputer","environmentId":environment,"expectedSubject":connect_subject,"label":label}));}))))
                         .when(remembered,|v|v.child(r::button(("forget-account-computer",index),"Forget saved").on_click(cx.listener(move|this,_,_,cx|{this.managed_action(methods::FORGET_ACCOUNT_ROUTE,json!({"environmentId":id,"expectedSubject":subject}));cx.notify();}))))
                 }))).into_any_element()
     }
@@ -352,16 +353,24 @@ impl WorkspaceView {
                                     .flex_1(),
                                 )
                                 .child(
-                                    r::small_button(("revoke-account-device", index), "Revoke")
-                                        .border_color(gpui::transparent_black())
-                                        .text_color(s::destructive_text())
-                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                    r::small_button(
+                                        ("revoke-account-device", index),
+                                        crate::localization::text(
+                                            "chat-device_bridge_panel_revoke",
+                                            cx,
+                                        ),
+                                    )
+                                    .border_color(gpui::transparent_black())
+                                    .text_color(s::destructive_text())
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
                                             this.managed_action(
                                                 methods::REVOKE_ACCOUNT_DEVICE,
                                                 json!({"clientId":id}),
                                             );
                                             cx.notify();
-                                        })),
+                                        },
+                                    )),
                                 )
                         },
                     )),

@@ -2,6 +2,7 @@
 resolver = "2"
 exclude = ["vendor/zkit"]
 members = [
+    "crates/i18n",
     "crates/simulator",
     "apps/cloud",
     "apps/cloud-runtime",
@@ -54,6 +55,7 @@ license = "AGPL-3.0-only"
 publish = false
 
 [workspace.dependencies]
+zuse-i18n = { path = "crates/i18n" }
 zuse-simulator = { path = "crates/simulator" }
 zuse-usage = { path = "crates/usage" }
 zuse-cloud-projection = { path = "crates/cloud-projection" }

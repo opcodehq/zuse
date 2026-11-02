@@ -1,8 +1,10 @@
 //! Sidebar account and provider limits, shared by both hosts.
+use crate::localization::message as tr;
 use crate::{assets::icon, creation_style as ui, palette, settings_style as s};
 use gpui::{prelude::*, *};
 use serde_json::{Value, json};
 use std::{cell::Cell, collections::BTreeMap, rc::Rc};
+use zuse_i18n::messages as msg;
 use zuse_protocol::{AgentAccount, AgentAccountsSnapshot, HarnessId, methods};
 
 #[derive(Clone, PartialEq)]
@@ -494,7 +496,7 @@ impl SidebarControls {
                     .text_size(px(12.))
                     .line_height(px(16.))
                     .font_weight(FontWeight::MEDIUM)
-                    .child("Usage limits"),
+                    .child(tr(cx, msg::usage::usage_dashboard_usage_limits)),
             );
         if let Some(error) = &self.usage_error {
             menu = menu.child(
@@ -622,13 +624,13 @@ impl Render for SidebarControls {
             || self.pending("checkout")
             || (signed_in && self.subscribed.is_none() && self.plan_error.is_none());
         let label = if loading {
-            "Loading account"
+            tr(cx, msg::native::loading_account)
         } else if !self.properties.available {
-            "Account unavailable"
+            tr(cx, msg::native::account_unavailable)
         } else if signing_in {
-            "Signing in"
+            "Signing in".to_owned()
         } else {
-            account_plan_label(signed_in, self.subscribed, self.plan_error.is_some())
+            account_plan_label(signed_in, self.subscribed, self.plan_error.is_some()).to_owned()
         };
         let upgrade = signed_in && self.subscribed == Some(false) && self.plan_error.is_none();
         let tip = self
@@ -637,7 +639,7 @@ impl Render for SidebarControls {
             .or(self.plan_error.as_ref())
             .cloned()
             .unwrap_or_else(|| label.to_owned());
-        let account = footer_button("sidebar-account", label)
+        let account = footer_button("sidebar-account", label.clone())
             .debug_selector(|| "sidebar-account".into())
             .aria_description(tip.clone())
             .tooltip(move |_, cx| cx.new(|_| ControlTip(tip.clone().into())).into())

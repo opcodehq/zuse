@@ -1,5 +1,7 @@
 //! Reference layout: question tray at the top of the composer, answer editor below.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 impl Composer {
     pub(super) fn render_question_composer(
         &mut self,
@@ -107,7 +109,7 @@ impl Composer {
                     .pb(px(4.))
                     .text_size(px(11.))
                     .text_color(theme.text_muted)
-                    .child("Select one or more options."),
+                    .child(tr(cx, msg::chat::question_card_multiple_choice_hint)),
             );
         }
         for (index, option) in question.options.iter().enumerate() {
@@ -184,11 +186,15 @@ impl Composer {
                     )
                     .when(secret, |footer| {
                         footer.child(
-                            crate::popover::btn_ghost(&theme, "Decline", "question-decline")
-                                .id("question-decline")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.submit_private_secret(true, cx)
-                                })),
+                            crate::popover::btn_ghost(
+                                &theme,
+                                &tr(cx, msg::projects::masters_decline),
+                                "question-decline",
+                            )
+                            .id("question-decline")
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.submit_private_secret(true, cx)),
+                            ),
                         )
                     })
                     .child(

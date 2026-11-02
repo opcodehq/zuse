@@ -1,0 +1,88 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+errors-format_error_access_denied = 访问被拒绝。请重新登录，或联系工作区所有者。
+
+errors-format_error_the_agent_restarted_and_this_approval_expired_dismiss_it_and_send = 智能体已重启，此批准已过期。请关闭它并发送消息以继续。
+
+errors-format_error_this_approval_is_no_longer_pending_it_may_have_been_resolved_on_a = 此批准已不在等待中，可能已在其他设备上处理。
+
+errors-format_error_this_folder_isn_t_a_git_repository = 此文件夹不是 Git 仓库。
+
+errors-format_error_this_directory_is_unavailable = 该目录不可用。
+
+errors-format_error_project_folder_not_found = 未找到项目文件夹。
+
+errors-format_error_git_is_not_installed = Git 未安装。
+
+errors-format_error_worktree_not_found = 未找到工作树。
+
+errors-format_error_couldn_t_reach_the_computer_it_may_be_asleep_or_offline = 无法连接到该电脑，它可能已休眠或离线。
+
+errors-format_error_the_connection_to_the_computer_was_interrupted = 与电脑的连接已中断。
+
+errors-format_error_this_cloud_workspace_could_not_be_found = 找不到此云工作区。
+
+errors-format_error_cloud_workspace_access_is_not_available_for_this_account = 此账户无法使用云工作区功能。
+
+errors-format_error_zuse_cloud_is_currently_invite_only = 请更新 Zuse 后重试，以使用 Cloud 公测版。
+
+errors-format_error_cloud_access_could_not_be_verified_try_again_shortly = 无法验证云访问权限，请稍后重试。
+
+errors-format_error_the_cloud_workspace_request_is_invalid = 云工作区请求无效。
+
+errors-format_error_a_cloud_sandbox_subscription_is_required = 需要 Cloud 订阅。
+
+errors-format_error_the_cloud_provider_is_temporarily_unavailable_try_again_shortly = 云提供商暂时不可用，请稍后重试。
+
+errors-format_error_this_cloud_project_needs_to_be_prepared_again_before_starting_a_w = 启动工作区前，需要重新准备此云项目。
+
+errors-format_error_connect_github_and_the_selected_agent_in_cloud_sandbox_settings_t = 请在云端设置中连接 GitHub 和所选智能体，然后重试。
+
+errors-format_error_that_branch_is_already_open_in_another_cloud_workspace_reuse_it_o = 该分支已在另一个云工作区中打开。可以复用它，或选择其他分支。
+
+errors-format_error_the_cloud_workspace_changed_while_starting_refresh_and_try_again = 启动期间云工作区发生了变化，请刷新后重试。
+
+errors-format_error_the_other_computer_s_secure_tunnel_isn_t_ready_yet_give_it_a_mome = 另一台电脑的安全隧道尚未就绪，请稍候再试。
+
+errors-format_error_sign_in_to_your_zuse_account_to_reach_this_computer = 登录你的 Zuse 账户以访问此电脑。
+
+errors-format_error_this_computer_is_no_longer_linked_to_your_account_run_zuse_serve = 此电脑不再关联到你的账户。请在其上重新运行 `zuse serve`。
+
+errors-format_error_zuse_s_api_is_temporarily_unavailable_try_again_shortly = Zuse API 暂时不可用，请稍后重试。
+
+errors-main_tabs_rename_session = 重命名会话
+
+errors-main_tabs_change_the_name_shown_on_this_conversation_tab = 更改此对话选项卡上显示的名称。
+
+errors-main_tabs_session_name = 会话名称
+
+errors-main_tabs_plan_ready_to_approve = 计划待批准
+
+errors-main_tabs_waiting_for_permission = 等待许可
+
+errors-main_tabs_starting_agent = 正在启动智能体
+
+errors-main_tabs_close_chat = 关闭聊天
+
+errors-main_tabs_new_tab_in_this_chat = 在此聊天中新建选项卡
+
+errors-main_renderer_crashed = 渲染器崩溃
+
+errors-main_zuse_hit_a_ui_error = Zuse 遇到了界面错误。
+
+errors-main_your_local_data_is_still_on_disk_reload_the_window_or_copy_these_crash = 你的本地数据仍在磁盘上。重新加载窗口，或复制这些崩溃详情用于调试。
+
+errors-main_reload = 重新加载
+
+errors-main_copy_crash_details = 复制崩溃详细信息
+
+errors-main_tabs_rename = 重命名{ $label }
+
+errors-main_tabs_no_authenticated_agent = 没有已登录的智能体
+
+errors-main_tabs_connect_an_agent_in_cloud_authentication_before_opening_a_new_tab = 请先在云端身份验证中连接智能体，再打开新选项卡。
+
+errors-main_tabs_unsaved = { $path }（未保存）
+
+errors-main_tabs_agent_is = 智能体当前状态：{ $activityState }

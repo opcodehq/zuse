@@ -1,6 +1,8 @@
 //! Project and chat grants, inspected through their owning engine.
 use super::*;
+use crate::localization::message as tr;
 use crate::{icons, popover};
+use zuse_i18n::messages as msg;
 use zuse_protocol::permission::{
     self, PermissionAction, PermissionRule, PermissionSnapshot, RuleEffect,
 };
@@ -147,7 +149,7 @@ impl Composer {
         if let Some(snapshot) = &inspector.snapshot {
             if snapshot.rules.is_empty() {
                 body = body.child(div().py(px(12.)).text_size(px(12.)).text_color(theme.text_muted)
-                    .child("No saved permissions yet. Choose Always allow on an approval prompt to save one."));
+                    .child(tr(cx, msg::native::no_saved_permissions_yet_choose_always_allow_on_an_approval_prompt_to_save_one)));
             } else {
                 let project: Vec<_> = snapshot
                     .rules
@@ -314,7 +316,7 @@ impl Composer {
                     .py(px(12.))
                     .text_size(px(12.))
                     .text_color(theme.text_muted)
-                    .child("Loading permissions…"),
+                    .child(tr(cx, msg::native::loading_permissions)),
             );
         }
         let busy = inspector.busy;
@@ -470,34 +472,42 @@ impl Composer {
             let revoke = id.clone();
             row = row
                 .child(
-                    popover::btn_ghost(theme, "Revoke", "permission-revoke-confirm")
-                        .id(SharedString::from(format!("{id}-confirm")))
-                        .px(px(7.))
-                        .py(px(3.))
-                        .rounded(px(4.))
-                        .text_size(px(10.))
-                        .text_color(theme.danger)
-                        .bg(theme.danger.opacity(0.12))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.permission_rule_request(
-                                permission::REMOVE,
-                                serde_json::json!({"id":revoke}),
-                                cx,
-                            )
-                        })),
+                    popover::btn_ghost(
+                        theme,
+                        &tr(cx, msg::chat::device_bridge_panel_revoke),
+                        "permission-revoke-confirm",
+                    )
+                    .id(SharedString::from(format!("{id}-confirm")))
+                    .px(px(7.))
+                    .py(px(3.))
+                    .rounded(px(4.))
+                    .text_size(px(10.))
+                    .text_color(theme.danger)
+                    .bg(theme.danger.opacity(0.12))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.permission_rule_request(
+                            permission::REMOVE,
+                            serde_json::json!({"id":revoke}),
+                            cx,
+                        )
+                    })),
                 )
                 .child(
-                    popover::btn_ghost(theme, "Cancel", "permission-revoke-cancel")
-                        .id(SharedString::from(format!("{id}-cancel")))
-                        .px(px(7.))
-                        .py(px(3.))
-                        .text_size(px(10.))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(inspector) = this.permission_inspector.as_mut() {
-                                inspector.confirming = None;
-                            }
-                            cx.notify();
-                        })),
+                    popover::btn_ghost(
+                        theme,
+                        &tr(cx, msg::common::cancel),
+                        "permission-revoke-cancel",
+                    )
+                    .id(SharedString::from(format!("{id}-cancel")))
+                    .px(px(7.))
+                    .py(px(3.))
+                    .text_size(px(10.))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(inspector) = this.permission_inspector.as_mut() {
+                            inspector.confirming = None;
+                        }
+                        cx.notify();
+                    })),
                 );
         } else {
             let edit = id.clone();
@@ -614,17 +624,21 @@ impl Composer {
                     })),
                 )
                 .child(
-                    popover::btn_ghost(theme, "Done", "permission-edit-done")
-                        .id(SharedString::from(format!("{id}-done")))
-                        .text_size(px(11.))
-                        .px(px(8.))
-                        .py(px(4.))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(inspector) = this.permission_inspector.as_mut() {
-                                inspector.editing = None;
-                            }
-                            cx.notify();
-                        })),
+                    popover::btn_ghost(
+                        theme,
+                        &tr(cx, msg::chat::voice_stop),
+                        "permission-edit-done",
+                    )
+                    .id(SharedString::from(format!("{id}-done")))
+                    .text_size(px(11.))
+                    .px(px(8.))
+                    .py(px(4.))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Some(inspector) = this.permission_inspector.as_mut() {
+                            inspector.editing = None;
+                        }
+                        cx.notify();
+                    })),
                 );
             item = item.child(editor);
         }

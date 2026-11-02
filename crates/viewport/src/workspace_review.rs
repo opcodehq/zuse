@@ -1,11 +1,13 @@
 //! Checkout review uses snapshot checksums and lazy per-file source reads.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     shell::{column, control, label, row},
     tool_results::{ResultLine, diff_lines},
 };
 use std::sync::Arc;
+use zuse_i18n::messages as msg;
 #[derive(Clone, Default)]
 pub(super) enum ReviewScope {
     #[default]
@@ -171,24 +173,27 @@ impl WorkspaceView {
                     .px_3()
                     .gap_2()
                     .child(label(if self.review.path.is_some() {
-                        "File changes"
+                        ("File changes").to_string()
                     } else if matches!(self.review_scope, ReviewScope::LatestTurn) {
-                        "Latest turn"
+                        crate::localization::text("native-latest_turn", cx)
                     } else if !self.review_scope.working() {
-                        "Commit changes"
+                        ("Commit changes").to_string()
                     } else if self
                         .selected
                         .as_ref()
                         .is_some_and(|chat| chat["archived"] == true)
                     {
-                        "Saved changes"
+                        ("Saved changes").to_string()
                     } else {
-                        "Working tree"
+                        crate::localization::text("chat-changes_review_working_tree", cx)
                     }))
                     .child(div().flex_1())
                     .child(
-                        control("refresh-workspace-changes", "Refresh")
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh_changes(cx))),
+                        control(
+                            "refresh-workspace-changes",
+                            tr(cx, msg::chat::attempts_refresh),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.refresh_changes(cx))),
                     ),
             )
             .when_some(self.changes_error.clone(), |d, error| {
@@ -201,15 +206,18 @@ impl WorkspaceView {
                     .px_3()
                     .gap_2()
                     .child(
-                        control("review-working-tree", "Working tree")
-                            .when(self.review_scope.working(), |d| d.bg(rgb(0x222222)))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.review_scope = ReviewScope::WorkingTree;
-                                this.refresh_changes(cx);
-                            })),
+                        control(
+                            "review-working-tree",
+                            tr(cx, msg::chat::changes_review_working_tree),
+                        )
+                        .when(self.review_scope.working(), |d| d.bg(rgb(0x222222)))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.review_scope = ReviewScope::WorkingTree;
+                            this.refresh_changes(cx);
+                        })),
                     )
                     .child(
-                        control("review-latest-turn", "Latest turn")
+                        control("review-latest-turn", tr(cx, msg::native::latest_turn))
                             .when(matches!(self.review_scope, ReviewScope::LatestTurn), |d| {
                                 d.bg(rgb(0x222222))
                             })
@@ -228,15 +236,23 @@ impl WorkspaceView {
                     .child(
                         row()
                             .gap_2()
-                            .child(control("back-to-history", "History").on_click(
-                                cx.listener(|this, _, _, cx| this.set_panel("history", cx)),
-                            ))
-                            .child(control("working-tree-scope", "Working tree").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.review_scope = ReviewScope::WorkingTree;
-                                    this.refresh_changes(cx);
-                                }),
-                            )),
+                            .child(
+                                control("back-to-history", tr(cx, msg::native::history)).on_click(
+                                    cx.listener(|this, _, _, cx| this.set_panel("history", cx)),
+                                ),
+                            )
+                            .child(
+                                control(
+                                    "working-tree-scope",
+                                    tr(cx, msg::chat::changes_review_working_tree),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.review_scope = ReviewScope::WorkingTree;
+                                        this.refresh_changes(cx);
+                                    },
+                                )),
+                            ),
                     )
                     .child(
                         label(format!(
@@ -256,12 +272,13 @@ impl WorkspaceView {
                     row()
                         .px_3()
                         .gap_2()
-                        .child(control("back-to-changes", "Back").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.reset_review();
-                                cx.notify();
-                            },
-                        )))
+                        .child(
+                            control("back-to-changes", tr(cx, msg::chat::checkpoints_back))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.reset_review();
+                                    cx.notify();
+                                })),
+                        )
                         .child(label(path.clone()).text_ellipsis().flex_1().min_w_0()),
                 )
                 .when_some(self.review.error.clone(), |d, error| {
@@ -271,7 +288,7 @@ impl WorkspaceView {
                     d.child(label(notice).p_3())
                 })
                 .when(self.review.request.is_some(), |d| {
-                    d.child(label("Loading diff…").p_3())
+                    d.child(label(tr(cx, msg::projects::file_editor_loading_diff)).p_3())
                 });
             let lines = self.review.lines.clone();
             if !lines.is_empty() {
@@ -325,15 +342,20 @@ impl WorkspaceView {
                         && !matches!(self.review_scope, ReviewScope::Commit { .. }),
                     |d| {
                         d.child(
-                            control("edit-reviewed-file", "Open in editor")
-                                .m_3()
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            control(
+                                "edit-reviewed-file",
+                                tr(cx, msg::projects::file_tree_open_in_editor),
+                            )
+                            .m_3()
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     if this.file_navigation_blocked(cx) {
                                         return;
                                     }
                                     this.right_tab = "files".into();
                                     this.read_file(&path, false, cx);
-                                })),
+                                },
+                            )),
                         )
                     },
                 );
@@ -361,10 +383,16 @@ impl WorkspaceView {
                         ),
                 )
                 .when(self.changes["truncated"] == true, |d| {
-                    d.child(label("Partial snapshot — refresh to check for more changes.").p_3())
+                    d.child(
+                        label(tr(
+                            cx,
+                            msg::native::partial_snapshot_refresh_to_check_for_more_changes,
+                        ))
+                        .p_3(),
+                    )
                 })
                 .when(self.changes_request.is_some(), |d| {
-                    d.child(label("Checking changes…").p_3())
+                    d.child(label(tr(cx, msg::native::checking_changes)).p_3())
                 })
                 .child(
                     column()

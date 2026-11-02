@@ -1,4 +1,5 @@
 //! Provider account rows and their shared switch/remove interactions.
+use crate::localization::message as tr;
 use crate::{
     acp_catalog::popup_bg,
     assets::icon,
@@ -8,6 +9,7 @@ use crate::{
 };
 use gpui::{prelude::*, *};
 use std::{cell::Cell, collections::HashMap, rc::Rc};
+use zuse_i18n::messages as msg;
 use zuse_protocol::AgentAccount;
 
 #[derive(Clone, Default, PartialEq)]
@@ -329,7 +331,7 @@ impl AccountRows {
         let popup = div()
             .id("provider-account-menu")
             .role(Role::Menu)
-            .aria_label("Account actions")
+            .aria_label(tr(cx, msg::native::account_actions))
             .key_context("ProviderAccountMenu")
             .track_focus(&self.focus)
             .w(px(width.max(112.)))
@@ -704,7 +706,7 @@ impl Render for AccountRows {
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_size(px(10.))
                                         .line_height(px(13.5))
-                                        .child("In use"),
+                                        .child(tr(cx, msg::chat::create_from_menu_in_use)),
                                 )
                             })
                             .when_some(account.plan_label.clone(), |v, plan| {
@@ -860,7 +862,8 @@ impl Render for AccountRows {
                     if let Some(error) = &account.usage_error {
                         details = details.child(error.clone());
                     } else if account.usage_windows.is_empty() {
-                        details = details.child("Usage not reported for this account.");
+                        details =
+                            details.child(tr(cx, msg::native::usage_not_reported_for_this_account));
                     }
                     body = body.child(details);
                 }

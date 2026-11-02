@@ -1,11 +1,13 @@
 //! Shared Cloud hosting and billing presentation. Hosts retain account-bound RPC ownership.
 use crate::cloud_settings::style::{badge, button, group, note, setting_row};
+use crate::localization::message as tr;
 use crate::{
     palette, settings_style as s,
     shell::{BORDER, MUTED, TEXT},
 };
 use gpui::{prelude::*, *};
 use serde_json::Value;
+use zuse_i18n::messages as msg;
 use zuse_model::cloud_billing::{cents, usd};
 use zuse_protocol::cloud_billing::{
     BillingStatus, BillingSummary, BillingUsageItem, PrepaidBalance,
@@ -351,7 +353,7 @@ pub fn usage<T: 'static>(
                     .flex_wrap()
                     .items_center()
                     .gap(px(8.))
-                    .child(s::title_text("Zuse credits"))
+                    .child(s::title_text(tr(cx, msg::settings::prepaid_title)))
                     .child(
                         div()
                             .rounded(px(7.))
@@ -401,7 +403,7 @@ pub fn usage<T: 'static>(
         .gap(px(6.))
         .id("cloud-credit-amounts")
         .role(Role::RadioGroup)
-        .aria_label("Credit amount");
+        .aria_label(tr(cx, msg::settings::prepaid_amount));
     for (i, amount) in [1000, 2500, 5000, 10000].into_iter().enumerate() {
         let handles = focus.clone();
         let selected = data.credit_amount == amount;
@@ -490,7 +492,7 @@ pub fn usage<T: 'static>(
                             .text_size(px(12.))
                             .line_height(px(16.))
                             .text_color(palette::rgb(MUTED))
-                            .child("Credit amount"),
+                            .child(tr(cx, msg::settings::prepaid_amount)),
                     )
                     .child(options),
             )
@@ -504,14 +506,20 @@ pub fn usage<T: 'static>(
                 ),
             ),
     );
-    credits=credits.child(div().text_size(px(12.)).line_height(px(19.5)).text_color(palette::rgb(MUTED)).child("Applies automatically to future Zuse invoices, including subscriptions. Unused credit rolls forward. Your usage allowance and spending cap stay the same."));
+    credits = credits.child(
+        div()
+            .text_size(px(12.))
+            .line_height(px(19.5))
+            .text_color(palette::rgb(MUTED))
+            .child(tr(cx, msg::settings::prepaid_description)),
+    );
     if data.credits.is_some_and(|b| !b.available) {
         credits = credits.child(
             div()
                 .text_size(px(12.))
                 .line_height(px(16.))
                 .text_color(palette::rgb(MUTED))
-                .child("Credit purchases are not enabled for this workspace yet."),
+                .child(tr(cx, msg::settings::prepaid_disabled)),
         );
     }
     if let Some(error) = data.credit_error {

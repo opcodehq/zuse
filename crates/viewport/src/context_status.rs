@@ -1,6 +1,8 @@
 //! Read-only context occupancy from the selected execution host's transcript.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{BORDER, FAINT, MUTED, TEXT, column, row};
+use zuse_i18n::messages as msg;
 use zuse_protocol::ContextUsage;
 
 /// Paint a bounded progress ring without allocating an image or an animation loop.
@@ -81,7 +83,7 @@ impl WorkspaceView {
             .id("context-status-trigger")
             .relative()
             .role(Role::Button)
-            .aria_label("Context and usage status")
+            .aria_label(tr(cx, msg::chat::chat_composer_context_and_usage_status))
             .aria_expanded(self.context_menu)
             .tab_index(0)
             .track_focus(&self.context_focus)
@@ -145,7 +147,7 @@ impl WorkspaceView {
         let mut card = column()
             .id("context-status-card")
             .role(Role::Group)
-            .aria_label("Context window usage")
+            .aria_label(tr(cx, msg::native::context_window_usage))
             .absolute()
             .bottom_full()
             .mb_2()
@@ -172,7 +174,7 @@ impl WorkspaceView {
                         div()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(rgb(TEXT))
-                            .child("Context"),
+                            .child(tr(cx, msg::native::context)),
                     )
                     .child(
                         usage
@@ -210,21 +212,21 @@ impl WorkspaceView {
                 .child(
                     row()
                         .justify_between()
-                        .child("Window used")
+                        .child(tr(cx, msg::native::window_used))
                         .child(format!("{:.1}%", fraction * 100.)),
                 )
                 .child(
                     row()
                         .justify_between()
                         .text_color(rgb(FAINT))
-                        .child("Available")
+                        .child(tr(cx, msg::chat::chat_composer_available))
                         .child(tokens(window.saturating_sub(used))),
                 );
         } else {
             card = card.child(
                 div()
                     .text_color(rgb(FAINT))
-                    .child("Usage appears after the first response."),
+                    .child(tr(cx, msg::native::usage_appears_after_the_first_response)),
             );
         }
         Some(

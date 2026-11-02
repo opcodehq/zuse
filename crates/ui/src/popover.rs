@@ -2674,13 +2674,19 @@ mod interaction_regressions {
                         .w(px(80.))
                         .h(px(30.))
                         .relative()
-                        .child("Notice")
+                        .child(crate::localization::message(
+                            cx,
+                            zuse_i18n::messages::native::notice,
+                        ))
                         .child(anchored_menu_below(
                             "persistent-notice",
                             div()
                                 .w(px(120.))
                                 .h(px(60.))
-                                .child("Voice unavailable")
+                                .child(crate::localization::message(
+                                    cx,
+                                    zuse_i18n::messages::native::voice_unavailable,
+                                ))
                                 .into_any_element(),
                             None,
                         )),
@@ -2692,7 +2698,10 @@ mod interaction_regressions {
                         .ml(px(200.))
                         .w(px(100.))
                         .h(px(30.))
-                        .child("Settings")
+                        .child(crate::localization::message(
+                            cx,
+                            zuse_i18n::messages::common::settings,
+                        ))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.second_open = true;
                             cx.notify();

@@ -1,6 +1,8 @@
 //! A held queue row edits in the composer while the user's draft stays aside.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{control, label, row};
+use zuse_i18n::messages as msg;
 use zuse_protocol::presentation::{
     QueueEditLease, chat_request, queue_edit_lease, queue_edit_review_matches,
 };
@@ -443,11 +445,11 @@ impl WorkspaceView {
             .bg(rgb(0x202020).opacity(0.35))
             .child(
                 label(if pending == Some(EditOp::Acquire) {
-                    "Opening queued message…"
+                    ("Opening queued message…").to_string()
                 } else if edit.review_only {
-                    "Review queued-message changes"
+                    ("Review queued-message changes").to_string()
                 } else {
-                    "Editing queued message"
+                    crate::localization::text("chat-chat_composer_editing_queued_message", cx)
                 })
                 .text_size(px(11.))
                 .flex_1()
@@ -457,7 +459,7 @@ impl WorkspaceView {
                 uncertain && edit.lease.is_some() && pending.is_none(),
                 |view| {
                     view.child(
-                        control("check-queue-edit", "Check host")
+                        control("check-queue-edit", tr(cx, msg::native::check_host))
                             .h(px(24.))
                             .text_size(px(11.))
                             .on_click(cx.listener(|this, _, _, cx| this.check_queue_edit(cx))),
@@ -468,9 +470,9 @@ impl WorkspaceView {
                 control(
                     "save-queue-edit",
                     if pending == Some(EditOp::Commit) || pending == Some(EditOp::Discard) {
-                        "Saving…"
+                        crate::localization::text("settings-wallpaper_saving", cx)
                     } else {
-                        "Save changes"
+                        ("Save changes").to_string()
                     },
                 )
                 .h(px(24.))
@@ -484,9 +486,9 @@ impl WorkspaceView {
                 control(
                     "cancel-queue-edit",
                     if uncertain && edit.previous.is_some() {
-                        "Keep copy and exit"
+                        ("Keep copy and exit").to_string()
                     } else {
-                        "Cancel"
+                        crate::localization::text("common-cancel", cx)
                     },
                 )
                 .h(px(24.))

@@ -65,6 +65,16 @@ cargo run -p zuse-cli -- --listen 0.0.0.0:27656 --ipc-port 0 \
 
 Direct HTTPS uses Secure browser cookies and WSS for agent RPC. See [development setup](internal-docs/development.md) for reverse-proxy configuration and platform requirements. Packaging and full cross-device runtime acceptance remain in progress.
 
+## Languages
+
+Choose **Settings → General → Language** to follow the system language or select
+English, French, German, Simplified Chinese, Traditional Chinese, Japanese, or
+Korean. Desktop and browser choices are saved locally. CLI output uses
+`zuse-server --language zh-Hans` or `ZUSE_LANGUAGE=zh-Hans`; command and protocol
+spellings stay the same. Non-English translations are previews pending screen
+review. See [localization](internal-docs/localization.md) for contribution and
+review instructions.
+
 ## Voice
 
 Use the microphone beside the composer model selector for dictation. Its setup opens **Settings → Voice**, where you can download the local speech model and choose a microphone. Hold to talk, then release to transcribe into the draft.

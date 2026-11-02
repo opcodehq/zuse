@@ -362,6 +362,7 @@ impl SettingsStore {
 
 pub fn init(settings: UiSettings, data_dir: impl Into<PathBuf>, cx: &mut App) {
     let data_dir = data_dir.into();
+    crate::localization::init(settings.language, cx);
     crate::dictation::init(data_dir.clone(), cx);
     cx.set_global(SettingsStore {
         current: settings,
@@ -827,6 +828,7 @@ pub const SKILL_COMPLETION_HARNESSES: [(zuse_protocol::HarnessId, &str); 9] = [
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiSettings {
+    pub language: zuse_i18n::LanguagePreference,
     pub desktop_import_dismissed: bool,
     pub desktop_import_pending: Option<serde_json::Value>,
     pub desktop_import_applied: Vec<String>,
@@ -1048,6 +1050,7 @@ pub struct UiSettings {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            language: Default::default(),
             display_name: String::new(),
             desktop_import_dismissed: false,
             desktop_import_pending: None,
@@ -1865,6 +1868,7 @@ impl UiSettings {
             }};
         }
         merge!(
+            language,
             desktop_import_dismissed,
             desktop_import_pending,
             desktop_import_applied,
@@ -2910,6 +2914,7 @@ mod tests {
     fn round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let settings = UiSettings {
+            language: zuse_i18n::LanguagePreference::Explicit(zuse_i18n::Locale::Fr),
             display_name: "Avery Parker".into(),
             desktop_import_dismissed: false,
             desktop_import_pending: None,
@@ -4105,4 +4110,20 @@ mod tests {
             TERMINAL_ABS_MAX_HEIGHT
         );
     }
+}
+
+/// Commit language only after the complete current preference snapshot is durable.
+/// A failed write leaves both the selected language and pending settings intact.
+pub fn set_language(preference: zuse_i18n::LanguagePreference, cx: &mut App) -> io::Result<()> {
+    let store = cx
+        .try_global::<SettingsStore>()
+        .ok_or_else(|| io::Error::other("settings are not initialized"))?;
+    let mut candidate = store.current.clone();
+    candidate.language = preference;
+    candidate.save(&store.data_dir)?;
+    let store = cx.global_mut::<SettingsStore>();
+    drop(store.save_task.take());
+    store.update_current(|settings| settings.language = preference);
+    store.mark_saved(store.revision);
+    Ok(())
 }

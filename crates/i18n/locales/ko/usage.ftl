@@ -1,0 +1,180 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+usage-usage_limits_submenu_reset_unavailable = 재설정 불가
+
+usage-usage_limits_submenu_loading_usage = 사용량 로드 중…
+
+usage-usage_limits_submenu_updated = 업데이트됨{ " " }
+
+usage-usage_limits_submenu_session = 세션
+
+usage-usage_limits_submenu_live = 라이브
+
+usage-usage_limits_submenu_cached = 캐시된
+
+usage-usage_limits_submenu_full_usage = 전체 사용량
+
+usage-usage_dashboard_usage = 사용법
+
+usage-usage_dashboard_usage_scope = 사용범위
+
+usage-usage_dashboard_all_projects = 모든 프로젝트
+
+usage-usage_dashboard_current = 현재
+
+usage-usage_dashboard_usage_period = 이용기간
+
+usage-usage_dashboard_refresh_usage = 사용량 새로고침
+
+usage-usage_dashboard_loading_usage = 로딩 사용량
+
+usage-usage_dashboard_loading_usage_2 = 사용량 로드 중…
+
+usage-usage_dashboard_updating = 업데이트 중…
+
+usage-usage_dashboard_plan_limits = 계획 한도
+
+usage-usage_dashboard_live_provider_allowance = 라이브 제공자 수당
+
+usage-usage_dashboard_credits = 크레딧
+
+usage-usage_dashboard_daily_usage = 일일 사용량
+
+usage-usage_dashboard_estimated_api_cost = 예상 API 비용
+
+usage-usage_dashboard_processed_tokens = 처리된 토큰
+
+usage-usage_dashboard_estimated_from_local_usage_at_published_provider_rates_actual_billing = 공시된 공급자 요율로 현지 사용량을 기준으로 추정됩니다. 실제 청구는 다를 수 있습니다.
+
+usage-usage_dashboard_cost_by_source = 소스별 비용
+
+usage-usage_dashboard_tokens_by_source = 소스별 토큰
+
+usage-usage_dashboard_active = { " " }활성
+
+usage-usage_dashboard_source = 출처
+
+usage-usage_dashboard_sources = 출처
+
+usage-usage_dashboard_no_usage_in_this_period = 이 기간에는 사용하지 않습니다.
+
+usage-usage_dashboard_view_day = 요일보기
+
+usage-usage_dashboard_hover_the_chart_for_a_daily_breakdown = 일일 분석을 보려면 차트에 마우스를 올리세요.
+
+usage-usage_dashboard_breakdown = 고장
+
+usage-usage_dashboard_provider = 공급자
+
+usage-usage_dashboard_model = 모델
+
+usage-usage_dashboard_project = 프로젝트
+
+usage-usage_dashboard_share = 공유
+
+usage-usage_dashboard_tokens = 토큰
+
+usage-usage_dashboard_cost = 비용
+
+usage-usage_dashboard_no_contributors_found = 기여자를 찾을 수 없습니다.
+
+usage-usage_dashboard_show_less = 간략히 보기
+
+usage-usage_dashboard_search_sessions = 세션 검색
+
+usage-usage_dashboard_filter_sessions_by_provider = 제공업체별로 세션 필터링
+
+usage-usage_dashboard_all_providers = 모든 제공업체
+
+usage-usage_dashboard_could_not_load_sessions_change_a_filter_or_try_again = 세션을 로드할 수 없습니다. 필터를 변경하거나 다시 시도하세요.
+
+usage-usage_dashboard_session = 세션
+
+usage-usage_dashboard_last_active = 마지막 활동
+
+usage-usage_dashboard_loading_sessions = 세션 로드 중…
+
+usage-usage_dashboard_previous_page = 이전 페이지
+
+usage-usage_dashboard_next_page = 다음 페이지
+
+usage-usage_limits_submenu_left_2 = { $left }% 남음
+
+usage-usage_limits_submenu_resets_in = { $reset }에서 재설정
+
+usage-usage_dashboard_input = 입력
+
+usage-usage_dashboard_output = 출력
+
+usage-usage_dashboard_cache = 캐시
+
+usage-usage_dashboard_reasoning = 추론
+
+usage-usage_dashboard_cache_reads = 캐시 읽기
+
+usage-usage_dashboard_active_sessions = 활성 세션
+
+usage-usage_dashboard_updated = 업데이트된{ " " }{ $value1 }
+
+usage-usage_dashboard_left = { $left }% 남음
+
+usage-usage_dashboard_estimated_cost = 예상 비용
+
+usage-usage_dashboard_locally_observed_usage_records_in_this_period = { $value1 }는 이 기간 동안 현지에서 관찰된 사용 기록입니다.
+
+usage-usage_pace_in_reserve = +{ $rounded }% 예비
+
+usage-usage_pace_over_pace = { $rounded }% 속도 초과
+
+usage-usage_dashboard_showing_saved_usage_refresh_failed_sentence = 저장된 사용량을 표시합니다. 새로 고침 실패:{ " " }{ $error }
+
+usage-usage_dashboard_sources_detected_sentence = { $value }{ " " }소스가 감지되었습니다.
+
+usage-usage_dashboard_clear_sentence = { $value }{ " " }· 클리어
+
+usage-usage_dashboard_sessions_in_this_period_sentence = 이 기간의 <part0>세션</part0><part1>{ $value }</part1>
+
+usage-usage_limits_submenu_used_left_total_sentence = <part0>{ $value }{ " " }중고 ·{ " " }{ $value2 }{ " " }왼쪽</part0><part1>{ $value3 }{ " " }전체</part1>
+
+usage-usage_limits_submenu_credits_remaining_sentence = <part0>남은 크레딧</part0><part1>{ $value }</part1>
+
+usage-usage_limits_submenu_just_now = 지금 막
+
+usage-usage_dashboard_no_usage_has_been_recorded_yet = 아직 기록된 사용량이 없습니다.
+
+usage-usage_dashboard_usage_limits = 사용량 한도
+
+usage-usage_dashboard_view_all = { $value1 }{ " " }모두 보기
+
+usage-usage_dashboard_page_summary = { $range }{ " " }/{ " " }{ $total }
+
+usage-usage_limits_menu_credits = { $value }{ " " }크레딧 남음
+
+usage-usage_limits_menu_stale = 새로고침에 실패했습니다. 이전 데이터를 표시하며, 최신 정보가 아닐 수 있습니다.
+
+usage-usage_limits_menu_failed = 사용 한도를 불러올 수 없습니다. 다시 새로고침해 주세요.
+
+usage-usage_limits_unavailable_account = 이 계정에서는 사용할 수 없습니다
+
+usage-usage_limits_unavailable_scope = 이 범위의 사용 한도를 확인할 수 없습니다
+
+usage-usage_limits_sign_in_kiro = 한도를 보려면 kiro-cli login으로 로그인하세요
+
+usage-usage_limits_sign_in = 한도를 보려면{ " " }{ $provider }에 로그인하세요
+
+usage-usage_limits_expired_kiro = 세션이 만료되었습니다: kiro-cli login을 실행하세요
+
+usage-usage_limits_expired = { $provider }{ " " }세션이 만료되었습니다: 다시 로그인하세요
+
+usage-usage_limits_load_failed = 한도를 불러올 수 없습니다: 다시 시도하세요
+
+usage-usage_limits_no_data = 사용량 데이터가 없습니다
+
+usage-usage_limits_cli_unavailable = { $provider }를 설치하거나 설정된 CLI 경로를 확인하세요.
+
+usage-usage_limits_upgrade_cli = 사용 한도를 확인하려면{ " " }{ $provider }를 업데이트하세요.
+
+usage-usage_limits_timeout = { $provider }가 응답하지 않았습니다. 다시 시도하세요.
+
+usage-usage_limits_invalid_response = { $provider }가 읽을 수 없는 사용량 데이터를 반환했습니다. CLI를 업데이트해 보세요.

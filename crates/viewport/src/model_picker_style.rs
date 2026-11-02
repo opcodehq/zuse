@@ -74,7 +74,9 @@ pub fn provider_heading(
                             .text_size(px(9.))
                             .line_height(px(12.15))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("CURRENT"),
+                            .child(crate::localization::element(
+                                zuse_i18n::messages::native::current,
+                            )),
                     )
                 })
                 .child(
@@ -124,7 +126,13 @@ pub fn provider_tab(
         })
         .when_some(glyph, |v, glyph| v.child(glyph.size(px(14.)).flex_none()))
         .when(!has_glyph, |v| {
-            v.child(div().font_weight(FontWeight::SEMIBOLD).child("All"))
+            v.child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(crate::localization::element(
+                        zuse_i18n::messages::providers::model_picker_all,
+                    )),
+            )
         })
         .when(live, |v| {
             v.child(

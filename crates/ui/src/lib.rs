@@ -44,6 +44,7 @@ pub(crate) mod image_media;
 pub(crate) mod image_viewer;
 pub mod links;
 pub mod loaders;
+pub mod localization;
 pub mod markdown;
 pub mod motion;
 mod new_thread_background_effects;
@@ -292,7 +293,7 @@ pub fn run_app(config: UiConfig) {
         // `open_main_window` because `Shell::new` ran `apply_keymap`
         // synchronously, so `set_menus` reads the final bindings for the ⌘-key
         // equivalents (gpui snapshots the keymap at set time).
-        cx.set_menus(app_menus::app_menus());
+        cx.set_menus(app_menus::app_menus(cx));
         cx.activate(true);
     });
 }

@@ -1,4 +1,6 @@
 //! Native PR inspection and explicit comment submission.
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 #[path = "pull_request_code.rs"]
 mod code;
 #[path = "pull_request_handoff.rs"]
@@ -1287,7 +1289,7 @@ impl PullRequestDetailPage {
             .id("pr-detail-nav")
             .debug_selector(|| "pr-detail-nav".into())
             .role(gpui::Role::TabList)
-            .aria_label("Pull request sections")
+            .aria_label(tr(cx, msg::native::pull_request_sections))
             .occlude()
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_up(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1802,7 +1804,7 @@ impl Render for PullRequestDetailPage {
             if let Some(detail) = &self.detail {
                 column = column.when(self.tab != Tab::Code, |column| {
                     column.child(
-                        summary::detail_header(self.header_facts(detail), &theme)
+                        summary::detail_header(self.header_facts(detail), &theme, cx)
                             .when(empty_activity, |el| el.flex_none()),
                     )
                 });
@@ -1843,7 +1845,7 @@ impl Render for PullRequestDetailPage {
                             .flex_col()
                             .when(detail.review_threads.is_none() && !activity.is_empty(), |thread| thread.child(
                                 div().mb(px(16.0)).text_color(theme.text_muted)
-                                    .child("Inline review threads are unavailable. Refresh or open this pull request on GitHub to read them.")));
+                                    .child(tr(cx, msg::native::inline_review_threads_are_unavailable_refresh_or_open_this_pull_request_on_githu_857cf31e))));
                         if activity.is_empty() {
                             thread = thread
                                 .pl_0()
@@ -1882,7 +1884,7 @@ impl Render for PullRequestDetailPage {
                                             .w_full()
                                             .mt(px(6.0))
                                             .text_color(theme.text_muted)
-                                            .child(if detail.review_threads.is_some() { "Comments and reviews will appear here. Start the conversation below." } else { "Inline review threads are unavailable. Refresh or open this pull request on GitHub to read them." }),
+                                            .child(if detail.review_threads.is_some() { ("Comments and reviews will appear here. Start the conversation below.").to_string() } else { crate::localization::text("native-inline_review_threads_are_unavailable_refresh_or_open_this_pull_request_on_githu_857cf31e", cx) }),
                                     ),
                             );
                         }
@@ -2026,7 +2028,7 @@ impl Render for PullRequestDetailPage {
                                                                 })
                                                                 .role(gpui::Role::Link)
                                                                 .aria_label(
-                                                                    "Open review comment on GitHub",
+                                                                    tr(cx, msg::native::open_review_comment_on_github),
                                                                 )
                                                                 .tab_index(0)
                                                                 .cursor_pointer()
@@ -2096,6 +2098,7 @@ impl Render for PullRequestDetailPage {
                                 changes: Some((None, preview.additions, preview.deletions)),
                             },
                             &theme,
+                            cx,
                         )
                         .into_any_element(),
                         None => div()

@@ -1,10 +1,12 @@
 //! Provider setup follows Zuse's expandable rows and canonical engine actions.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     settings_style as s,
     shell::{BORDER, MUTED, column, provider_icon, row},
 };
+use zuse_i18n::messages as msg;
 impl WorkspaceView {
     fn provider_account_action(
         &mut self,
@@ -424,7 +426,7 @@ impl WorkspaceView {
     pub(super) fn providers_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let refresh = row()
             .gap(px(6.))
-            .child(s::description_text("Checked").text_size(px(10.)))
+            .child(s::description_text(tr(cx, msg::native::checked)).text_size(px(10.)))
             .child(
                 crate::shell::icon_button(
                     "refresh-provider-status",
@@ -571,9 +573,9 @@ impl WorkspaceView {
                         let mut details = column().gap(px(16.)).px(px(12.)).pt(px(4.)).pb(px(16.));
                         if !installed && provider["canInstall"] != true {
                             let command = serde_json::from_value::<zuse_protocol::HarnessId>(json!(id)).ok().and_then(zuse_protocol::provider_setup::manual_command);
-                            details = details.child(s::details("Install agent", command.unwrap_or("Install this agent on the execution host, then refresh its status.")));
+                            details = details.child(s::details(tr(cx, msg::native::install_agent), command.unwrap_or("Install this agent on the execution host, then refresh its status.")));
                             if let Some(command) = command {
-                                details = details.child(s::button(("copy-install", index), "Copy command").on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(command.to_owned()))));
+                                details = details.child(s::button(("copy-install", index), tr(cx, msg::settings::snapshot_copy_command)).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(command.to_owned()))));
                             }
                         } else if !installed {
                             let install = id.clone();
@@ -581,13 +583,13 @@ impl WorkspaceView {
                                 row()
                                     .gap(px(12.))
                                     .child(s::details(
-                                        "Install agent",
+                                        tr(cx, msg::native::install_agent),
                                         format!("Install {name} on the execution host."),
                                     ))
                                     .child(
                                         s::button(
                                             ("install-provider", index),
-                                            if busy { "Installing…" } else { "Install" },
+                                            if busy { crate::localization::text("simulators-status_installing", cx) } else { crate::localization::text("providers-provider_card_install", cx) },
                                         )
                                         .when(busy, |button| button.opacity(0.5))
                                         .on_click(
@@ -635,7 +637,7 @@ impl WorkspaceView {
                         let phase=self.provider_updates.iter().find(|status|String::from(status.harness)==id).map(|status|status.phase);
                         let options_id=id.clone();
                         details=details.child(column().gap(px(8.))
-                            .child(crate::provider_options::header(("provider-options",index),options_open,phase,false)
+                            .child(crate::provider_options::header(("provider-options",index),options_open,phase,false, cx)
                                 .on_click(cx.listener(move|this,_,_,cx| {
                                     if !this.provider_options.insert(options_id.clone()){this.provider_options.remove(&options_id);}
                                     cx.notify();
@@ -644,8 +646,8 @@ impl WorkspaceView {
                         card = card.child(details);
                     }
                     card
-                });
-        column().gap(px(16.)).child(s::frame().child(s::header_with_action("Agent providers","Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.",Some(refresh.into_any_element())))
+                }).collect::<Vec<_>>();
+        column().gap(px(16.)).child(s::frame().child(s::header_with_action(crate::localization::text("settings-settings_page_agent_providers", cx),crate::localization::text("settings-settings_page_enable_the_coding_agents_you_use_verify_their_local_setup_and_control", cx),Some(refresh.into_any_element())))
             .child(s::card().when_some(self.provider_error.clone(),|card,error|card.child(div().px_3().py_2().text_size(px(11.)).text_color(rgb(0xf87171)).child(error))).children(rows).when_some(self.provider_updates_error.clone(),|card,error|card.child(s::description_text(error).px_3().py_2())))).child(self.custom_acp_settings(cx)).into_any_element()
     }
 }

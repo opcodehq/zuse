@@ -1,0 +1,330 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+providers-add_computer_dialog_your_computers = 你的电脑
+
+providers-add_computer_dialog_connect_a_computer = 连接电脑
+
+providers-add_computer_dialog_rename_reconnect_or_remove_computers_saved_on_this_device = 重命名、重新连接或移除保存在此设备上的电脑。
+
+providers-add_computer_dialog_review_this_link_then_press_connect_to_pair_with_the_other_computer = 查看此链接，然后按“连接”与另一台电脑配对。
+
+providers-add_computer_dialog_use_a_connect_link_or_your_existing_ssh_setup = 使用连接链接或现有的 SSH 设置。
+
+providers-add_computer_dialog_add_computer = 添加电脑
+
+providers-add_computer_dialog_manage = 管理
+
+providers-add_computer_dialog_saved_computers = 已保存的电脑
+
+providers-add_computer_dialog_on_your_account = 来自你的账户
+
+providers-add_computer_dialog_hide = 隐藏
+
+providers-add_computer_dialog_removing_a_computer_only_forgets_it_here_its_projects_and_data_remain = 移除电脑只是在这里不再显示它，其项目和数据不受影响。
+
+providers-add_computer_dialog_on_the_other_computer_open_settings_remote_access_connect_a_device_the = 在另一台电脑上，打开设置 → 远程访问 → 连接设备，然后复制链接。任何 Zuse 连接链接都可以在此处使用。
+
+providers-add_computer_dialog_connect_link = 连接链接
+
+providers-add_computer_dialog_zuse_connect_pair = zuse:///connect/pair?...
+
+providers-add_computer_dialog_linux_computer = Linux 电脑
+
+providers-add_computer_dialog_sign_in_to_see_the_computers_on_your_zuse_account = 登录以查看你 Zuse 账户中的电脑。
+
+providers-add_computer_dialog_computers_signed_in_to_your_zuse_account_appear_here_automatically = 登录到你 Zuse 账户的电脑会自动显示在这里。
+
+providers-add_computer_dialog_suggestions = 建议
+
+providers-add_computer_dialog_tailnet = Tailnet
+
+providers-add_computer_dialog_ssh_config = SSH 配置
+
+providers-add_computer_dialog_host = 主机
+
+providers-add_computer_dialog_server_example_com = server.example.com
+
+providers-add_computer_dialog_build_computer = 构建用电脑
+
+providers-model_picker_change_model = 切换模型
+
+providers-model_picker_change_default_model_for_new_chats = 更改新聊天的默认模型
+
+providers-model_picker_change_model_applies_to_next_message = 切换模型 — 对下一条消息生效
+
+providers-model_picker_model_provider = 模型提供商
+
+providers-model_picker_all_models = 所有模型
+
+providers-model_picker_checking_available_agents = 正在检查可用的智能体…
+
+providers-model_picker_no_models_match = 没有匹配的模型。
+
+providers-model_picker_no_authenticated_agents = 没有已登录的智能体。
+
+providers-model_picker_models = 模型
+
+providers-model_picker_all = 全部
+
+providers-model_picker_live_from_local_daemon = 来自本地守护进程的实时数据
+
+providers-model_picker_current = 当前
+
+providers-model_picker_open_in_new_tab = 在新选项卡中打开
+
+providers-model_picker_default_model = 默认模型
+
+providers-model_picker_make_default_model = 设为默认模型
+
+providers-model_picker_make_default = 设为默认
+
+providers-model_picker_selected = 已选择
+
+providers-opencode_provider_manager_providers = 提供商
+
+providers-opencode_provider_manager_refresh_providers = 刷新提供商
+
+providers-opencode_provider_manager_loading_providers = 正在加载提供商…
+
+providers-opencode_provider_manager_add_your_first_provider = 添加你的第一个提供商
+
+providers-opencode_provider_manager_add_provider = 添加提供商
+
+providers-opencode_provider_manager_custom_endpoint = 自定义端点
+
+providers-opencode_provider_manager_custom = 自定义 ·{ " " }
+
+providers-opencode_provider_manager_model = { " " }模型
+
+providers-opencode_provider_manager_remove_credential = 删除凭据
+
+providers-opencode_provider_manager_search_providers = 搜索提供商
+
+providers-opencode_provider_manager_connected = 已连接
+
+providers-opencode_provider_manager_get_an_api_key = 获取 API 密钥
+
+providers-opencode_provider_manager_api_key = API 密钥
+
+providers-opencode_provider_manager_hide_key = 隐藏密钥
+
+providers-opencode_provider_manager_reveal_key = 显示密钥
+
+providers-opencode_provider_manager_bring_any_endpoint_that_speaks_a_known_api_shape_vllm_lm_studio_groq_l = 接入任何符合已知 API 格式的端点——vLLM、LM Studio、Groq、LiteLLM、网关或代理。
+
+providers-opencode_provider_manager_name = 名称
+
+providers-opencode_provider_manager_my_gateway = 我的网关
+
+providers-opencode_provider_manager_type = 类型
+
+providers-opencode_provider_manager_base_url = Base URL
+
+providers-opencode_provider_manager_sk = sk-…
+
+providers-opencode_provider_manager_models = 模型
+
+providers-opencode_provider_manager_model_id = 模型 ID
+
+providers-opencode_provider_manager_display_name_optional = 显示名称（可选）
+
+providers-opencode_provider_manager_remove_model = 删除模型
+
+providers-opencode_provider_manager_add_model = 添加模型
+
+providers-opencode_provider_manager_add_endpoint = 添加端点
+
+providers-opencode_provider_manager_saving = 正在保存…
+
+providers-opencode_provider_manager_configure = 配置
+
+providers-opencode_provider_manager_filter_models = 筛选模型
+
+providers-opencode_provider_manager_advanced = 高级
+
+providers-opencode_provider_manager_show_in_picker = 在选择器中显示
+
+providers-provider_card_update_cli = 更新 CLI
+
+providers-provider_card_install = 安装
+
+providers-provider_card_sandboxed_with_auto_review = 沙箱运行，自动审查
+
+providers-provider_card_local_edits_and_commands_run_through_the_bundled_sdk_sandbox_calls_rej = 本地编辑和命令通过内置 SDK 沙箱运行。被自动审查拒绝的调用会直接拦截，不再弹出提示。
+
+providers-provider_card_api_key_optional = API 密钥（可选）
+
+providers-provider_card_at_least_one_model_must_stay_visible = 至少保留一个可见模型
+
+providers-provider_card_custom = 自定义
+
+providers-provider_card_enter_a_model_id = 输入模型 ID
+
+providers-provider_card_subscribe = 订阅
+
+providers-provider_card_signed_in_refreshing = 已登录。正在刷新…
+
+providers-provider_card_waiting_for_browser_sign_in = 正在等待浏览器登录…
+
+providers-provider_card_open_browser_again = 再次打开浏览器
+
+providers-provider_card_try_again = 再试一次
+
+providers-provider_card_or_run_manually = 或手动运行
+
+providers-add_computer_dialog_connected_to = 连接到{ " " }{ $connectedLabel }
+
+providers-opencode_provider_manager_remove = 删除{ " " }{ $name }
+
+providers-opencode_provider_manager_openai_compatible = OpenAI 兼容
+
+providers-opencode_provider_manager_openrouter_compatible = OpenRouter 兼容
+
+providers-opencode_provider_manager_anthropic_compatible = Anthropic 兼容
+
+providers-opencode_provider_manager_google_compatible = Google 兼容
+
+providers-opencode_provider_manager_other_npm_package = 其他 npm 包…
+
+providers-provider_card_requires_a_subscription = { $value1 }{ " " }需要{ " " }{ $plan }{ " " }订阅
+
+providers-provider_card_enable = 启用{ " " }{ $value1 }
+
+providers-provider_card_requires_subscription = 需要{ " " }{ $plan }{ " " }订阅
+
+providers-provider_card_custom_model_id = 自定义{ " " }{ $value1 }{ " " }模型 ID
+
+providers-provider_card_starting_sign_in = 正在发起{ " " }{ $label }{ " " }登录…
+
+providers-add_computer_dialog_show_hidden_computers_sentence = 显示已隐藏的电脑（{ $value }）
+
+providers-add_computer_dialog_computer_name_optional_sentence = 电脑名称 <part0>可选</part0>
+
+providers-add_computer_dialog_username_optional_sentence = 用户名 <part0>可选</part0>
+
+providers-add_computer_dialog_port_optional_sentence = 端口 <part0>可选</part0>
+
+providers-add_computer_dialog_label_optional_sentence = 标签 <part0>可选</part0>
+
+providers-add_computer_dialog_zuse_will_forget_this_computer_on_this_device_projects_and_d_sentence = Zuse 会在这台设备上移除此电脑的记录。{ $value }{ " " }上的项目和数据不会被删除。
+
+providers-opencode_provider_manager_configured_sentence = 已配置{ " " }{ $value }{ " " }个
+
+providers-opencode_provider_manager_no_providers_match_sentence = 没有与“{ $query }”匹配的提供商。
+
+providers-opencode_provider_manager_view_all_providers_sentence = 查看全部{ " " }{ $value }{ " " }个提供商
+
+providers-opencode_provider_manager_id_sentence = ID：<part0>{ $value }</part0>
+
+providers-opencode_provider_manager_models_of_shown_sentence = <part0>模型</part0><part1>已显示{ " " }{ $total }{ " " }个中的{ " " }{ $selected }{ " " }个</part1>
+
+providers-opencode_provider_manager_no_models_match_sentence = 没有与“{ $query }”匹配的模型。
+
+providers-provider_card_models_shown_sentence = <part0>模型</part0><part1>已显示{ " " }{ $value }{ " " }个</part1>
+
+providers-provider_card_custom_ids_are_passed_directly_to_sentence = 自定义 ID 直接传递到{ " " }{ $value }。
+
+providers-provider_card_requires_subscription_sentence = 需要{ " " }{ $value }{ " " }订阅
+
+providers-provider_card_sessions_will_fail_if_your_plan_doesn_apos_t_include_subscri_sentence = 如果你的套餐不包含{ " " }{ $value }，会话将会失败。请先订阅（或确认现有套餐）再使用{ " " }{ $value2 }。
+
+providers-provider_card_sign_in_to_sentence = 登录{ " " }{ $label }
+
+providers-provider_card_or_run_sentence = 或运行 <part0>${ " " }{ $manualCommand }</part0>
+
+providers-add_computer_dialog_label_for = { $value1 }{ " " }的标签
+
+providers-add_computer_dialog_edit_label_for = 编辑{ " " }{ $value1 }{ " " }的标签
+
+providers-add_computer_dialog_retry = 重试{ " " }{ $value1 }
+
+providers-add_computer_dialog_disconnect = 断开{ " " }{ $value1 }
+
+providers-add_computer_dialog_remove = 删除{ " " }{ $value1 }
+
+providers-add_computer_dialog_could_not_load_account_computers = 无法加载账户电脑：{ $accountDiscoveryError }
+
+providers-model_picker_match = { $value1 }{ " " }匹配{ $value2 }
+
+providers-model_picker_model = { $value1 }{ " " }模型{ $value2 }
+
+providers-model_picker_context_window = { $value1 }{ " " }上下文窗口
+
+providers-model_picker_credit_multiplier = { $value1 }{ " " }积分倍率
+
+providers-provider_card_remove_custom_model = 移除自定义模型{ " " }{ $modelId }
+
+providers-muse_sign_in_hint = Muse Code 管理登录。在终端中运行 <part0>muse login</part0>，或使用 <part1>muse auth set</part1> 保存 Meta API 密钥。Zuse 不会传递 META_API_KEY。
+
+providers-pi_setup_hint = Pi 管理身份验证和工具权限。在终端中运行 <part0>pi</part0>，然后使用 <part1>/login</part1> 登录。
+
+providers-pi_binary_path = Pi 可执行文件路径
+
+providers-pi_binary_placeholder = 在 PATH 中查找 pi
+
+providers-pi_binary_help = 输入可执行文件的绝对路径，或留空以搜索 PATH。
+
+providers-provider_row_configure = 配置{ " " }{ $label }
+
+providers-updating = 正在更新…
+
+providers-updated = 已更新
+
+providers-update_failed = 失败
+
+providers-cancel_update = 取消更新
+
+providers-update_to_version = 将{ " " }{ $name }{ " " }更新至 v{ $version }
+
+providers-update_to_latest = 将{ " " }{ $name }{ " " }更新至最新版本
+
+providers-sign_in_failed = 登录失败。
+
+providers-sign_in_incomplete = 登录在完成前结束了。
+
+providers-update_incomplete = 更新在完成前结束了。
+
+providers-remove_computer_account_description = 从你的账户移除{ " " }{ $value }，释放一个电脑名额。通过 Zuse 的远程访问将停止。电脑上的项目和数据会保留。
+
+providers-accounts_title = 账户
+
+providers-accounts_name = 账户名称
+
+providers-accounts_hint = 新聊天使用默认账户开始。聊天达到限额时，你可以在输入框中将其切换到其他账户。
+
+providers-accounts_default = 默认登录
+
+providers-accounts_waiting = 请在浏览器中完成登录。
+
+providers-accounts_open_browser = 打开浏览器
+
+providers-accounts_signed_in = 已登录
+
+providers-accounts_remove_description = 将此账户从设置中移除。使用此账户的聊天将无法继续。登录文件和对话记录会保留。
+
+providers-model_picker_switch_pending = 当前工作完成后切换
+
+providers-accounts_default_detail = CLI 登录或 API 密钥
+
+providers-accounts_suggested_name = 账户{ " " }{ $index }
+
+providers-accounts_actions = { $name }{ " " }操作
+
+providers-accounts_sign_in_again = 重新登录
+
+providers-accounts_rename = 重命名
+
+providers-accounts_connect = 连接其他账户
+
+providers-accounts_use_for_new_chats = 用于新聊天
+
+providers-accounts_default_badge = 默认
+
+providers-accounts_add = 添加账户
+
+providers-accounts_use = 用于新聊天
+
+providers-accounts_selected = 已选择
+
+providers-model_picker_unavailable_selection = { $model }（不可用）

@@ -1,10 +1,12 @@
 //! New-chat workspace placement uses the host's existing deferred worktree run.
 use super::*;
 use crate::creation_style as ui;
+use crate::localization::message as tr;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
 };
+use zuse_i18n::messages as msg;
 use zuse_protocol::presentation::WorkspaceMode;
 
 #[derive(Default)]
@@ -109,7 +111,7 @@ impl WorkspaceView {
         )
         .relative()
         .track_focus(&focus)
-        .aria_label("Choose workspace")
+        .aria_label(tr(cx, msg::chat::workspace_picker_choose_workspace))
         .aria_expanded(open)
         .when(open, |v| v.bg(crate::settings_style::frame_bg()))
         .child(

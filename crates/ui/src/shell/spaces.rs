@@ -9,12 +9,14 @@
 //! Child module of `shell` so it renders straight off `Shell`'s private state.
 
 use super::*;
+use crate::localization::message as tr;
 use crate::pickers::{
     breadcrumbs, browser_rows, completion_prefix_len, folder_path_key, parent_path,
     same_folder_path,
 };
 use gpui::{FocusHandle, Window};
 use std::collections::HashSet;
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     ChatIndicator, Device, DriveEntry, DriveListing, FolderListing, HomeFolderMatch,
     HomeFolderSearchResult, SearchHomeFoldersRequest, Space,
@@ -2082,7 +2084,7 @@ impl Render for SidebarViewOptionsTooltip {
             .shadow_md()
             .text_size(crate::typography::text_xs())
             .text_color(theme.text)
-            .child("View options")
+            .child(tr(cx, msg::native::view_options))
     }
 }
 
@@ -2642,7 +2644,9 @@ fn home_folders_header(theme: &Theme, status: Option<&'static str>) -> gpui::Div
         .gap(px(8.0))
         .text_size(crate::typography::text_xs())
         .text_color(theme.text_muted)
-        .child("In Home")
+        .child(crate::localization::element(
+            zuse_i18n::messages::native::in_home,
+        ))
         .when_some(status, |header, status| {
             header.child(div().opacity(0.7).child(status))
         })
@@ -4290,7 +4294,7 @@ impl Shell {
                                 .size(px(14.0))
                                 .text_color(theme.text_muted),
                         )
-                        .child("Create Section")
+                        .child(tr(cx, msg::native::create_section))
                         .into_any_element()
                 }
                 SidebarViewItem::Group(group) => {
@@ -4614,7 +4618,7 @@ impl Shell {
                     .id("spaces-filter-clear")
                     .debug_selector(|| "spaces-filter-clear".into())
                     .role(gpui::Role::Button)
-                    .aria_label("Clear project filter")
+                    .aria_label(tr(cx, msg::native::clear_project_filter))
                     .size(px(20.0))
                     .flex_none()
                     .flex()
@@ -4702,14 +4706,14 @@ impl Shell {
             .when(projects, |el| {
                 el.child(
                     sidebar_header_button("sidebar-new-project", icons::FOLDER_WITH_FILES, theme)
-                        .aria_label("New project")
+                        .aria_label(tr(cx, msg::projects::projects_sidebar_new_project))
                         .tooltip(crate::settings::widgets::text_tooltip("New project"))
                         .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
                 )
             })
             .child(
                 sidebar_header_button("sidebar-new-chat", icons::PLUS, theme)
-                    .aria_label("New chat")
+                    .aria_label(tr(cx, msg::chat::chat_view_new_chat))
                     .tooltip(crate::settings::widgets::text_tooltip(
                         ShortcutId::NewSession.label(),
                     ))
@@ -4729,7 +4733,7 @@ impl Shell {
             if active { theme.text } else { theme.text_muted },
             theme,
         )
-        .aria_label("Filter by project")
+        .aria_label(tr(cx, msg::native::filter_by_project))
         .aria_expanded(open)
         .when(active || open, |el| el.bg(theme.glass_hover()))
         .tooltip(crate::settings::widgets::text_tooltip("Filter by project"))
@@ -4771,7 +4775,7 @@ impl Shell {
         let view_trigger = div()
             .id("sidebar-view-options")
             .role(gpui::Role::Button)
-            .aria_label("View options")
+            .aria_label(tr(cx, msg::native::view_options))
             .aria_expanded(view_open)
             .track_focus(&view_focus)
             .size(px(22.0))
@@ -7099,7 +7103,7 @@ impl Shell {
         } else if let Some(message) = load_error.filter(|_| step == ProjectStep::Folders) {
             results = results.child(
                 popover::error_row(&theme, &message).p(px(16.0)).child(
-                    popover::btn_ghost(&theme, "Retry", "project-retry")
+                    popover::btn_ghost(&theme, &tr(cx, msg::chat::attempts_retry), "project-retry")
                         .id("project-retry")
                         .on_click(cx.listener(|this, _, _, cx| {
                             let path = this.add_space.as_ref().and_then(|f| f.browser_path.clone());
@@ -7142,7 +7146,7 @@ impl Shell {
                     .pb(px(8.0))
                     .text_color(theme.text_muted)
                     .text_size(crate::typography::text_xs())
-                    .child("Loading locations…"),
+                    .child(tr(cx, msg::native::loading_locations)),
             );
         }
         let results = command_palette::palette_results_fade(results, &scroll);
@@ -7596,14 +7600,14 @@ impl Shell {
                     )
                     .id("space-menu-archives")
                     .role(gpui::Role::MenuItem)
-                    .aria_label("Archived chats")
+                    .aria_label(tr(cx, msg::chat::archived_chats_page_archived_chats))
                     .tab_index(0)
                     .child(
                         icon("icons/project-archive.svg")
                             .size(px(14.))
                             .text_color(theme.text_muted),
                     )
-                    .child("Archived chats")
+                    .child(tr(cx, msg::chat::archived_chats_page_archived_chats))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_project_archives(archive_id.clone(), window, cx)
                     })),
@@ -7616,14 +7620,14 @@ impl Shell {
                     )
                     .id("space-menu-usage")
                     .role(gpui::Role::MenuItem)
-                    .aria_label("Usage")
+                    .aria_label(tr(cx, msg::usage::usage_dashboard_usage))
                     .tab_index(0)
                     .child(
                         icon("icons/analytics.svg")
                             .size(px(14.))
                             .text_color(theme.text_muted),
                     )
-                    .child("Usage")
+                    .child(tr(cx, msg::usage::usage_dashboard_usage))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.open_usage(Some(usage_id.clone()), true, cx)
                     })),
@@ -7685,12 +7689,16 @@ impl Shell {
                         .justify_end()
                         .gap(px(8.0))
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "rename-space-cancel")
-                                .id("rename-space-cancel")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.rename_space_dialog = None;
-                                    cx.notify();
-                                })),
+                            popover::btn_ghost(
+                                &theme,
+                                &tr(cx, msg::common::cancel),
+                                "rename-space-cancel",
+                            )
+                            .id("rename-space-cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.rename_space_dialog = None;
+                                cx.notify();
+                            })),
                         )
                         .child(
                             popover::btn_primary(&theme, "Rename")
@@ -7739,12 +7747,16 @@ impl Shell {
                         .justify_end()
                         .gap(px(8.0))
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "delete-space-cancel")
-                                .id("delete-space-cancel")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.delete_space_confirm = None;
-                                    cx.notify();
-                                })),
+                            popover::btn_ghost(
+                                &theme,
+                                &tr(cx, msg::common::cancel),
+                                "delete-space-cancel",
+                            )
+                            .id("delete-space-cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.delete_space_confirm = None;
+                                cx.notify();
+                            })),
                         )
                         .child(
                             popover::btn_danger(&theme, "Remove")

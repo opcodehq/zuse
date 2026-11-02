@@ -1,0 +1,1803 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+chat-question_card_multiple_choice_hint = 選擇一個或多個選項。
+
+chat-question_card_continue = 繼續
+
+chat-secret_request_placeholder = 輸入私密內容…
+
+chat-background_tasks_title = 後臺工作
+
+chat-background_process = 後臺處理程序
+
+chat-background_stop_task = 停止{ " " }{ $task }
+
+chat-background_group_running = 執行中
+
+chat-background_group_stopped = 已停止
+
+chat-background_stop_all = 全部停止
+
+chat-terminal_bottom = 底部終端機
+
+chat-terminal_resize_bottom = 調整底部終端機大小
+
+chat-terminal_close = 關閉{ " " }{ $title }
+
+chat-terminal_new_bottom = 新增底部終端機
+
+chat-terminal_limit = 上限{ " " }{ $limit }
+
+chat-terminal_hide_bottom = 隱藏底部終端機
+
+chat-terminal_catalog_unavailable = 終端機目錄不可用。
+
+chat-terminal_retry_bottom_catalog = 重試載入底部終端機目錄
+
+chat-terminal_directory_unavailable = 此目錄不可用。
+
+chat-terminal_restoring = 正在恢復終端機…
+
+chat-terminal_input_limit = 佇列的終端機輸入已達到安全上限。
+
+chat-terminal_actions = 終端機操作：{ $title }
+
+chat-terminal_controls = 終端機控制項：{ $title }
+
+chat-terminal_name = 終端機名稱
+
+chat-terminal_clear_screen_label = 清除終端機螢幕
+
+chat-terminal_clear_screen = 清屏
+
+chat-terminal_restart_process_label = 重新啟動終端機處理程序
+
+chat-terminal_restart_process = 重新啟動處理程序
+
+chat-terminal_restoring_local = 正在恢復本機終端機…
+
+chat-terminal_restoring_cloud = 正在恢復雲端終端機…
+
+chat-terminal_restoring_project = 正在恢復專案終端機…
+
+chat-plan_submit_failed = 無法提交計畫決定：{ $error }
+
+chat-plan_submitting = 正在提交計畫決定…
+
+chat-plan_feedback_or_approve = 在下方輸入回饋，或核准計畫
+
+chat-decision_submitting = 正在提交決定…
+
+chat-decision_submit_failed = 無法提交決定：{ $error }
+
+chat-question_expired = 此問題已過期。
+
+chat-question_reconnecting = 正在重新連線此問題…
+
+chat-answer_submitting = 正在提交回答…
+
+chat-answer_submit_failed = 無法提交回答
+
+chat-workspace_panels = 工作區面板
+
+chat-api_key_row_replace_key = 更換金鑰
+
+chat-api_key_row_get_an_api_key = 獲取 API 金鑰
+
+chat-api_key_row_remove_api_key = 刪除 API 金鑰？
+
+chat-api_key_row_new_sessions_will_stop_working_until_another_key_is_added_existing_ses = 在新增新金鑰之前，新工作階段將無法使用。現有工作階段會繼續執行，直至關閉。
+
+chat-api_key_row_removing = 正在移除…
+
+chat-api_key_row_remove_key = 移除金鑰
+
+chat-api_key_row_api_key = API 金鑰
+
+chat-api_key_row_paste_api_key = 貼上 API 金鑰
+
+chat-api_key_row_hide_api_key = 隱藏 API 金鑰
+
+chat-api_key_row_reveal_api_key = 顯示 API 金鑰
+
+chat-api_key_row_verifying = 正在驗證…
+
+chat-api_key_row_verify_and_save = 驗證並儲存
+
+chat-archived_chat_timeline_archived_chat_transcript = 存檔的聊天記錄
+
+chat-archived_chats_page_archived_chats = 存檔的聊天記錄
+
+chat-archived_chats_page_filter_archived_chats = 篩選已存檔聊天
+
+chat-archived_chats_page_filter_archived_chats_2 = 篩選已存檔聊天…
+
+chat-archived_chats_page_back_to_archived_chats = 返回已存檔聊天
+
+chat-archived_chats_page_archived_chat_sessions = 存檔的聊天工作階段
+
+chat-archived_chats_page_this_chat_is_archived = 此聊天已存檔。
+
+chat-archived_chats_page_force_archive = 強制存檔
+
+chat-archived_chats_page_unarchiving = 正在取消存檔…
+
+chat-archived_chats_page_unarchive = 取消存檔
+
+chat-assistant_message_actions_copy_message = 複製訊息
+
+chat-blurred_email_click_to_hide = 點選隱藏
+
+chat-blurred_email_click_to_reveal = 點選顯示
+
+chat-blurred_email_hide_email = 隱藏電子郵件
+
+chat-blurred_email_reveal_email = 顯示電子郵件
+
+chat-browser_pane_search_or_enter_url = 搜尋或輸入 URL
+
+chat-browser_pane_browser_viewport = 瀏覽器檢視區
+
+chat-browser_pane_fill = 填充
+
+chat-browser_pane_phone = 手機
+
+chat-browser_pane_tablet = 平板電腦
+
+chat-browser_pane_laptop = 膝上型電腦
+
+chat-browser_pane_desktop = 桌面
+
+chat-browser_pane_custom = 自訂
+
+chat-browser_pane_viewport_width = 檢視區寬度
+
+chat-browser_pane_viewport_height = 檢視區高度
+
+chat-browser_pane_lock_viewport_aspect_ratio = 鎖定檢視區縱橫比
+
+chat-browser_pane_ratio = 比率
+
+chat-browser_pane_rotate_browser_viewport = 旋轉瀏覽器檢視區
+
+chat-browser_pane_recording = 錄製中
+
+chat-browser_pane_saved = 已儲存
+
+chat-browser_pane_password_autofill = 密碼自動填充
+
+chat-browser_pane_password_field_detected = 檢測到密碼欄位
+
+chat-browser_pane_filling = 正在填充…
+
+chat-browser_pane_fill_saved_login = 填寫已儲存的登入資訊
+
+chat-browser_pane_browser_session_access = 瀏覽器工作階段存取
+
+chat-browser_pane_the_grant_stays_in_memory_and_applies_only_to_this_task_and_domain = 該授權僅保留在記憶體中，且只作用於本次工作和該網域。
+
+chat-browser_pane_deny = 拒絕
+
+chat-browser_pane_allow_for_task = 此工作內允許
+
+chat-browser_pane_resize_browser_viewport = 調整瀏覽器檢視區大小
+
+chat-browser_pane_dev_servers_on_this_environment = 此環境中的開發伺服器
+
+chat-browser_pane_local_servers = 本機伺服器
+
+chat-browser_pane_no_dev_servers_detected_on_this_environment = 未在此環境中檢測到開發伺服器。
+
+chat-browser_pane_connecting = 正在連線…
+
+chat-browser_pane_this_server_only_listens_on_127_0_0_1_restart_it_with_host_0_0_0_0_to = 此伺服器僅監聽 127.0.0.1——請使用 --host 0.0.0.0 重新啟動，以共用公開連結。
+
+chat-browser_pane_copy_public_link_anyone_with_the_link_can_access_it = 複製公開連結——任何獲得連結的人都可以存取。
+
+chat-browser_pane_cancel_annotation = 取消標註
+
+chat-browser_pane_region = 區域
+
+chat-browser_pane_annotation_details = 標註詳細資料
+
+chat-browser_pane_describe_the_change = 描述此次變更…
+
+chat-browser_pane_attaching = 附加
+
+chat-browser_pane_attach = 附加
+
+chat-changes_review_select_a_ready_workspace_to_review_changes = 選擇一個就緒的工作區來檢閱變更。
+
+chat-changes_review_expand_diff = 展開差異
+
+chat-changes_review_collapse_diff = 摺疊差異
+
+chat-changes_review_mark_unviewed = 標記為未檢視
+
+chat-changes_review_mark_viewed_and_collapse = 標記已檢視並摺疊
+
+chat-changes_review_save_edit_s = 儲存編輯 (⌘S)
+
+chat-changes_review_save = { " " }儲存
+
+chat-changes_review_preparing_review = 正在準備檢閱
+
+chat-changes_review_review_changes = 檢閱變更
+
+chat-changes_review_working_tree = 工作樹
+
+chat-changes_review_use_unified_view = 使用統一檢視
+
+chat-changes_review_use_split_view = 使用分欄檢視
+
+chat-changes_review_expand_all_files = 展開所有檔案
+
+chat-changes_review_collapse_all_files = 摺疊所有檔案
+
+chat-changes_review_copy_all_patches = 複製所有修補檔
+
+chat-changes_review_no_branch_changes_to_review = 沒有需要檢閱的分支變更。
+
+chat-changes_review_back_to_review = 返回檢閱
+
+chat-changes_review_saving_resolution = 正在儲存解決方案…
+
+chat-changes_review_loading_conflict = 正在載入衝突
+
+chat-changes_review_keep_current = 保留目前版本
+
+chat-changes_review_keep_incoming = 保留傳入版本
+
+chat-changes_review_keep_both = 兩者都保留
+
+chat-changes_review_file_actions = 檔案操作
+
+chat-changes_review_return_to_diff = 返回差異
+
+chat-changes_review_edit_file = 編輯檔案
+
+chat-changes_review_discard_uncommitted_changes = 捨棄未提交的變更
+
+chat-changes_review_restore_to_comparison_base = 恢復到比較基準
+
+chat-changes_review_display_settings = 顯示設定
+
+chat-changes_review_line_numbers = 行號
+
+chat-changes_review_word_wrap = 自動換行
+
+chat-changes_review_indicators = 標記
+
+chat-chat_composer_editing_queued_message = 編輯佇列訊息
+
+chat-chat_composer_drop_files_to_attach = 拖放要附加的檔案
+
+chat-chat_composer_attach_files = 附加檔案
+
+chat-chat_composer_add_menu = 新增
+
+chat-chat_composer_plan_mode = 計畫模式
+
+chat-chat_composer_attach_files_paste_drop_also_work = 附加檔案（也可貼上/拖放）
+
+chat-chat_composer_request_changes_to_plan = 請求更改計畫
+
+chat-chat_composer_request_changes = 請求更改
+
+chat-chat_composer_add_message_to_queue = 將訊息新增到佇列
+
+chat-chat_composer_queue = 佇列
+
+chat-chat_composer_stopping_current_turn = 正在停止目前輪次
+
+chat-chat_composer_stop_current_turn = 停止目前輪次
+
+chat-chat_composer_stopping = 停止…
+
+chat-chat_composer_uploading_image = 上傳圖片
+
+chat-chat_composer_send = 傳送
+
+chat-chat_composer_uploading_image_2 = 正在上傳圖片…
+
+chat-chat_composer_send_enter = 傳送（Enter）
+
+chat-chat_composer_cursor_uses_fixed_sandbox_access = Cursor 使用固定沙箱存取
+
+chat-chat_composer_agent_access = 代理程式存取
+
+chat-chat_composer_sandboxed = 沙箱
+
+chat-chat_composer_checking_access = 正在檢查存取權限…
+
+chat-chat_composer_updating = 正在更新…
+
+chat-chat_composer_disable_fast_mode = 停用快速模式
+
+chat-chat_composer_enable_fast_mode = 啟用快速模式
+
+chat-chat_composer_fast = 快速
+
+chat-chat_composer_disable_claude_fast_mode = 停用 Claude 快速模式
+
+chat-chat_composer_enable_claude_fast_mode = 啟用 Claude 快速模式
+
+chat-chat_composer_1_5_speed = 1.5× 速度
+
+chat-chat_composer_more_usage = 更多用量
+
+chat-chat_composer_exit_plan_mode = 退出計畫模式
+
+chat-chat_composer_enter_plan_mode = 進入計畫模式
+
+chat-chat_composer_plan = 計畫
+
+chat-chat_composer_tab = ⇧Tab
+
+chat-chat_composer_send_next_message_as_goal = 傳送下一條訊息作為目標
+
+chat-chat_composer_set_goal = 設定目標
+
+chat-chat_composer_goal = 目標
+
+chat-goal_status_active = 目標進行中
+
+chat-goal_status_paused = 目標已暫停
+
+chat-goal_status_budget_limited = 已達到目標預算
+
+chat-goal_status_usage_limited = 目標用量受限
+
+chat-goal_status_blocked = 目標受阻
+
+chat-goal_status_complete = 目標已完成
+
+chat-chat_composer_next_send_sets_a_goal = 下次傳送將設定目標
+
+chat-chat_composer_pause_goal = 暫停目標
+
+chat-chat_composer_resume_goal = 恢復目標
+
+chat-chat_composer_edit_goal = 編輯目標
+
+chat-chat_composer_delete_goal = 刪除目標
+
+chat-chat_composer_plan_mode_active = 計畫模式已開啟
+
+chat-chat_composer_edit_goal_2 = 編輯目標
+
+chat-chat_composer_changing_the_objective_replaces_the_codex_goal_and_resets_goal_usage = 更改目標會替換 Codex 目標並重設目標使用情況。
+
+chat-chat_composer_goal_objective = 目標內容
+
+chat-chat_composer_token_budget = token 預算
+
+chat-chat_composer_save_goal = 儲存目標
+
+chat-chat_composer_advanced = 高階
+
+chat-chat_composer_context_and_usage_status = 上下文與用量狀態
+
+chat-chat_composer_available = 可用
+
+chat-chat_composer_usage_appears_after_the_first_response = 首次回應後顯示用量
+
+chat-chat_composer_reset = 重設
+
+chat-chat_composer_unknown = 未知
+
+chat-chat_landing_is_unavailable = 不可用。
+
+chat-chat_landing_are_unavailable = 不可用。
+
+chat-chat_landing_zuse_will_keep_trying = Zuse 會繼續重試。
+
+chat-chat_landing_retrying = 正在重試…
+
+chat-chat_landing_cloud_auth_check_failed = 無法檢查雲端代理程式登入狀態。
+
+chat-chat_landing_cloud_auth_check_failed_hint = Zuse 確認前，傳送已暫停。
+
+chat-chat_landing_cloud_auth_no_agents = 沒有為雲工作區連線任何代理程式。
+
+chat-chat_landing_cloud_auth_no_agents_hint = 連線一個代理程式即可傳送此聊天。
+
+chat-chat_landing_cloud_auth_connect_agent = 連線代理程式
+
+chat-chat_landing_clone_it_there_before_starting_this_chat = 開始此聊天前，請先在那裡克隆它。
+
+chat-chat_landing_clone_project = 克隆專案
+
+chat-chat_landing_dismiss_error = 關閉錯誤
+
+chat-chat_landing_clear_create_from_source = 清除建立來源
+
+chat-chat_landing_import_an_existing_chat = 匯入現有聊天
+
+chat-chat_landing_import_chat = 匯入聊天
+
+chat-chat_landing_recent_provider_chats = 各提供商的最近聊天
+
+chat-chat_landing_search_chats = 搜尋聊天…
+
+chat-chat_landing_search_imported_chats = 搜尋匯入的聊天記錄
+
+chat-chat_landing_finding_chats = 正在查詢聊天…
+
+chat-chat_landing_couldn_t_load_chats_close_and_reopen_this_menu_to_retry = 無法載入聊天。請關閉並重新開啟此選單重試。
+
+chat-chat_landing_no_recent_chats_found = 沒有找到最近的聊天記錄。
+
+chat-chat_landing_waiting_for_sandbox = 等待沙箱
+
+chat-chat_landing_queued = 佇列中
+
+chat-chat_landing_pick_a_project = 選擇一個專案
+
+chat-chat_landing_search_projects = 搜尋專案…
+
+chat-chat_landing_search_projects_2 = 搜尋專案
+
+chat-chat_landing_no_projects_yet = 還沒有專案。
+
+chat-chat_landing_add_new_project = 新增新專案
+
+chat-chat_switcher_current = 目前
+
+chat-chat_switcher_quick_open = 快速開啟
+
+chat-chat_switcher_search_chats_or_run_a_command = 搜尋聊天或執行命令…
+
+chat-chat_switcher_no_results_found_try_another_chat_project_or_command_name = 沒有找到結果。嘗試其他聊天、專案或命令名稱。
+
+chat-chat_turn_navigator_navigate_conversation = 導航對話
+
+chat-chat_turn_navigator_conversation_turns = 對話輪次
+
+chat-chat_view_type_a_message_below_to_get_started = 在下面輸入一條訊息即可開始。
+
+chat-chat_view_response_is_streaming_out_of_view = 回覆正在串流輸出，已超出可視區域。
+
+chat-cli_upgrade_banner_you_have = 您正在使用
+
+chat-cli_upgrade_banner_sending_in_this_session_will_fail_until_you_upgrade_start_a_new_sessio = { " " }升級前此工作階段無法傳送訊息；可先用其他提供商新增工作階段繼續工作。
+
+chat-cli_upgrade_banner_dismiss_upgrade_banner = 關閉升級橫幅
+
+chat-cli_upgrade_banner_hide = 隱藏
+
+chat-cli_upgrade_banner_copied = { " " }已複製
+
+chat-cli_upgrade_banner_copy = { " " }複製
+
+chat-cli_upgrade_banner_upgrade_guide = 升級指南
+
+chat-cli_upgrade_banner_recheck = 重新檢查
+
+chat-annotation_tray_annotations = 標註
+
+chat-annotation_tray_clear_all_annotations = 清除所有標註
+
+chat-annotation_tray_open_annotation = 開啟標註
+
+chat-annotation_tray_save_annotation = 儲存標註
+
+chat-annotation_tray_edit_annotation = 編輯標註
+
+chat-annotation_tray_remove_annotation = 刪除標註
+
+chat-computer_picker_run_on_computer = 在電腦上執行
+
+chat-computer_picker_cloud_sandbox = 雲端
+
+chat-computer_picker_beta = Beta
+
+chat-computer_picker_add_computer = 新增電腦…
+
+chat-context_tray_add_context = 新增上下文
+
+chat-context_tray_transcript = 對話記錄
+
+chat-context_tray_plan = 計畫
+
+chat-create_from_menu_create_from_an_existing_pr_branch_or_issue_tracker_ticket = 從現有 PR、分支或問題工單建立
+
+chat-create_from_menu_create_from = 建立自…
+
+chat-create_from_menu_search_by_name = 按名稱搜尋
+
+chat-create_from_menu_search_by_title_number_or_author = 按標題、編號或作者搜尋
+
+chat-create_from_menu_no_other_branches = 沒有其他分支。
+
+chat-create_from_menu_in_use = 使用中
+
+chat-create_from_menu_select = 選擇 ↵
+
+chat-plan_approval_tray_review_plan = 檢閱計畫
+
+chat-plan_approval_tray_open_a_new_session_in_build_mode_with_this_plan_attached = 在建置模式下開啟一個新工作階段並附加此計畫
+
+chat-plan_approval_tray_hand_off = 移交 →
+
+chat-plan_approval_tray_abandon = 捨棄
+
+chat-plan_approval_tray_approve = 核准
+
+chat-queue_chip_drag_queued_message = 拖動佇列訊息
+
+chat-queue_chip_steer_to_queued_message = 轉向佇列的訊息
+
+chat-queue_chip_send_queued_message_now = 立即傳送此佇列訊息
+
+chat-queue_chip_starting = 開始…
+
+chat-queue_chip_steer = 轉向
+
+chat-queue_chip_send_now = 立即傳送
+
+chat-queue_chip_steer_the_agent_to_this_message_next = 下一條優先處理此訊息
+
+chat-queue_chip_send_this_message_now = 立即傳送此訊息
+
+chat-queue_chip_edit_queued_message = 編輯佇列訊息
+
+chat-queue_chip_remove_queued_message = 移除佇列訊息
+
+chat-queue_chip_more_queue_actions = 更多佇列操作
+
+chat-queue_chip_move_up = 向上移動
+
+chat-queue_chip_move_down = 向下移動
+
+chat-queue_tray_waiting_for_sandbox = 等待沙箱
+
+chat-queue_tray_queued = 佇列
+
+chat-queue_tray_waiting_for_connection = 等待連線
+
+chat-queue_tray_queue_paused = 佇列已暫停
+
+chat-queue_tray_queue_held_because_the_last_turn_failed = 上一輪失敗，佇列已暫停
+
+chat-queue_tray_resume_queued_messages = 恢復佇列中的訊息
+
+chat-queue_tray_resume = 繼續
+
+chat-workspace_picker_choose_workspace = 選擇工作區
+
+chat-workspace_picker_workspace = 工作區
+
+chat-computer_switcher_add_computer = 新增電腦
+
+chat-computer_switcher_switch_computer = 切換電腦
+
+chat-computer_switcher_local_workspace = 本機工作區
+
+chat-computer_switcher_online = 線上
+
+chat-computer_switcher_computers = 電腦
+
+chat-computer_switcher_current = 目前
+
+chat-computer_switcher_no_served_computers_are_linked_to_this_account_yet = 此帳戶尚未關聯執行 serve 的電腦。
+
+chat-directory_unavailable_banner_this_directory_is_unavailable = 該目錄不可用。
+
+chat-directory_unavailable_banner_this_directory_has_been_deleted_and_it_s_inaccessible = 該目錄已被刪除並且無法存取。
+
+chat-environment_path_browser_parent_folder = 父資料夾
+
+chat-environment_path_browser_developer = ~/Developer
+
+chat-environment_path_browser_go = 前往
+
+chat-environment_path_browser_choose = 選擇…
+
+chat-environment_path_browser_go_to_parent_folder = 轉到父資料夾
+
+chat-environment_path_browser_folder_contents = 資料夾內容
+
+chat-environment_path_browser_this_folder_is_empty = 此資料夾為空
+
+chat-environment_path_browser_loading_folder = 正在載入資料夾…
+
+chat-environment_path_browser_enter_a_folder_path = 輸入資料夾路徑
+
+chat-environment_summary_environment_summary = 環境總結
+
+chat-environment_summary_running_on = 執行於
+
+chat-environment_summary_connected_devices = 連線裝置
+
+chat-environment_summary_create_pr = 建立 PR
+
+chat-environment_summary_github_actions = GitHub Actions
+
+chat-environment_summary_merge_conflicts = 合併衝突
+
+chat-environment_summary_branch_changes = 分支更改
+
+chat-environment_summary_plan = 計畫
+
+chat-environment_summary_stack = 堆疊
+
+chat-environment_summary_manage_stack = 管理堆疊
+
+chat-environment_summary_stack_count = { $count }{ " " }個 PR
+
+chat-environment_summary_stack_count_one = { $count }{ " " }個 PR
+
+chat-environment_summary_stack_count_other = { $count }{ " " }個 PR
+
+chat-environment_summary_loading_checks = 正在載入檢查…
+
+chat-environment_summary_check_details_unavailable = 檢查詳細資料不可用。
+
+chat-environment_summary_no_check_details_available = 暫無檢查詳細資料。
+
+chat-fork_menu_fork_in_this_chat = 在此聊天中分叉
+
+chat-fork_menu_open_a_new_session_tab_that_shares_this_chat_and_its_current_worktree = 開啟一個共用此聊天及其目前工作樹的新工作階段索引標籤。
+
+chat-fork_menu_fork_into_a_new_worktree = 分叉到新工作樹
+
+chat-fork_menu_create_a_separate_chat_in_an_isolated_git_worktree_for_parallel_work = 在隔離的 Git 工作樹中建立獨立聊天，用於並行工作。
+
+chat-claude_icon_claude = Claude
+
+chat-codex_icon_codex = Codex
+
+chat-gemini_icon_gemini = Gemini
+
+chat-grok_icon_grok = Grok
+
+chat-kiro_icon_kiro = Kiro
+
+chat-inline_diff_no_textual_change = （無文字變更）
+
+chat-inline_diff_add = 新增
+
+chat-inline_diff_update = 更新
+
+chat-jump_to_latest_pill_jump_to_latest = 前往最新
+
+chat-markdown_body_copy_link = 複製連結
+
+chat-markdown_body_open_link = 開啟連結
+
+chat-markdown_body_zoom_out = 縮小
+
+chat-markdown_body_zoom_in = 放大
+
+chat-markdown_body_reset_view = 重設檢視
+
+chat-markdown_body_mermaid_diagram = Mermaid 圖
+
+chat-markdown_body_expanded_mermaid_diagram_viewer = Mermaid 圖檢視器
+
+chat-markdown_body_rendering_diagram = 正在渲染圖表…
+
+chat-markdown_body_open_diagram_viewer = 開啟圖表檢視器
+
+chat-message_row_interrupted_by_user = 被使用者中斷
+
+chat-message_row_compacting = 正在壓縮…
+
+chat-message_row_chat_compacted = 聊天已壓縮
+
+chat-message_row_open_the_sender_s_chat = 開啟傳送者的聊天
+
+chat-message_row_sender_chat_not_loaded = 傳送者的聊天未載入
+
+chat-message_row_browser_annotation = 瀏覽器標註
+
+chat-message_row_open_annotation = 開啟標註
+
+chat-message_row_sent_as_goal = 作為目標傳送
+
+chat-message_row_error = 錯誤
+
+chat-message_row_dismiss = 關閉
+
+chat-message_row_waiting_for_browser_sign_in = 正在等待瀏覽器登入…
+
+chat-message_row_open_browser_again = 再次開啟瀏覽器
+
+chat-message_row_signed_in_finishing = 已登入。正在完成…
+
+chat-message_row_create_replacement_chat = 建立替換聊天
+
+chat-message_row_open_cloud_authentication = 開啟雲端身分驗證
+
+chat-message_row_gemini_cli_needs_an_upgrade = Gemini CLI 需要升級
+
+chat-message_row_your_installed_gemini_cli_does_not_support_acp_mode_yet_so_zuse_zuse_b = 您安裝的 Gemini CLI 尚不支援 ACP 模式，請先更新 CLI，否則 Zuse（測試版）無法啟動 Gemini 工作階段。
+
+chat-message_row_copy_upgrade_command = 複製升級命令
+
+chat-message_row_update_provider_to_use_model = 更新{ " " }{ $label }{ " " }以使用{ " " }{ $model }
+
+chat-message_row_installed_provider_does_not_support_model = 您安裝的{ " " }{ $label }{ " " }尚不支援此模型。
+
+chat-message_row_update_provider = 更新{ " " }{ $label }
+
+chat-message_row_retry_provider_update = 重試更新
+
+chat-message_row_limit_reached = 已達限額
+
+chat-message_row_limit_resets = { $time }{ " " }後重設
+
+chat-message_row_weekly_limit = 每週限額
+
+chat-message_row_monthly_limit = 每月限額
+
+chat-message_row_daily_limit = 每日限額
+
+chat-message_row_try_again_later = 請稍後重試
+
+chat-message_row_sign_in_to_provider = 登入{ " " }{ $label }
+
+chat-message_row_sign_in_required = 需要登入
+
+chat-message_row_connection_lost = 連線已斷開
+
+chat-message_row_dismiss_error = 關閉錯誤
+
+chat-message_row_reconnecting = 正在重新連線
+
+chat-message_row_provider_error = 提供商錯誤
+
+chat-message_row_open_provider_settings = 開啟提供商設定
+
+chat-nearby_pairing_approval_is_this_you_trying_to_connect = 這是您在嘗試連線嗎？
+
+chat-nearby_pairing_approval_confirm_these_words_match_the_ones_shown_on_your_phone = 請確認這些文字與您手機上顯示的一致。
+
+chat-nearby_pairing_approval_block_device = 封鎖裝置
+
+chat-nearby_pairing_approval_not_now = 暫不
+
+chat-nearby_pairing_approval_allowing = 允許…
+
+chat-nearby_pairing_approval_allow = 允許
+
+chat-next_unread_button_jump_to_the_next_chat_with_unread_activity = 前往下一個有未讀活動的聊天
+
+chat-next_unread_button_next = 下一個
+
+chat-permission_card_approval_expired_after_agent_restart = 代理程式重新啟動後核准已過期
+
+chat-permission_card_the_agent_restarted_while_waiting_for_this_approval_it_cannot_consume = 代理程式在等待此核准期間重新啟動，無法使用舊回應。請關閉此請求併傳送訊息以繼續。
+
+chat-permission_card_esc = Esc
+
+chat-permission_card_dismiss = 關閉
+
+chat-permission_card_deny = 拒絕
+
+chat-permission_card_allow_for_session = 本次工作階段內允許
+
+chat-permission_card_always_allow = 始終允許
+
+chat-permission_card_enter = ⌘+Enter
+
+chat-permission_card_allow_once = 允許一次
+
+chat-permissions_inspector_no_saved_permission_decisions_for_this_project_yet_they_appear_here_wh = 此專案尚未儲存權限決定。當您在權限提示中選擇「本次工作階段內允許」或「在此專案中始終允許」後，會顯示在這裡。
+
+chat-permissions_inspector_always_allowed_in_this_project = 在此專案中始終允許
+
+chat-permissions_inspector_allowed_for_past_sessions = { " " }過往工作階段中允許（
+
+chat-permissions_inspector_recent_activity = { " " }近期活動（
+
+chat-permissions_inspector_revoke = 撤銷
+
+chat-permissions_inspector_revoke_this_decision = 撤銷本決定
+
+chat-provider_updates_toast_dismiss_provider_update_toast = 關閉提供商更新 toast
+
+chat-provider_updates_toast_title = 有可用的代理程式更新
+
+chat-provider_updates_toast_update_all = 全部更新
+
+chat-provider_updates_toast_update = 更新
+
+chat-provider_updates_toast_hint = 新模型通常需要最新版本。
+
+chat-question_card_dismiss = 關閉
+
+chat-question_card_previous_question = 上一個問題
+
+chat-question_card_next_question = 下一個問題
+
+chat-question_card_submit_answer = 提交答案
+
+chat-rename_dialog_rename = 重新命名
+
+chat-review_annotation_chat_session_required = 需要聊天工作階段
+
+chat-review_annotation_post_a_review_comment = 發表檢閱評論…
+
+chat-review_annotation_add_an_annotation_for_ai = 新增 AI 標註…
+
+chat-review_annotation_annotation_destination = 標註傳送目標
+
+chat-review_annotation_ai = AI
+
+chat-review_annotation_github = GitHub
+
+chat-review_annotation_cancel_annotation = 取消標註
+
+chat-review_annotation_cancel_annotation_esc = 取消標註（Esc）
+
+chat-review_annotation_save_annotation = 儲存標註
+
+chat-review_annotation_save_annotation_enter = 儲存標註（Enter）
+
+chat-review_annotation_for_ai = { " " }傳送給 AI
+
+chat-review_annotation_edit_annotation = 編輯標註
+
+chat-review_annotation_delete_annotation = 刪除標註
+
+chat-right_pane_terminal_disconnected_close_it_and_open_a_new_terminal = 終端機已斷開——請關閉並新增一個終端機
+
+chat-right_pane_no_project_selected = 沒有選擇專案。
+
+chat-right_pane_preparing_workspace = 正在準備工作區…
+
+chat-right_pane_integrated_browser_is_desktop_only = 整合瀏覽器僅限桌面版
+
+chat-right_pane_browser_automation_requires_electron_s_isolated_chromium_controls_link = 瀏覽器自動化需要 Electron 的獨立 Chromium 控制項。連結仍可在普通瀏覽器索引標籤中開啟。
+
+chat-right_pane_this_cloud_workspace_is_disconnected_select_this_tab_to_reconnect = 此雲工作區已斷開連線。選擇此索引標籤以重新連線。
+
+chat-right_pane_this_directory_is_unavailable = 該目錄不可用。
+
+chat-right_pane_add_panel = 新增面板
+
+chat-subagent_row_agent_running = 代理程式執行中
+
+chat-subagent_row_prompt = 提示
+
+chat-subagent_row_copy_prompt = 複製提示
+
+chat-subagents_pane_back_to_subagents = 返回子代理程式
+
+chat-subagents_pane_active = 活躍
+
+chat-subagents_pane_detached_subagents_will_appear_here = 已分離的子代理程式會顯示在這裡。
+
+chat-subagents_pane_no_active_subagents = 沒有活躍的子代理程式
+
+chat-terminal_pane_reconnecting_cloud_terminal = 正在重新連線雲終端機…
+
+chat-terminal_pane_resuming_cloud_workspace = 正在恢復雲端工作區…
+
+chat-terminal_pane_cloud_terminal_type_to_resume_the_workspace = 雲終端機。輸入即可恢復工作區。
+
+chat-terminal_pane_cloud_terminal_could_not_connect_type_here_to_try_again = 雲終端機無法連線。在此輸入即可重試。
+
+chat-terminal_pane_workspace_paused_type_here_to_resume_the_terminal = 工作區已暫停——在此輸入即可恢復終端機。
+
+chat-terminal_pane_cloud_terminal_is_unavailable = 雲終端機不可用。
+
+chat-terminal_pane_file_changes_synced_to_local = 檔案變更已同步到本機
+
+chat-terminal_pane_local_file_sync_failed = 本機檔案同步失敗
+
+chat-terminal_pane_syncing_files_to_local = 正在將檔案同步到本機…
+
+chat-top_bar_zuse_beta = Zuse（測試版）
+
+chat-top_bar_hide_projects_panel = 隱藏專案面板
+
+chat-top_bar_show_projects_panel = 顯示專案面板
+
+chat-top_bar_repository_location = 存放庫位置
+
+chat-top_bar_toggle_environment_summary = 切換環境摘要
+
+chat-top_bar_hide_files_panel = 隱藏檔案面板
+
+chat-top_bar_show_files_panel = 顯示檔案面板
+
+chat-top_bar_switch_branch = 切換分支
+
+chat-top_bar_rename_current_branch = 重新命名目前分支…
+
+chat-top_bar_search_branches = 搜尋分支
+
+chat-top_bar_local_branches = 本機分支
+
+chat-top_bar_no_local_branches = 沒有本機分支
+
+chat-top_bar_remote_branches = 遠端分支
+
+chat-top_bar_no_matching_branches = 沒有匹配的分支
+
+chat-top_bar_rename_branch = 重新命名分支
+
+chat-top_bar_rename_the_unpublished_branch_for_this_chat_workspace = 重新命名此聊天工作區的未釋出分支。
+
+chat-top_bar_branch_name = 分支名稱
+
+chat-top_bar_open_workspace_in_app = 在應用程式內開啟工作區
+
+chat-top_bar_open_in = 開啟方式…
+
+chat-top_bar_copy_path = 複製路徑
+
+chat-top_bar_run = 執行
+
+chat-top_bar_actions_unavailable = 操作不可用
+
+chat-top_bar_no_pr = 無 PR
+
+chat-top_bar_merged = 已合併
+
+chat-top_bar_fix = 修復
+
+chat-top_bar_resolve_conflicts = 解決衝突
+
+chat-top_bar_commit_push = 提交併推送
+
+chat-top_bar_push = 推送
+
+chat-top_bar_push_commits = 推送提交
+
+chat-top_bar_create_pr = 建立 PR
+
+chat-top_bar_archive = 存檔
+
+chat-top_bar_archive_chat = 存檔聊天
+
+chat-top_bar_mark_ready = 標記就緒
+
+chat-top_bar_check = { " " }檢查
+
+chat-top_bar_failing = { " " }失敗
+
+chat-top_bar_merge = 合併
+
+chat-top_bar_choose_merge_method = 選擇合併方法
+
+chat-top_bar_merge_method = 合併方法
+
+chat-top_bar_auto_merge_on = 自動合併開啟
+
+chat-top_bar_auto_merge = 自動合併
+
+chat-top_bar_capturing = 正在擷取…
+
+chat-top_bar_fix_ci_errors = 修復 CI 錯誤
+
+chat-turn_summary_tool = 次
+
+chat-turn_summary_call = 工具呼叫
+
+chat-turn_summary_calls = 工具呼叫
+
+chat-turn_summary_message = 條訊息
+
+chat-turn_summary_messages = 條訊息
+
+chat-turn_summary_show_less = 收起
+
+chat-command_palette_up_arrow = 向上箭頭
+
+chat-command_palette_down_arrow = 向下箭頭
+
+chat-command_palette_navigate = 導航
+
+chat-command_palette_enter = Enter
+
+chat-command_palette_esc = Esc
+
+chat-spinner_loading = 正在載入
+
+chat-update_banner_update_failed = 更新失敗
+
+chat-update_banner_agents_are_running = 代理程式正在執行
+
+chat-update_banner_update_available = 有可用更新
+
+chat-update_banner_dismiss_update_toast = 關閉更新 toast
+
+chat-update_banner_restart_later = 稍後重新啟動
+
+chat-update_banner_restart_when_idle = 閒置時重新啟動
+
+chat-update_banner_restart_now = 立即重新啟動
+
+chat-update_banner_restart_anyway = 仍要重新啟動
+
+chat-update_banner_dismiss = 關閉
+
+chat-update_banner_try_again = 再試一次
+
+chat-browser_pane_select = 選擇
+
+chat-browser_pane_region_2 = 區域
+
+chat-browser_pane_draw = 繪製
+
+chat-browser_pane_erase = 擦除
+
+chat-browser_pane_point = 點（{ $x },{ " " }{ $y }）
+
+chat-changes_review_additions_and_deletions = { $additions }{ " " }處新增，{ $deletions }{ " " }處刪除
+
+chat-changes_review_conflict_remaining = 剩餘{ " " }{ $remaining }{ " " }處衝突
+
+chat-changes_review_actions_for = { $path }{ " " }的操作
+
+chat-chat_composer_composer_already_has_a_draft = 您已有草稿
+
+chat-chat_composer_send_or_clear_the_current_draft_before_editing_a_queued_message = 在編輯佇列訊息之前傳送或清除目前草稿。
+
+chat-chat_composer_composer_draft_changed = 您的草稿已更改
+
+chat-chat_composer_the_queued_message_was_restored_so_your_current_draft_stays_untou = 已恢復佇列訊息，您目前的草稿保持不變。
+
+chat-chat_composer_sandboxed_with_auto_review = 沙箱執行，自動檢閱
+
+chat-chat_composer_this_provider_uses_a_fixed_local_sandbox_and_does_not_support_int = 此提供商使用固定的本機沙箱，不支援互動式權限模式。
+
+chat-chat_composer_image_upload_failed = 圖片上傳失敗
+
+chat-chat_composer_the_image_was_removed_try_attaching_it_again = 圖片已被移除，請重新附加。
+
+chat-chat_landing_could_not_reconnect = 無法重新連線
+
+chat-chat_landing_cloud_workspace_needs_attention = 雲工作區需要處理
+
+chat-chat_working_row_is_working = { $providerLabel }{ " " }正在工作
+
+chat-composer_chip_overlay_view = 檢視{ $relPath }
+
+chat-composer_chip_overlay_open = 開啟{ $relPath }
+
+chat-context_tray_nothing_to_attach = 沒有什麼可附加的
+
+chat-context_tray_attach_failed = 附加失敗
+
+chat-context_tray_added_to_the_composer = 已將{ " " }{ $relPath }{ " " }新增到輸入框。
+
+chat-context_tray_attach = 附加{ " " }{ $label }
+
+chat-create_from_menu_prs = PR
+
+chat-create_from_menu_branches = 分支
+
+chat-create_from_menu_issues = 問題
+
+chat-plan_approval_tray_nothing_to_hand_off = 沒有什麼可以交出的
+
+chat-plan_approval_tray_could_not_find_the_proposed_plan_for_this_session = 找不到此工作階段的擬定計畫。
+
+chat-plan_approval_tray_handoff_failed = 移交失敗
+
+chat-plan_approval_tray_could_not_create_the_build_session = 無法建立建置工作階段。
+
+chat-plan_approval_tray_plan_handed_off = 計畫已交接
+
+chat-workspace_picker_worktree = 工作樹
+
+chat-workspace_picker_fresh_isolated_branch = 全新隔離分支
+
+chat-workspace_picker_local = 本機
+
+chat-workspace_picker_use_the_main_checkout = 使用主檢出目錄
+
+chat-computer_switcher_offline = 離線 ·{ " " }{ $value1 }
+
+chat-environment_summary_loading_pull_request = 正在載入提取要求
+
+chat-environment_summary_pull_request_merged = 提取要求已合併
+
+chat-environment_summary_pull_request_closed = 提取要求已關閉
+
+chat-environment_summary_pull_request_open = 提取要求已開啟
+
+chat-environment_summary_no_pull_request = 無提取要求
+
+chat-fork_menu_fork_failed = 分叉失敗
+
+chat-fork_menu_the_source_session_is_no_longer_available = 源工作階段不再可用。
+
+chat-fork_menu_worktree_creation_failed = 工作樹建立失敗
+
+chat-fork_menu_could_not_branch_this_conversation = 無法為此對話建立分支。
+
+chat-fork_menu_fork_from_this_2 = 從此{ $label }分叉
+
+chat-message_row_this_cloud_chat_uses_legacy_authentication = 此雲聊天使用舊版{ " " }{ $providerLabel }{ " " }身分驗證
+
+chat-message_row_account_needs_reconnecting = { $providerLabel }{ " " }帳戶需要重新連線
+
+chat-message_row_authentication_is_unavailable = { $providerLabel }認證不可用
+
+chat-message_row_its_image_owned_credential_cannot_be_migrated_safely_reconnect_on = 映像內建的{ " " }{ $providerLabel }{ " " }憑證無法安全遷移。請重新連線一次，然後新增一個使用帳戶級身分驗證的替代雲聊天。
+
+chat-message_row_reconnect_once_in_cloud_workspace_settings_the_account_credential = 請在雲工作區設定中重新連線一次{ " " }{ $providerLabel }。帳戶憑證可供新的雲聊天共用，且絕不會固化到此沙箱中。
+
+chat-message_row_open_cloud_workspace_settings_to_restore_account_level_authentica = 開啟雲工作區設定，恢復帳戶級{ " " }{ $providerLabel }{ " " }身分驗證。雲端後設資料同步完成後，Zuse 會識別舊聊天。
+
+chat-nearby_pairing_approval_could_not_update_phone_access = 無法更新電話存取權限
+
+chat-review_annotation_send_annotation_to = 將標註傳送至{ " " }{ $label }
+
+chat-review_annotation_send_to = 傳送至{ " " }{ $label }
+
+chat-review_annotation_line = 第{ " " }{ $startLine }{ " " }行
+
+chat-review_annotation_lines = 第{ " " }{ $startLine }–{ $endLine }{ " " }行
+
+chat-right_pane_files = 檔案
+
+chat-right_pane_terminal = 終端機
+
+chat-right_pane_changes = 變化
+
+chat-right_pane_pr = PR
+
+chat-right_pane_plan = 計畫
+
+chat-right_pane_browser = 瀏覽器
+
+chat-right_pane_subagents = 子代理程式
+
+chat-right_pane_cloud_terminal = 雲終端機
+
+chat-right_pane_local_terminal = 本機終端機
+
+chat-right_pane_close = 關閉{ " " }{ $label }
+
+chat-runtime_mode_meta_supervised = 監督模式
+
+chat-runtime_mode_meta_asks_before_every_bash_file_edit_web_request_or_mcp_call_read_onl = 每次 Bash、檔案編輯、網路請求或 MCP 呼叫前都會詢問。唯讀工具（Read、Glob、Grep、LS）始終免確認。
+
+chat-runtime_mode_meta_auto_accept_edits = 自動接受編輯
+
+chat-runtime_mode_meta_auto_allows_edit_write_multiedit_notebookedit_still_asks_for_bash = 自動允許 Edit、Write、MultiEdit、NotebookEdit。Bash、WebFetch/WebSearch 及其他工具仍需確認。
+
+chat-runtime_mode_meta_auto_accept_edits_bash = 自動接受編輯 + Bash
+
+chat-runtime_mode_meta_auto_allows_edits_and_bash_commands_still_asks_for_webfetch_webse = 自動允許編輯和 Bash 命令。WebFetch/WebSearch 等工具仍需確認。
+
+chat-runtime_mode_meta_full_access = 完全存取權限
+
+chat-runtime_mode_meta_auto_allows_everything_plan_mode_and_sensitive_paths_env_ssh_cred = 自動允許所有操作。計畫模式和敏感路徑（.env、.ssh、憑證、金鑰）仍會提示。
+
+chat-subagents_pane_done = 已完成 ·{ " " }{ $length }
+
+chat-top_bar_open_pull_request_on_github = 在 GitHub 上開啟提取要求 #{ $value1 }
+
+chat-top_bar_failed = { $label }{ " " }失敗
+
+chat-top_bar_auto_merge_failed = 自動合併失敗
+
+chat-cartesian_root_chart = 圖表
+
+chat-right_pane_merge_conflicts = 合併衝突
+
+chat-changes_review_of_reviewed_sentence = 已檢閱{ " " }{ $viewedCount }/{ $value }
+
+chat-changes_review_some_changes_could_not_be_loaded_sentence = 部分變更無法載入：{ $error }
+
+chat-changes_review_resolve_sentence = 解決{ " " }{ $value }
+
+chat-permission_card_more_sentence = +{ $value }{ " " }更多
+
+chat-chat_composer_4000_tokens_sentence = <part0>{ $value }/4000</part0><part1>{ $value2 }{ " " }token ·{ " " }{ $elapsed }</part1>
+
+chat-chat_composer_context_sentence = <part0>上下文</part0><part1>{ $headerValue }</part1>
+
+chat-chat_composer_window_used_sentence = <part0>視窗占用</part0><part1>{ $value }%</part1>
+
+chat-chat_landing_this_project_isn_t_on_sentence = 該專案不在{ " " }{ $value }{ " " }上
+
+chat-chat_landing_issue_attached_sentence = 已附加問題{ " " }{ $value }
+
+chat-chat_landing_no_chats_match_sentence = 沒有與「{ $value }」匹配的聊天。
+
+chat-chat_landing_no_projects_match_sentence = 沒有與「{ $value }」匹配的專案。
+
+chat-top_bar_ahead_sentence = 領先{ " " }{ $value }
+
+chat-top_bar_open_pull_request_on_github_sentence = 在 GitHub 上開啟提取要求 #{ $value }
+
+chat-cli_upgrade_banner_update_to_keep_using_it_sentence = 更新{ " " }{ $value }{ " " }以繼續使用
+
+chat-nearby_pairing_approval_device_sentence = { $value }{ " " }· 裝置{ " " }{ $value2 }
+
+chat-fork_menu_fork_from_this_sentence = 從此{ $label }分叉
+
+chat-markdown_body_could_not_render_mermaid_diagram_sentence = 無法渲染 Mermaid 圖：{ $value }
+
+chat-turn_summary_more_sentence = +{ $value }{ " " }更多
+
+chat-archived_chats_page_archived_sentence = 已存檔{ " " }{ $value }
+
+chat-permissions_inspector_permissions_sentence = 權限 —{ " " }{ $projectName }
+
+chat-browser_pane_allow_this_task_to_use_the_signed_in_session_for_sentence = 允許此工作使用{ " " }{ $value }{ " " }的登入工作階段嗎？
+
+chat-changes_review_conflict_remaining_one = 剩餘{ " " }{ $remaining }{ " " }處衝突
+
+chat-changes_review_conflict_remaining_other = 剩餘{ " " }{ $remaining }{ " " }處衝突
+
+chat-top_bar_change_plural0_sentence = { $value }{ " " }處變更
+
+chat-top_bar_change_plural0_sentence_one = { $value }{ " " }處變更
+
+chat-top_bar_change_plural0_sentence_other = { $value }{ " " }處變更
+
+chat-archived_chats_page_worktree_cleanup_failed = 工作樹清理失敗。
+
+chat-browser_pane_use_the_saved_test_login_for = 使用為{ " " }{ $passwordFieldOrigin }{ " " }儲存的測試登入資訊。
+
+chat-browser_pane_port = 埠{ " " }{ $value1 }
+
+chat-changes_review_no_review_is_available = 暫無檢閱結果。
+
+chat-changes_review_indicators_2 = { $label }標記
+
+chat-chat_landing_computers = { $value1 }{ " " }臺電腦
+
+chat-chat_view_new_chat = 新增聊天
+
+chat-cli_upgrade_banner_an_unknown_version = 未知版本
+
+chat-context_tray_transcript_2 = { $value1 }{ " " }· 對話記錄
+
+chat-context_tray_plan_2 = { $value1 }·計畫
+
+chat-create_from_menu_no_found = 未找到{ " " }{ $value1 }。
+
+chat-computer_switcher_this_computer = 這臺電腦
+
+chat-computer_switcher_unnamed_computer = 未命名的電腦
+
+chat-avatar_avatar = { $name }頭像
+
+chat-message_row_empty = （空）
+
+chat-message_row_starting_sign_in = 開始{ " " }{ $label }{ " " }登入…
+
+chat-subagent_row_empty = （空）
+
+chat-chat_landing_issue = 問題
+
+chat-chat_landing_attached = 已附加
+
+chat-device_bridge_panel_revoke = 撤銷
+
+chat-chat_composer_goal_time_used = 目標已用時間
+
+chat-chat_landing_this_cloud_api_version_delivers_the_first_message_itself_send_the = 此雲 API 版本會自行投遞第一條訊息。工作區就緒後請重新傳送檔案。
+
+chat-chat_landing_couldn_t_send_your_first_cloud_message = 無法傳送您的第一條雲訊息
+
+chat-chat_landing_cloud_workspace_started_without_your_attachments = 雲工作區未附帶您的附件即已啟動
+
+chat-device_permission_card_shell_access_can_read_and_change_local_files_saved_approvals_apply_to_this_computer = Shell 存取可以讀取和更改本機檔案。儲存的核准適用於該電腦。
+
+chat-device_permission_card_run_command_on = 在{ " " }{ $device }{ " " }上執行命令？
+
+chat-device_bridge_panel_chat = 聊天{ " " }{ $value1 }
+
+chat-tool_row_local_computer = 本機電腦
+
+chat-message_row_could_not_load_image_click_to_retry = 無法載入圖片。點選重試。
+
+chat-message_row_retry_preview = 重試預覽
+
+chat-message_row_preparing_image = 正在準備圖片
+
+chat-device_bridge_panel_always_allow_your_cloud_chats = 始終允許 · 您的雲聊天
+
+chat-chat_landing_issueattached_sentence = 已附加問題{ " " }{ $value }
+
+chat-terminal_pane_waiting_for_changes_to_settle = 正在等待變更落定…
+
+chat-pi_permissions = Pi 權限
+
+chat-question_timed_out = 問題已逾時。
+
+chat-question_cancelled = 問題已取消。
+
+chat-computer_picker_machine_size = 機器規格
+
+chat-cloud_setup_unavailable = 不可用
+
+chat-cloud_setup_subscription_required = 需要訂閱
+
+chat-cloud_setup_connect_repository = 連線存放庫
+
+chat-cloud_setup_building_image = 正在建置雲端映像
+
+chat-cloud_setup_rebuild_authentication = 重建身分驗證
+
+chat-cloud_setup_update_image = 更新雲端映像
+
+chat-cloud_connect_repository_first = 請先在雲端設定中連線此存放庫。
+
+chat-cloud_supported_agents = 雲端目前支援 Claude 和 Codex。
+
+chat-cloud_size_small = 小型（{ $cpu }{ " " }vCPU /{ " " }{ $memory }{ " " }GB）
+
+chat-cloud_size_default = 標準型（{ $cpu }{ " " }vCPU /{ " " }{ $memory }{ " " }GB）
+
+chat-cloud_size_large = 大型（{ $cpu }{ " " }vCPU /{ " " }{ $memory }{ " " }GB）
+
+chat-device_command_permissions_title = 已儲存的命令權限
+
+chat-cloud_queue_waiting_for_agent = 等待代理程式
+
+chat-cloud_queue_cancel_failed = 無法取消佇列中的訊息。請重試。
+
+chat-cloud_queue_waiting_for_cloud = 等待雲端啟動
+
+chat-cloud_history_loading = 正在載入較早的訊息…
+
+chat-cloud_history_retry = 無法載入較早的訊息 · 重試
+
+chat-fork_menu_fork_in_new_tab = 分叉到新索引標籤
+
+chat-fork_menu_new_tab_on_this_machine = 在這臺機器上開啟一個新索引標籤，包含截至此訊息的對話。
+
+chat-fork_menu_fork_in_new_machine = 分叉到新機器
+
+chat-fork_menu_new_machine_description = 克隆這臺機器，並在單獨的聊天中繼續對話。
+
+chat-fork_menu_forking_in_new_machine = 正在分叉到新機器
+
+chat-workspace_sharing_button = 共用
+
+chat-message_row_compaction_failed = 上下文壓縮已中止
+
+chat-runtime_mode_ask_for_approval = 請求核准
+
+chat-runtime_mode_approve_for_me = 替我核准
+
+chat-runtime_mode_auto_description = 代理程式會檢閱操作，並在需要時詢問。
+
+chat-runtime_mode_change_stops_turn = 更改存取權限會停止目前輪次。下一條訊息將使用新模式。
+
+chat-runtime_mode_approval_description = 編輯檔案、執行命令和存取網路前先詢問。
+
+chat-runtime_mode_full_description = 無需核准即可執行操作。計畫模式仍然適用。
+
+chat-message_row_signed_out_of = 您已退出{ " " }{ $label }{ " " }登入。
+
+chat-provider_sign_in_tray_signed_out = 已退出{ " " }{ $label }{ " " }登入
+
+chat-provider_sign_in_tray_sign_in_to_continue = 登入以繼續此聊天。
+
+chat-chat_landing_choose_a_project_in_the_sidebar = 在側邊欄中選擇一個專案以開始新聊天。
+
+chat-chat_landing_add_a_project_to_start = 新增一個專案以開始您的第一次聊天。
+
+chat-chat_landing_add_project = 新增專案
+
+chat-chat_working_row_waiting_for_task = 正在執行{ " " }{ $task }
+
+chat-changes_review_viewed = 已檢視
+
+chat-delegation_group_count = { $count }{ " " }個子代理程式
+
+chat-delegation_group_count_one = { $count }{ " " }個子代理程式
+
+chat-delegation_group_count_other = { $count }{ " " }個子代理程式
+
+chat-delegation_group_working = { $count }{ " " }個執行中
+
+chat-delegation_group_done = { $count }{ " " }個已完成
+
+chat-delegation_group_failed = { $count }{ " " }個失敗
+
+chat-delegation_group_stopped = { $count }{ " " }個已停止
+
+chat-delegation_status_running = 執行中
+
+chat-delegation_status_done = 已完成
+
+chat-delegation_status_failed = 失敗
+
+chat-delegation_status_stopped = 已停止
+
+chat-delegation_row_starting = 正在啟動…
+
+chat-delegation_row_open = 開啟{ " " }{ $title }
+
+chat-delegation_group_running = { $total }{ " " }箇中{ " " }{ $working }{ " " }個執行中
+
+chat-message_row_ui_spec_generated = 產生的 UI
+
+chat-message_row_ui_spec_could_not_render = 無法渲染此 UI 塊 — 顯示原始 spec
+
+chat-message_row_ui_spec_submit = 提交
+
+chat-message_row_ui_spec_sent = 已傳送
+
+chat-message_row_ui_spec_yes = 是
+
+chat-message_row_ui_spec_no = 否
+
+chat-message_row_ui_spec_send_failed = 無法傳送您的回覆
+
+chat-message_row_ui_spec_send_open_chat = 開啟此聊天以傳送。
+
+chat-selection_menu_label = 選區操作
+
+chat-selection_menu_annotate = 標註
+
+chat-selection_menu_copy = 複製
+
+chat-selection_menu_copied = 已複製
+
+chat-plan_expired = 此計畫請求已過期。請傳送新訊息以繼續。
+
+chat-plan_delivery_uncertain = 無法確認計畫回覆是否已送達。開始下一輪前，請檢查對話。
+
+chat-provider_quiet = 提供商近期無活動。您可以等待或停止此輪。
+
+chat-execution_unavailable = Zuse 無法繼續跟蹤此回覆。正在檢查其狀態…
+
+chat-checkpoints_title = 檢查點
+
+chat-checkpoints_description = 將檔案和對話恢復到已儲存的輪次。代理程式將從已驗證的歷史繼續，或使用保留的記錄開始新對話。工具和原生子代理程式步驟無法單獨回滾。
+
+chat-checkpoints_empty = 暫無檢查點。代理程式開始一個輪次時會建立檢查點。
+
+chat-checkpoints_before = 輪次開始前
+
+chat-checkpoints_after = 輪次結束後
+
+chat-checkpoints_review = 檢查回滾內容
+
+chat-checkpoints_restore = 恢復檢查點
+
+chat-checkpoints_retry = 重試
+
+chat-checkpoints_back = 返回
+
+chat-checkpoints_refresh = 重新整理
+
+chat-checkpoints_confirm = 這些檔案將被恢復，之後的對話訊息將被移除。引擎的所有工作都必須處於閒置狀態。預覽後發生的外部修改將阻止回滾。
+
+chat-checkpoints_no_files = 沒有檔案變更。僅回滾對話。
+
+chat-checkpoints_resume = 繼續中斷的回滾
+
+chat-checkpoints_status_capturing = 正在儲存
+
+chat-checkpoints_status_ready = 就緒
+
+chat-checkpoints_status_error = 需要處理
+
+chat-checkpoints_status_stale = 已被替代
+
+chat-checkpoints_status_unsupported = 需要 Git 存放庫
+
+chat-merge_back_action = 將上下文合併到父對話
+
+chat-merge_back_complete = 上下文已合併
+
+chat-merge_back_next_turn = 父對話將在下一輪接收新的上下文。檔案保持不變。
+
+chat-merge_back_failed = 無法合併上下文
+
+chat-checkpoints_saving = 正在儲存檢查點
+
+chat-fork_recovery_failed = 分支需要處理
+
+chat-fork_recovery_pending = 正在準備分支…
+
+chat-fork_recovery_retry = 重試
+
+chat-fork_recovery_cancel = 取消分支
+
+chat-native_background_running = 後臺工作執行中
+
+chat-attempts_title = 嘗試記錄
+
+chat-attempts_description = 檢視每個輪次中的重試和恢復記錄。嘗試不會增加新的輪次。
+
+chat-attempts_empty = 暫無嘗試記錄。
+
+chat-attempts_turn = 輪次
+
+chat-attempts_attempt = 嘗試
+
+chat-attempts_initial = 首次執行
+
+chat-attempts_retry = 重試
+
+chat-attempts_recovery = 恢復
+
+chat-attempts_running = 執行中
+
+chat-attempts_completed = 已完成
+
+chat-attempts_interrupted = 已中斷
+
+chat-attempts_failed = 失敗
+
+chat-attempts_superseded = 已替代
+
+chat-attempts_rolled_back = 已回滾
+
+chat-attempts_more = 載入更早的嘗試
+
+chat-attempts_refresh = 重新整理
+
+chat-attempts_loading = 正在載入嘗試記錄…
+
+chat-attempts_unavailable = 此連線不可用。請重新連線以載入嘗試記錄。
+
+chat-send_blocked = 傳送其他訊息前，請回答或關閉待處理的請求。
+
+chat-attention_quiet = 暫無活動
+
+chat-attention_unavailable = 執行不可用
+
+chat-attention_disconnected = 已斷開連線
+
+chat-attention_checking = 正在檢查執行狀態
+
+chat-message_row_send_again = 重新傳送
+
+chat-message_row_model_switched = 模型已從 <from>{ $from }</from> 切換為 <to>{ $to }</to>。
+
+chat-message_row_context_handed_off = 上下文已移交。
+
+chat-message_row_context_preserved = 上下文已保留。
+
+chat-secret_request_availability = 已私密儲存為{ " " }{ $name }。重新啟動此工作階段的提供方後可用。該值不會新增到聊天中。
+
+chat-secret_request_save_failed = 無法儲存此回覆。請重試。
+
+chat-agents_summary_title = 代理程式
+
+chat-agents_summary_running = { $count }{ " " }個執行中
+
+chat-agents_summary_parent = 父級
+
+chat-agents_summary_parent_chat = 父級聊天
+
+chat-agents_summary_unavailable = 此代理程式不可用或已歸檔。
+
+chat-message_row_sent_by_sender = 由{ " " }{ $value }{ " " }傳送
+
+chat-message_row_slack_author_in_channel = { $author }，來自 #{ $channel }
+
+chat-message_row_slack_author = { $value }（透過 Slack）
+
+chat-message_row_slack_channel = 來自 #{ $value }
+
+chat-message_row_from_slack = 來自 Slack
+
+chat-switch_account_cache_warning = { $name }{ " " }沒有此聊天的提示快取，因此下一次回覆會重新讀取整個對話。速度更慢，並消耗{ " " }{ $name }{ " " }更多的額度。
+
+chat-switch_account_compact = 壓縮並切換
+
+chat-switch_account_confirm = 切換並重試
+
+chat-switch_account_to = 切換到{ " " }{ $name }
+
+chat-switch_account_more = 更多切換方式
+
+chat-switch_account_confirm_title = 切換到{ " " }{ $name }？
+
+chat-switch_account_compact_warning = { $name }{ " " }會讀取一次對話來進行總結。後續回覆保持快速輕量。
+
+chat-switch_account_retry_detail = 保留完整歷史記錄
+
+chat-switch_account_compact_detail = 先總結，讓回覆保持快速
+
+chat-switch_account_compact_first = 先壓縮
+
+chat-switch_account_compact_first_detail = 繼續之前先總結聊天。部分較早的細節可能會丟失。
+
+chat-switch_account_choose = 選擇帳戶
+
+chat-no_project = 無專案
+
+chat-start_without_project = 不關聯專案開始
+
+chat-voice_dictate = 聽寫
+
+chat-voice_stop = 完成
+
+chat-voice_starting = 正在啟動麥克風…
+
+chat-voice_transcribing = 正在轉寫…
+
+chat-voice_listening = 正在聆聽
+
+chat-voice_cancel = 捨棄錄音
+
+chat-voice_error_unsupported = 此裝置不支援語音聽寫。
+
+chat-voice_error_account_required = 請在設定中關聯 ChatGPT 帳戶以使用聽寫。
+
+chat-voice_error_permission_denied = 麥克風存取已被阻止。請在系統設定中允許後重試。
+
+chat-voice_error_no_microphone = 沒有可用的麥克風。請檢查麥克風是否已連線且未被佔用。
+
+chat-voice_error_too_large = 錄音過長。請嘗試更短的訊息。
+
+chat-voice_error_recorder_failed = 錄音意外停止。請重試。
+
+chat-voice_error_no_speech = 未檢測到語音。請重試。
+
+chat-voice_error_transcription_failed = 無法轉寫錄音。請檢查網路連線後重試。
+
+chat-voice_error_service_unavailable = 此工作區無法使用轉寫服務。
+
+chat-voice_error_start_failed = 無法開始聽寫。請重試。
+
+chat-startup_queue_preparing = 正在新增檔案…
+
+chat-startup_queue_failed = 檔案未能新增
+
+chat-startup_queue_reattach = 請移除此訊息並重新附加檔案。您的提示詞尚未傳送。
+
+chat-question_composer_placeholder = 輸入您自己的回答…
+
+chat-workflow_run_phases = 階段
+
+chat-workflow_run_more = 再顯示{ " " }{ $count }{ " " }個
+
+chat-workflow_run_agents_done = { $total }{ " " }個代理程式中已完成{ " " }{ $done }{ " " }個
+
+chat-workflow_run_script_collapse = 隱藏指令碼
+
+chat-workflow_run_workflow = 工作流
+
+chat-workflow_run_unphased = 代理程式
+
+chat-workflow_run_prompt = 提示
+
+chat-workflow_run_phase_empty = 此階段沒有執行代理程式
+
+chat-workflow_run_phase_waiting = 前面的階段完成後開始
+
+chat-workflow_run_label = 工作流：{ $name }
+
+chat-workflow_run_result = 結果
+
+chat-workflow_run_queued = 佇列中
+
+chat-workflow_run_script_expand = 檢視指令碼
+
+chat-review_guide_title = 導覽
+
+chat-review_guide_new_summary = 本導覽撰寫之後的變更。導覽會自動更新。
+
+chat-review_guide_changed = 已改動
+
+chat-review_guide_unavailable_too_large = 此變更過大，無法自動產生導覽。
+
+chat-review_guide_updating_for = 正在為{ " " }{ $sha }{ " " }更新
+
+chat-review_guide_in_this_guide = 本導覽內容
+
+chat-review_guide_progress = 已歸入{ " " }{ $assigned }/{ $total }{ " " }個變更塊
+
+chat-review_guide_before_after = 之前 / 之後
+
+chat-review_guide_cancel = 停止撰寫
+
+chat-review_guide_reviewed = 已檢閱
+
+chat-review_guide_writing = 正在撰寫導覽
+
+chat-review_guide_ask_prefix = 關於「{ $title }」（{ $files }）：
+
+chat-review_guide_also_changed = 其他改動
+
+chat-review_guide_file_count = { $count }{ " " }個檔案
+
+chat-review_guide_new_title = 導覽之後的新變更
+
+chat-review_guide_unavailable_no_changes = 暫無可導覽的變更。
+
+chat-review_guide_diff_tab = 差異
+
+chat-changes_review_moved_to = 已移至{ " " }{ $location }
+
+chat-review_guide_empty_body = 代理程式會按閱讀順序把變更整理成簡短章節，並把測試和產生檔案放到一邊。
+
+chat-review_guide_view = 檢閱檢視
+
+chat-review_guide_overview = 概覽
+
+chat-review_guide_next_chapter = 下一章
+
+chat-changes_review_moved_from = 移自{ " " }{ $location }
+
+chat-review_guide_file_count_one = { $count }{ " " }個檔案
+
+chat-review_guide_empty_title = 按順序閱讀這次變更
+
+chat-review_guide_unavailable_no_session = 在此工作區開始一個對話即可撰寫導覽。
+
+chat-review_guide_file_count_other = { $count }{ " " }個檔案
+
+chat-review_guide_unavailable_disabled = 引導式檢閱已在設定中關閉。
+
+chat-review_guide_ask_author = 詢問作者
+
+chat-review_guide_generate = 撰寫導覽
+
+chat-review_guide_write_anyway = 仍然撰寫
+
+chat-review_guide_unavailable_unsupported = 導覽由 Claude 或 Codex 對話撰寫。
+
+chat-image_gallery_zoom = 放大圖片
+
+chat-image_gallery_image = 圖片
+
+chat-image_gallery_next = 下一張圖片
+
+chat-image_gallery_previous = 上一張圖片
+
+chat-image_gallery_fit = 適應視窗
+
+chat-image_gallery_unavailable = 圖片不可用
+
+chat-image_gallery_thumbnail = 檢視圖片{ " " }{ $index }：{ $name }
+
+chat-image_gallery_view = 檢視圖片：{ $name }
+
+chat-image_gallery_loading = 正在載入圖片…
+
+chat-image_gallery_title = 聊天圖片
+
+chat-review_guide_chapters_appear = 章節寫好後會顯示在這裡。
+
+chat-review_guide_try_again = 重試
+
+chat-review_guide_reading_changes = 正在讀取改動…
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+chat-environment_summary_stack_count-plural =
+    { $count ->
+       [one] { $count }{ " " }個 PR
+       *[other] { $count }{ " " }個 PR
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+chat-changes_review_conflict_remaining-plural =
+    { $count ->
+       [one] 剩餘{ " " }{ $remaining }{ " " }處衝突
+       *[other] 剩餘{ " " }{ $remaining }{ " " }處衝突
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+chat-top_bar_change_plural0_sentence-plural =
+    { $count ->
+       [one] { $value }{ " " }處變更
+       *[other] { $value }{ " " }處變更
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+chat-delegation_group_count-plural =
+    { $count ->
+       [one] { $count }{ " " }個子代理程式
+       *[other] { $count }{ " " }個子代理程式
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+chat-review_guide_file_count-plural =
+    { $count ->
+       [one] { $count }{ " " }個檔案
+       *[other] { $count }{ " " }個檔案
+    }

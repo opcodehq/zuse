@@ -1,5 +1,7 @@
 //! Conversation tabs share a thread checkout and retain independent agent sessions.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 
 const RIGHT_PANE_HEADER_CONTROLS_MIN_WIDTH: f32 = 8.0 + 4.0 + 4.0 + 28.0;
 
@@ -997,7 +999,7 @@ impl Shell {
                         .px(px(8.))
                         .py(px(6.))
                         .text_color(theme.text_muted)
-                        .child("No earlier chats"),
+                        .child(tr(cx, msg::native::no_earlier_chats)),
                 )
             })
             .children(rows)
@@ -1160,7 +1162,7 @@ impl Shell {
                 cx.listener(|this, _, _, cx| this.toggle_session_info(cx)),
             )
             .role(gpui::Role::Button)
-            .aria_label("Toggle environment summary")
+            .aria_label(tr(cx, msg::chat::top_bar_toggle_environment_summary))
             .aria_selected(open)
             .flex_none()
             .on_mouse_down(
@@ -1184,7 +1186,7 @@ impl Shell {
                 cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)),
             )
             .role(gpui::Role::Button)
-            .aria_label("Toggle bottom terminal")
+            .aria_label(tr(cx, msg::common::toggle_bottom_terminal))
             .aria_selected(open)
             .flex_none()
             .when(open, |button| button.bg(theme.text.opacity(0.10)))

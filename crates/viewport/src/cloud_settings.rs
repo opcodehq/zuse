@@ -1,4 +1,6 @@
 //! Cloud settings navigation shared by desktop and browser.
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 pub(crate) mod style;
 use crate::{palette, settings_style as s};
 use gpui::{prelude::*, *};
@@ -19,7 +21,7 @@ pub fn tabs<T: 'static>(
     div()
         .id("cloud-settings-tabs")
         .role(Role::TabList)
-        .aria_label("Cloud workspace settings")
+        .aria_label(tr(cx, msg::common::cloud_workspace_settings))
         .flex()
         .items_center()
         .w(px(224.))
@@ -96,16 +98,16 @@ pub fn tabs<T: 'static>(
 }
 
 /// The reference account gate is shared across both Cloud settings hosts.
-pub fn account_gate(action: impl IntoElement, error: Option<&str>) -> Div {
+pub fn account_gate(action: impl IntoElement, error: Option<&str>, cx: &gpui::App) -> Div {
     use crate::shell::MUTED;
     let mut copy = div().flex_1().min_w_0().flex().flex_col()
-        .child(s::title_text("Sign in to set up cloud workspaces"))
+        .child(s::title_text(tr(cx, msg::settings::cloud_workspace_pool_sign_in_to_set_up_cloud_workspaces)))
         .child(div().mt(px(2.)).max_w(px(576.)).text_size(px(11.))
             .line_height(px(16.)).text_color(palette::rgb(MUTED))
-            .child("Choose a plan, connect repositories, and authorize your coding agents from one account."))
+            .child(tr(cx, msg::settings::cloud_workspace_pool_choose_a_plan_connect_repositories_and_authorize_your_coding_agents_fr)))
         .child(div().mt(px(4.)).text_size(px(10.)).line_height(px(13.5))
             .text_color(palette::rgb(MUTED).opacity(0.75))
-            .child("Local chats stay on this computer and remain available without an account."));
+            .child(tr(cx, msg::settings::cloud_workspace_pool_local_chats_stay_on_this_computer_and_remain_available_without_an_acco)));
     if let Some(error) = error {
         copy = copy.child(
             div()

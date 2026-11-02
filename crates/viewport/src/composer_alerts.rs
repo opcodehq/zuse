@@ -1,9 +1,11 @@
 //! Compact attached composer notices and explicit recovery actions.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     shell::{BORDER, FAINT, MUTED, TEXT, column, control, icon_button, label, row},
 };
+use zuse_i18n::messages as msg;
 
 impl WorkspaceView {
     fn latest_provider_alert(&self) -> Option<(String, String)> {
@@ -124,7 +126,11 @@ impl WorkspaceView {
                         view.child(
                             control(
                                 "retry-cloud-connection",
-                                if state == "paused" { "Resume" } else { "Retry" },
+                                if state == "paused" {
+                                    crate::localization::text("chat-queue_tray_resume", cx)
+                                } else {
+                                    crate::localization::text("chat-attempts_retry", cx)
+                                },
                             )
                             .on_click(cx.listener(|this, _, _, _| {
                                 let _ = this.requests.unbounded_send(json!({"ui":"resumeCloud"}));
@@ -148,7 +154,7 @@ impl WorkspaceView {
                     .child(icon("refresh").size(px(14.)).text_color(rgb(MUTED)))
                     .child(label(notice.clone()).flex_1().min_w_0().text_size(px(11.)))
                     .child(
-                        control("retry-transcript", "Retry")
+                        control("retry-transcript", tr(cx, msg::chat::attempts_retry))
                             .tab_index(0)
                             .h(px(24.))
                             .on_click(cx.listener(|this, _, _, cx| this.retry_transcript(cx))),
@@ -169,13 +175,13 @@ impl WorkspaceView {
                     .border_color(rgb(BORDER))
                     .child(icon("refresh").size(px(14.)).text_color(rgb(MUTED)))
                     .child(
-                        label("Agent provider updates")
+                        label(tr(cx, msg::native::agent_provider_updates))
                             .flex_1()
                             .min_w_0()
                             .text_size(px(11.)),
                     )
                     .child(
-                        control("review-provider-updates", "Review")
+                        control("review-provider-updates", tr(cx, msg::native::review))
                             .h(px(24.))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.settings = true;
@@ -321,19 +327,29 @@ impl WorkspaceView {
                             })
                             .when(account_action, |d| {
                                 d.child(
-                                    control("composer-error-settings", "Settings")
-                                        .h(px(26.))
-                                        .text_size(px(11.))
-                                        .on_click(cx.listener(|this, _, _, cx| {
+                                    control(
+                                        "composer-error-settings",
+                                        tr(cx, msg::common::settings),
+                                    )
+                                    .h(px(26.))
+                                    .text_size(px(11.))
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
                                             this.settings = true;
                                             cx.notify();
-                                        })),
+                                        },
+                                    )),
                                 )
                             })
                             .child(
-                                icon_button("dismiss-error", "close", "Dismiss error")
-                                    .size(px(24.))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                icon_button(
+                                    "dismiss-error",
+                                    "close",
+                                    crate::localization::text("chat-message_row_dismiss_error", cx),
+                                )
+                                .size(px(24.))
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         if local {
                                             this.error = None;
                                         } else {
@@ -341,7 +357,8 @@ impl WorkspaceView {
                                         }
                                         this.expanded_alert = None;
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             ),
                     )
                     .when(expanded, |d| {
@@ -376,8 +393,14 @@ impl WorkspaceView {
                     .border_b_1()
                     .border_color(rgb(BORDER))
                     .child(div().size(px(5.)).rounded_full().bg(rgb(0x89ca21)))
-                    .child(label("Working").text_color(rgb(TEXT)).text_size(px(11.)))
-                    .child(label("New messages join the queue").text_size(px(10.)))
+                    .child(
+                        label(tr(cx, msg::projects::masters_working))
+                            .text_color(rgb(TEXT))
+                            .text_size(px(11.)),
+                    )
+                    .child(
+                        label(tr(cx, msg::native::new_messages_join_the_queue)).text_size(px(10.)),
+                    )
                     .child(div().flex_1()),
             );
         }
@@ -387,7 +410,7 @@ impl WorkspaceView {
         column()
             .id("access-menu")
             .role(Role::ListBox)
-            .aria_label("Agent access")
+            .aria_label(tr(cx, msg::chat::chat_composer_agent_access))
             .occlude()
             .absolute()
             .bottom_full()
@@ -403,7 +426,7 @@ impl WorkspaceView {
             .shadow_lg()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
-                label("AGENT ACCESS")
+                label(tr(cx, msg::native::agent_access))
                     .text_size(px(10.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(MUTED))
@@ -505,23 +528,29 @@ impl WorkspaceView {
             .shadow_lg()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
-                control("attach-files-menu", "Attach images or files")
-                    .h(px(34.))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.add_menu = false;
-                        this.pick_attachments();
-                        cx.notify();
-                    })),
+                control(
+                    "attach-files-menu",
+                    tr(cx, msg::native::attach_images_or_files),
+                )
+                .h(px(34.))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.add_menu = false;
+                    this.pick_attachments();
+                    cx.notify();
+                })),
             )
             .child(
-                control("composer-tools-settings", "Plugins & connections")
-                    .h(px(34.))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.add_menu = false;
-                        this.settings = true;
-                        this.plugin_action(json!({"action":"list"}));
-                        cx.notify();
-                    })),
+                control(
+                    "composer-tools-settings",
+                    tr(cx, msg::native::plugins_connections),
+                )
+                .h(px(34.))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.add_menu = false;
+                    this.settings = true;
+                    this.plugin_action(json!({"action":"list"}));
+                    cx.notify();
+                })),
             )
             .into_any_element()
     }

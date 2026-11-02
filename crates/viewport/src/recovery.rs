@@ -1,5 +1,7 @@
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{column, control, label};
+use zuse_i18n::messages as msg;
 use zuse_protocol::recovery::{RecoveryAction, ResolveRecovery};
 
 impl WorkspaceView {
@@ -120,9 +122,9 @@ impl WorkspaceView {
     }
     pub(super) fn recovery_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut view=column().id("recovery-panel").flex_1().min_h_0().overflow_y_scroll().p_3().gap_3()
-            .child(label("Review interrupted tools"))
-            .child(label("Inspect the tool and its effects before authorizing a retry. Saving a review does not run anything."))
-            .child(control("refresh-recovery",if self.recovery_request.is_some(){"Loading…"}else{"Refresh"})
+            .child(label(tr(cx, msg::native::review_interrupted_tools)))
+            .child(label(tr(cx, msg::native::inspect_the_tool_and_its_effects_before_authorizing_a_retry_saving_a_review_does_e9dcec1f)))
+            .child(control("refresh-recovery",if self.recovery_request.is_some(){crate::localization::text("common-loading", cx)}else{crate::localization::text("chat-attempts_refresh", cx)})
                 .on_click(cx.listener(|this,_,_,cx|{this.inspect_recovery();cx.notify();})));
         if let Some(error) = &self.recovery_error {
             view = view.child(
@@ -137,7 +139,10 @@ impl WorkspaceView {
         }
         if let Some(snapshot) = &self.recovery {
             if snapshot.calls.is_empty() {
-                view = view.child(label("No uncertain tool outcomes remain."));
+                view = view.child(label(tr(
+                    cx,
+                    msg::native::no_uncertain_tool_outcomes_remain,
+                )));
             }
             for (index, call) in snapshot.calls.iter().enumerate() {
                 view = view.child(
@@ -171,15 +176,16 @@ impl WorkspaceView {
                             .text_size(px(12.))
                             .child(SharedString::from(input.clone())),
                     )
-                    .child(control("copy-recovery-input", "Copy full input").on_click(
-                        move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(input.clone()))
-                        },
-                    ))
+                    .child(
+                        control("copy-recovery-input", tr(cx, msg::native::copy_full_input))
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(input.clone()))
+                            }),
+                    )
                     .child(
                         control(
                             "authorize-recovery-retry",
-                            "Authorize retry after inspection",
+                            tr(cx, msg::native::authorize_retry_after_inspection),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.resolve_recovery(RecoveryAction::RetryAfterInspection);
@@ -188,13 +194,15 @@ impl WorkspaceView {
                     )
                     .child(self.recovery_output.clone())
                     .child(
-                        control("save-recovery-outcome", "Save inspected outcome").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                let output = this.recovery_output.read(cx).value(cx);
-                                this.resolve_recovery(RecoveryAction::RecordOutcome { output });
-                                cx.notify();
-                            }),
-                        ),
+                        control(
+                            "save-recovery-outcome",
+                            tr(cx, msg::native::save_inspected_outcome),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let output = this.recovery_output.read(cx).value(cx);
+                            this.resolve_recovery(RecoveryAction::RecordOutcome { output });
+                            cx.notify();
+                        })),
                     );
             }
         }

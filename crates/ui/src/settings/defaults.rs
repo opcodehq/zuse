@@ -1,7 +1,9 @@
 //! New-chat defaults use the same model menu as the composer.
 use super::{SavePolicy, widgets};
+use crate::localization::message as tr;
 use crate::{pickers::Pickers, state::AppState, theme::Theme};
 use gpui::{prelude::*, *};
+use zuse_i18n::messages as msg;
 use zuse_protocol::presentation::PermissionMode;
 
 pub struct DefaultsPage {
@@ -84,7 +86,7 @@ impl Render for DefaultsPage {
             .child(
                 widgets::card_row(&theme, true)
                     .items_start()
-                    .child(details(&theme, "Default model", &description))
+                    .child(details(&theme, &tr(cx, msg::settings::settings_page_default_model), &description))
                     .child(self.picker.clone()),
             )
             .child(
@@ -92,22 +94,22 @@ impl Render for DefaultsPage {
                     .items_start()
                     .child(details(
                         &theme,
-                        "Default permission mode",
-                        "How new chats handle tool calls. Each chat can override this from the composer.",
+                        &tr(cx, msg::settings::settings_page_default_permission_mode),
+                        &tr(cx, msg::settings::settings_page_how_new_chats_handle_tool_calls_each_chat_can_override_this_from_the_c),
                     ))
                     .child(permission),
             );
         let content = widgets::settings_page_column(window)
             .child(widgets::section_title(
                 &theme,
-                "Default models",
-                "Choose how new chats start.",
+                &tr(cx, msg::settings::settings_page_default_models),
+                &tr(cx, msg::native::choose_how_new_chats_start),
             ))
             .child(widgets::section_stack().child(
                 widgets::group(
                     &theme,
-                    "Chat defaults",
-                    "These choices apply when you start a new chat. You can still change either one from the composer.",
+                    tr(cx, msg::settings::settings_page_chat_defaults),
+                    tr(cx, msg::settings::settings_page_these_choices_apply_when_you_start_a_new_chat_you_can_still_change_eit),
                 )
                 .child(rows),
             ));

@@ -1,9 +1,11 @@
 //! Threads and project-grouped navigation share selection and composer drafts.
 use super::*;
 use crate::assets::icon;
+use crate::localization::message as tr;
 use crate::shell::{
     BG, BORDER, FAINT, MUTED, RAISED, TEXT, column, icon_button, label, provider_icon, row,
 };
+use zuse_i18n::messages as msg;
 use zuse_protocol::presentation::{SidebarView, project_identity};
 
 impl WorkspaceView {
@@ -155,7 +157,7 @@ impl WorkspaceView {
                     .pr(px(4.))
                     .gap(px(4.))
                     .child(
-                        label("Zuse (Beta)")
+                        label(tr(cx, msg::chat::top_bar_zuse_beta))
                             .text_size(px(11.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(rgb(TEXT)),
@@ -176,14 +178,14 @@ impl WorkspaceView {
                     .py(px(4.))
                     .gap(px(2.))
                     .child(
-                        sidebar_action("sidebar-new-chat", "New chat", "pen-new-square")
+                        sidebar_action("sidebar-new-chat", crate::localization::text("chat-chat_view_new_chat", cx), "pen-new-square")
                             .child(label("Ctrl+N").text_size(px(12.)).text_color(rgb(MUTED)))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.start_new_session(window, cx)
                             })),
                     )
                     .child(
-                        sidebar_action("sidebar-new-project", "New project", "folder-with-files")
+                        sidebar_action("sidebar-new-project", crate::localization::text("projects-projects_sidebar_new_project", cx), "folder-with-files")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.project_picker = true;
                                 cx.notify();
@@ -191,7 +193,7 @@ impl WorkspaceView {
                     )
                     .when(self.cloud_account["user"].is_object(), |v| {
                         v.child(
-                            sidebar_action("sidebar-plugins", "Plugins", "settings-plugins")
+                            sidebar_action("sidebar-plugins", crate::localization::text("plugins-plugins_back", cx), "settings-plugins")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.open_plugins_browse(cx);
                                 })),
@@ -226,11 +228,11 @@ impl WorkspaceView {
                     .gap_2()
                     .child(
                         label(if self.show_archive {
-                            "Archived threads"
+                            crate::localization::text("native-archived_threads", cx)
                         } else if projects {
-                            "Projects"
+                            crate::localization::text("projects-projects_sidebar_projects", cx)
                         } else {
-                            "Threads"
+                            crate::localization::text("projects-projects_sidebar_threads", cx)
                         })
                         .text_size(px(11.))
                         .text_color(rgb(FAINT)),
@@ -298,15 +300,15 @@ impl WorkspaceView {
                                     .p_4()
                                     .gap_2()
                                     .child(label(if query.is_empty() {
-                                        "No threads yet"
+                                        crate::localization::text("projects-projects_sidebar_no_threads_yet", cx)
                                     } else {
-                                        "No matching threads"
+                                        crate::localization::text("native-no_matching_threads", cx)
                                     }))
                                     .child(
                                         label(if query.is_empty() {
-                                            "Start a conversation with Cmd/Ctrl N"
+                                            crate::localization::text("native-start_conversation_shortcut", cx)
                                         } else {
-                                            "Try a title, project, or branch"
+                                            crate::localization::text("native-try_title_project_branch", cx)
                                         })
                                         .text_size(px(11.))
                                         .text_color(rgb(FAINT)),
@@ -374,7 +376,7 @@ impl WorkspaceView {
                                                         .text_size(px(10.))
                                                         .text_color(rgb(FAINT)),
                                                 )
-                                                .when_some(archive_space,|d,id|d.child(icon_button(SharedString::from(format!("project-menu-{id}")),"more-horizontal","Project actions").size(px(22.))
+                                                .when_some(archive_space,|d,id|d.child(icon_button(SharedString::from(format!("project-menu-{id}")),"more-horizontal",crate::localization::text("native-project_actions", cx)).size(px(22.))
                                                     .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())
                                                     .on_click(cx.listener(move|this,event:&ClickEvent,window,cx| {cx.stop_propagation();this.project_archive_menu(id.clone(),event.position(),window,cx);}))))
                                                 .child(
@@ -422,7 +424,7 @@ impl WorkspaceView {
                                         .when(!collapsed, |d| {
                                             d.when(chats.is_empty(), |d| {
                                                 d.child(
-                                                    label("No threads in this project")
+                                                    label(tr(cx, msg::native::no_threads_in_this_project))
                                                         .pl_6()
                                                         .py_2()
                                                         .text_size(px(10.))
@@ -683,11 +685,16 @@ impl WorkspaceView {
     }
 }
 
-fn sidebar_action(id: &'static str, label: &'static str, glyph: &'static str) -> Stateful<Div> {
+fn sidebar_action(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    glyph: &'static str,
+) -> Stateful<Div> {
+    let label = label.into();
     div()
         .id(id)
         .role(Role::Button)
-        .aria_label(label)
+        .aria_label(label.clone())
         .tab_index(0)
         .w_full()
         .min_h(px(24.))

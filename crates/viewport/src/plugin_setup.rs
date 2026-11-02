@@ -1,6 +1,8 @@
 //! Shared ephemeral plugin setup form for both GPUI frontends.
+use crate::localization::message as tr;
 use gpui::{prelude::*, *};
 use gpui_base::input::{InputEditorStyle, InputEvent, InputState, TextareaState};
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     plugin_setup::{LOCAL_CONFIG_TEMPLATE, LocalServerDraft, ServerAuth, ServerDraft, api_key},
     plugins::{PluginDefinition, PluginRequest, PluginReturnTo},
@@ -296,7 +298,7 @@ impl PluginSetup {
                         div()
                             .id("cancel-plugin-setup")
                             .role(Role::Button)
-                            .aria_label("Cancel")
+                            .aria_label(tr(cx, msg::common::cancel))
                             .track_focus(&self.cancel_focus)
                             .tab_index(0)
                             .h(px(28.))
@@ -309,7 +311,7 @@ impl PluginSetup {
                             .text_size(px(12.))
                             .font_weight(FontWeight::MEDIUM)
                             .cursor_pointer()
-                            .child("Cancel")
+                            .child(tr(cx, msg::common::cancel))
                             .hover(|d| d.bg(self.colors.border.opacity(0.4)))
                             .on_click(cx.listener(|this, _, window, cx| this.cancel(window, cx)))
                             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -526,7 +528,7 @@ impl Render for PluginSetup {
                     div()
                         .id("plugin-transport-tabs")
                         .role(Role::TabList)
-                        .aria_label("Connection type")
+                        .aria_label(tr(cx, msg::plugins::plugins_transport))
                         .h(px(28.))
                         .flex()
                         .items_center()
@@ -601,35 +603,112 @@ impl Render for PluginSetup {
         if local {
             body = body.child(
                 area("MCP configuration (JSON)", self.config.clone()).child(
-                    div().text_color(self.colors.muted).child(
-                        "Runs on this computer in your personal workspace. Paste one stdio server configuration, including command, args, and optional env. Desktop apps such as Paper must be installed here.",
-                    ),
+                    div()
+                        .text_color(self.colors.muted)
+                        .child(tr(cx, msg::plugins::plugins_local_hint)),
                 ),
             );
         } else if server {
-            body=body.child(field("Server URL",self.url.clone())).child(
-                div().flex().flex_col().gap(px(6.))
-                    .child(div().font_weight(FontWeight::MEDIUM).child("Authentication"))
-                    .child(div().id("plugin-auth-tabs").role(Role::TabList).aria_label("Authentication")
-                        .h(px(28.)).flex().items_center().p(px(2.)).gap(px(2.)).rounded(px(7.))
-                        .bg(crate::settings_style::frame_bg().opacity(0.55))
-                        .children([(ServerAuth::Automatic,"Sign in or none"),(ServerAuth::Bearer,"Bearer token"),(ServerAuth::Header,"Custom header")].into_iter().enumerate().map(|(i,(auth,title))| {
-                            let handles=self.auth_focus.clone();
-                            div().id(("plugin-auth",i)).role(Role::Tab).aria_label(title).aria_selected(self.auth==auth)
-                                .track_focus(&self.auth_focus[i].clone().tab_stop(self.auth==auth)).tab_index(if self.auth==auth {0}else{-1})
-                                .cursor_pointer().flex_1().min_w_0().h(px(24.)).flex().items_center().justify_center()
-                                .px(px(10.)).rounded(px(5.)).text_size(px(11.)).font_weight(FontWeight::MEDIUM)
-                                .text_color(if self.auth==auth {self.colors.text}else{self.colors.muted})
-                                .when(self.auth==auth,|d|d.bg(crate::palette::rgb(crate::shell::BG))).child(title)
-                                .on_click(cx.listener(move|this,_,_,cx|{if !this.busy {this.auth=auth;this.error=None;cx.notify();}}))
-                                .on_key_down(cx.listener(move|this,event:&KeyDownEvent,window,cx|{
-                                    let index=match event.keystroke.key.as_str(){"right"=>(i+1)%3,"left"=>(i+2)%3,"home"=>0,"end"=>2,_=>return};
-                                    if !this.busy {this.auth=[ServerAuth::Automatic,ServerAuth::Bearer,ServerAuth::Header][index];this.error=None;window.focus(&handles[index],cx);cx.notify();}
-                                    cx.stop_propagation();
-                                }))
-                        })))
-                    .when(self.auth==ServerAuth::Automatic,|d|d.child(div().text_color(self.colors.muted)
-                        .child("Zuse detects whether the server needs you to sign in or is open to everyone.")))
+            body = body.child(field("Server URL", self.url.clone())).child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(tr(cx, msg::plugins::plugins_add_server_auth)),
+                    )
+                    .child(
+                        div()
+                            .id("plugin-auth-tabs")
+                            .role(Role::TabList)
+                            .aria_label(tr(cx, msg::plugins::plugins_add_server_auth))
+                            .h(px(28.))
+                            .flex()
+                            .items_center()
+                            .p(px(2.))
+                            .gap(px(2.))
+                            .rounded(px(7.))
+                            .bg(crate::settings_style::frame_bg().opacity(0.55))
+                            .children(
+                                [
+                                    (ServerAuth::Automatic, "Sign in or none"),
+                                    (ServerAuth::Bearer, "Bearer token"),
+                                    (ServerAuth::Header, "Custom header"),
+                                ]
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, (auth, title))| {
+                                    let handles = self.auth_focus.clone();
+                                    div()
+                                        .id(("plugin-auth", i))
+                                        .role(Role::Tab)
+                                        .aria_label(title)
+                                        .aria_selected(self.auth == auth)
+                                        .track_focus(
+                                            &self.auth_focus[i].clone().tab_stop(self.auth == auth),
+                                        )
+                                        .tab_index(if self.auth == auth { 0 } else { -1 })
+                                        .cursor_pointer()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .h(px(24.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .px(px(10.))
+                                        .rounded(px(5.))
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(if self.auth == auth {
+                                            self.colors.text
+                                        } else {
+                                            self.colors.muted
+                                        })
+                                        .when(self.auth == auth, |d| {
+                                            d.bg(crate::palette::rgb(crate::shell::BG))
+                                        })
+                                        .child(title)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if !this.busy {
+                                                this.auth = auth;
+                                                this.error = None;
+                                                cx.notify();
+                                            }
+                                        }))
+                                        .on_key_down(cx.listener(
+                                            move |this, event: &KeyDownEvent, window, cx| {
+                                                let index = match event.keystroke.key.as_str() {
+                                                    "right" => (i + 1) % 3,
+                                                    "left" => (i + 2) % 3,
+                                                    "home" => 0,
+                                                    "end" => 2,
+                                                    _ => return,
+                                                };
+                                                if !this.busy {
+                                                    this.auth = [
+                                                        ServerAuth::Automatic,
+                                                        ServerAuth::Bearer,
+                                                        ServerAuth::Header,
+                                                    ][index];
+                                                    this.error = None;
+                                                    window.focus(&handles[index], cx);
+                                                    cx.notify();
+                                                }
+                                                cx.stop_propagation();
+                                            },
+                                        ))
+                                }),
+                            ),
+                    )
+                    .when(self.auth == ServerAuth::Automatic, |d| {
+                        d.child(
+                            div()
+                                .text_color(self.colors.muted)
+                                .child(tr(cx, msg::plugins::plugins_add_server_auth_auto_hint)),
+                        )
+                    }),
             );
         }
         if server && !local && self.auth == ServerAuth::Header {
@@ -661,7 +740,7 @@ impl Render for PluginSetup {
             body = body.child(
                 div()
                     .text_color(self.colors.muted)
-                    .child("Keys are encrypted on Zuse servers and never reach agent machines."),
+                    .child(tr(cx, msg::plugins::plugins_add_server_key_hint)),
             );
         }
         body = body.when_some(self.error, |d, error| {
@@ -682,11 +761,11 @@ impl Render for PluginSetup {
             .id("plugin-setup-form")
             .role(Role::Dialog)
             .aria_label(if local {
-                "Add local MCP server"
+                ("Add local MCP server").to_string()
             } else if server {
-                "Add MCP server"
+                crate::localization::text("plugins-plugins_add_server", cx)
             } else {
-                "Connect plugin"
+                ("Connect plugin").to_string()
             })
             .track_focus(&self.dialog_focus)
             .tab_group()
@@ -747,9 +826,9 @@ impl Render for PluginSetup {
                             .line_height(px(15.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(if server {
-                                "Add MCP server"
+                                crate::localization::text("plugins-plugins_add_server", cx)
                             } else {
-                                "Connect plugin"
+                                ("Connect plugin").to_string()
                             }),
                     )
                     .when(server, |d| {
@@ -758,9 +837,12 @@ impl Render for PluginSetup {
                                 .text_size(px(11.))
                                 .text_color(self.colors.muted)
                                 .child(if self.tenant.starts_with("organization:") {
-                                    "Adding to your organization workspace."
+                                    ("Adding to your organization workspace.").to_string()
                                 } else {
-                                    "Adding to your personal workspace."
+                                    crate::localization::text(
+                                        "plugins-plugins_add_server_workspace_personal",
+                                        cx,
+                                    )
                                 }),
                         )
                     }),
@@ -823,7 +905,7 @@ impl Render for PluginSetup {
                 div()
                     .id("close-plugin-setup")
                     .role(Role::Button)
-                    .aria_label("Close")
+                    .aria_label(tr(cx, msg::common::close))
                     .cursor_pointer()
                     .absolute()
                     .top(px(8.))

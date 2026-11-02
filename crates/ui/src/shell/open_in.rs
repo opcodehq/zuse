@@ -5,7 +5,9 @@
 //! each app's known bundle paths and converts its bundle icon to a cached
 //! PNG with `sips`; Linux and Windows look the editors and terminals up on
 //! PATH and draw fallback glyphs. The file manager is always offered.
+use crate::localization::message as tr;
 use std::path::{Path, PathBuf};
+use zuse_i18n::messages as msg;
 
 use super::*;
 
@@ -628,7 +630,7 @@ impl Shell {
             .id("open-in-trigger")
             .debug_selector(|| "open-in-trigger".into())
             .role(gpui::Role::Button)
-            .aria_label("Open workspace in app")
+            .aria_label(tr(cx, msg::chat::top_bar_open_workspace_in_app))
             .aria_expanded(open)
             .h(px(28.0))
             .flex_none()
@@ -739,7 +741,7 @@ impl Shell {
                         .py(px(6.0))
                         .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
-                        .child("This workspace is on another computer"),
+                        .child(tr(cx, msg::native::this_workspace_is_on_another_computer)),
                 )
             })
             .child(popover::menu_separator())
@@ -748,7 +750,7 @@ impl Shell {
                     .id("open-in-copy-path")
                     .debug_selector(|| "open-in-copy-path".into())
                     .role(gpui::Role::MenuItem)
-                    .aria_label("Copy path")
+                    .aria_label(tr(cx, msg::chat::top_bar_copy_path))
                     .text_size(crate::typography::text_md())
                     .child(
                         icon(icons::COPY)
@@ -756,7 +758,13 @@ impl Shell {
                             .flex_none()
                             .text_color(theme.text_muted),
                     )
-                    .child(div().flex_1().min_w_0().truncate().child("Copy path"))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(tr(cx, msg::chat::top_bar_copy_path)),
+                    )
                     .child(popover::kbd_hint(&theme, &copy_shortcut))
                     .on_click(cx.listener(|this, _, _, cx| this.copy_open_in_path(cx))),
             )

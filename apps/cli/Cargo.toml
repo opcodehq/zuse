@@ -10,6 +10,7 @@ name = "zuse-server"
 path = "src/main.rs"
 
 [dependencies]
+zuse-i18n.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }
 zuse-engine.workspace = true
 zuse-serve.workspace = true

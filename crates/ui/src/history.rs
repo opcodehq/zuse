@@ -3,11 +3,13 @@
 //! The pane is hosted by the current Changes surface for now, but owns its
 //! data and rendering so it can move intact into the future right-panel tabs.
 
+use crate::localization::message as tr;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
+use zuse_i18n::messages as msg;
 use zuse_protocol::presentation::git_history::{
     GraphLayout, GraphRow, GraphSegment, SegmentShape, compact_commits_to_visible,
     git_history_matches, layout_graph,
@@ -2973,7 +2975,7 @@ impl GitHistory {
                         this.toggle_author_display(cx);
                         this.close_author_menu(cx);
                     }))
-                    .child(div().flex_1().child("Name"))
+                    .child(div().flex_1().child(tr(cx, msg::projects::pr_pane_name)))
                     .child(div().w(px(12.0)).flex_none().flex().justify_end().when(
                         show_name,
                         |element| {
@@ -3071,7 +3073,7 @@ impl GitHistory {
                                     this.reset_columns(cx);
                                     this.close_column_menu(cx);
                                 }))
-                                .child("Reset"),
+                                .child(tr(cx, msg::chat::chat_composer_reset)),
                         )
                     }),
             )
@@ -4027,7 +4029,7 @@ impl Render for GitHistory {
                 .justify_center()
                 .text_size(px(12.0))
                 .text_color(theme.text_faint)
-                .child("No repository selected")
+                .child(tr(cx, msg::native::no_repository_selected))
                 .into_any_element()
         } else if self.loading && self.commits.is_empty() {
             div()
@@ -4046,7 +4048,7 @@ impl Render for GitHistory {
                     div()
                         .text_size(px(12.0))
                         .text_color(theme.text_faint)
-                        .child("Loading history…"),
+                        .child(tr(cx, msg::native::loading_history)),
                 )
                 .into_any_element()
         } else if self.visible_commits.is_empty() {
@@ -4240,7 +4242,12 @@ impl Render for GitHistory {
                                     .text_size(px(9.5))
                                     .text_color(header_theme.text_faint)
                                     .child(graph_spacer)
-                                    .child(div().flex_1().min_w(px(80.0)).child("Commit"))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(80.0))
+                                            .child(tr(cx, msg::projects::diff_pane_commit)),
+                                    )
                                     .child(optional_headers)
                                     .child(column_button),
                             )

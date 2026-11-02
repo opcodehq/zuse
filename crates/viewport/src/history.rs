@@ -1,7 +1,9 @@
 //! Paginated host-owned Git history and pinned commit review.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{MUTED, RAISED, TEXT, column, control, label, row};
 use std::sync::Arc;
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     GitHistoryCommit, GitHistoryPage,
     presentation::git_history::{GraphLayout, GraphRow, SegmentShape, layout_graph},
@@ -237,16 +239,18 @@ impl WorkspaceView {
             .gap_1()
             .child(div().flex_1().min_w_0().child(self.history.input.clone()))
             .child(
-                control("search-history", "Search")
+                control("search-history", tr(cx, msg::common::search))
                     .on_click(cx.listener(|this, _, _, cx| this.search_history(cx))),
             )
             .when(!self.history.query.is_empty(), |d| {
                 d.child(
-                    control("clear-history-search", "Clear").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.clear_history_search(cx);
-                        },
-                    )),
+                    control(
+                        "clear-history-search",
+                        tr(cx, msg::settings::acp_agents_clear_variables),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.clear_history_search(cx);
+                    })),
                 )
             });
         let header = row()
@@ -259,15 +263,22 @@ impl WorkspaceView {
                     .as_ref()
                     .is_some_and(|c| c["archived"] == true)
                 {
-                    "Saved history"
+                    ("Saved history").to_string()
                 } else {
-                    "History"
+                    crate::localization::text("native-history", cx)
                 },
             ))
             .child(div().flex_1())
             .child(
-                control("refresh-history", if busy { "Loading…" } else { "Refresh" })
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh_history(cx))),
+                control(
+                    "refresh-history",
+                    if busy {
+                        crate::localization::text("common-loading", cx)
+                    } else {
+                        crate::localization::text("chat-attempts_refresh", cx)
+                    },
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.refresh_history(cx))),
             );
         let metadata = row()
             .px_3()
@@ -304,11 +315,11 @@ impl WorkspaceView {
         if self.history.commits.is_empty() {
             view = view.child(
                 label(if busy {
-                    "Loading history…"
+                    crate::localization::text("native-loading_history", cx)
                 } else if self.history.query.is_empty() {
-                    "No commits to show"
+                    ("No commits to show").to_string()
                 } else {
-                    "No matching commits"
+                    ("No matching commits").to_string()
                 })
                 .p_3(),
             );
@@ -396,9 +407,9 @@ impl WorkspaceView {
                     control(
                         "load-more-history",
                         if busy {
-                            "Loading…"
+                            crate::localization::text("common-loading", cx)
                         } else {
-                            "Load more commits"
+                            ("Load more commits").to_string()
                         },
                     )
                     .m_3()

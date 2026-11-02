@@ -1,6 +1,8 @@
 //! Terminal tabs remain attached to their owning chat and engine across navigation.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{BORDER, RAISED, column, control, icon_button, row};
+use zuse_i18n::messages as msg;
 pub(super) const LOCAL_MIRROR_PREFIX: &str = "cloud-local/";
 #[derive(Clone)]
 pub(super) struct TerminalTab {
@@ -280,20 +282,26 @@ impl WorkspaceView {
                     .border_color(rgb(BORDER))
                     .when(self.cloud.guest, |view| {
                         view.child(
-                            control("terminal-cloud-environment", "Cloud")
-                                .role(Role::Tab)
-                                .aria_selected(!self.cloud.local_terminals)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.select_terminal_environment(false, cx)
-                                })),
+                            control(
+                                "terminal-cloud-environment",
+                                tr(cx, msg::chat::computer_picker_cloud_sandbox),
+                            )
+                            .role(Role::Tab)
+                            .aria_selected(!self.cloud.local_terminals)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.select_terminal_environment(false, cx)
+                            })),
                         )
                         .child(
-                            control("terminal-local-environment", "Local (synced)")
-                                .role(Role::Tab)
-                                .aria_selected(self.cloud.local_terminals)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.select_terminal_environment(true, cx)
-                                })),
+                            control(
+                                "terminal-local-environment",
+                                tr(cx, msg::native::local_synced),
+                            )
+                            .role(Role::Tab)
+                            .aria_selected(self.cloud.local_terminals)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.select_terminal_environment(true, cx)
+                            })),
                         )
                     })
                     .children(

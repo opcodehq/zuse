@@ -1,6 +1,8 @@
 //! Shared metrics for sidebar surface toolbars and their controls.
 
+use crate::localization::message as tr;
 use gpui::{Div, div, prelude::*, px};
+use zuse_i18n::messages as msg;
 
 use crate::theme::Theme;
 
@@ -118,6 +120,7 @@ pub(crate) fn tab_chip(
     chip: TabChip,
     theme: &Theme,
     on_close: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+    cx: &gpui::App,
 ) -> gpui::Stateful<Div> {
     let TabChip {
         id,
@@ -182,7 +185,7 @@ pub(crate) fn tab_chip(
                 .rounded(px(4.0))
                 .relative()
                 .role(gpui::Role::Button)
-                .aria_label("Close tab")
+                .aria_label(tr(cx, msg::commands::default_keybindings_close_tab))
                 .tooltip(crate::settings::widgets::text_tooltip("Close tab"))
                 .hover(|s| s.bg(theme.surface))
                 // The tab owns a drag payload. Claim the close press before

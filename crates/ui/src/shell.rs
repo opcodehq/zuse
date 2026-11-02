@@ -11,8 +11,10 @@
 //! ghost view + `on_drag_move::<Marker>` on the root), the same idiom as Zed's
 //! dock. Double-clicking a handle resets that pane to its default width.
 
+use crate::localization::message as tr;
 use std::path::PathBuf;
 use std::time::Duration;
+use zuse_i18n::messages as msg;
 
 use chrono::{DateTime, Utc};
 use gpui::{
@@ -8206,7 +8208,7 @@ impl Shell {
         let back = div()
             .id("settings-back")
             .role(gpui::Role::Button)
-            .aria_label("Back to app")
+            .aria_label(tr(cx, msg::settings::settings_page_back_to_app))
             .tab_index(0)
             .flex()
             .items_center()
@@ -8227,11 +8229,11 @@ impl Shell {
                     .size(px(14.))
                     .text_color(theme.text_muted),
             )
-            .child("Back to app");
+            .child(tr(cx, msg::settings::settings_page_back_to_app));
         div()
             .id("settings-page")
             .role(gpui::Role::Group)
-            .aria_label("Settings")
+            .aria_label(tr(cx, msg::common::settings))
             .track_focus(&self.settings_focus)
             .tab_group()
             .tab_stop(false)
@@ -8340,7 +8342,7 @@ impl Shell {
             div()
                 .id("settings-sections")
                 .role(gpui::Role::TabList)
-                .aria_label("Settings sections")
+                .aria_label(tr(cx, msg::native::settings_sections))
                 .w_full()
                 .overflow_y_scroll()
                 .h_full()
@@ -9157,7 +9159,7 @@ impl Shell {
                                 let id = id.clone();
                                 move || format!("chat-status-{id}")
                             })
-                            .aria_label("Working")
+                            .aria_label(tr(cx, msg::projects::masters_working))
                             .absolute()
                             .right(px(-4.0))
                             .bottom(px(-4.0))
@@ -10008,7 +10010,7 @@ impl Shell {
                                         .px(px(10.0))
                                         .text_color(theme.text_muted)
                                         .text_size(crate::typography::text_xs())
-                                        .child("Drop here to unpin")
+                                        .child(tr(cx, msg::native::drop_here_to_unpin))
                                 })
                                 .children(regular_items),
                         )
@@ -10204,7 +10206,7 @@ impl Shell {
                     "New chat",
                     false,
                 )
-                .aria_label("New chat")
+                .aria_label(tr(cx, msg::chat::chat_view_new_chat))
                 .on_click(cx.listener(|this, _, _, cx| this.open_new_session(None, cx)))
                 .when(!new_chat_hint.is_empty(), |el| {
                     el.child(
@@ -10224,7 +10226,7 @@ impl Shell {
                     "New project",
                     false,
                 )
-                .aria_label("New project")
+                .aria_label(tr(cx, msg::projects::projects_sidebar_new_project))
                 .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
             )
             .when(self.state.read(cx).cloud_user_id().is_some(), |view| {
@@ -10235,7 +10237,7 @@ impl Shell {
                         "Plugins",
                         plugins_open,
                     )
-                    .aria_label("Plugins")
+                    .aria_label(tr(cx, msg::plugins::plugins_back))
                     .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
                 )
             })
@@ -10290,7 +10292,13 @@ impl Shell {
                         .size(px(12.0))
                         .text_color(tone),
                 )
-                .child(div().flex_1().min_w_0().truncate().child("Star on GitHub"))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(tr(cx, msg::projects::projects_sidebar_star_on_github)),
+                )
                 .child(
                     div()
                         .id("github-star-banner-dismiss")
@@ -10608,7 +10616,7 @@ impl Shell {
         div()
             .id("open-pull-requests")
             .role(gpui::Role::Button)
-            .aria_label("Pull requests")
+            .aria_label(tr(cx, msg::native::pull_requests))
             .tab_index(0)
             .debug_selector(|| "open-pull-requests".into())
             .focus_visible(|style| style.border_2().border_color(theme.accent))
@@ -10910,9 +10918,9 @@ impl Shell {
             .debug_selector(|| "settings-trigger".into())
             .role(gpui::Role::Button)
             .aria_label(if settings_open {
-                "Close settings"
+                ("Close settings").to_string()
             } else {
-                "Settings"
+                crate::localization::text("common-settings", cx)
             })
             .aria_toggled(if settings_open {
                 gpui::Toggled::True
@@ -11011,7 +11019,7 @@ impl Shell {
                         .justify_end()
                         .gap(px(8.0))
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "sync-enable-cancel")
+                            popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "sync-enable-cancel")
                                 .id("sync-enable-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.cancel_auth_setup(cx)
@@ -11060,7 +11068,7 @@ impl Shell {
                     .justify_end()
                     .gap(px(8.0))
                     .child(
-                        popover::btn_ghost(&theme, "Later", "sync-switch-later")
+                        popover::btn_ghost(&theme, &tr(cx, msg::native::later), "sync-switch-later")
                             .id("sync-switch-later")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.postpone_sync_restart(cx)
@@ -11069,7 +11077,7 @@ impl Shell {
                 if has_local_work {
                     actions = actions
                         .child(
-                            popover::btn_ghost(&theme, "Start fresh", "sync-switch-fresh")
+                            popover::btn_ghost(&theme, &tr(cx, msg::native::start_fresh), "sync-switch-fresh")
                                 .id("sync-switch-fresh")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.start_synced_switch(false, cx)
@@ -11216,7 +11224,7 @@ impl Shell {
                         .justify_end()
                         .gap(px(8.0))
                         .child(
-                            popover::btn_ghost(&theme, "Later", "import-failed-dismiss")
+                            popover::btn_ghost(&theme, &tr(cx, msg::native::later), "import-failed-dismiss")
                                 .id("import-failed-dismiss")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.postpone_sync_restart(cx)
@@ -11264,7 +11272,7 @@ impl Shell {
                         .justify_end()
                         .gap(px(8.0))
                         .child(
-                            popover::btn_ghost(&theme, "Later", "sync-restart-later")
+                            popover::btn_ghost(&theme, &tr(cx, msg::native::later), "sync-restart-later")
                                 .id("sync-restart-later")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.postpone_sync_restart(cx)
@@ -11298,7 +11306,7 @@ impl Shell {
                         .justify_end()
                         .gap(px(8.0))
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "signout-cancel")
+                            popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "signout-cancel")
                                 .id("signout-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.sync_flow = SyncFlow::Idle;
@@ -11751,7 +11759,7 @@ impl Shell {
                         .justify_end()
                         .gap(px(8.0))
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "delete-chat-cancel")
+                            popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "delete-chat-cancel")
                                 .id("delete-chat-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.delete_confirm = None;
@@ -11792,7 +11800,7 @@ impl Shell {
                                 .child(
                                     popover::btn_ghost(
                                         &theme,
-                                        "Cancel",
+                                        &tr(cx, msg::common::cancel),
                                         "discard-working-tree-cancel",
                                     )
                                     .id("discard-working-tree-cancel")
@@ -12224,7 +12232,7 @@ impl Shell {
                                 .text_size(crate::typography::text_sm())
                                 .text_color(theme.text_muted)
                                 .hover(|view| view.text_color(theme.text))
-                                .child("Start without a project")
+                                .child(tr(cx, msg::chat::start_without_project))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.state
                                         .update(cx, |state, cx| state.select_space(None, cx));
@@ -12282,7 +12290,7 @@ impl Shell {
                             .text_size(px(12.))
                             .text_color(theme.text_muted)
                             .hover(|d| d.text_color(theme.text))
-                            .child("Start without a project")
+                            .child(tr(cx, msg::chat::start_without_project))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let pickers = this.composer.read(cx).pickers().clone();
                                 pickers.update(cx, |pickers, cx| pickers.start_without_project(cx));
@@ -12580,7 +12588,7 @@ impl Shell {
             .text_size(px(10.0))
             .text_color(motion::hover_blend(hover_key, theme.text_muted, theme.text))
             .role(gpui::Role::Button)
-            .aria_label("Jump to latest")
+            .aria_label(tr(cx, msg::chat::jump_to_latest_pill_jump_to_latest))
             .on_hover(motion::hover_listener(hover_key))
             .on_click(cx.listener(move |_, _, _, cx| {
                 transcript.update(cx, |transcript, cx| transcript.jump_to_bottom(cx));
@@ -13280,6 +13288,7 @@ impl Shell {
                 cx.listener(move |this, _, window, cx| {
                     this.close_right_surface(surface, window, cx);
                 }),
+                cx,
             )
             .aria_label(accessible_label)
             .when_some(detail, |chip, detail| {
@@ -13423,7 +13432,7 @@ impl Shell {
                 }
             }))
             .role(gpui::Role::Button)
-            .aria_label("Add panel")
+            .aria_label(tr(cx, msg::chat::right_pane_add_panel))
             .aria_expanded(plus_open)
             .when(plus_open, |el| el.bg(crate::theme::wash(0.11)))
             .tooltip(crate::settings::widgets::text_tooltip("Add panel"))
@@ -14369,6 +14378,9 @@ impl Render for Shell {
                 window,
                 |this: &mut Shell, window, cx| {
                     motion::window_activation_changed(window.is_window_active(), cx);
+                    if window.is_window_active() {
+                        crate::localization::refresh_system(cx);
+                    }
                     if window.is_window_active()
                         && let Some(update) = crate::app_update::AppUpdate::global(cx)
                     {
@@ -14444,7 +14456,13 @@ impl Render for Shell {
                 el.rounded(px(LINUX_WINDOW_CORNER_RADIUS)).overflow_hidden()
             })
             .text_color(text)
-            .font_family(font)
+            .font(gpui::Font {
+                family: font,
+                fallbacks: Some(zuse_viewport::language_fonts::fallbacks(
+                    crate::localization::localizer(cx).locale(),
+                )),
+                ..Default::default()
+            })
             .text_size(crate::typography::text_base())
             .on_drag_move::<SidebarSessionDrag>(cx.listener(Self::contain_pinned_session_drag))
             .on_drop::<SidebarSessionDrag>(cx.listener(|this, _, _, cx| {

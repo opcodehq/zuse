@@ -1,6 +1,8 @@
 //! Local mirror controls operate on the host authority, never the guest filesystem.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{RAISED, TEXT, icon_button};
+use zuse_i18n::messages as msg;
 #[derive(Default)]
 pub(super) struct SyncUi {
     open: bool,
@@ -163,7 +165,7 @@ impl WorkspaceView {
         let button = icon_button(
             "cloud-workspace-details",
             "cloud-dither",
-            "Cloud workspace details",
+            crate::localization::text("native-cloud_workspace_details", cx),
         )
         .aria_expanded(self.cloud.sync.open)
         .on_mouse_down(
@@ -218,14 +220,23 @@ impl WorkspaceView {
                         .w_full()
                         .min_h(px(32.))
                         .role(Role::Switch)
-                        .aria_label("Sync to a local directory")
+                        .aria_label(tr(
+                            cx,
+                            msg::connections::cloud_workspace_info_sync_to_a_local_directory,
+                        ))
                         .aria_toggled(if enabled {
                             Toggled::True
                         } else {
                             Toggled::False
                         })
                         .opacity(if busy || !loaded { 0.5 } else { 1. })
-                        .child(label("Sync to a local directory").flex_1())
+                        .child(
+                            label(tr(
+                                cx,
+                                msg::connections::cloud_workspace_info_sync_to_a_local_directory,
+                            ))
+                            .flex_1(),
+                        )
                         .child(
                             div()
                                 .w(px(28.))
@@ -268,14 +279,14 @@ impl WorkspaceView {
             // Browser directories belong to the connected host, not the browser device.
             menu = menu
                 .child(
-                    label("Folder on connected host")
+                    label(tr(cx, msg::native::folder_on_connected_host))
                         .px_2()
                         .text_size(px(11.))
                         .text_color(rgb(MUTED)),
                 )
                 .child(self.cloud_sync_path.clone())
                 .child(
-                    control("cloud-sync-use-folder", "Use folder")
+                    control("cloud-sync-use-folder", tr(cx, msg::native::use_folder))
                         .opacity(if busy { 0.5 } else { 1. })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let path = this.cloud_sync_path.read(cx).value(cx);
@@ -291,43 +302,46 @@ impl WorkspaceView {
                 );
             if enabled {
                 menu = menu.child(
-                    control("cloud-sync-retry", "Retry sync").on_click(cx.listener(
-                        |this, _, _, cx| {
+                    control("cloud-sync-retry", tr(cx, msg::native::retry_sync)).on_click(
+                        cx.listener(|this, _, _, cx| {
                             this.request_cloud_sync(methods::CLOUD_SYNC_RETRY, true, None);
                             cx.notify();
-                        },
-                    )),
+                        }),
+                    ),
                 );
             }
             if self.cloud.status["state"] == "ready" {
                 menu = menu.child(div().h(px(1.)).my_1().bg(rgb(BORDER))).child(
-                    control("pause-cloud-workspace", "Pause workspace")
-                        .w_full()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let child = this.cloud.child.clone();
-                            if let Some(child) = child {
-                                let session = child.update(cx, |view, cx| {
-                                    if view.file_navigation_blocked(cx)
-                                        || view.queue_edit_navigation_blocked(cx)
-                                    {
-                                        return None;
-                                    }
-                                    view.stash_draft(cx);
-                                    Some(
-                                        view.selected
-                                            .as_ref()
-                                            .and_then(|chat| chat["id"].as_str())
-                                            .map(str::to_owned),
-                                    )
-                                });
-                                if let Some(session) = session {
-                                    this.cloud.sync.open = false;
-                                    this.cloud.sync.poll = None;
-                                    this.pause_cloud(session);
-                                    cx.notify();
+                    control(
+                        "pause-cloud-workspace",
+                        tr(cx, msg::native::pause_workspace),
+                    )
+                    .w_full()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let child = this.cloud.child.clone();
+                        if let Some(child) = child {
+                            let session = child.update(cx, |view, cx| {
+                                if view.file_navigation_blocked(cx)
+                                    || view.queue_edit_navigation_blocked(cx)
+                                {
+                                    return None;
                                 }
+                                view.stash_draft(cx);
+                                Some(
+                                    view.selected
+                                        .as_ref()
+                                        .and_then(|chat| chat["id"].as_str())
+                                        .map(str::to_owned),
+                                )
+                            });
+                            if let Some(session) = session {
+                                this.cloud.sync.open = false;
+                                this.cloud.sync.poll = None;
+                                this.pause_cloud(session);
+                                cx.notify();
                             }
-                        })),
+                        }
+                    })),
                 );
             }
             if let Some(error) = self

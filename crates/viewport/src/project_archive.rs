@@ -1,10 +1,12 @@
 //! Shared project archive composition. Hosts own transcript reads and restoration.
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     palette::rgb,
     shell::{BG, BORDER, MUTED, TEXT},
 };
 use gpui::{prelude::*, *};
+use zuse_i18n::messages as msg;
 use zuse_protocol::Chat;
 
 #[derive(Clone)]
@@ -222,7 +224,7 @@ pub fn failure<T: 'static>(
                 .h(px(24.))
                 .border_1()
                 .border_color(rgb(BORDER))
-                .child("Retry")
+                .child(tr(cx, msg::projects::masters_retry))
                 .on_key_down(activate(Action::Retry, run, cx))
                 .on_click(
                     cx.listener(move |this, _, window, cx| run(this, Action::Retry, window, cx)),
@@ -440,7 +442,7 @@ pub fn list<T: 'static>(
                                         .text_size(px(20.))
                                         .line_height(px(28.))
                                         .font_weight(FontWeight::MEDIUM)
-                                        .child("Archived chats"),
+                                        .child(tr(cx, msg::projects::projects_sidebar_archived_chats)),
                                 )
                                 .child(
                                     div()
@@ -595,9 +597,9 @@ fn files_banner<T: 'static>(
             .child(
                 button("archive-files-refresh", "Refresh file status")
                     .child(if files.loading {
-                        "Checking…"
+                        crate::localization::text("simulators-status_checking", cx)
                     } else {
-                        "Refresh status"
+                        ("Refresh status").to_string()
                     })
                     .when(!enabled, |view| view.opacity(0.5))
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -624,7 +626,10 @@ pub fn preview<T: 'static>(
     let mut tabs = div()
         .id("project-archive-sessions")
         .role(Role::TabList)
-        .aria_label("Archived chat sessions")
+        .aria_label(tr(
+            cx,
+            msg::chat::archived_chats_page_archived_chat_sessions,
+        ))
         .h(px(44.))
         .flex_none()
         .flex()
@@ -774,7 +779,7 @@ pub fn preview<T: 'static>(
                                 .text_size(px(12.))
                                 .line_height(px(16.))
                                 .text_color(rgb(MUTED))
-                                .child("Read-only preview. Restore this chat to continue working.")
+                                .child(tr(cx, msg::native::read_only_preview_restore_this_chat_to_continue_working))
                                 .when_some(error, |d, error| {
                                     d.child(
                                         div()
@@ -807,11 +812,11 @@ pub fn preview<T: 'static>(
                             .when(busy, |d| d.opacity(0.64))
                             .child(restore_icon(busy, -2.))
                             .child(if busy {
-                                "Restoring…"
+                                ("Restoring…").to_string()
                             } else if error.is_some() {
-                                "Retry"
+                                crate::localization::text("projects-masters_retry", cx)
                             } else {
-                                "Restore chat"
+                                ("Restore chat").to_string()
                             })
                             .on_key_down(cx.listener({
                                 let id = restore.clone();

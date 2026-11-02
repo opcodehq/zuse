@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+zuse-i18n.workspace = true
 zuse-icons.workspace = true
 zuse-voice-session.workspace = true
 zuse-orb.workspace = true
@@ -31,4 +32,5 @@ similar.workspace = true
 chrono.workspace = true
 
 [dev-dependencies]
+ttf-parser.workspace = true
 gpui = { workspace = true, features = ["test-support"] }

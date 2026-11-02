@@ -8,6 +8,8 @@
 //! to clear it. Once clearing it would narrow the transcript, the card hides,
 //! and opening it floats it over the transcript instead.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 
 use crate::project_actions::{ProjectActionsStatus, action_icon};
 
@@ -437,7 +439,13 @@ impl Shell {
                     icons::GIT_COMPARE,
                     &theme,
                 )))
-                .child(div().flex_1().min_w_0().truncate().child("Branch changes"))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(tr(cx, msg::chat::environment_summary_branch_changes)),
+                )
                 .when_some(diff_stat, |row, (additions, deletions)| {
                     row.child(
                         sidebar_diff_stat(additions, deletions, 1.0, &theme).text_size(px(11.0)),
@@ -469,7 +477,7 @@ impl Shell {
                 this.create_child_chat(None, cx)
             }))
             .child(popover::picker_icon_slot(row_glyph(icons::PLUS, &theme)))
-            .child(div().flex_1().child("New side chat"));
+            .child(div().flex_1().child(tr(cx, msg::native::new_side_chat)));
 
         // ── The project's run actions.
         let actions = self.render_session_info_actions(&theme, cx);
@@ -673,7 +681,7 @@ impl Shell {
                             this.stop_background_task(&chat_id, id, cx);
                         }
                     }))
-                    .child("Stop all")
+                    .child(tr(cx, msg::chat::background_stop_all))
                     .into_any_element()
             });
             rows.push(group("Running", stop_all));
@@ -940,7 +948,7 @@ impl Shell {
                         .cursor_pointer()
                         .hover(|style| style.text_color(theme.text))
                         .on_click(cx.listener(|this, _, _, cx| this.retry_project_actions(cx)))
-                        .child("Retry")
+                        .child(tr(cx, msg::chat::attempts_retry))
                         .into_any_element(),
                 );
             }
@@ -1028,7 +1036,7 @@ impl Shell {
                             .flex_none()
                             .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
-                            .child("Import"),
+                            .child(tr(cx, msg::settings::settings_page_import)),
                     )
                     .into_any_element(),
             );
@@ -1045,7 +1053,7 @@ impl Shell {
                     this.close_session_info_overlay(cx);
                     this.open_project_action_editor(None, None, cx)
                 }))
-                .child("Add action")
+                .child(tr(cx, msg::native::add_action))
                 .into_any_element(),
         );
         rows

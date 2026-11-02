@@ -159,9 +159,9 @@ impl Render for PrWatchControl {
             .role(gpui::Role::Button)
             .tab_index(if ready { 0 } else { -1 })
             .aria_label(if watching {
-                "Pause CI watch"
+                ("Pause CI watch").to_string()
             } else {
-                "Watch CI"
+                crate::localization::text("projects-github_watch_ci", cx)
             })
             .rounded(px(5.0))
             .px(px(6.0))
@@ -186,7 +186,11 @@ impl Render for PrWatchControl {
                         }
                     }))
             })
-            .child(if watching { "Watching CI" } else { "Watch CI" });
+            .child(if watching {
+                ("Watching CI").to_string()
+            } else {
+                crate::localization::text("projects-github_watch_ci", cx)
+            });
         let fix_ready = ready && ((writable && status.is_some_and(|s| s.can_auto_fix)) || fixing);
         let fix_label = if fixing {
             format!("Auto-fix on · {attempts}/3")

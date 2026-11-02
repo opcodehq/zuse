@@ -1,9 +1,11 @@
 //! Transcript activity uses compact disclosures with task-specific details.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     shell::{column, control, label, row},
 };
+use zuse_i18n::messages as msg;
 
 impl WorkspaceView {
     pub(super) fn activity_part(
@@ -91,11 +93,11 @@ impl WorkspaceView {
                 .when(!reasoning && (!resolved || failed), |d| {
                     d.child(
                         label(if failed {
-                            "Failed"
+                            crate::localization::text("chat-attempts_failed", cx)
                         } else if resolved {
-                            "Done"
+                            crate::localization::text("chat-voice_stop", cx)
                         } else {
-                            "Running"
+                            crate::localization::text("chat-attempts_running", cx)
                         })
                         .text_size(px(10.))
                         .text_color(rgb(color)),
@@ -143,19 +145,31 @@ impl WorkspaceView {
                                 .py_1()
                                 .bg(rgb(0x191919))
                                 .child(
-                                    label(if kind == "exec" { "Command" } else { "Input" })
-                                        .text_size(px(10.)),
+                                    label(if kind == "exec" {
+                                        crate::localization::text(
+                                            "settings-diagnostics_pane_command",
+                                            cx,
+                                        )
+                                    } else {
+                                        crate::localization::text("usage-usage_dashboard_input", cx)
+                                    })
+                                    .text_size(px(10.)),
                                 )
                                 .child(div().flex_1())
                                 .child(
-                                    control(SharedString::from(format!("copy-{key}")), "Copy")
-                                        .h(px(24.))
-                                        .text_size(px(10.))
-                                        .on_click(move |_, _, cx| {
+                                    control(
+                                        SharedString::from(format!("copy-{key}")),
+                                        tr(cx, msg::chat::selection_menu_copy),
+                                    )
+                                    .h(px(24.))
+                                    .text_size(px(10.))
+                                    .on_click(
+                                        move |_, _, cx| {
                                             cx.write_to_clipboard(ClipboardItem::new_string(
                                                 copy.clone(),
                                             ))
-                                        }),
+                                        },
+                                    ),
                                 ),
                         )
                         .child(
@@ -174,7 +188,7 @@ impl WorkspaceView {
                         body = body.child(
                             control(
                                 SharedString::from(format!("open-tool-file-{key}")),
-                                "Open in workspace",
+                                tr(cx, msg::native::open_in_workspace),
                             )
                             .child(icon("alt-arrow-right").size(px(12.)))
                             .on_click(cx.listener(
@@ -198,7 +212,7 @@ impl WorkspaceView {
                 body = body.child(
                     column()
                         .gap_2()
-                        .child(label("Output").text_size(px(10.)))
+                        .child(label(tr(cx, msg::usage::usage_dashboard_output)).text_size(px(10.)))
                         .child(
                             div()
                                 .text_size(px(12.))
@@ -220,7 +234,11 @@ impl WorkspaceView {
             if resolved && part["outputBytes"].as_u64().is_some() && !part["outputRef"].is_string()
             {
                 body = body.child(
-                    label("Detailed output is unavailable for this result.").text_size(px(10.)),
+                    label(tr(
+                        cx,
+                        msg::native::detailed_output_is_unavailable_for_this_result,
+                    ))
+                    .text_size(px(10.)),
                 );
             }
             if let Some(reference) = part["outputRef"].as_str() {

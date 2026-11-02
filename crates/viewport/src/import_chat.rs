@@ -1,4 +1,5 @@
 //! Shared recent-provider-chat menu, with host-owned import and ordinary chat navigation.
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     creation_style,
@@ -9,6 +10,7 @@ use crate::{
 use gpui::{prelude::*, *};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use zuse_i18n::messages as msg;
 use zuse_protocol::external_chat::{self as wire, Imported, Row};
 
 gpui::actions!(import_chat_menu, [DismissImportMenu]);
@@ -404,7 +406,7 @@ impl Render for ImportMenu {
         let mut card = div()
             .id("import-chat-menu")
             .role(Role::Menu)
-            .aria_label("Recent provider chats")
+            .aria_label(tr(cx, msg::chat::chat_landing_recent_provider_chats))
             .occlude()
             .key_context("ImportChatMenu")
             .w(px(288.).min(window.viewport_size().width - px(16.)))
@@ -440,7 +442,7 @@ impl Render for ImportMenu {
                             .line_height(px(14.85))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(palette::rgb(MUTED))
-                            .child("Recent provider chats"),
+                            .child(tr(cx, msg::chat::chat_landing_recent_provider_chats)),
                     )
                     .child(
                         div().px_1().pb(px(6.)).child(

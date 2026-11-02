@@ -3,6 +3,8 @@
 //! commands an agent needs. The prompt is only staged in the composer; the
 //! user reviews and sends it.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 
 /// What the new session should do with the pull request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -420,7 +422,7 @@ impl PullRequestDetailPage {
             Some(
                 div()
                     .text_color(theme.text_muted)
-                    .child("Finding a checkout…")
+                    .child(tr(cx, msg::native::finding_a_checkout))
                     .into_any_element(),
             )
         } else {
@@ -438,9 +440,9 @@ impl PullRequestDetailPage {
                         widgets::action_button(theme, widgets::ActionTone::Filled)
                             .id("pr-add-checkout")
                             .role(gpui::Role::Button)
-                            .aria_label("Add project on this device")
+                            .aria_label(tr(cx, msg::native::add_project_on_this_device))
                             .tab_index(0)
-                            .child("Add project")
+                            .child(tr(cx, msg::projects::project_add_menu_add_project))
                             .on_click(move |_, window, cx| {
                                 window.dispatch_action(
                                     Box::new(AddPullRequestProject(device.clone())),

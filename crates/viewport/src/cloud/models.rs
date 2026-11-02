@@ -1,5 +1,7 @@
 //! New Cloud chats use the runtime's published choices and the ordinary model menu.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     cloud_catalog::CloudAgentCatalog,
     presentation::{PickerCatalog, ProviderCatalog},
@@ -58,7 +60,7 @@ impl WorkspaceView {
                 .when(launch_retry || connection_retry, |view| {
                     view.child(
                         row().w_full().px_3().py_1().justify_end().child(
-                            control("retry-cloud-creation", "Retry")
+                            control("retry-cloud-creation", tr(cx, msg::chat::attempts_retry))
                                 .h(px(24.))
                                 .tab_index(0)
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -99,7 +101,7 @@ impl WorkspaceView {
             .child(label(title).flex_1().min_w_0().text_size(px(12.)))
             .when(launch_retry || connection_retry || model_retry, |view| {
                 view.child(
-                    control("retry-cloud-creation", "Retry")
+                    control("retry-cloud-creation", tr(cx, msg::chat::attempts_retry))
                         .h(px(24.))
                         .tab_index(0)
                         .on_click(cx.listener(move |this, _, _, cx| {

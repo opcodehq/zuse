@@ -72,6 +72,7 @@ name = "compact-picker-fixture"
 required-features = ["compact-picker-fixture"]
 
 [dependencies]
+zuse-i18n.workspace = true
 zuse-model.workspace = true
 zuse-icons.workspace = true
 zuse-remote.workspace = true

@@ -3,8 +3,10 @@
 //! The composer's usage indicator: one ring button in the toolbar (between
 //! the model pill and the send key) whose glass card stacks the context
 //! window section above the plan-usage section ([`crate::account_usage`]).
+use crate::localization::message as tr;
 use crate::theme::Theme;
 use gpui::{SharedString, div, prelude::*, px};
+use zuse_i18n::messages as msg;
 use zuse_protocol::ContextUsage;
 
 /// Usage card geometry: `w-[300px]`, `p-3.5` sections with `gap-3` rows.
@@ -191,7 +193,11 @@ pub(crate) fn stick_meter(fraction: f64, high: bool, theme: &Theme) -> gpui::Div
 }
 
 /// The card's context section, when the harness reports a window.
-pub(crate) fn context_section(usage: Option<ContextUsage>, theme: &Theme) -> Option<gpui::Div> {
+pub(crate) fn context_section(
+    usage: Option<ContextUsage>,
+    theme: &Theme,
+    cx: &gpui::App,
+) -> Option<gpui::Div> {
     let reading = reading(usage)?;
     let section = section(theme).child(title_row("Context", reading.header, theme));
     Some(match reading.fraction {
@@ -207,11 +213,10 @@ pub(crate) fn context_section(usage: Option<ContextUsage>, theme: &Theme) -> Opt
                 reading.available.unwrap_or_default(),
                 theme.text_muted.opacity(0.7),
             )),
-        None => section.child(
-            div()
-                .text_color(theme.text_muted.opacity(0.7))
-                .child("Usage appears after the first response"),
-        ),
+        None => section.child(div().text_color(theme.text_muted.opacity(0.7)).child(tr(
+            cx,
+            msg::chat::chat_composer_usage_appears_after_the_first_response,
+        ))),
     })
 }
 

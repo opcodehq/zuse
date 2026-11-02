@@ -32,10 +32,12 @@
 //!   code plane: gutters, comment affordances, and sticky headers stay fixed,
 //!   while the virtual list measures each logical row's resulting height.
 
+use crate::localization::message as tr;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
+use zuse_i18n::messages as msg;
 
 use gpui::{
     AnyElement, App, Context, Entity, FocusHandle, Focusable as _, ListAlignment, ListState,
@@ -3572,7 +3574,7 @@ impl Changes {
                         )
                     }),
             )
-            .child("Viewed")
+            .child(tr(cx, msg::chat::changes_review_viewed))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
@@ -4419,7 +4421,9 @@ impl Changes {
                     .py(px(6.))
                     .text_size(px(11.))
                     .text_color(theme.warning)
-                    .child("Partial snapshot — some changes could not be loaded.")
+                    .child(crate::localization::element(
+                        zuse_i18n::messages::native::partial_changes,
+                    ))
                     .into_any_element()
             })
     }

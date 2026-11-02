@@ -379,6 +379,7 @@ impl ManagedAccessCard {
                     } else {
                         "Set up"
                     },
+                    cx,
                 )
                 .when(self.busy, |v| v.opacity(0.5))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -399,8 +400,8 @@ impl ManagedAccessCard {
         use zuse_viewport::{remote_access_style as r, settings_style as s};
         let rows =
             zuse_protocol::managed_connection::computer_rows(&self.environments, &self.saved);
-        r::frame("Other computers","Projects and chats from connected computers stay in the same sidebar.",Some(add))
-            .child(s::card().when(rows.is_empty(),|v|v.child(r::empty_computers()))
+        r::frame(crate::localization::text("settings-remote_other_computers", cx),crate::localization::text("settings-using_computers_card_projects_and_chats_from_connected_computers_stay_in_the_same_sidebar", cx),Some(add))
+            .child(s::card().when(rows.is_empty(),|v|v.child(r::empty_computers(cx)))
                 .children(rows.into_iter().enumerate().map(|(index,computer)| {
                     let environment=computer["environmentId"].as_str().unwrap_or_default().to_owned();
                     let subject=self.account["user"]["id"].as_str().unwrap_or_default().to_owned();
@@ -414,7 +415,7 @@ impl ManagedAccessCard {
                         .when(index>0,|v|v.border_t_1().border_color(s::card_border().opacity(0.4)))
                         .child(zuse_viewport::remote_access_style::glyph("monitor").size(px(16.)))
                         .child(r::details(label.clone(),description.to_owned()).flex_1())
-                        .when(!current&&compatible,|v|v.child(r::button(("connect-account-computer",index),"Connect")
+                        .when(!current&&compatible,|v|v.child(r::button(("connect-account-computer",index),crate::localization::text("settings-remote_connect", cx))
                             .on_click(move|_,_,cx|if let Some(controller)=controller.clone(){crate::open_account_window(crate::state::AccountTarget{controller,subject:subject.clone(),environment:environment.clone(),label:label.clone()},cx);})))
                         .when(remembered,|v|v.child(r::button(("forget-account-computer",index),"Forget saved")
                             .on_click(cx.listener(move|this,_,_,cx|this.request(methods::FORGET_ACCOUNT_ROUTE,json!({"environmentId":forget_id,"expectedSubject":forget_subject}),cx)))))
@@ -460,17 +461,22 @@ impl ManagedAccessCard {
                                 .flex_1(),
                             )
                             .child(
-                                r::small_button(("revoke-account-device", index), "Revoke")
-                                    .border_color(gpui::transparent_black())
-                                    .text_color(zuse_viewport::settings_style::destructive_text())
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                r::small_button(
+                                    ("revoke-account-device", index),
+                                    crate::localization::text("settings-organizations_revoke", cx),
+                                )
+                                .border_color(gpui::transparent_black())
+                                .text_color(zuse_viewport::settings_style::destructive_text())
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         this.request(
                                             methods::REVOKE_ACCOUNT_DEVICE,
                                             json!({"clientId":id}),
                                             cx,
                                         );
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             )
                     })),
             )
@@ -503,7 +509,10 @@ impl ManagedAccessCard {
                             .gap(px(10.))
                             .child(
                                 r::details(
-                                    "Zuse account",
+                                    crate::localization::text(
+                                        "settings-model_connections_account_scope",
+                                        cx,
+                                    ),
                                     self.account["user"]["email"]
                                         .as_str()
                                         .map(zuse_protocol::presentation::masked_email)
@@ -515,11 +524,14 @@ impl ManagedAccessCard {
                                 r::button(
                                     "managed-account-sign-in",
                                     if self.busy {
-                                        "Working…"
+                                        crate::localization::text(
+                                            "settings-model_connections_working",
+                                            cx,
+                                        )
                                     } else if signed_in {
-                                        "Sign out"
+                                        crate::localization::text("common-signOut", cx)
                                     } else {
-                                        "Sign in"
+                                        crate::localization::text("settings-acp_agents_sign_in", cx)
                                     },
                                 )
                                 .on_click(cx.listener(
@@ -585,7 +597,7 @@ impl ManagedAccessCard {
         Some(r::Modal(r::dialog_panel("managed-access-dialog",title,description).track_focus(&self.dialog_root)
             .on_key_down(cx.listener(|this,event:&KeyDownEvent,window,cx|if event.keystroke.key=="escape"{this.close_dialog(window,cx);cx.stop_propagation();}))
             .child(body).child(r::dialog_footer()
-                .child(r::button("close-managed-access","Cancel").track_focus(&self.dialog_focus).on_click(cx.listener(|this,_,window,cx|this.close_dialog(window,cx))))
+                .child(r::button("close-managed-access",crate::localization::text("settings-organizations_cancel", cx)).track_focus(&self.dialog_focus).on_click(cx.listener(|this,_,window,cx|this.close_dialog(window,cx))))
                 .child(r::button("confirm-managed-access",confirm).when(!enabled,|v|v.opacity(0.5).cursor_default())
                     .on_click(cx.listener(move|this,_,_,cx|if enabled {
                         match &dialog {

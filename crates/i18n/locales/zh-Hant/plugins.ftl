@@ -1,0 +1,264 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+plugins-plugins_title = 外掛
+
+plugins-plugins_subtitle = 連線您的工具，讓代理程式在任何聊天中都能使用它們。
+
+plugins-plugins_search = 搜尋外掛
+
+plugins-plugins_refresh = 重新整理外掛
+
+plugins-plugins_account = 外掛帳戶
+
+plugins-plugins_tab_browse = 瀏覽
+
+plugins-plugins_tab_connected = 已連線
+
+plugins-plugins_featured = 精選
+
+plugins-plugins_all = 全部外掛
+
+plugins-plugins_results = 搜尋結果
+
+plugins-plugins_show_more = 顯示更多
+
+plugins-plugins_loading = 正在載入外掛…
+
+plugins-plugins_load_failed = 無法載入外掛。請檢查網路連線後重試。
+
+plugins-plugins_sign_in = 登入您的 Zuse 帳戶以連線外掛。
+
+plugins-plugins_retry = 重試
+
+plugins-plugins_no_results = 沒有與「{ $query }」匹配的外掛。
+
+plugins-plugins_none_connected = 您連線的外掛會顯示在這裡。
+
+plugins-plugins_connect_named = 連線{ " " }{ $name }
+
+plugins-plugins_manage_named = 管理{ " " }{ $name }
+
+plugins-plugins_connecting_named = 正在連線{ " " }{ $name }
+
+plugins-plugins_back = 外掛
+
+plugins-plugins_connect = 連線
+
+plugins-plugins_connected = 已連線
+
+plugins-plugins_disconnect = 斷開連線
+
+plugins-plugins_waiting = 正在等待瀏覽器…
+
+plugins-plugins_reopen = 重新開啟瀏覽器
+
+plugins-plugins_cancel = 取消
+
+plugins-plugins_pending = 請在瀏覽器中完成{ " " }{ $name }{ " " }的登入。Zuse 會自動接收。
+
+plugins-plugins_connected_toast = { $name }{ " " }已連線
+
+plugins-plugins_connected_toast_detail = 代理程式可以在新聊天中使用它。
+
+plugins-plugins_connect_failed = 無法連線{ " " }{ $name }
+
+plugins-plugins_connect_failed_detail = 該服務拒絕了連線，或需要 Zuse 尚不支援的設定。
+
+plugins-plugins_return_failed_detail = 登入已過期或屬於另一個 Zuse 帳戶。請從外掛頁面重新連線。
+
+plugins-plugins_return_cancelled = { $name }{ " " }未連線
+
+plugins-plugins_return_cancelled_detail = 登入已取消。您可以隨時重試。
+
+plugins-plugins_disconnect_failed = 無法斷開{ " " }{ $name }。請重試。
+
+plugins-plugins_cancel_failed = 無法取消。請重試。
+
+plugins-plugins_information = 資訊
+
+plugins-plugins_website = 網站
+
+plugins-plugins_category = 類別
+
+plugins-plugins_access = 存取權限
+
+plugins-plugins_access_value = 讀取和寫入，受每個聊天的權限限制
+
+plugins-plugins_connections = 連線
+
+plugins-plugins_connected_on = 連線於{ " " }{ $date }
+
+plugins-plugins_privacy = 連線僅屬於您的 Zuse 帳戶。權杖在 Zuse 伺服器上加密儲存，絕不會傳到代理程式所在的機器。斷開連線會立即停止新的呼叫。
+
+plugins-plugins_settings_subtitle = 為您的代理程式開啟或關閉外掛、MCP 伺服器和技能。
+
+plugins-plugins_settings_tab_plugins = 外掛
+
+plugins-plugins_settings_tab_skills = 技能
+
+plugins-plugins_settings_search = 搜尋
+
+plugins-plugins_settings_browse = 瀏覽外掛
+
+plugins-plugins_settings_add = 新增
+
+plugins-plugins_settings_toggle_failed = 無法更新{ " " }{ $name }。請重試。
+
+plugins-plugins_skills_none = 未找到技能。
+
+plugins-plugins_skills_load_failed = 無法載入技能。
+
+plugins-plugins_skills_always_on = 始終開啟
+
+plugins-plugins_skills_personal = 個人
+
+plugins-plugins_skills_project = 專案
+
+plugins-plugins_skills_codex_note = Codex 的開關儲存在 Codex 自身的配置中，因此在 Zuse 之外也會生效。
+
+plugins-plugins_skills_loading = 正在載入技能…
+
+plugins-plugins_rename = 重新命名
+
+plugins-plugins_connection_name = 連線名稱
+
+plugins-plugins_connection_name_placeholder = 工作、個人或公司名稱
+
+plugins-plugins_connect_another = 連線另一個帳戶
+
+plugins-plugins_connection_name_exists = 此名稱已被使用。請選擇其他連線名稱。
+
+plugins-plugins_add_server = 新增 MCP 伺服器
+
+plugins-plugins_add_server_workspace_personal = 將新增到您的個人工作區。
+
+plugins-plugins_add_server_workspace_organization = 將新增到{ " " }{ $name }{ " " }組織。連線後成員即可使用。
+
+plugins-plugins_add_server_name = 名稱
+
+plugins-plugins_add_server_name_placeholder = 內部工具
+
+plugins-plugins_add_server_url = 伺服器 URL
+
+plugins-plugins_add_server_url_placeholder = https://mcp.example.com/mcp
+
+plugins-plugins_add_server_auth = 身分驗證
+
+plugins-plugins_auth_auto = 登入或無需驗證
+
+plugins-plugins_auth_bearer = Bearer 權杖
+
+plugins-plugins_auth_header = 自訂請求頭
+
+plugins-plugins_auth_header_named = 自訂請求頭（{ $header }）
+
+plugins-plugins_add_server_auth_auto_hint = Zuse 會檢測伺服器是需要登入還是對所有人開放。
+
+plugins-plugins_add_server_token = 權杖
+
+plugins-plugins_add_server_header_name = 請求頭名稱
+
+plugins-plugins_add_server_header_name_placeholder = X-API-Key
+
+plugins-plugins_add_server_header_value = 值
+
+plugins-plugins_add_server_key_hint = 金鑰在 Zuse 伺服器上加密儲存，絕不會傳送到代理程式所在的機器。
+
+plugins-plugins_add_server_submit = 新增伺服器
+
+plugins-plugins_add_server_added = 已新增{ " " }{ $name }
+
+plugins-plugins_add_server_failed = 無法新增伺服器。請檢查網路連線後重試。
+
+plugins-plugins_add_server_admins_only = 只有組織管理員可以新增伺服器。
+
+plugins-plugins_add_server_name_required = 請輸入此伺服器的名稱。
+
+plugins-plugins_add_server_name_too_long = 名稱不能超過 60 個字元。
+
+plugins-plugins_add_server_url_invalid = 請輸入伺服器完整的 https:// URL。
+
+plugins-plugins_add_server_header_invalid = 請求頭名稱只能包含字母、數字和連字元。
+
+plugins-plugins_add_server_value_required = 請輸入此伺服器所需的金鑰。
+
+plugins-plugins_error_auth_unsupported = 此伺服器未提供登入。如果它需要 API 金鑰，請選擇 Bearer 權杖或自訂請求頭。
+
+plugins-plugins_error_client_registration_unsupported = 此伺服器的登入需要預先註冊的應用程式，Zuse 無法自動完成。如果該服務提供 API 金鑰，請改用金鑰。
+
+plugins-plugins_error_setup_unsupported = 此服務需要 Zuse 暫不支援的設定。
+
+plugins-plugins_error_unreachable = Zuse 無法連線到此伺服器。請檢查 URL 並確認伺服器線上。
+
+plugins-plugins_error_url_rejected = 請使用預設埠上的公開 https:// URL。不支援本機地址和 IP 地址。
+
+plugins-plugins_error_credentials_rejected = 伺服器拒絕了此金鑰。請檢查後重試。
+
+plugins-plugins_error_limit_reached = 此工作區已達到連線數上限。請移除一個連線後再新增。
+
+plugins-plugins_custom = 自訂
+
+plugins-plugins_custom_servers = 自訂伺服器
+
+plugins-plugins_api_key = API 金鑰
+
+plugins-plugins_api_key_placeholder = 此帳戶的金鑰
+
+plugins-plugins_remove_server = 移除伺服器
+
+plugins-plugins_remove_server_title = 移除{ " " }{ $name }？
+
+plugins-plugins_remove_server_description = 這會斷開所有帳戶，並從此工作區移除該伺服器。代理程式將立即失去存取權限。
+
+plugins-plugins_remove_server_done = 已移除{ " " }{ $name }
+
+plugins-plugins_remove_server_failed = 無法移除{ " " }{ $name }。請重試。
+
+plugins-plugins_manage_admins_only = 只有組織管理員可以更改此工作區的外掛。
+
+plugins-plugins_workspace_personal = 個人
+
+plugins-plugins_popover_empty = 此工作區尚未連線任何外掛。連線一個外掛，或新增您自己的 MCP 伺服器。
+
+plugins-plugins_popover_manage = 管理外掛
+
+plugins-plugins_popover_enabled_count = 已啟用{ " " }{ $enabled }/{ $total }
+
+plugins-plugins_more_actions = 更多操作
+
+plugins-plugins_copy_url = 複製伺服器 URL
+
+plugins-plugins_url_copied = 已複製伺服器 URL
+
+plugins-plugins_copy_failed = 無法複製，請重試。
+
+plugins-plugins_visit_website = 存取網站
+
+plugins-plugins_privacy_organization = 連線會與此組織的成員共用。權杖在 Zuse 伺服器上加密儲存，絕不會傳送到代理程式所在的機器。斷開連線後，新的呼叫會立即停止。
+
+plugins-plugins_account_actions = { $name }{ " " }的操作
+
+plugins-plugins_error_sign_in_failed = 您已登入，但 Zuse 無法完成連線。請重試。如果仍然失敗，說明暫不支援此服務的登入方式。
+
+plugins-plugins_connected_accounts = 已連線的帳戶
+
+plugins-plugins_turn_off = 對代理程式關閉
+
+plugins-plugins_turn_on = 對代理程式開啟
+
+plugins-plugins_connection_off = 已關閉 · 代理程式無法使用此帳戶
+
+plugins-plugins_transport = 連線型別
+
+plugins-plugins_remote = 遠端
+
+plugins-plugins_local = 本機命令
+
+plugins-plugins_local_config = MCP 配置（JSON）
+
+plugins-plugins_local_hint = 在此電腦的個人工作區中執行。貼上一個 stdio 伺服器配置，包含 command、args 和可選的 env。Paper 等桌面應用程式必須安裝在此電腦上。
+
+plugins-plugins_local_config_invalid = 請輸入有效的 stdio MCP 配置，包含一個命令、args 陣列和可選的 env 值。
+
+plugins-plugins_local_connect_failed = 無法啟動本機 MCP 伺服器。請檢查命令，並確認應用程式已安裝且正在執行。

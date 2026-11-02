@@ -1,0 +1,180 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+usage-usage_limits_submenu_reset_unavailable = リセット不可
+
+usage-usage_limits_submenu_loading_usage = 使用方法を読み込み中…
+
+usage-usage_limits_submenu_updated = 更新されました{ " " }
+
+usage-usage_limits_submenu_session = セッション
+
+usage-usage_limits_submenu_live = 生きる
+
+usage-usage_limits_submenu_cached = キャッシュされた
+
+usage-usage_limits_submenu_full_usage = 完全な使用法
+
+usage-usage_dashboard_usage = 使用法
+
+usage-usage_dashboard_usage_scope = 利用範囲
+
+usage-usage_dashboard_all_projects = すべてのプロジェクト
+
+usage-usage_dashboard_current = 現在
+
+usage-usage_dashboard_usage_period = 利用期間
+
+usage-usage_dashboard_refresh_usage = リフレッシュの使用法
+
+usage-usage_dashboard_loading_usage = 使用方法を読み込み中
+
+usage-usage_dashboard_loading_usage_2 = 使用方法を読み込み中…
+
+usage-usage_dashboard_updating = 更新中…
+
+usage-usage_dashboard_plan_limits = プランの制限
+
+usage-usage_dashboard_live_provider_allowance = ライブプロバイダーの手当
+
+usage-usage_dashboard_credits = クレジット
+
+usage-usage_dashboard_daily_usage = 毎日の使用量
+
+usage-usage_dashboard_estimated_api_cost = 推定 API コスト
+
+usage-usage_dashboard_processed_tokens = 処理されたトークン
+
+usage-usage_dashboard_estimated_from_local_usage_at_published_provider_rates_actual_billing = 公開されているプロバイダー料金でのローカル使用量から推定されます。実際の請求額は異なる場合があります。
+
+usage-usage_dashboard_cost_by_source = ソースごとのコスト
+
+usage-usage_dashboard_tokens_by_source = ソースごとのトークン
+
+usage-usage_dashboard_active = { " " }アクティブな
+
+usage-usage_dashboard_source = ソース
+
+usage-usage_dashboard_sources = ソース
+
+usage-usage_dashboard_no_usage_in_this_period = この期間はご利用いただけません。
+
+usage-usage_dashboard_view_day = 見学日
+
+usage-usage_dashboard_hover_the_chart_for_a_daily_breakdown = グラフにカーソルを置くと日次の内訳が表示されます
+
+usage-usage_dashboard_breakdown = 内訳
+
+usage-usage_dashboard_provider = プロバイダー
+
+usage-usage_dashboard_model = モデル
+
+usage-usage_dashboard_project = プロジェクト
+
+usage-usage_dashboard_share = シェアする
+
+usage-usage_dashboard_tokens = トークン
+
+usage-usage_dashboard_cost = コスト
+
+usage-usage_dashboard_no_contributors_found = 貢献者が見つかりませんでした。
+
+usage-usage_dashboard_show_less = 表示を少なくする
+
+usage-usage_dashboard_search_sessions = セッションの検索
+
+usage-usage_dashboard_filter_sessions_by_provider = プロバイダーごとにセッションをフィルタリングする
+
+usage-usage_dashboard_all_providers = すべてのプロバイダー
+
+usage-usage_dashboard_could_not_load_sessions_change_a_filter_or_try_again = セッションをロードできませんでした。フィルターを変更するか、もう一度試してください。
+
+usage-usage_dashboard_session = セッション
+
+usage-usage_dashboard_last_active = 最後にアクティブだった
+
+usage-usage_dashboard_loading_sessions = セッションを読み込み中…
+
+usage-usage_dashboard_previous_page = 前のページへ
+
+usage-usage_dashboard_next_page = 次のページ
+
+usage-usage_limits_submenu_left_2 = { $left }{ " " }残り%
+
+usage-usage_limits_submenu_resets_in = { $reset }でリセット
+
+usage-usage_dashboard_input = 入力
+
+usage-usage_dashboard_output = 出力
+
+usage-usage_dashboard_cache = キャッシュ
+
+usage-usage_dashboard_reasoning = 推論
+
+usage-usage_dashboard_cache_reads = キャッシュ読み取り
+
+usage-usage_dashboard_active_sessions = アクティブなセッション
+
+usage-usage_dashboard_updated = { $value1 }を更新しました
+
+usage-usage_dashboard_left = { $left }{ " " }残り%
+
+usage-usage_dashboard_estimated_cost = 推定コスト
+
+usage-usage_dashboard_locally_observed_usage_records_in_this_period = { $value1 }{ " " }この期間にローカルで観察された使用記録。
+
+usage-usage_pace_in_reserve = +{ $rounded }% が予備
+
+usage-usage_pace_over_pace = { $rounded }% オーバーペース
+
+usage-usage_dashboard_showing_saved_usage_refresh_failed_sentence = 保存された使用状況を表示します。更新に失敗しました:{ " " }{ $error }
+
+usage-usage_dashboard_sources_detected_sentence = { $value }{ " " }ソースが検出されました
+
+usage-usage_dashboard_clear_sentence = { $value }・クリア
+
+usage-usage_dashboard_sessions_in_this_period_sentence = <part0>セッション</part0><part1>この期間の{ $value }</part1>
+
+usage-usage_limits_submenu_used_left_total_sentence = <part0>{ $value }{ " " }使用済み ·{ " " }{ $value2 }{ " " }左</part0><part1>{ $value3 }{ " " }合計</part1>
+
+usage-usage_limits_submenu_credits_remaining_sentence = <part0>残りのクレジット</part0><part1>{ $value }</part1>
+
+usage-usage_limits_submenu_just_now = たった今
+
+usage-usage_dashboard_no_usage_has_been_recorded_yet = 使用状況はまだ記録されていません。
+
+usage-usage_dashboard_usage_limits = 使用制限
+
+usage-usage_dashboard_view_all = すべて表示（{ $value1 }）
+
+usage-usage_dashboard_page_summary = { $range }{ " " }/{ " " }{ $total }
+
+usage-usage_limits_menu_credits = 残り{ " " }{ $value }{ " " }クレジット
+
+usage-usage_limits_menu_stale = 更新に失敗しました。以前のデータを表示しています。最新ではない可能性があります。
+
+usage-usage_limits_menu_failed = 使用量の上限を読み込めませんでした。再度更新してください。
+
+usage-usage_limits_unavailable_account = このアカウントでは利用できません
+
+usage-usage_limits_unavailable_scope = このスコープでは使用量の上限を取得できません
+
+usage-usage_limits_sign_in_kiro = kiro-cli login でサインインすると上限を確認できます
+
+usage-usage_limits_sign_in = { $provider }{ " " }にサインインすると上限を確認できます
+
+usage-usage_limits_expired_kiro = セッションの有効期限が切れました：kiro-cli login を実行してください
+
+usage-usage_limits_expired = { $provider }{ " " }のセッションの有効期限が切れました：再度サインインしてください
+
+usage-usage_limits_load_failed = 上限を読み込めませんでした：再試行してください
+
+usage-usage_limits_no_data = 使用量データがありません
+
+usage-usage_limits_cli_unavailable = { $provider }{ " " }をインストールするか、設定された CLI のパスを確認してください。
+
+usage-usage_limits_upgrade_cli = 使用上限を確認するには、{ $provider }{ " " }を更新してください。
+
+usage-usage_limits_timeout = { $provider }{ " " }が応答しませんでした。もう一度お試しください。
+
+usage-usage_limits_invalid_response = { $provider }{ " " }が読み取れない使用状況データを返しました。CLI の更新をお試しください。

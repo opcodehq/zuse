@@ -3,7 +3,9 @@
 //! unfolds its diff inline beneath it, the current file's row stays pinned
 //! while its body scrolls, and a picker finds a file by name.
 use super::*;
+use crate::localization::message as tr;
 use std::ops::Range;
+use zuse_i18n::messages as msg;
 
 /// The stream's and toolbar's inset from the pane edges.
 const STREAM_PAD_X: f32 = 16.0;
@@ -636,7 +638,7 @@ impl PullRequestDetailPage {
                                 )
                             }),
                     )
-                    .child("Viewed")
+                    .child(tr(cx, msg::chat::changes_review_viewed))
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |page, _, _, cx| {
                         cx.stop_propagation();
@@ -699,7 +701,7 @@ impl PullRequestDetailPage {
             .id("pr-file-list")
             .debug_selector(|| "pr-file-list".into())
             .role(gpui::Role::Tree)
-            .aria_label("Changed files")
+            .aria_label(tr(cx, msg::projects::diff_pane_changed_files))
             .track_focus(&self.tree_focus)
             .rounded(px(6.0))
             // A resting transparent ring, so focusing never shifts the rows.
@@ -733,7 +735,7 @@ impl PullRequestDetailPage {
                     .py(px(6.0))
                     .text_size(px(12.0))
                     .text_color(theme.text_muted)
-                    .child("No matching files"),
+                    .child(tr(cx, msg::projects::diff_pane_no_matching_files)),
             );
         }
         for entry in entries {
@@ -830,7 +832,11 @@ impl PullRequestDetailPage {
                     .gap(px(8.0))
                     .px(px(8.0))
                     .text_size(px(12.0))
-                    .child(div().font_weight(gpui::FontWeight::MEDIUM).child("Files"))
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(tr(cx, msg::projects::diff_pane_files)),
+                    )
                     .child(
                         div()
                             .flex_1()

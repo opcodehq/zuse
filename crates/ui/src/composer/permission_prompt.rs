@@ -1,6 +1,8 @@
 //! The same compact permission surface as the reference permission-card.
 use super::*;
+use crate::localization::message as tr;
 use crate::popover;
+use zuse_i18n::messages as msg;
 use zuse_protocol::permission::{ALLOW_CHAT, ALLOW_PROJECT, PermissionAction};
 
 impl Composer {
@@ -123,7 +125,10 @@ impl Composer {
                     .text_size(px(10.))
                     .line_height(px(16.))
                     .text_color(theme.text_muted)
-                    .child("Only Allow once is available for this request."),
+                    .child(tr(
+                        cx,
+                        msg::native::only_allow_once_is_available_for_this_request,
+                    )),
             );
         }
         card.child(
@@ -135,55 +140,65 @@ impl Composer {
                 .justify_end()
                 .gap(px(4.))
                 .child(
-                    popover::btn_ghost(&theme, "Deny", "permission-deny")
-                        .id("permission-deny")
-                        .role(Role::Button)
-                        .aria_label("Deny this action")
-                        .tab_index(0)
-                        .h(px(28.))
-                        .px(px(8.))
-                        .py(px(4.))
-                        .rounded(px(6.))
-                        .text_size(px(11.))
-                        .tooltip(crate::settings::widgets::text_tooltip("Escape".to_owned()))
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.answer_permission(&deny, cx)),
-                        ),
+                    popover::btn_ghost(
+                        &theme,
+                        &tr(cx, msg::chat::browser_pane_deny),
+                        "permission-deny",
+                    )
+                    .id("permission-deny")
+                    .role(Role::Button)
+                    .aria_label(tr(cx, msg::native::deny_this_action))
+                    .tab_index(0)
+                    .h(px(28.))
+                    .px(px(8.))
+                    .py(px(4.))
+                    .rounded(px(6.))
+                    .text_size(px(11.))
+                    .tooltip(crate::settings::widgets::text_tooltip("Escape".to_owned()))
+                    .on_click(cx.listener(move |this, _, _, cx| this.answer_permission(&deny, cx))),
                 )
                 .child(
-                    popover::btn_ghost(&theme, "Allow for this chat", "permission-allow-chat")
-                        .id("permission-allow-chat")
-                        .role(Role::Button)
-                        .tab_index(0)
-                        .h(px(28.))
-                        .px(px(8.))
-                        .py(px(4.))
-                        .rounded(px(6.))
-                        .text_size(px(11.))
-                        .when(!can_chat, |view| view.opacity(0.4))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if can_chat {
-                                this.answer_permission(ALLOW_CHAT, cx);
-                            }
-                        })),
+                    popover::btn_ghost(
+                        &theme,
+                        &tr(cx, msg::native::allow_for_this_chat),
+                        "permission-allow-chat",
+                    )
+                    .id("permission-allow-chat")
+                    .role(Role::Button)
+                    .tab_index(0)
+                    .h(px(28.))
+                    .px(px(8.))
+                    .py(px(4.))
+                    .rounded(px(6.))
+                    .text_size(px(11.))
+                    .when(!can_chat, |view| view.opacity(0.4))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if can_chat {
+                            this.answer_permission(ALLOW_CHAT, cx);
+                        }
+                    })),
                 )
                 .child(
-                    popover::btn_ghost(&theme, "Always allow", "permission-allow-project")
-                        .id("permission-allow-project")
-                        .role(Role::Button)
-                        .aria_label("Always allow in this project")
-                        .tab_index(0)
-                        .h(px(28.))
-                        .px(px(8.))
-                        .py(px(4.))
-                        .rounded(px(6.))
-                        .text_size(px(11.))
-                        .when(!can_project, |view| view.opacity(0.4))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if can_project {
-                                this.answer_permission(ALLOW_PROJECT, cx);
-                            }
-                        })),
+                    popover::btn_ghost(
+                        &theme,
+                        &tr(cx, msg::chat::permission_card_always_allow),
+                        "permission-allow-project",
+                    )
+                    .id("permission-allow-project")
+                    .role(Role::Button)
+                    .aria_label(tr(cx, msg::native::always_allow_in_this_project))
+                    .tab_index(0)
+                    .h(px(28.))
+                    .px(px(8.))
+                    .py(px(4.))
+                    .rounded(px(6.))
+                    .text_size(px(11.))
+                    .when(!can_project, |view| view.opacity(0.4))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if can_project {
+                            this.answer_permission(ALLOW_PROJECT, cx);
+                        }
+                    })),
                 )
                 .child(
                     popover::btn_primary(&theme, "Allow once")

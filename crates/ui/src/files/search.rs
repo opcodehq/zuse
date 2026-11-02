@@ -1,7 +1,9 @@
+use crate::localization::message as tr;
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
 };
+use zuse_i18n::messages as msg;
 
 use gpui::{
     AnyElement, Context, ListSizingBehavior, SharedString, Task, Window, div, list, prelude::*, px,
@@ -561,7 +563,7 @@ impl FilesSurface {
         div()
             .id("files-search-results")
             .role(gpui::Role::Tree)
-            .aria_label("Fuzzy workspace file results")
+            .aria_label(tr(cx, msg::native::fuzzy_workspace_file_results))
             .flex_1()
             .min_h_0()
             .flex()
@@ -579,7 +581,7 @@ impl FilesSurface {
                             .font_family(theme.font_sans.clone())
                             .text_size(px(10.0))
                             .text_color(theme.text_faint)
-                            .child("Showing the first 200 matches"),
+                            .child(tr(cx, msg::native::showing_the_first_200_matches)),
                     )
                 },
             )

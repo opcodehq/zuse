@@ -1,4 +1,5 @@
 //! User review of interrupted native tools, bound to the selected conversation.
+use crate::localization::message as tr;
 use crate::{
     composer::ComposerInput,
     settings::widgets,
@@ -7,6 +8,7 @@ use crate::{
 };
 use gpui::{prelude::*, *};
 use serde_json::json;
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     methods,
     recovery::{RecoveryAction, RecoverySnapshot, ResolveRecovery},
@@ -175,7 +177,7 @@ impl Render for RecoveryCard {
         if !self.open {
             return view;
         }
-        view = view.child(div().text_color(theme.text_muted).child("Inspect the tool and its effects before authorizing a retry. Saving a review does not run anything."));
+        view = view.child(div().text_color(theme.text_muted).child(tr(cx, msg::native::inspect_the_tool_and_its_effects_before_authorizing_a_retry_saving_a_review_does_e9dcec1f)));
         if let Some(error) = &self.error {
             view = view.child(
                 div()
@@ -188,7 +190,7 @@ impl Render for RecoveryCard {
         }
         if let Some(snapshot) = &self.snapshot {
             if snapshot.calls.is_empty() {
-                view = view.child("No uncertain tool outcomes remain.");
+                view = view.child(tr(cx, msg::native::no_uncertain_tool_outcomes_remain));
             }
             let mut calls = div()
                 .id("recovery-calls")

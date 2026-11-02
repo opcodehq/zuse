@@ -7,6 +7,8 @@
 //! pending-input detection) lives in free functions/structs with unit tests;
 //! the gpui element only feeds them measurements.
 
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 mod archive;
 mod permission_inspector;
 mod permission_prompt;
@@ -8149,9 +8151,9 @@ impl Composer {
                     .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(if token.query.is_empty() {
-                        "No files available"
+                        ("No files available").to_string()
                     } else {
-                        "No matching files"
+                        crate::localization::text("projects-diff_pane_no_matching_files", cx)
                     }),
             );
         } else {
@@ -10354,7 +10356,7 @@ impl Composer {
                     .id("composer-setup-dictation")
                     .debug_selector(|| "composer-microphone".into())
                     .role(gpui::Role::Button)
-                    .aria_label("Set up dictation")
+                    .aria_label(tr(cx, msg::native::set_up_dictation))
                     .size(px(28.))
                     .flex()
                     .items_center()
@@ -10606,7 +10608,7 @@ impl Composer {
                     .child(
                         self.dictation_action_button(false, cx)
                             .mt(px(-3.0))
-                            .child("Dismiss"),
+                            .child(tr(cx, msg::chat::message_row_dismiss)),
                     ),
             )
             .into_any_element(),
@@ -11458,7 +11460,7 @@ impl Render for Composer {
             ))
             .on_hover(motion::hover_listener(plugins_hover_key.clone()))
             .role(Role::Button)
-            .aria_label("Plugins")
+            .aria_label(tr(cx, msg::plugins::plugins_back))
             .tooltip(crate::settings::widgets::text_tooltip("Plugins"))
             .opacity(beneath_voice)
             .on_click(cx.listener(|_, _, _, cx| {
@@ -11548,7 +11550,7 @@ impl Render for Composer {
             )
             // Last, so it paints over the editor and toolbar while a file is
             // carried over the card.
-            .child(tray::drop_overlay(&theme));
+            .child(tray::drop_overlay(&theme, cx));
         let new_thread_target_selectors =
             (new_thread_chrome_opacity > 0.0 && !self.cloud_launch_pending(cx)).then(|| {
                 self.pickers.update(cx, |pickers, cx| {

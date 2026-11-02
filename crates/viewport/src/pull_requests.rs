@@ -1,7 +1,9 @@
 //! Browser PR board/inspection through the owning engine's source-control service.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{column, control, label, markdown_block, row};
 use std::{collections::HashSet, sync::Arc};
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     ChangeRequestDetail, ChangeRequestFilter, ChangeRequestListItem, ChangeRequestPage,
 };
@@ -425,9 +427,9 @@ impl WorkspaceView {
                             .gap_2()
                             .child(label(format!("#{}", item.number)))
                             .child(label(if item.is_draft {
-                                "Draft".into()
+                                crate::localization::text("projects-pr_pane_draft", cx).into()
                             } else {
-                                format!("{:?}", item.state)
+                                (format!("{:?}", item.state)).to_string()
                             }))
                             .child(div().flex_1())
                             .child(label(format!("+{} −{}", item.additions, item.deletions))),
@@ -478,11 +480,18 @@ impl WorkspaceView {
                     .h(px(40.))
                     .px_3()
                     .gap_2()
-                    .child(label("Pull requests"))
+                    .child(label(tr(cx, msg::native::pull_requests)))
                     .child(div().flex_1())
                     .child(
-                        control("refresh-prs", if busy { "Loading…" } else { "Refresh" })
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh_pull_requests(cx))),
+                        control(
+                            "refresh-prs",
+                            if busy {
+                                crate::localization::text("common-loading", cx)
+                            } else {
+                                crate::localization::text("common-refresh", cx)
+                            },
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.refresh_pull_requests(cx))),
                     ),
             )
             .when_some(self.pull_requests.error.clone(), |d, error| {
@@ -497,8 +506,8 @@ impl WorkspaceView {
                     .px_3()
                     .gap_2()
                     .child(
-                        control("pr-back", "All pull requests").on_click(cx.listener(
-                            |this, _, _, cx| {
+                        control("pr-back", tr(cx, msg::native::all_pull_requests)).on_click(
+                            cx.listener(|this, _, _, cx| {
                                 if this.pull_requests.posting.is_some() {
                                     return;
                                 }
@@ -510,11 +519,11 @@ impl WorkspaceView {
                                 this.pull_requests.selected = None;
                                 this.pull_requests.detail = None;
                                 cx.notify();
-                            },
-                        )),
+                            }),
+                        ),
                     )
                     .child(
-                        control("pr-open-browser", "Open on GitHub")
+                        control("pr-open-browser", tr(cx, msg::native::open_on_github))
                             .on_click(move |_, _, cx| cx.open_url(&url)),
                     ),
             );
@@ -575,7 +584,7 @@ impl WorkspaceView {
                     if self.pull_requests.tab == "checks" {
                         body = body
                             .when(detail.status_check_rollup.is_empty(), |d| {
-                                d.child(label("No checks reported."))
+                                d.child(label(tr(cx, msg::native::no_checks_reported)))
                             })
                             .children(detail.status_check_rollup.iter().map(|check| {
                                 column()
@@ -679,7 +688,7 @@ impl WorkspaceView {
                     ),
                 )
                 .when(!busy && self.pull_requests.items.is_empty(), |d| {
-                    d.child(label("No pull requests in this view.").p_3())
+                    d.child(label(tr(cx, msg::native::no_pull_requests_in_this_view)).p_3())
                 })
                 .child(
                     uniform_list(
@@ -692,14 +701,20 @@ impl WorkspaceView {
                     .track_scroll(&self.pull_requests.scroll),
                 )
                 .when(self.pull_requests.next.is_some(), |d| {
-                    d.child(control("pr-load-more", "Load more").mx_3().mb_3().on_click(
-                        cx.listener(|this, _, _, cx| {
+                    d.child(
+                        control(
+                            "pr-load-more",
+                            tr(cx, msg::settings::diagnostics_pane_load_more),
+                        )
+                        .mx_3()
+                        .mb_3()
+                        .on_click(cx.listener(|this, _, _, cx| {
                             if this.pull_requests.reads.is_empty() {
                                 this.load_pr_page(true);
                             }
                             cx.notify();
-                        }),
-                    ))
+                        })),
+                    )
                 });
         }
         view.into_any_element()

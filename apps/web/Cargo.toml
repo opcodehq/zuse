@@ -9,6 +9,7 @@ publish.workspace = true
 browser-input-fixture = []
 
 [dependencies]
+zuse-i18n.workspace = true
 zuse-remote.workspace = true
 base64 = "0.22"
 uuid = { workspace = true, features = ["js"] }

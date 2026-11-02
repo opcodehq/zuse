@@ -1,6 +1,8 @@
 //! Account-synced sections; local workspaces keep their settings on this device.
 use super::*;
+use crate::localization::message as tr;
 use crate::settings::SidebarSection;
+use zuse_i18n::messages as msg;
 use zuse_protocol::{SidebarPinChange, SidebarSectionChange};
 
 pub(super) struct SectionDialog {
@@ -350,7 +352,7 @@ impl Shell {
                         .items_center()
                         .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted.opacity(0.5))
-                        .child("Drop sessions here"),
+                        .child(tr(cx, msg::native::drop_sessions_here)),
                 )
             })
             .children(rows.into_iter().map(|(_, _, row)| row))
@@ -534,7 +536,7 @@ impl Shell {
                     div()
                         .mt(px(8.0))
                         .text_color(theme.text_muted)
-                        .child("Group sessions however you like"),
+                        .child(tr(cx, msg::native::group_sessions_however_you_like)),
                 )
                 .child(
                     div()
@@ -548,12 +550,16 @@ impl Shell {
                         .justify_end()
                         .gap(px(8.0))
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "section-cancel")
-                                .id("section-cancel")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.section_dialog = None;
-                                    cx.notify();
-                                })),
+                            popover::btn_ghost(
+                                &theme,
+                                &tr(cx, msg::common::cancel),
+                                "section-cancel",
+                            )
+                            .id("section-cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.section_dialog = None;
+                                cx.notify();
+                            })),
                         )
                         .child(
                             popover::btn_primary(
