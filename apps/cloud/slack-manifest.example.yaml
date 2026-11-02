@@ -1,0 +1,34 @@
+display_information:
+  name: Zuse
+  description: Start coding tasks and follow their results in Slack.
+features:
+  bot_user:
+    display_name: Zuse
+    always_online: false
+  app_home:
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+oauth_config:
+  redirect_urls:
+    - https://api.example.com/slack/oauth/callback
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+      - im:history
+      - im:read
+      - users:read
+      - channels:read
+      - channels:history
+      - groups:read
+      - groups:history
+settings:
+  event_subscriptions:
+    request_url: https://api.example.com/slack/events
+    bot_events:
+      - app_mention
+      - message.im
+      - app_uninstalled
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

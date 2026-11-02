@@ -93,3 +93,4 @@ pub mod usage;
 
 pub mod keybindings;
 pub mod simulators;
+pub mod slack;

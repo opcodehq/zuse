@@ -12,6 +12,8 @@ pub struct Cursor {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Head {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub slack_results: std::collections::BTreeMap<String, zuse_protocol::slack::TurnResult>,
     pub schema_version: u32,
     pub payload_format: String,
     pub workspace_id: String,

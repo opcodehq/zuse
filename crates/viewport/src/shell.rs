@@ -619,6 +619,7 @@ impl WorkspaceView {
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);
                 let user = message["role"] == "user";
+                let source=entry.parts.iter().find_map(|part|match part {zuse_model::MessagePart::MessageSource {source,..}=>Some(source),_=>None});
                 column()
                     .id(("message", i))
                     .group("message")
@@ -626,6 +627,7 @@ impl WorkspaceView {
                     .w_full().max_w(px(796.)).self_center()
                     .flex_shrink_0()
                     .gap_3()
+                    .children(source.map(|source|div().self_end().text_size(px(11.)).text_color(rgb(MUTED)).child(source.label())))
                     .children(entry.parts.iter().filter_map(|part| {
                         if let zuse_model::MessagePart::AgentContext { agent, previous_agent: Some(previous), .. } = part {
                             Some(crate::activity::agent_switch_notice(previous, agent, rgb(MUTED).into()))
@@ -640,7 +642,7 @@ impl WorkspaceView {
                                 let kind = part["kind"].as_str().unwrap_or_default();
                                 match kind {
                                     "text" => {
-                                        let text = part["text"].as_str().unwrap_or_default();
+                                        let text = if user {source.map(|s|s.text()).unwrap_or_else(||part["text"].as_str().unwrap_or_default())}else{part["text"].as_str().unwrap_or_default()};
                                         Some(if user {
                                             let parsed = zuse_protocol::message_attachments::parse(text);
                                             column().items_end().gap_3()

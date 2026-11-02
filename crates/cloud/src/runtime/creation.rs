@@ -104,6 +104,26 @@ impl RuntimeControl {
         body: CreateWorkspace,
         now: i64,
     ) -> Result<(Value, bool), ApiError> {
+        self.create_workspace_impl(access, body, now, false).await
+    }
+    pub(crate) async fn create_slack_workspace(
+        &self,
+        access: &Access,
+        body: CreateWorkspace,
+        now: i64,
+    ) -> Result<(Value, bool), ApiError> {
+        if access.membership.is_some() || access.owner_id.starts_with("organization:") {
+            return Err(ApiError::conflict("slack_organization_runtime_unavailable"));
+        }
+        self.create_workspace_impl(access, body, now, true).await
+    }
+    async fn create_workspace_impl(
+        &self,
+        access: &Access,
+        body: CreateWorkspace,
+        now: i64,
+        slack: bool,
+    ) -> Result<(Value, bool), ApiError> {
         if access.membership.is_some()
             || access.owner_id != access.actor.account_id
             || !self.creation_accounts.contains(&access.owner_id)
@@ -113,7 +133,11 @@ impl RuntimeControl {
         validate(&body)?;
         let owner = &access.owner_id;
         let digest = self.master.digest_api(
-            &format!("rust-workspace-create:{owner}"),
+            &if slack {
+                format!("rust-slack-workspace-create:{owner}")
+            } else {
+                format!("rust-workspace-create:{owner}")
+            },
             &serde_json::to_string(&body)
                 .map_err(|_| ApiError::bad_request("invalid_cloud_workspace_request"))?,
         );
@@ -160,6 +184,10 @@ impl RuntimeControl {
         let build:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(b) FROM api_cloud_project_builds b WHERE account_id=$1 AND provider=$2 AND state='ready' AND (settings->>'rustRuntimeCheckoutProjectId'=$3 OR settings->'rustRuntimeRepositoryLayouts' ? $3) AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE (s.provider=b.provider OR (b.provider='boxd' AND s.provider='box')) AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY updated_at DESC,build_id DESC LIMIT 1 FOR SHARE")
             .bind(owner).bind(&body.provider_id).bind(&body.project_id).fetch_optional(&mut *tx).await?;
         let build = build.ok_or_else(|| ApiError::conflict("cloud_project_not_ready"))?;
+        if slack && build["settings"]["rustSlackVersion"] != 1 {
+            return Err(ApiError::conflict("slack_runtime_update_required"));
+        }
+
         if (body.reasoning.is_some() || !body.model_options.is_empty())
             && build["settings"]["rustLaunchModelConfigVersion"] != 1
         {
