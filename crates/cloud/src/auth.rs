@@ -32,6 +32,9 @@ pub struct MembershipRole {
 pub trait Identity: Send + Sync {
     async fn verify(&self, token: &str) -> Result<Principal, ApiError>;
     async fn membership(&self, account: &str, organization: &str) -> Result<Membership, ApiError>;
+    async fn organization_name(&self, organization: &str) -> Result<String, ApiError> {
+        Ok(organization.to_owned())
+    }
 }
 
 struct KeyCache {
@@ -151,6 +154,38 @@ impl Identity for WorkosIdentity {
         })
     }
 
+    async fn organization_name(&self, organization: &str) -> Result<String, ApiError> {
+        let key = self
+            .api_key
+            .as_ref()
+            .ok_or_else(|| ApiError::unavailable("workos_auth_not_configured"))?;
+        let mut url = reqwest::Url::parse("https://api.workos.com/organizations/")
+            .map_err(|_| ApiError::unavailable("workos_auth_unavailable"))?;
+        url.path_segments_mut()
+            .map_err(|_| ApiError::unavailable("workos_auth_unavailable"))?
+            .pop_if_empty()
+            .push(organization);
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(key)
+            .send()
+            .await
+            .map_err(|_| ApiError::unavailable("workos_auth_unavailable"))?;
+        if !response.status().is_success() {
+            return Err(ApiError::unavailable("workos_auth_unavailable"));
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bounded_body(response).await?)
+            .map_err(|_| ApiError::unavailable("workos_auth_invalid_response"))?;
+        if value["id"] != organization {
+            return Err(ApiError::unavailable("workos_auth_invalid_response"));
+        }
+        value["name"]
+            .as_str()
+            .filter(|v| !v.trim().is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| ApiError::unavailable("workos_auth_invalid_response"))
+    }
     async fn membership(&self, account: &str, organization: &str) -> Result<Membership, ApiError> {
         let key = self
             .api_key
@@ -186,7 +221,7 @@ impl Identity for WorkosIdentity {
     }
 }
 
-async fn bounded_body(response: reqwest::Response) -> Result<Vec<u8>, ApiError> {
+pub(crate) async fn bounded_body(response: reqwest::Response) -> Result<Vec<u8>, ApiError> {
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {

@@ -379,7 +379,21 @@ async fn main() -> Result<()> {
                 .collect::<Result<Vec<_>, _>>()?;
             let listener = tokio::net::TcpListener::bind(config.listen).await?;
             tracing::info!(address = %listener.local_addr()?,runtime_control=runtime_enabled, "Zuse cloud API listening");
-            axum_serve(listener, router(state, origins)).await?;
+            let mut app = router(state.clone(), origins);
+            let slack_worker = if let Some(slack_config) = zuse_cloud::slack::Config::from_env()? {
+                let slack =
+                    zuse_cloud::slack::Slack::connect(state, slack_config, &config.database_url)
+                        .await?;
+                let worker = slack.start_worker();
+                app = app.merge(slack.router());
+                Some(worker)
+            } else {
+                None
+            };
+            axum_serve(listener, app).await?;
+            if let Some(worker) = slack_worker {
+                worker.abort();
+            }
         }
     }
     Ok(())

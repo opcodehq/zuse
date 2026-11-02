@@ -79,6 +79,7 @@ impl Publisher {
                 .map(|p| p.0.clone())
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let mut head = Head {
+                slack_results: doc.slack_turn_results(),
                 schema_version: 1,
                 payload_format: FORMAT.into(),
                 workspace_id: boot.workspace_id.clone(),

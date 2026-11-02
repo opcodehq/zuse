@@ -27,3 +27,5 @@ pub mod projects;
 pub mod github;
 
 pub mod images;
+
+pub mod slack;

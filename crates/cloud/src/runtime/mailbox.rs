@@ -14,8 +14,27 @@ impl RuntimeControl {
         &self,
         id: &str,
         access: &Access,
+        command: CommandEnvelope,
+        now: i64,
+    ) -> Result<Value, ApiError> {
+        self.enqueue_command(id, access, command, now, false).await
+    }
+    pub(crate) async fn command_enqueue_slack(
+        &self,
+        id: &str,
+        access: &Access,
+        command: CommandEnvelope,
+        now: i64,
+    ) -> Result<Value, ApiError> {
+        self.enqueue_command(id, access, command, now, true).await
+    }
+    async fn enqueue_command(
+        &self,
+        id: &str,
+        access: &Access,
         mut command: CommandEnvelope,
         now: i64,
+        slack: bool,
     ) -> Result<Value, ApiError> {
         if command.workspace_id != id || !command.eligible() {
             return Err(ApiError::bad_request("cloud_command_not_eligible"));
@@ -41,7 +60,7 @@ impl RuntimeControl {
             return Err(ApiError::conflict("cloud_command_fence_stale"));
         }
         // Personal author is derived from authorization; never accept a spoofed organization actor.
-        command.actor = None;
+        command.actor = slack.then(|| json!({"kind":"slack"}));
         mailbox(&mut tx, id).await?;
         if let Some(existing) = sqlx::query("SELECT command_id,fingerprint,state,workspace_sequence,revision,accepted_at FROM zuse_rust_mailbox_commands WHERE workspace_id=$1 AND command_id=$2")
             .bind(id).bind(&command.command_id).fetch_optional(&mut *tx).await? {

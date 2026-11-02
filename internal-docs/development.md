@@ -203,3 +203,7 @@ a temporary prefix, verifies the agent CLI, reads a real loopback hub catalog,
 and prepares/stops a supervised agent daemon without sending device commands:
 `cargo test -p zuse-simulator --lib setup::smoke::pinned_helpers_install_verify_and_start_on_linux -- --ignored --nocapture`.
 It requires Node.js 22.12+, npm, and network; it is ignored in the normal suite.
+
+## Slack integration
+
+The first-party Slack app runs alongside `zuse-cloud-api` behind an explicit feature flag. See [Slack setup and recovery](slack-app.md) for server-only secrets, the additive migration, manifest, runtime image compatibility and fixture tests. Settings → Cloud → Slack shares one component across native and browser hosts; each connected member chooses a Zuse workspace and prepared repository before authorizing Slack.

@@ -32,6 +32,8 @@ use zuse_protocol::{
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MessageSend {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<zuse_protocol::slack::MessageSource>,
     pub command_id: String,
     pub session_id: String,
     pub client_message_id: String,
@@ -417,7 +419,9 @@ impl Mailbox {
         &self,
         envelope: &CommandEnvelope,
     ) -> std::result::Result<DecodedCommand, &'static str> {
-        if envelope.actor.is_some() {
+        let slack = envelope.kind == "messages.send"
+            && envelope.actor.as_ref() == Some(&json!({"kind":"slack"}));
+        if envelope.actor.is_some() && !slack {
             return Err("command-author-access-unavailable");
         }
         let bytes = self
@@ -454,6 +458,9 @@ impl Mailbox {
             || (payload.text.is_none() && payload.input.is_none())
         {
             return Err("command-payload-identity-mismatch");
+        }
+        if payload.source.is_some() && !slack {
+            return Err("command-message-source-not-allowed");
         }
         if let Some(category) = payload.limitation() {
             return Err(category);
@@ -605,5 +612,55 @@ mod tests {
             key.decrypt(&tampered).is_err(),
             "Valid AES-GCM alone cannot replace the keyed command identity"
         );
+    }
+    struct NeverExec;
+    #[async_trait]
+    impl Executor for NeverExec {
+        async fn admitted(&self, _: &MessageSend, _: &str) -> Result<bool> {
+            Ok(false)
+        }
+        async fn native_admitted(&self, _: &CloudSessionCommand, _: &str) -> Result<bool> {
+            Ok(false)
+        }
+        async fn admit(&self, _: &MessageSend, _: &str, _: i64) -> Result<()> {
+            unreachable!()
+        }
+        async fn admit_native(&self, _: &CloudSessionCommand, _: &str, _: i64) -> Result<()> {
+            unreachable!()
+        }
+    }
+    #[test]
+    fn slack_source_requires_server_owned_ingress_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("receipts.sqlite");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("PRAGMA user_version=1")
+            .unwrap();
+        let key = CommandKey::parse(&B64.encode([31; 32])).unwrap();
+        let mut envelope:CommandEnvelope=serde_json::from_value(json!({"protocolVersion":3,"workspaceId":"workspace","sessionId":"session","commandId":"command","kind":"messages.send","fingerprint":"","schemaVersion":1,"keyVersion":1,"destructionFence":0,"createdAt":1000,"iv":"","ciphertext":"","dependencies":[]})).unwrap();
+        let plaintext=json!({"commandId":"command","sessionId":"session","clientMessageId":"message","text":"full prompt","source":{"_tag":"slack","text":"original words"}}).to_string();
+        envelope.fingerprint = key.fingerprint(plaintext.as_bytes());
+        (envelope.iv, envelope.ciphertext) = key.encrypt(&envelope, plaintext.as_bytes()).unwrap();
+        let mailbox = Mailbox {
+            key,
+            receipts: Receipts::open(&path).unwrap(),
+            executor: Arc::new(NeverExec),
+            workspace: "workspace".into(),
+            incarnation: "storage".into(),
+            sandbox: "sandbox".into(),
+            generation: 1,
+        };
+        assert!(matches!(
+            mailbox.decode(&envelope),
+            Err("command-message-source-not-allowed")
+        ));
+        envelope.actor = Some(json!({"kind":"slack"}));
+        assert!(mailbox.decode(&envelope).is_ok());
+        envelope.actor = Some(json!({"kind":"organization","subject":"forged"}));
+        assert!(matches!(
+            mailbox.decode(&envelope),
+            Err("command-author-access-unavailable")
+        ));
     }
 }

@@ -197,6 +197,11 @@ fn title_case(value: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MessagePart {
+    /// Slack attribution; the Text part retains the complete provider prompt.
+    MessageSource {
+        id: String,
+        source: zuse_protocol::slack::MessageSource,
+    },
     /// Invisible dispatch metadata; a changed identity renders above the user message.
     #[serde(rename_all = "camelCase")]
     AgentContext {
@@ -312,7 +317,8 @@ pub enum MessagePart {
 impl MessagePart {
     pub fn id(&self) -> &str {
         match self {
-            MessagePart::AgentContext { id, .. }
+            MessagePart::MessageSource { id, .. }
+            | MessagePart::AgentContext { id, .. }
             | MessagePart::Text { id, .. }
             | MessagePart::Image { id, .. }
             | MessagePart::Visual { id, .. }
@@ -326,6 +332,9 @@ impl MessagePart {
 
     pub fn byte_len(&self) -> usize {
         match self {
+            MessagePart::MessageSource { source, .. } => {
+                serde_json::to_vec(source).map_or(0, |v| v.len())
+            }
             MessagePart::AgentContext {
                 agent,
                 previous_agent,
