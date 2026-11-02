@@ -1,10 +1,12 @@
 //! Inline host-owned visual trees. A control targets the revision the reader
 //! saw; disconnect and navigation retire subscriptions instead of replaying input.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{BORDER, FAINT, MUTED, TEXT, column, control, icon_button, label, row};
 use std::time::Duration;
 use std::{cell::Cell, rc::Rc, sync::Arc};
 use web_time::Instant;
+use zuse_i18n::messages as msg;
 use zuse_protocol::visual_session as wire;
 
 #[derive(Default)]
@@ -320,7 +322,11 @@ impl WorkspaceView {
             .child(div().flex_1())
             .when(view.is_none(), |d| {
                 d.child(
-                    control(SharedString::from(format!("open-{id}")), "Open visual").on_click({
+                    control(
+                        SharedString::from(format!("open-{id}")),
+                        tr(cx, msg::native::open_visual),
+                    )
+                    .on_click({
                         let id = id.clone();
                         cx.listener(move |this, _, _, cx| this.open_visual(id.clone(), cx))
                     }),
@@ -364,13 +370,17 @@ impl WorkspaceView {
         if let Some(view) = view {
             if let Some(error) = &view.error {
                 frame = frame.child(label(error.clone())).child(
-                    control(SharedString::from(format!("retry-{id}")), "Reopen visual").on_click({
+                    control(
+                        SharedString::from(format!("retry-{id}")),
+                        tr(cx, msg::native::reopen_visual),
+                    )
+                    .on_click({
                         let id = id.clone();
                         cx.listener(move |this, _, _, cx| this.open_visual(id.clone(), cx))
                     }),
                 );
             } else if view.tree.is_null() {
-                frame = frame.child(label("Opening visual…"));
+                frame = frame.child(label(tr(cx, msg::native::opening_visual)));
             } else {
                 frame = frame.child(self.visual_node(
                     &id,
@@ -459,7 +469,7 @@ impl WorkspaceView {
                         stack
                             .id(SharedString::from(format!("{id}-{path}")))
                             .role(Role::Button)
-                            .aria_label("Interactive group")
+                            .aria_label(tr(cx, msg::native::interactive_group))
                             .cursor_pointer(),
                         json!({"kind":"none"}),
                         cx,
@@ -598,7 +608,7 @@ impl WorkspaceView {
             "Tabs" => row()
                 .id(SharedString::from(format!("{id}-{path}-tabs")))
                 .role(Role::TabList)
-                .aria_label("Visual tabs")
+                .aria_label(tr(cx, msg::native::visual_tabs))
                 .gap_2()
                 .flex_wrap()
                 .children(
@@ -754,7 +764,7 @@ impl WorkspaceView {
                 label(format!("{kind} rendering is available in the desktop app."))
                     .into_any_element()
             }
-            _ => label("Unsupported visual element").into_any_element(),
+            _ => label(tr(cx, msg::native::unsupported_visual_element)).into_any_element(),
         };
         let mut container = div().min_w_0().child(element);
         if node["grow"] == true {
@@ -838,7 +848,7 @@ impl WorkspaceView {
             .get(id)
             .and_then(|v| v.canvases.get(path))
         else {
-            return label("Preparing canvas…").into_any_element();
+            return label(tr(cx, msg::native::preparing_canvas)).into_any_element();
         };
         let bounds = canvas.bounds.clone();
         let painted = canvas.painted.clone();
@@ -895,7 +905,7 @@ impl WorkspaceView {
                 .cursor_pointer()
                 .tab_index(0)
                 .role(Role::Button)
-                .aria_label("Interactive canvas")
+                .aria_label(tr(cx, msg::native::interactive_canvas))
                 .focus_visible(|style| style.bg(rgb(0x89ca21).opacity(0.12)))
                 .on_key_down(|event: &KeyDownEvent, _, cx| {
                     if matches!(event.keystroke.key.as_str(), "enter" | "space") {

@@ -657,11 +657,11 @@ impl WorkspaceView {
                         control(
                             "connect-cloud",
                             if busy {
-                                "Resuming…"
+                                ("Resuming…").to_string()
                             } else if paused {
-                                "Resume"
+                                crate::localization::text("chat-queue_tray_resume", cx)
                             } else {
-                                "Reconnect"
+                                crate::localization::text("simulators-reconnect", cx)
                             },
                         )
                         .opacity(if busy { 0.5 } else { 1. })

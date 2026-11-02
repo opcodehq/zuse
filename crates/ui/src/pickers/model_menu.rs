@@ -522,9 +522,12 @@ impl Pickers {
                                 .text_size(px(12.))
                                 .text_color(theme.text_muted)
                                 .child(if loading {
-                                    "Checking available agents…"
+                                    crate::localization::text(
+                                        "providers-model_picker_checking_available_agents",
+                                        cx,
+                                    )
                                 } else {
-                                    "No models match your search."
+                                    ("No models match your search.").to_string()
                                 }),
                         )
                     }),

@@ -1,9 +1,11 @@
 //! Project commands are edited and executed on the selected thread's engine.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     settings_style as s,
     shell::{BORDER, MUTED, column, row},
 };
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     ProjectActionDraft, ProjectActionIcon, ProjectActionRun, ProjectActionsSnapshot,
 };
@@ -339,9 +341,9 @@ impl WorkspaceView {
             .child(
                 row()
                     .gap_2()
-                    .child(s::title_text("Project actions").flex_1())
+                    .child(s::title_text(tr(cx, msg::native::project_actions)).flex_1())
                     .child(
-                        s::button("refresh-project-actions", "Refresh").on_click(cx.listener(
+                        s::button("refresh-project-actions", tr(cx, msg::common::refresh)).on_click(cx.listener(
                             |this, _, _, cx| {
                                 this.refresh_project_actions();
                                 cx.notify();
@@ -350,13 +352,14 @@ impl WorkspaceView {
                     ),
             )
             .child(s::description_text(
-                "Save commands for this project and run them in the selected thread’s checkout.",
+                tr(cx, msg::native::save_commands_for_this_project_and_run_them_in_the_selected_thread_s_checkout),
             ));
         if self.project_action_scope().is_none() {
             return view
-                .child(s::description_text(
-                    "Open a thread in a project to manage its actions.",
-                ))
+                .child(s::description_text(tr(
+                    cx,
+                    msg::native::open_a_thread_in_a_project_to_manage_its_actions,
+                )))
                 .into_any_element();
         }
         if let Some(error) = &state.error {
@@ -376,27 +379,27 @@ impl WorkspaceView {
                 (ProjectActionIcon::Build, "Build"),
                 (ProjectActionIcon::Debug, "Debug"),
             ];
-            return view.child(s::frame().child(s::header(if id.is_some() { "Edit action" } else { "New action" }, "Commands run only when you choose Run, or when enabled for new worktrees."))
+            return view.child(s::frame().child(s::header(if id.is_some() { "Edit action" } else { "New action" }, tr(cx, msg::native::commands_run_only_when_you_choose_run_or_when_enabled_for_new_worktrees)))
                 .child(s::card()
-                    .child(s::setting_row(true).flex_col().items_stretch().child(s::title_text("Name")).child(s::field().child(editor.name.clone())))
-                    .child(s::setting_row(false).flex_col().items_stretch().child(s::title_text("Command")).child(div().rounded(px(7.)).border_1().border_color(rgb(BORDER)).p_2().child(editor.command.clone())))
-                    .child(s::setting_row(false).flex_col().items_stretch().child(s::title_text("Icon")).child(row().gap_1().flex_wrap().children(choices.into_iter().enumerate().map(|(index,(icon,label))| {
+                    .child(s::setting_row(true).flex_col().items_stretch().child(s::title_text(tr(cx, msg::projects::pr_pane_name))).child(s::field().child(editor.name.clone())))
+                    .child(s::setting_row(false).flex_col().items_stretch().child(s::title_text(tr(cx, msg::settings::diagnostics_pane_command))).child(div().rounded(px(7.)).border_1().border_color(rgb(BORDER)).p_2().child(editor.command.clone())))
+                    .child(s::setting_row(false).flex_col().items_stretch().child(s::title_text(tr(cx, msg::native::icon))).child(row().gap_1().flex_wrap().children(choices.into_iter().enumerate().map(|(index,(icon,label))| {
                         s::button(("project-action-icon",index),label).when(editor.icon==icon,|view|view.bg(s::frame_bg()))
                             .on_click(cx.listener(move|this,_,_,cx|{if !busy {if let Some(editor)=&mut this.project_actions.editor {editor.icon=icon;}cx.notify();}}))
                     }))))
-                    .child(s::setting_row(false).child(s::details("Run on worktree creation","Run this setup command when a new worktree is created."))
-                        .child(s::toggle("project-action-setup",editor.setup,"Run on worktree creation").opacity(if busy {0.45}else{1.})
+                    .child(s::setting_row(false).child(s::details(tr(cx, msg::native::run_on_worktree_creation),tr(cx, msg::native::run_this_setup_command_when_a_new_worktree_is_created)))
+                        .child(s::toggle("project-action-setup",editor.setup,tr(cx, msg::native::run_on_worktree_creation)).opacity(if busy {0.45}else{1.})
                             .on_click(cx.listener(move|this,_,_,cx|{if !busy {if let Some(editor)=&mut this.project_actions.editor {editor.setup=!editor.setup;}cx.notify();}}))))
                     .child(s::setting_row(false).flex_wrap()
-                        .child(s::button("cancel-project-action","Cancel").on_click(cx.listener(move|this,_,_,cx|{if !busy {this.project_actions.editor=None;cx.notify();}})))
-                        .child(s::button("save-project-action",if busy {"Saving…"}else{"Save action"}).opacity(if available {1.}else{0.45})
+                        .child(s::button("cancel-project-action",tr(cx, msg::projects::masters_cancel)).on_click(cx.listener(move|this,_,_,cx|{if !busy {this.project_actions.editor=None;cx.notify();}})))
+                        .child(s::button("save-project-action",if busy {crate::localization::text("settings-wallpaper_saving", cx)}else{("Save action").to_string()}).opacity(if available {1.}else{0.45})
                             .on_click(cx.listener(move|this,_,_,cx|{if available {this.project_action_request(Operation::Save,None,cx);}})))
                         .when_some(id.clone(),|view,id|view.child(s::button("delete-project-action",if editor.confirm_delete {"Confirm delete"}else{"Delete…"}).text_color(rgb(0xec9292))
                             .on_click(cx.listener(move|this,_,_,cx|{if !available{return;}if this.project_actions.editor.as_ref().is_some_and(|editor|editor.confirm_delete) {this.project_action_request(Operation::Delete,Some(id.clone()),cx);}else if let Some(editor)=&mut this.project_actions.editor {editor.confirm_delete=true;cx.notify();}})))))))
                 .into_any_element();
         }
         view = view.child(
-            s::button("new-project-action", "Add action")
+            s::button("new-project-action", tr(cx, msg::native::add_action))
                 .opacity(if available { 1. } else { 0.45 })
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if available {
@@ -409,35 +412,43 @@ impl WorkspaceView {
                 view = view.child(s::description_text(issue.clone()).text_color(rgb(0xecb66b)));
             }
             if snapshot.actions.is_empty() {
-                view = view.child(s::description_text(
-                    "No saved actions yet. Add a command or import one below.",
-                ));
+                view = view.child(s::description_text(tr(
+                    cx,
+                    msg::native::no_saved_actions_yet_add_a_command_or_import_one_below,
+                )));
             }
             for (index, action) in snapshot.actions.iter().enumerate() {
                 let edit = action.clone();
                 let run = action.id.clone();
-                view = view.child(
-                    s::frame().child(
-                        s::card().child(
-                            s::setting_row(true)
-                                .flex_col()
-                                .items_stretch()
-                                .child(s::title_text(action.name.clone()))
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .font_family("Geist Mono")
-                                        .text_color(rgb(MUTED))
-                                        .child(action.command.clone()),
-                                )
-                                .when(action.run_on_worktree_create, |view| {
-                                    view.child(s::description_text("Runs on new worktrees"))
-                                })
-                                .child(
-                                    row()
-                                        .gap_2()
-                                        .child(
-                                            s::button(("run-project-action", index), "Run")
+                view =
+                    view.child(
+                        s::frame().child(
+                            s::card().child(
+                                s::setting_row(true)
+                                    .flex_col()
+                                    .items_stretch()
+                                    .child(s::title_text(action.name.clone()))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .font_family("Geist Mono")
+                                            .text_color(rgb(MUTED))
+                                            .child(action.command.clone()),
+                                    )
+                                    .when(action.run_on_worktree_create, |view| {
+                                        view.child(s::description_text(tr(
+                                            cx,
+                                            msg::native::runs_on_new_worktrees,
+                                        )))
+                                    })
+                                    .child(
+                                        row()
+                                            .gap_2()
+                                            .child(
+                                                s::button(
+                                                    ("run-project-action", index),
+                                                    tr(cx, msg::chat::top_bar_run),
+                                                )
                                                 .opacity(if available { 1. } else { 0.45 })
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     if available {
@@ -448,9 +459,12 @@ impl WorkspaceView {
                                                         );
                                                     }
                                                 })),
-                                        )
-                                        .child(
-                                            s::button(("edit-project-action", index), "Edit")
+                                            )
+                                            .child(
+                                                s::button(
+                                                    ("edit-project-action", index),
+                                                    tr(cx, msg::common::edit),
+                                                )
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
                                                         if available {
@@ -469,14 +483,17 @@ impl WorkspaceView {
                                                         }
                                                     },
                                                 )),
-                                        ),
-                                ),
+                                            ),
+                                    ),
+                            ),
                         ),
-                    ),
-                );
+                    );
             }
             if !snapshot.importable_actions.is_empty() {
-                view = view.child(s::title_text("Available in project files"));
+                view = view.child(s::title_text(tr(
+                    cx,
+                    msg::native::available_in_project_files,
+                )));
             }
             for (index, action) in snapshot.importable_actions.iter().enumerate() {
                 let draft = action.clone();
@@ -488,8 +505,12 @@ impl WorkspaceView {
                             .child(s::title_text(action.name.clone()))
                             .child(s::description_text(action.command.clone()))
                             .child(
-                                s::button(("import-project-action", index), "Review and import")
-                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                s::button(
+                                    ("import-project-action", index),
+                                    tr(cx, msg::native::review_and_import),
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
                                         if available {
                                             this.edit_project_action(
                                                 Some(draft.clone()),
@@ -498,13 +519,17 @@ impl WorkspaceView {
                                                 cx,
                                             );
                                         }
-                                    })),
+                                    },
+                                )),
                             ),
                     ),
                 );
             }
         } else if state.request.is_some() {
-            view = view.child(s::description_text("Loading project actions…"));
+            view = view.child(s::description_text(tr(
+                cx,
+                msg::native::loading_project_actions,
+            )));
         }
         view.into_any_element()
     }

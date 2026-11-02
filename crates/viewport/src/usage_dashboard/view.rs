@@ -1,11 +1,13 @@
 pub(super) use super::format::{money, tokens};
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     palette::{self, rgb},
     settings_style as style,
     shell::{BG, BORDER, MUTED, TEXT},
 };
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     HarnessId,
     usage::{CostStatus, Group},
@@ -198,13 +200,15 @@ impl UsageDashboard {
             .child(
                 label(
                     if self.project_scope {
-                        self.properties
+                        (self
+                            .properties
                             .project
                             .as_ref()
                             .map(|p| p.label.clone())
-                            .unwrap_or_else(|| "This project".into())
+                            .unwrap_or_else(|| "This project".into()))
+                        .to_string()
                     } else {
-                        "All projects".into()
+                        crate::localization::text("usage-usage_dashboard_all_projects", cx).into()
                     },
                     12.,
                 )
@@ -241,7 +245,10 @@ impl UsageDashboard {
                     .px(px(20.))
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .child(label("Usage", 14.).font_weight(FontWeight::MEDIUM)),
+                    .child(
+                        label(tr(cx, msg::usage::usage_dashboard_usage), 14.)
+                            .font_weight(FontWeight::MEDIUM),
+                    ),
             )
             .child(controls);
         if self.report_error.is_some() && report.is_some() {
@@ -288,15 +295,16 @@ impl UsageDashboard {
                         report.sources.iter().filter(|s| s.detected).count()
                     ))
                     .child(if refreshing {
-                        "Updating…".into()
+                        crate::localization::text("chat-chat_composer_updating", cx).into()
                     } else {
-                        format!(
+                        (format!(
                             "Updated {}",
                             report
                                 .generated_at
                                 .with_timezone(&Local)
                                 .format("%-I:%M %p")
-                        )
+                        ))
+                        .to_string()
                     }),
             );
             root = root.child(self.scroll_view(body, cx));
@@ -374,11 +382,10 @@ impl UsageDashboard {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut title = row()
-            .gap(px(8.))
-            .flex_1()
-            .min_w_0()
-            .child(label("Daily usage", 14.).font_weight(FontWeight::MEDIUM));
+        let mut title = row().gap(px(8.)).flex_1().min_w_0().child(
+            label(tr(cx, msg::usage::usage_dashboard_daily_usage), 14.)
+                .font_weight(FontWeight::MEDIUM),
+        );
         if let Some((_, _, range)) = self.range.clone() {
             title = title.child(self.text_button(
                 "usage-clear-day",
@@ -597,7 +604,7 @@ impl UsageDashboard {
                     .h(px(256.))
                     .justify_center()
                     .text_color(rgb(MUTED))
-                    .child("No usage in this period."),
+                    .child(tr(cx, msg::usage::usage_dashboard_no_usage_in_this_period)),
             );
         } else {
             let mut legend = row()
@@ -680,7 +687,14 @@ impl UsageDashboard {
                     );
             } else {
                 foot = foot.child(
-                    label("Hover the chart for a daily breakdown", 11.).text_color(rgb(MUTED)),
+                    label(
+                        tr(
+                            cx,
+                            msg::usage::usage_dashboard_hover_the_chart_for_a_daily_breakdown,
+                        ),
+                        11.,
+                    )
+                    .text_color(rgb(MUTED)),
                 );
             }
             plot = plot.child(foot);
@@ -790,7 +804,7 @@ impl UsageDashboard {
         }
         frame().child(content).into_any_element()
     }
-    fn limits(&self, wide: bool, _cx: &mut Context<Self>) -> AnyElement {
+    fn limits(&self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
         let mut cards = div().grid().grid_cols(if wide { 2 } else { 1 }).gap(px(4.));
         for (harness, _, name, art) in PROVIDERS {
             let account = self
@@ -888,8 +902,17 @@ impl UsageDashboard {
                     .px(px(12.))
                     .py(px(8.))
                     .justify_between()
-                    .child(label("Plan limits", 14.).font_weight(FontWeight::MEDIUM))
-                    .child(label("Live provider allowance", 11.).text_color(rgb(MUTED))),
+                    .child(
+                        label(tr(cx, msg::usage::usage_dashboard_plan_limits), 14.)
+                            .font_weight(FontWeight::MEDIUM),
+                    )
+                    .child(
+                        label(
+                            tr(cx, msg::usage::usage_dashboard_live_provider_allowance),
+                            11.,
+                        )
+                        .text_color(rgb(MUTED)),
+                    ),
             )
             .child(cards)
             .into_any_element()
@@ -963,10 +986,13 @@ impl UsageDashboard {
             .child(table::heading(headers, columns.widths));
         if values.is_empty() {
             table = table.child(
-                row()
-                    .h(px(64.))
-                    .justify_center()
-                    .child(label("No contributors found.", 12.).text_color(rgb(MUTED))),
+                row().h(px(64.)).justify_center().child(
+                    label(
+                        tr(cx, msg::usage::usage_dashboard_no_contributors_found),
+                        12.,
+                    )
+                    .text_color(rgb(MUTED)),
+                ),
             );
         }
         let count_visible = values.len();
@@ -984,7 +1010,10 @@ impl UsageDashboard {
                     .h(px(44.))
                     .px(px(12.))
                     .justify_between()
-                    .child(label("Breakdown", 14.).font_weight(FontWeight::MEDIUM))
+                    .child(
+                        label(tr(cx, msg::usage::usage_dashboard_breakdown), 14.)
+                            .font_weight(FontWeight::MEDIUM),
+                    )
                     .child(tabs),
             )
             .child(
@@ -1035,7 +1064,7 @@ impl UsageDashboard {
                 column()
                     .items_start()
                     .child(
-                        label("Sessions", 14.)
+                        label(tr(cx, msg::native::sessions), 14.)
                             .line_height(px(20.))
                             .font_weight(FontWeight::MEDIUM),
                     )
@@ -1080,7 +1109,7 @@ impl UsageDashboard {
             if self.page_error.is_some() {
                 result = result.child(
                     label(
-                        "Could not load sessions. Change a filter or try again.",
+                        tr(cx, msg::usage::usage_dashboard_could_not_load_sessions_change_a_filter_or_try_again),
                         12.,
                     )
                     .border_t_1()
@@ -1098,7 +1127,7 @@ impl UsageDashboard {
                 .border_b_1()
                 .border_color(rgb(BORDER))
                 .child(
-                    label("Session", 12.)
+                    label(tr(cx, msg::usage::usage_dashboard_session), 12.)
                         .line_height(px(12.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(rgb(MUTED))
@@ -1164,10 +1193,10 @@ impl UsageDashboard {
             } else if loading {
                 has_rows = true;
                 body = body.child(
-                    row()
-                        .h(px(80.))
-                        .justify_center()
-                        .child(label("Loading sessions…", 12.).text_color(rgb(MUTED))),
+                    row().h(px(80.)).justify_center().child(
+                        label(tr(cx, msg::usage::usage_dashboard_loading_sessions), 12.)
+                            .text_color(rgb(MUTED)),
+                    ),
                 );
             }
             if has_rows {

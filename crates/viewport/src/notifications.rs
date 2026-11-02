@@ -1,10 +1,12 @@
 //! Completion cues consume durable markers even while muted or awaiting delivery.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     settings_style as s,
     shell::{BORDER, MUTED, TEXT, column, row},
 };
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     Session,
     completion_sound::CompletionSoundPreset,
@@ -96,7 +98,7 @@ impl WorkspaceView {
         let toggle = s::toggle(
             "general-completion-sound",
             enabled,
-            "Agent completion sound",
+            tr(cx, msg::settings::settings_page_agent_completion_sound),
         )
         .track_focus(&self.completion_switch_focus)
         .tab_index(0)
@@ -120,7 +122,7 @@ impl WorkspaceView {
                     .track_focus(&self.completion_preset_focus.clone().tab_stop(enabled))
                     .tab_index(0)
                     .on_key_down(cx.listener(Self::on_completion_preset_key))
-                    .aria_label("Completion sound preset")
+                    .aria_label(tr(cx, msg::native::completion_sound_preset))
                     .aria_expanded(self.completion_preset_menu)
                     .when(!enabled, |button| button.opacity(0.64).cursor_default())
                     .child(icon("alt-arrow-down").size(px(14.)))
@@ -159,7 +161,7 @@ impl WorkspaceView {
                         column()
                             .id("completion-preset-list")
                             .role(Role::ListBox)
-                            .aria_label("Completion sound presets")
+                            .aria_label(tr(cx, msg::native::completion_sound_presets))
                             .absolute()
                             .top_full()
                             .mt_1()
@@ -220,21 +222,27 @@ impl WorkspaceView {
             .child(icon("volume-loud").size(px(16.)).text_color(rgb(MUTED)))
             .child(selector)
             .child(
-                s::button("general-preview-sound", "Preview")
-                    .tab_index(0)
-                    .tab_stop(enabled)
-                    .when(!enabled, |button| button.opacity(0.64).cursor_default())
-                    .on_click(cx.listener(move |this, _, _, _| {
-                        if this.preferences.completion_sound.enabled {
-                            this.play_completion_sound();
-                        }
-                    })),
+                s::button(
+                    "general-preview-sound",
+                    tr(cx, msg::projects::file_editor_preview),
+                )
+                .tab_index(0)
+                .tab_stop(enabled)
+                .when(!enabled, |button| button.opacity(0.64).cursor_default())
+                .on_click(cx.listener(move |this, _, _, _| {
+                    if this.preferences.completion_sound.enabled {
+                        this.play_completion_sound();
+                    }
+                })),
             );
         let updates = self.preferences.provider_update_notifications;
         let updates_switch = s::toggle(
             "general-provider-updates",
             updates,
-            "Provider update notifications",
+            tr(
+                cx,
+                msg::settings::settings_page_provider_update_notifications,
+            ),
         )
         .track_focus(&self.provider_notice_focus)
         .tab_index(0)
@@ -246,17 +254,17 @@ impl WorkspaceView {
             cx.notify();
         }));
         let settings_row = s::setting_row(false).flex_col().flex_nowrap().items_stretch().gap_2()
-            .child(row().items_start().gap(px(10.)).child(s::details("Agent completion sound", "Play a short sound when any agent turn finishes, including agents working in background chats.")).child(row().h(px(28.)).child(toggle)))
+            .child(row().items_start().gap(px(10.)).child(s::details(tr(cx, msg::settings::settings_page_agent_completion_sound), tr(cx, msg::settings::settings_page_play_a_short_sound_when_any_agent_turn_finishes_including_agents_worki))).child(row().h(px(28.)).child(toggle)))
             .child(controls);
         s::frame()
-            .child(s::header("Notifications", ""))
+            .child(s::header(tr(cx, msg::settings::settings_page_notifications), ""))
             .child(
                 s::card()
                     .map(|mut card| {
                         card.style().overflow = Default::default();
                         card
                     })
-                    .child(s::setting_row(true).child(s::details("Provider update notifications","Show a notification when a newer version of an agent provider is available. Off by default.")).child(row().h(px(28.)).child(updates_switch)))
+                    .child(s::setting_row(true).child(s::details(tr(cx, msg::settings::settings_page_provider_update_notifications),tr(cx, msg::settings::settings_page_provider_update_notifications_description))).child(row().h(px(28.)).child(updates_switch)))
                     .child(settings_row),
             )
             .into_any_element()

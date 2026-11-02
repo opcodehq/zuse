@@ -1,5 +1,7 @@
 //! Workspace surfaces and platform titlebar controls.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 use zuse_viewport::workspace_style as layout;
 
 impl Shell {
@@ -64,7 +66,7 @@ impl Shell {
                         .text_size(px(11.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(theme.text)
-                        .child("Zuse (Beta)"),
+                        .child(tr(cx, msg::chat::top_bar_zuse_beta)),
                 )
                 .child(
                     zuse_viewport::sidebar_controls::footer_button(

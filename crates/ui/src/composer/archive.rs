@@ -1,7 +1,9 @@
 //! Archived threads keep their transcript and draft, with an explicit restore action.
 use super::Composer;
+use crate::localization::message as tr;
 use crate::{icons, theme::Theme};
 use gpui::{Context, Div, Role, div, prelude::*, px};
+use zuse_i18n::messages as msg;
 use zuse_protocol::Chat;
 use zuse_rpc::methods;
 
@@ -49,7 +51,7 @@ impl Composer {
         let button = div()
             .id("unarchive-thread")
             .role(Role::Button)
-            .aria_label("Unarchive thread")
+            .aria_label(tr(cx, msg::native::unarchive_thread))
             .tab_index(0)
             .h(px(28.))
             .px(px(12.))
@@ -62,7 +64,11 @@ impl Composer {
             .text_color(theme.text)
             .opacity(if busy || !connected { 0.45 } else { 1. })
             .when(!busy && connected, |view| view.cursor_pointer())
-            .child(if busy { "Unarchiving…" } else { "Unarchive" })
+            .child(if busy {
+                crate::localization::text("chat-archived_chats_page_unarchiving", cx)
+            } else {
+                crate::localization::text("chat-archived_chats_page_unarchive", cx)
+            })
             .on_click(cx.listener(move |this, _, _, cx| this.unarchive_thread(target.clone(), cx)));
         let row = div()
             .flex()
@@ -87,7 +93,7 @@ impl Composer {
                         div()
                             .text_size(px(12.))
                             .text_color(theme.text_muted)
-                            .child("This chat is archived."),
+                            .child(tr(cx, msg::chat::archived_chats_page_this_chat_is_archived)),
                     )
                     .when_some(
                         self.failure

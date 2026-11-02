@@ -1,5 +1,7 @@
 //! Alternate presentation of the same model and option mutations.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 
 pub(super) const COMPACT_ROW_HEIGHT: f32 = 32.0;
 const COMPACT_LIST_ROWS: usize = 7;
@@ -688,7 +690,7 @@ impl Pickers {
                     .justify_between()
                     .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
-                    .child("Advanced")
+                    .child(tr(cx, msg::chat::chat_composer_advanced))
                     .children(fast.map(|(option, choice, default, on)| {
                         fast_toggle(&theme, on).on_click(cx.listener(move |this, _, _, cx| {
                             this.pick_option(option.clone(), choice.clone(), default, cx);

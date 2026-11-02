@@ -115,7 +115,10 @@ impl WorkspaceView {
             );
         } else {
             choices.push((
-                "This computer".into(),
+                crate::localization::message(
+                    cx,
+                    zuse_i18n::messages::chat::computer_switcher_this_computer,
+                ),
                 "monitor",
                 Pick::Computer,
                 !self.cloud.mode,
@@ -419,8 +422,10 @@ impl WorkspaceView {
             self.project
                 .as_ref()
                 .and_then(|p| p["name"].as_str())
-                .unwrap_or("No project")
-                .to_owned()
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    crate::localization::message(cx, zuse_i18n::messages::chat::no_project)
+                })
         };
         row()
             .relative()
@@ -438,7 +443,10 @@ impl WorkspaceView {
                 if self.cloud.mode {
                     "Cloud sandbox · boxd".into()
                 } else {
-                    "This computer".into()
+                    crate::localization::message(
+                        cx,
+                        zuse_i18n::messages::chat::computer_switcher_this_computer,
+                    )
                 },
                 if self.cloud.mode {
                     "cloud-dither"

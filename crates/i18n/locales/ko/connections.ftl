@@ -1,0 +1,192 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+connections-cloud_connection_notice_signing_in = 로그인 중…
+
+connections-cloud_workspace_info_open_workspace_via_ssh = SSH를 통해 작업 공간 열기
+
+connections-cloud_workspace_info_open_via_ssh = SSH를 통해 열기
+
+connections-cloud_workspace_info_open_this_workspace_in_an_editor_or_terminal_over_ssh = SSH를 통해 편집기나 터미널에서 이 작업 공간을 엽니다.
+
+connections-cloud_workspace_info_the_workspace_must_be_running_for_ssh_access = SSH 액세스를 위해서는 작업공간이 실행 중이어야 합니다.
+
+connections-cloud_workspace_info_copy_ssh_command = SSH 명령 복사
+
+connections-cloud_workspace_info_sync_to_a_local_directory = 로컬 디렉터리에 동기화
+
+connections-cloud_workspace_info_status = 상태
+
+connections-cloud_workspace_info_live_usage_needs_the_updated_workspace_runtime = 실시간 사용에는 업데이트된 작업공간 런타임이 필요합니다.
+
+connections-cloud_workspace_info_restart_workspace = 작업공간 다시 시작
+
+connections-cloud_workspace_info_restart_this_workspace = 이 작업공간을 다시 시작하시겠습니까?
+
+connections-cloud_workspace_info_the_runtime_restarts_in_place_any_agent_turn_in_progress_is_interrupte = 런타임이 제자리에서 다시 시작됩니다. 진행 중인 모든 에이전트 설정이 중단되고 열려 있는 터미널이 다시 연결됩니다. 작업 공간의 파일은 보존됩니다.
+
+connections-cloud_workspace_info_restart = 다시 시작
+
+connections-no_connection_tray_no_connection = 연결되지 않음
+
+connections-cloud_connection_notice_cloud_workspace_paused = 클라우드 작업공간이 일시중지됨
+
+connections-cloud_connection_notice_resuming_cloud_workspace = 클라우드 작업공간 재개
+
+connections-cloud_connection_notice_updating_cloud_runtime = 클라우드 런타임 업데이트
+
+connections-cloud_connection_notice_update_required = 업데이트 필요
+
+connections-cloud_connection_notice_reconnect_needed = 다시 연결 필요
+
+connections-cloud_connection_notice_connection_failed = 연결 실패
+
+connections-cloud_connection_notice_cloud_access_unavailable = Cloud에 액세스할 수 없음
+
+connections-cloud_connection_notice_update_zuse_and_try_again_to_use_the_cloud_public_beta = Zuse를 업데이트한 후 Cloud 공개 베타를 다시 시도하세요.
+
+connections-cloud_connection_notice_cloud_access_could_not_be_verified = 클라우드 액세스를 확인할 수 없습니다.
+
+connections-cloud_connection_notice_sign_in_required = 로그인이 필요합니다
+
+connections-cloud_workspace_info_could_not_open_via_ssh = SSH를 통해 열 수 없습니다.
+
+connections-cloud_workspace_info_ssh_command_copied = SSH 명령이 복사되었습니다.
+
+connections-cloud_workspace_info_could_not_prepare_ssh_access = SSH 액세스를 준비할 수 없습니다.
+
+connections-cloud_workspace_info_cursor = Cursor
+
+connections-cloud_workspace_info_zed = 제드
+
+connections-cloud_workspace_info_terminal = 터미널
+
+connections-cloud_workspace_info_could_not_sync_this_workspace = 이 작업공간을 동기화할 수 없습니다.
+
+connections-cloud_workspace_info_could_not_restart_the_workspace = 작업공간을 다시 시작할 수 없습니다.
+
+connections-cloud_machine_connection_securely_connected_projects_and_terminals_are_available = 안전하게 연결되었습니다. 프로젝트와 터미널을 사용할 수 있습니다.
+
+connections-cloud_machine_connection_connected = 연결됨
+
+connections-cloud_machine_connection_connection_failed = 연결 실패
+
+connections-cloud_machine_connection_offline = 오프라인
+
+connections-cloud_machine_connection_establishing_the_secure_desktop_connection = 보안 데스크톱 연결을 설정합니다.
+
+connections-cloud_machine_connection_connecting = 연결 중
+
+connections-cloud_machine_connection_the_machine_is_ready_but_it_has_not_been_connected_to_this_deskto = 머신이 준비되었지만 아직 이 데스크톱에 연결되지 않았습니다.
+
+connections-cloud_machine_connection_not_connected = 연결되지 않음
+
+connections-cloud_machine_progress_provisioning = 프로비저닝
+
+connections-cloud_machine_progress_retrying_automatically = 자동으로 재시도 중
+
+connections-cloud_machine_progress_installing_tools = 도구 설치
+
+connections-cloud_machine_progress_starting = 시작
+
+connections-cloud_machine_progress_installing = 설치 중
+
+connections-cloud_machine_progress_connecting = 연결 중
+
+connections-cloud_machine_progress_ready = 준비
+
+connections-cloud_machine_progress_setup_interrupted = 설정이 중단되었습니다.
+
+connections-cloud_machine_progress_cancellation_scheduled = 취소 예정
+
+connections-cloud_machine_progress_suspended = 정지됨
+
+connections-cloud_machine_progress_restoring = 복원 중
+
+connections-cloud_machine_progress_removing = 제거
+
+connections-cloud_machine_progress_removed = 삭제됨
+
+connections-cloud_ssh_client_bus_zuse_desktop = zuse-데스크탑
+
+connections-remote_access_on_managed_by_zuse_serve = 켜기 · zuse Serve에서 관리합니다.
+
+connections-remote_access_private_access = 비공개 액세스{ $value1 }.
+
+connections-remote_access_a_previous_serve_route_is_no_longer_responding = 이전 서비스 경로{ $port }가 더 이상 응답하지 않습니다.
+
+connections-remote_access_tailscale_serve_is_used_by_another_app = Tailscale 서버는 다른 앱{ $port }에서 사용됩니다.
+
+connections-remote_access_tailscale_serve_has_an_existing_configuration_zuse_doesn_t_recogn = Tailscale 서버에는 Zuse가 인식하지 못하는 기존 구성이 있습니다.
+
+connections-remote_access_tailscale_is_off_turn_it_on_in_the_tailscale_app = Tailscale가 꺼져 있습니다. Tailscale 앱에서 켜세요.
+
+connections-remote_access_open_tailscale_and_sign_in_to_use_private_access = Tailscale를 열고 로그인하여 비공개 액세스를 사용하세요.
+
+connections-remote_access_connect_privately_from_devices_on_the_same_tailnet = 동일한 tailnet에 있는 장치에서 비공개로 연결하세요.
+
+connections-auth_opening_browser_sign_in = 브라우저 로그인 열기
+
+connections-auth_complete_workos_sign_in_in_your_browser = 브라우저에서 WorkOS 로그인을 완료하세요.
+
+connections-auth_sign_in_failed = 로그인 실패
+
+connections-cloud_workspace_info_inactive = 비활성
+
+connections-cloud_memory_low = 클라우드 머신의 메모리가 부족합니다.
+
+connections-cloud_memory_waiting = 메모리가 확보되면 다시 연결합니다…
+
+connections-cloud_memory_recovering = 클라우드 머신의 메모리가 소진되었습니다. 다시 연결하는 중…
+
+connections-cloud_memory_failed = 메모리 부족으로 자동 복구가 중단되었습니다.
+
+connections-cloud_memory_advice = 에이전트에게 테스트나 빌드를 동시에 적게 실행하도록 요청하거나 더 큰 머신을 사용하세요.
+
+connections-cloud_workspace_menu_details = 워크스페이스 세부 정보
+
+connections-cloud_workspace_menu_copy_branch = 브랜치 이름 복사
+
+connections-cloud_workspace_menu_repository = 저장소
+
+connections-cloud_workspace_menu_created = 생성일
+
+connections-cloud_workspace_menu_environment = 환경
+
+connections-cloud_workspace_menu_preview_urls = 미리보기 URL
+
+connections-cloud_workspace_menu_copy_url = 미리보기 URL 복사
+
+connections-cloud_workspace_menu_no_previews = 개발 서버를 시작하면 미리보기 URL이 표시됩니다.
+
+connections-cloud_workspace_menu_public_urls = 링크가 있는 누구나 이 서버에 접근할 수 있습니다.
+
+connections-cloud_workspace_menu_preview_pending = URL 생성 중…
+
+connections-cloud_workspace_menu_preview_failed = URL 생성 실패 · 재시도 중
+
+connections-preview_ports_title = 포트 및 미리보기
+
+connections-preview_ports_auto_urls = 미리보기 URL 자동 생성
+
+connections-preview_ports_local = localhost로 전달
+
+connections-preview_ports_auto_help = 이 작업 공간의 확인된 웹 서버를 사용합니다.
+
+connections-preview_ports_failed = 포트 전달을 설정할 수 없습니다.
+
+connections-preview_ports_forward_failed = 전달 실패 · 재시도 중
+
+connections-preview_ports_forward_pending = localhost에 연결 중…
+
+connections-preview_ports_empty = 감지된 웹 서버가 없습니다.
+
+connections-preview_ports_number = 포트 번호
+
+connections-preview_ports_add = 포트 추가
+
+connections-preview_ports_manual_help = 서버가 없나요? 포트를 추가한 후 URL 또는 로컬 전달을 켜세요.
+
+connections-preview_ports_public_help = 미리보기 링크는 공개됩니다. 끄면 발급된 링크를 해제합니다.
+
+connections-preview_ports_revoke_pending = 미리보기 링크 해제 중… 삭제에 성공할 때까지 공유된 링크가 공개 상태로 남을 수 있습니다. 다시 끄면 재시도합니다.

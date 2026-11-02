@@ -5,7 +5,9 @@
 //! emits [`NotificationsEvent::Changed`], and the shell persists it. Nothing
 //! here talks RPC — all preferences are device-local UI settings.
 
+use crate::localization::message as tr;
 use gpui::{Context, EventEmitter, SharedString, Window, div, prelude::*, px};
+use zuse_i18n::messages as msg;
 
 use crate::popover;
 use crate::settings::widgets;
@@ -218,14 +220,9 @@ impl Render for NotificationsPage {
             .mt_0()
             .child(
                 widgets::card_row(&theme, true)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(160.0))
-                            .flex()
-                            .flex_col()
-                            .child(widgets::row_title(&theme, "Session sounds")),
-                    )
+                    .child(div().flex_1().min_w(px(160.0)).flex().flex_col().child(
+                        widgets::row_title(&theme, tr(cx, msg::native::session_sounds)),
+                    ))
                     .child(interactive_switch(
                         toggle("notifications-sound-toggle", "Session sounds", sound, true),
                         accent,
@@ -236,14 +233,9 @@ impl Render for NotificationsPage {
             .child(
                 widgets::card_row(&theme, false)
                     .when(!sound, |el| el.opacity(0.55))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(160.0))
-                            .flex()
-                            .flex_col()
-                            .child(widgets::row_title(&theme, "Task completed")),
-                    )
+                    .child(div().flex_1().min_w(px(160.0)).flex().flex_col().child(
+                        widgets::row_title(&theme, tr(cx, msg::native::task_completed)),
+                    ))
                     .child(
                         toggle(
                             "notifications-completion-sound-toggle",
@@ -264,14 +256,9 @@ impl Render for NotificationsPage {
             .child(
                 widgets::card_row(&theme, false)
                     .when(!sound, |el| el.opacity(0.55))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(160.0))
-                            .flex()
-                            .flex_col()
-                            .child(widgets::row_title(&theme, "Input required")),
-                    )
+                    .child(div().flex_1().min_w(px(160.0)).flex().flex_col().child(
+                        widgets::row_title(&theme, tr(cx, msg::native::input_required)),
+                    ))
                     .child(
                         toggle(
                             "notifications-input-sound-toggle",
@@ -287,14 +274,9 @@ impl Render for NotificationsPage {
             .child(
                 widgets::card_row(&theme, false)
                     .when(!sound, |el| el.opacity(0.55))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(160.0))
-                            .flex()
-                            .flex_col()
-                            .child(widgets::row_title(&theme, "Errors and disconnections")),
-                    )
+                    .child(div().flex_1().min_w(px(160.0)).flex().flex_col().child(
+                        widgets::row_title(&theme, tr(cx, msg::native::errors_and_disconnections)),
+                    ))
                     .child(
                         toggle(
                             "notifications-attention-sound-toggle",
@@ -316,14 +298,9 @@ impl Render for NotificationsPage {
             .mt_0()
             .child(
                 widgets::card_row(&theme, true)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(160.0))
-                            .flex()
-                            .flex_col()
-                            .child(widgets::row_title(&theme, "Desktop notifications")),
-                    )
+                    .child(div().flex_1().min_w(px(160.0)).flex().flex_col().child(
+                        widgets::row_title(&theme, tr(cx, msg::native::desktop_notifications)),
+                    ))
                     .child(interactive_switch(
                         toggle(
                             "notifications-desktop-toggle",
@@ -345,7 +322,10 @@ impl Render for NotificationsPage {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .child(widgets::row_title(&theme, "Agent updates"))
+                            .child(widgets::row_title(
+                                &theme,
+                                tr(cx, msg::native::agent_updates),
+                            ))
                             .child(widgets::meta_line(
                                 &theme,
                                 vec![
@@ -374,14 +354,12 @@ impl Render for NotificationsPage {
                 // are off (the harnesses not-installed treatment).
                 widgets::card_row(&theme, false)
                     .when(!desktop, |el| el.opacity(0.55))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(160.0))
-                            .flex()
-                            .flex_col()
-                            .child(widgets::row_title(&theme, "Only when in the background")),
-                    )
+                    .child(div().flex_1().min_w(px(160.0)).flex().flex_col().child(
+                        widgets::row_title(
+                            &theme,
+                            tr(cx, msg::native::only_when_in_the_background),
+                        ),
+                    ))
                     .child(
                         toggle(
                             "notifications-background-toggle",
@@ -420,12 +398,12 @@ impl Render for NotificationsPage {
                             widgets::settings_page_column(window)
                                 .child(widgets::section_title(
                                     &theme,
-                                    "Notifications",
-                                    "Choose when Zuse alerts you about agent activity.",
+                                    &tr(cx, msg::settings::settings_page_notifications),
+                                    &tr(cx, msg::native::choose_when_zuse_alerts_you_about_agent_activity),
                                 ))
                                 .child(
                                     widgets::section_stack()
-                                        .child(widgets::section(&theme, "Desktop", desktop_card))
+                                        .child(widgets::section(&theme, crate::localization::text("chat-browser_pane_desktop", cx), desktop_card))
                                         .child(widgets::section(&theme, "Sounds", card)),
                                 ),
                         ),

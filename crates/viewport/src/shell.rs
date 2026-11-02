@@ -1,6 +1,8 @@
 //! Shared workspace presentation, following the native shell's density and surfaces.
 use super::*;
+use crate::localization::message as tr;
 use crate::{assets::icon, composer_style as composer};
+use zuse_i18n::messages as msg;
 use zuse_markdown::{Block, InlineRun, parse_full};
 
 pub(super) const BG: u32 = 0x0b0c0b;
@@ -42,7 +44,7 @@ pub(super) fn control(id: impl Into<ElementId>, name: impl Into<SharedString>) -
 pub(super) fn icon_button(
     id: impl Into<ElementId>,
     glyph: &str,
-    name: &'static str,
+    name: impl Into<SharedString>,
 ) -> Stateful<Div> {
     row()
         .id(id)
@@ -98,7 +100,10 @@ impl WorkspaceView {
                         icon_button(
                             "back-to-archives",
                             "alt-arrow-left",
-                            "Back to archived chats",
+                            crate::localization::text(
+                                "chat-archived_chats_page_back_to_archived_chats",
+                                cx,
+                            ),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.settings = true;
@@ -174,7 +179,7 @@ impl WorkspaceView {
             )
             .when(self.browser_voice_live(), |d| {
                 d.child(
-                    control("end-voice-compact", "End voice")
+                    control("end-voice-compact", tr(cx, msg::native::end_voice))
                         .on_click(cx.listener(|this, _, _, cx| this.end_browser_voice(None, cx))),
                 )
             })
@@ -425,7 +430,7 @@ impl WorkspaceView {
                                     .track_focus(&self.access_focus)
                                     .on_key_down(cx.listener(Self::on_access_key))
                                     .role(Role::ComboBox)
-                                    .aria_label("Agent access")
+                                    .aria_label(tr(cx, msg::chat::chat_composer_agent_access))
                                     .aria_expanded(self.access_picker)
                                     .tab_index(0)
                                     .h(px(28.))
@@ -471,12 +476,12 @@ impl WorkspaceView {
                                     )
                                     .when(self.content_width >= 420., |view| {
                                         view.child(if self.access_change_pending_for_selection() {
-                                            "Saving…"
-                                        } else {
-                                            zuse_protocol::presentation::access_details(
-                                                self.sandbox,
+                                            crate::localization::text(
+                                                "settings-wallpaper_saving",
+                                                cx,
                                             )
-                                            .label
+                                        } else {
+                                            crate::localization::access_label(self.sandbox, cx)
                                         })
                                     })
                                     .child(icon("alt-arrow-down").size(px(12.)).opacity(0.6))
@@ -501,7 +506,7 @@ impl WorkspaceView {
                                             .size_full()
                                     })
                                     .role(Role::Button)
-                                    .aria_label("Change model")
+                                    .aria_label(tr(cx, msg::providers::model_picker_change_model))
                                     .cursor_pointer()
                                     .h(px(28.))
                                     .w(px((self.content_width * 0.4).clamp(104., 160.)))
@@ -531,7 +536,18 @@ impl WorkspaceView {
                                             .text_size(px(11.))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(rgb(TEXT))
-                                            .child(self.picker_label()),
+                                            .child(
+                                                if self.selected_model().is_none()
+                                                    && self
+                                                        .model
+                                                        .as_deref()
+                                                        .is_none_or(|m| m == "default")
+                                                {
+                                                    tr(cx, msg::native::agent_default)
+                                                } else {
+                                                    (self.picker_label()).to_string()
+                                                },
+                                            ),
                                     )
                                     .when_some(self.picker_effort_label(), |view, detail| {
                                         view.child(
@@ -552,11 +568,18 @@ impl WorkspaceView {
                             })
                             .when(working && self.queue_edit.is_none(), |d| {
                                 d.child(
-                                    icon_button("stop", "stop", "Stop agent")
-                                        .size(px(28.))
-                                        .bg(rgb(0x33352d))
-                                        .text_color(rgb(TEXT))
-                                        .on_click(cx.listener(|this, _, _, cx| this.interrupt(cx))),
+                                    icon_button(
+                                        "stop",
+                                        "stop",
+                                        crate::localization::text(
+                                            "projects-masters_stop_agent",
+                                            cx,
+                                        ),
+                                    )
+                                    .size(px(28.))
+                                    .bg(rgb(0x33352d))
+                                    .text_color(rgb(TEXT))
+                                    .on_click(cx.listener(|this, _, _, cx| this.interrupt(cx))),
                                 )
                             })
                             .when((!working || has_draft) && self.queue_edit.is_none(), |d| {
@@ -607,13 +630,13 @@ impl WorkspaceView {
             .when(self.messages.is_empty() && archived, |d| {
                 d.child(column().flex_1().justify_center().items_center().gap_3()
                     .child(icon("archive-minimalistic").size(px(24.)).text_color(rgb(MUTED)))
-                    .child(label(if self.transcript_blocked() { "Loading saved conversation…" } else { "No messages in this archived chat." }).text_color(rgb(MUTED))))
+                    .child(label(if self.transcript_blocked() { crate::localization::text("native-loading_saved_conversation", cx) } else { crate::localization::text("native-no_messages_archived", cx) }).text_color(rgb(MUTED))))
             })
             .when(self.messages.is_empty() && !archived && self.selected.is_none() && !self.cloud_startup_pending(), |d| {
-                let title = self.creation_project_name().map(|name|format!("What should we build in {name}?")).unwrap_or_else(||"What should we build today?".to_owned());
+                let title = self.creation_project_name().map(|name|tr(cx, |l10n| msg::native::what_build_in(l10n, name))).unwrap_or_else(||tr(cx,msg::native::what_build_today));
                 d.px(px(if self.viewport_width <= 800. { 16. } else { 24. })).pt(px(32.)).child(column().flex_1().justify_center().items_center().w_full().max_w(px(768.)).self_center().gap_2()
                     .child(div().relative().top(px(3.)).text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::MEDIUM).child(title))
-                    .when(self.project.is_some() || self.cloud.mode, |view| view.child(control("welcome-without-project", "Start without a project")
+                    .when(self.project.is_some() || self.cloud.mode, |view| view.child(control("welcome-without-project", tr(cx, msg::chat::start_without_project))
                         .text_color(rgb(MUTED)).text_size(px(12.))
                         .on_click(cx.listener(|this, _, _, cx| { this.project = None; this.set_creation_destination(false, cx); cx.notify(); })))))
             })
@@ -716,7 +739,7 @@ impl WorkspaceView {
                             }),
                     )
                     .child(row().absolute().left_0().right_0().bottom(px(-25.)).h(px(22.)).when(user,|d|d.justify_end()).child(
-                        icon_button(("copy-message",i),"copy","Copy message")
+                        icon_button(("copy-message",i),"copy",crate::localization::text("chat-assistant_message_actions_copy_message", cx))
                             .opacity(0.).group_hover("message",|d|d.opacity(1.))
                             .on_click({let text=entry.parts.iter().filter_map(|p|serde_json::to_value(p).ok()).filter_map(|p|p["text"].as_str().map(str::to_owned)).collect::<Vec<_>>().join("\n");move|_,_,cx|cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))})
                     ))
@@ -731,7 +754,11 @@ impl WorkspaceView {
             .flex_1()
             .child(
                 row()
-                    .child(div().text_size(px(20.)).child("Open a project"))
+                    .child(
+                        div()
+                            .text_size(px(20.))
+                            .child(tr(cx, msg::native::open_a_project)),
+                    )
                     .child(div().flex_1())
                     .child(
                         icon_button("close-project-picker", "close", "Close project picker")
@@ -741,9 +768,10 @@ impl WorkspaceView {
                             })),
                     ),
             )
-            .child(label(
-                "Choose a known repository, or enter a path on the engine host.",
-            ))
+            .child(label(tr(
+                cx,
+                msg::native::choose_a_known_repository_or_enter_a_path_on_the_engine_host,
+            )))
             .children(self.known_projects().iter().enumerate().map(|(i, p)| {
                 let project = p.clone();
                 column()
@@ -781,7 +809,7 @@ impl WorkspaceView {
                     .child(self.project_input.clone()),
             )
             .child(
-                control("add-project", "Open folder")
+                control("add-project", tr(cx, msg::native::open_folder))
                     .bg(rgb(RAISED))
                     .on_click(cx.listener(|this, _, _, cx| this.add_project(cx))),
             )
@@ -852,7 +880,7 @@ impl WorkspaceView {
                     .child(self.terminal_tabs_view(cx))
                     .when(self.terminal_id.is_none(), |d| {
                         d.child(
-                            control("open-browser-terminal", "Open terminal")
+                            control("open-browser-terminal", tr(cx, msg::native::open_terminal))
                                 .m_3()
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.set_panel("terminal", cx)),
@@ -923,7 +951,7 @@ impl WorkspaceView {
                                 .text_ellipsis(),
                         )
                         .when(self.file_request.is_some(), |d| {
-                            d.child(label("Loading…").text_size(px(10.)))
+                            d.child(label(tr(cx, msg::common::loading)).text_size(px(10.)))
                         }),
                 )
                 .when_some(file["readOnlyReason"].as_str(), |d, reason| {
@@ -936,9 +964,12 @@ impl WorkspaceView {
                 })
                 .when(file["truncated"] == true, |d| {
                     d.child(
-                        label("Partial file preview · Editing is disabled")
-                            .px_3()
-                            .py_2(),
+                        label(tr(
+                            cx,
+                            msg::native::partial_file_preview_editing_is_disabled,
+                        ))
+                        .px_3()
+                        .py_2(),
                     )
                 })
                 .child(if file["text"].is_string() {
@@ -975,17 +1006,23 @@ impl WorkspaceView {
                         .border_t_1()
                         .border_color(rgb(BORDER))
                         .child(label(if self.save_request.is_some() {
-                            "Saving…"
+                            crate::localization::text("settings-wallpaper_saving", cx)
                         } else if self.file_dirty(cx) {
-                            "Unsaved changes"
+                            ("Unsaved changes").to_string()
                         } else {
-                            "Saved"
+                            crate::localization::text("chat-browser_pane_saved", cx)
                         }))
                         .child(div().flex_1())
                         .when(self.file_dirty(cx), |d| {
-                            d.child(control("discard-edits", "Discard").on_click(
-                                cx.listener(|this, _, _, cx| this.discard_file_edits(cx)),
-                            ))
+                            d.child(
+                                control(
+                                    "discard-edits",
+                                    tr(cx, msg::shell::pending_chat_creation_discard),
+                                )
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.discard_file_edits(cx)),
+                                ),
+                            )
                         })
                         .when(
                             !file["readOnlyReason"].is_string() && file["truncated"] != true,
@@ -994,9 +1031,12 @@ impl WorkspaceView {
                                     control(
                                         "save-file",
                                         if self.save_request.is_some() {
-                                            "Saving…"
+                                            crate::localization::text(
+                                                "settings-wallpaper_saving",
+                                                cx,
+                                            )
                                         } else {
-                                            "Save"
+                                            crate::localization::text("common-save", cx)
                                         },
                                     )
                                     .bg(rgb(RAISED))
@@ -1037,18 +1077,24 @@ impl WorkspaceView {
                     )
                     .when(!self.directory.is_empty(), |d| {
                         d.child(
-                            icon_button("directory-up", "arrow-left", "Parent folder").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    let parent = this
-                                        .directory
-                                        .rsplit_once('/')
-                                        .map(|(p, _)| p)
-                                        .unwrap_or("")
-                                        .to_owned();
-                                    this.load_directory(&parent);
-                                    cx.notify();
-                                }),
-                            ),
+                            icon_button(
+                                "directory-up",
+                                "arrow-left",
+                                crate::localization::text(
+                                    "chat-environment_path_browser_parent_folder",
+                                    cx,
+                                ),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let parent = this
+                                    .directory
+                                    .rsplit_once('/')
+                                    .map(|(p, _)| p)
+                                    .unwrap_or("")
+                                    .to_owned();
+                                this.load_directory(&parent);
+                                cx.notify();
+                            })),
                         )
                     })
                     .child(
@@ -1066,7 +1112,7 @@ impl WorkspaceView {
                     .flex_1()
                     .min_h_0()
                     .when(self.directory_request.is_some(), |d| {
-                        d.child(label("Loading files…").px_3().py_2())
+                        d.child(label(tr(cx, msg::native::loading_files)).px_3().py_2())
                     })
                     .when(
                         self.entries.is_empty() && self.directory_request.is_none(),
@@ -1132,9 +1178,9 @@ impl WorkspaceView {
                             control(
                                 "load-more-files",
                                 if self.directory_request.is_some() {
-                                    "Loading…"
+                                    crate::localization::text("common-loading", cx)
                                 } else {
-                                    "Load more files"
+                                    ("Load more files").to_string()
                                 },
                             )
                             .m_2()
@@ -1435,7 +1481,13 @@ impl Render for WorkspaceView {
             .flex()
             .bg(rgb(if self.settings { BG } else { SURFACE }))
             .text_color(rgb(TEXT))
-            .font_family("Geist")
+            .font(gpui::Font {
+                family: "Geist".into(),
+                fallbacks: Some(crate::language_fonts::fallbacks(
+                    crate::localization::localizer(cx).locale(),
+                )),
+                ..Default::default()
+            })
             .text_size(px(13.))
             .when(self.sidebar_open && !self.settings, |d| {
                 d.child(

@@ -335,7 +335,11 @@ const GEIST_MONO: [&[u8]; 8] = [
 
 /// Font faces shared by the interface and SVG text-to-path conversion.
 pub(crate) fn bundled_font_faces() -> impl Iterator<Item = &'static [u8]> {
-    GEIST.iter().chain(GEIST_MONO.iter()).copied()
+    GEIST
+        .iter()
+        .chain(GEIST_MONO.iter())
+        .copied()
+        .chain(zuse_viewport::language_fonts::faces())
 }
 
 fn register_family(cx: &App, family: &UiFontFamily, faces: &'static [&'static [u8]]) -> bool {
@@ -425,6 +429,7 @@ pub fn register_fonts(cx: &App) -> FontAvailability {
         .filter(|name| name != "Geist" && name != "Geist Mono")
         .filter(|name| families_with_latin_metrics.contains_key(name))
         .collect();
+    zuse_viewport::language_fonts::register(cx);
     let geist = register_family(cx, &UiFontFamily::Geist, &GEIST);
     let geist_mono = register_family(cx, &UiFontFamily::GeistMono, &GEIST_MONO);
     let mut choices = vec![

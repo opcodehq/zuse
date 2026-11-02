@@ -3,10 +3,12 @@
 //! per-row Reset and Restore defaults. Changes emit [`ShortcutsEvent`]; the
 //! shell persists them and re-applies the app keymap.
 
+use crate::localization::message as tr;
 use gpui::{
     Context, Entity, EventEmitter, FocusHandle, Keystroke, PathPromptOptions, SharedString, Window,
     div, prelude::*, px,
 };
+use zuse_i18n::messages as msg;
 
 use crate::appshots::{AppshotCapabilities, AppshotDestination};
 use crate::popover::{self, ScrollRailHost};
@@ -785,19 +787,20 @@ impl Render for ShortcutsPage {
         .render(&self.send_select, cx);
 
         let send_behavior_row = widgets::card_row(&theme, true)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(160.0))
-                    .child(widgets::row_title(&theme, "Send messages with")),
-            )
+            .child(div().flex_1().min_w(px(160.0)).child(widgets::row_title(
+                &theme,
+                tr(cx, msg::native::send_messages_with),
+            )))
             .child(send_behavior_control);
         let compact_mode_row = widgets::card_row(&theme, false)
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(widgets::row_title(&theme, "Compact mode"))
+                    .child(widgets::row_title(
+                        &theme,
+                        tr(cx, msg::native::compact_mode),
+                    ))
                     .child(widgets::meta_line(
                         &theme,
                         vec![
@@ -812,7 +815,7 @@ impl Render for ShortcutsPage {
                     .id("transcript-compact-mode-toggle")
                     .tab_index(0)
                     .role(gpui::Role::Switch)
-                    .aria_label("Compact mode")
+                    .aria_label(tr(cx, msg::native::compact_mode))
                     .aria_toggled(if compact_mode {
                         gpui::Toggled::True
                     } else {
@@ -831,7 +834,7 @@ impl Render for ShortcutsPage {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(widgets::row_title(&theme, "Compact model picker"))
+                    .child(widgets::row_title(&theme, tr(cx, msg::native::compact_model_picker)))
                     .child(widgets::meta_line(
                         &theme,
                         vec![
@@ -846,7 +849,7 @@ impl Render for ShortcutsPage {
                     .id("compact-model-picker-toggle")
                     .tab_index(0)
                     .role(gpui::Role::Switch)
-                    .aria_label("Compact model picker")
+                    .aria_label(tr(cx, msg::native::compact_model_picker))
                     .aria_toggled(if compact_model_picker {
                         gpui::Toggled::True
                     } else {
@@ -869,7 +872,10 @@ impl Render for ShortcutsPage {
                 div()
                     .flex_1()
                     .min_w(px(160.0))
-                    .child(widgets::row_title(&theme, "Stop agent with Escape"))
+                    .child(widgets::row_title(
+                        &theme,
+                        tr(cx, msg::native::stop_agent_with_escape),
+                    ))
                     .child(widgets::meta_line(
                         &theme,
                         vec![
@@ -889,7 +895,7 @@ impl Render for ShortcutsPage {
                 .debug_selector(|| "escape-stops-active-agent-toggle".into())
                 .tab_index(0)
                 .role(gpui::Role::Switch)
-                .aria_label("Stop active agent with Escape")
+                .aria_label(tr(cx, msg::native::stop_active_agent_with_escape))
                 .aria_toggled(if escape_stops_active_agent {
                     gpui::Toggled::True
                 } else {
@@ -931,7 +937,10 @@ impl Render for ShortcutsPage {
                     div()
                         .flex_1()
                         .min_w(px(160.0))
-                        .child(widgets::row_title(&theme, "Open pull requests in"))
+                        .child(widgets::row_title(
+                            &theme,
+                            tr(cx, msg::native::open_pull_requests_in),
+                        ))
                         .child(widgets::meta_line(
                             &theme,
                             vec![
@@ -960,19 +969,19 @@ impl Render for ShortcutsPage {
                             .track_scroll(&self.scroll.scroll)
                             .child(
                                 widgets::settings_page_column(window)
-                                    .child(self.general_header(&theme))
+                                    .child(self.general_header(&theme, cx))
                                     .child(
                                         widgets::section_stack()
                                             .child(self.general_account.clone())
                                             .child(div().mt_3().mb_3().flex().items_center().justify_between()
-                                                .child(div().text_color(theme.text_muted).child("Move chats and settings from Electron"))
-                                                .child(crate::popover::btn_ghost(&theme,"Import from Electron","settings-desktop-import")
+                                                .child(div().text_color(theme.text_muted).child(tr(cx, msg::native::move_chats_and_settings_from_electron)))
+                                                .child(crate::popover::btn_ghost(&theme,&tr(cx, msg::native::import_from_electron),"settings-desktop-import")
                                                     .id("settings-desktop-import")
                                                     .on_click(|_,window,cx|window.dispatch_action(Box::new(crate::desktop_import::OpenDesktopImport),cx))))
                                             .child(self.general_preferences(&theme, cx))
                                             .child(div().flex().flex_col().gap(px(16.))
                                                 .child(
-                                                widgets::group(&theme, "Composer", "").child(
+                                                widgets::group(&theme, tr(cx, msg::commands::command_group_composer), "").child(
                                                     widgets::section_card(&theme)
                                                         .mt_0()
                                                         .child(send_behavior_row)
@@ -1088,7 +1097,10 @@ impl Render for ShortcutsPage {
                                     div().mb_3().flex().justify_end().child(
                                         widgets::ghost_action(&theme)
                                             .id("shortcuts-import-electron")
-                                            .child("Import from Electron…")
+                                            .child(tr(
+                                                cx,
+                                                msg::native::import_from_electron_f24edf6b,
+                                            ))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.import_shortcuts(cx)
                                             })),

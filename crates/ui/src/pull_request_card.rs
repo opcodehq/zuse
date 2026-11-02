@@ -5,8 +5,10 @@
 //! merge. It follows the PR live while it shows, and publishes a one-line
 //! status the composer's chip reads.
 
+use crate::localization::message as tr;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
+use zuse_i18n::messages as msg;
 
 use chrono::{DateTime, Utc};
 use gpui::{
@@ -1282,7 +1284,9 @@ impl PullRequestCard {
                     div()
                         .text_size(px(12.0))
                         .text_color(theme.text_muted)
-                        .child("GitHub reports conflicts with the base branch."),
+                        .child(crate::localization::element(
+                            zuse_i18n::messages::native::base_conflicts,
+                        )),
                 )
                 .into_any_element();
         };
@@ -1644,7 +1648,7 @@ impl PullRequestCard {
                             .text_size(px(12.0))
                             .text_color(theme.text_muted)
                             .child(spinner("pr-card-merging", theme))
-                            .child("Merging")
+                            .child(tr(cx, msg::native::merging))
                             .into_any_element()
                     } else {
                         div()
@@ -1874,7 +1878,7 @@ pub fn composer_chips(state: &AppState, theme: &Theme, cx: &App) -> Option<AnyEl
                         .size(px(13.0))
                         .text_color(theme.text_muted),
                 )
-                .child("Create PR"),
+                .child(tr(cx, msg::chat::top_bar_create_pr)),
         );
     }
     if let Some(summary) = summary {

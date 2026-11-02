@@ -1,10 +1,12 @@
 //! Workspace file browsing surface.
 
+use crate::localization::message as tr;
 use std::{
     collections::HashMap,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
+use zuse_i18n::messages as msg;
 
 use gpui::{
     Context, Entity, EventEmitter, FocusHandle, ListAlignment, ListState, Pixels, Point, Render,
@@ -366,7 +368,7 @@ impl Render for FilesSurface {
                 self.chat_id
             )))
             .role(gpui::Role::Group)
-            .aria_label("Workspace files")
+            .aria_label(tr(cx, msg::native::workspace_files))
             .size_full()
             .relative()
             .flex()
@@ -444,7 +446,7 @@ impl FilesSurface {
                         .items_center()
                         .text_size(px(11.5))
                         .text_color(theme.text)
-                        .child("Retry")
+                        .child(tr(cx, msg::chat::attempts_retry))
                         .on_click(cx.listener(|this, _, _, cx| this.retry_root(cx))),
                 )
                 .into_any_element()
@@ -520,10 +522,10 @@ impl FilesSurface {
                                 .items_center()
                                 .cursor_pointer()
                                 .role(gpui::Role::Button)
-                                .aria_label("Refresh workspace files now")
+                                .aria_label(tr(cx, msg::native::refresh_workspace_files_now))
                                 .text_color(theme.text_muted)
                                 .hover(|style| style.bg(crate::theme::wash(0.07)))
-                                .child("Refresh now")
+                                .child(tr(cx, msg::native::refresh_now))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.refresh(cx);
                                     this.reconcile_open_documents(cx);

@@ -427,9 +427,9 @@ impl Composer {
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(theme.text_muted)
             .child(if waiting {
-                "Waiting for connection"
+                crate::localization::text("chat-queue_tray_waiting_for_connection", cx)
             } else {
-                "Queued"
+                crate::localization::text("chat-queue_tray_queued", cx)
             });
         // The rows section is the drop target, including its padding.
         let panel = div()
@@ -714,9 +714,9 @@ impl Composer {
                         .text_size(px(QUEUE_TEXT_SIZE))
                         .text_color(theme.text_muted)
                         .child(if self.queue_edit_finishing {
-                            "Saving…"
+                            crate::localization::text("settings-wallpaper_saving", cx)
                         } else {
-                            "Editing in composer"
+                            ("Editing in composer").to_string()
                         }),
                 )
             })

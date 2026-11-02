@@ -1,8 +1,10 @@
+use crate::localization::message as tr;
 use std::{
     collections::{HashMap, HashSet},
     rc::Rc,
     time::Instant,
 };
+use zuse_i18n::messages as msg;
 
 use chrono::{DateTime, Utc};
 use gpui::{
@@ -1432,8 +1434,8 @@ impl PullRequestsPage {
                                 .px(px(10.0))
                                 .flex_none()
                                 .text_size(crate::typography::text_xs())
-                                .aria_label("Open repository")
-                                .child("Open")
+                                .aria_label(tr(cx, msg::native::open_repository))
+                                .child(tr(cx, msg::common::open))
                                 .on_click(cx.listener(|page, _, _, cx| {
                                     cx.stop_propagation();
                                     page.return_focus = Some(page.repository_focus.clone());
@@ -2005,7 +2007,7 @@ impl PullRequestsPage {
                                 div()
                                     .text_size(crate::typography::text_xs())
                                     .text_color(theme.text_muted)
-                                    .child("This device"),
+                                    .child(tr(cx, msg::native::this_device)),
                             )
                         })
                         .when(!online, |element| {
@@ -2013,7 +2015,7 @@ impl PullRequestsPage {
                                 div()
                                     .text_size(crate::typography::text_xs())
                                     .text_color(theme.text_muted)
-                                    .child("Offline"),
+                                    .child(tr(cx, msg::projects::masters_offline)),
                             )
                         })
                         .child(div().size(px(6.0)).rounded_full().bg(if online {
@@ -2362,7 +2364,7 @@ impl Render for PullRequestsPage {
                                     .id("pull-requests-refresh")
                                     .debug_selector(|| "pull-requests-refresh".to_string())
                                     .role(gpui::Role::Button)
-                                    .aria_label("Refresh pull requests")
+                                    .aria_label(tr(cx, msg::native::refresh_pull_requests))
                                     .aria_description(if loading {
                                         "Loading pull requests"
                                     } else {
@@ -2415,7 +2417,7 @@ impl Render for PullRequestsPage {
                         div()
                             .id("pr-filter-tray")
                             .role(gpui::Role::TabList)
-                            .aria_label("Pull requests to show")
+                            .aria_label(tr(cx, msg::native::pull_requests_to_show))
                             .h(px(HEADER_CONTROL_HEIGHT))
                             .flex_none()
                             .p(px(2.0))
@@ -2504,7 +2506,7 @@ impl Render for PullRequestsPage {
                                             div()
                                                 .id("pull-requests-clear-search")
                                                 .role(gpui::Role::Button)
-                                                .aria_label("Clear search")
+                                                .aria_label(tr(cx, msg::native::clear_search))
                                                 .tab_index(0)
                                                 .size(px(24.0))
                                                 .flex()

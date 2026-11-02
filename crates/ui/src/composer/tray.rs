@@ -10,8 +10,10 @@
 //! The pure half (which error the tray shows, how it reads) is unit-tested
 //! below; the rest renders on [`Composer`].
 
+use crate::localization::message as tr;
 use std::collections::HashMap;
 use std::time::Duration;
+use zuse_i18n::messages as msg;
 
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, ObjectFit, SharedString,
@@ -447,7 +449,7 @@ pub(crate) enum TrayRow {
 
 /// The in-card drop target (`inset-1 rounded-lg border-dashed bg-popover`):
 /// shown only while a file or workspace path is dragged over the card.
-pub(crate) fn drop_overlay(theme: &Theme) -> gpui::Stateful<gpui::Div> {
+pub(crate) fn drop_overlay(theme: &Theme, cx: &gpui::App) -> gpui::Stateful<gpui::Div> {
     let theme = theme.for_popup();
     div()
         .id("composer-drop-overlay")
@@ -476,7 +478,7 @@ pub(crate) fn drop_overlay(theme: &Theme) -> gpui::Stateful<gpui::Div> {
                 .size(px(14.0))
                 .text_color(theme.text_muted),
         )
-        .child("Drop files to attach")
+        .child(tr(cx, msg::chat::chat_composer_drop_files_to_attach))
 }
 
 // ---------------------------------------------------------------------------

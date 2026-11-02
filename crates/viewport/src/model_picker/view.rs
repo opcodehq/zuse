@@ -1,10 +1,12 @@
 //! Model menu projection. Search, pointer selection and shortcuts share one order.
 use super::*;
+use crate::localization::message as tr;
 use crate::model_picker_style as ui;
 use std::{
     cell::{Cell, RefCell},
     sync::Arc,
 };
+use zuse_i18n::messages as msg;
 
 #[derive(Clone)]
 pub(super) struct Entry {
@@ -583,12 +585,13 @@ impl WorkspaceView {
                             .py(px(6.))
                             .gap(px(6.))
                             .child(label(error).text_size(px(11.)).flex_1())
-                            .child(control("retry-models", "Retry").on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.load_picker_catalogs(true);
-                                    cx.notify();
-                                },
-                            )))
+                            .child(
+                                control("retry-models", tr(cx, msg::chat::attempts_retry))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.load_picker_catalogs(true);
+                                        cx.notify();
+                                    })),
+                            )
                     }))
                     .child(
                         div()
@@ -604,11 +607,14 @@ impl WorkspaceView {
                                         .text_size(px(12.))
                                         .text_color(rgb(MUTED))
                                         .child(if loading {
-                                            "Checking available agents…"
+                                            crate::localization::text(
+                                                "providers-model_picker_checking_available_agents",
+                                                cx,
+                                            )
                                         } else if current.is_empty() {
-                                            "No authenticated agents available."
+                                            ("No authenticated agents available.").to_string()
                                         } else {
-                                            "No models match your search."
+                                            ("No models match your search.").to_string()
                                         }),
                                 )
                             })

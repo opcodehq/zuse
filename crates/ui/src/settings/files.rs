@@ -1,6 +1,8 @@
 //! Settings → Files: local preferences for workspace-file editing.
 
+use crate::localization::message as tr;
 use gpui::{Context, EventEmitter, Window, div, prelude::*, px};
+use zuse_i18n::messages as msg;
 
 use super::widgets;
 use crate::popover;
@@ -121,7 +123,7 @@ impl Render for FilesSettingsPage {
                             .min_w(px(160.0))
                             .flex()
                             .flex_col()
-                            .child(widgets::row_title(&theme, "Autosave")),
+                            .child(widgets::row_title(&theme, tr(cx, msg::native::autosave))),
                     )
                     .child(
                         widgets::toggle_switch(&theme, autosave_enabled, "files-autosave")
@@ -129,7 +131,7 @@ impl Render for FilesSettingsPage {
                             .cursor_pointer()
                             .tab_index(0)
                             .role(gpui::Role::Switch)
-                            .aria_label("Autosave")
+                            .aria_label(tr(cx, msg::native::autosave))
                             .aria_toggled(if autosave_enabled {
                                 gpui::Toggled::True
                             } else {
@@ -146,34 +148,24 @@ impl Render for FilesSettingsPage {
             .when(autosave_enabled, |card| {
                 card.child(
                     widgets::card_row(&theme, true)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(160.0))
-                                .flex()
-                                .flex_col()
-                                .child(widgets::row_title(&theme, "Autosave delay")),
-                        )
+                        .child(div().flex_1().min_w(px(160.0)).flex().flex_col().child(
+                            widgets::row_title(&theme, tr(cx, msg::native::autosave_delay)),
+                        ))
                         .child(delay_control),
                 )
             })
             .child(
                 widgets::card_row(&theme, false)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(160.0))
-                            .flex()
-                            .flex_col()
-                            .child(widgets::row_title(&theme, "Word wrap")),
-                    )
+                    .child(div().flex_1().min_w(px(160.0)).flex().flex_col().child(
+                        widgets::row_title(&theme, tr(cx, msg::chat::changes_review_word_wrap)),
+                    ))
                     .child(
                         widgets::toggle_switch(&theme, word_wrap, "files-word-wrap")
                             .id("files-word-wrap-toggle")
                             .cursor_pointer()
                             .tab_index(0)
                             .role(gpui::Role::Switch)
-                            .aria_label("Word wrap")
+                            .aria_label(tr(cx, msg::chat::changes_review_word_wrap))
                             .aria_toggled(if word_wrap {
                                 gpui::Toggled::True
                             } else {
@@ -189,21 +181,19 @@ impl Render for FilesSettingsPage {
             )
             .child(
                 widgets::card_row(&theme, false)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(160.0))
-                            .flex()
-                            .flex_col()
-                            .child(widgets::row_title(&theme, "Show hidden and ignored files")),
-                    )
+                    .child(div().flex_1().min_w(px(160.0)).flex().flex_col().child(
+                        widgets::row_title(
+                            &theme,
+                            tr(cx, msg::native::show_hidden_and_ignored_files),
+                        ),
+                    ))
                     .child(
                         widgets::toggle_switch(&theme, show_all_files, "files-show-all")
                             .id("files-show-all-toggle")
                             .cursor_pointer()
                             .tab_index(0)
                             .role(gpui::Role::Switch)
-                            .aria_label("Show hidden and ignored files")
+                            .aria_label(tr(cx, msg::native::show_hidden_and_ignored_files))
                             .aria_toggled(if show_all_files {
                                 gpui::Toggled::True
                             } else {
@@ -240,11 +230,11 @@ impl Render for FilesSettingsPage {
                             widgets::settings_page_column(window)
                                 .child(widgets::section_title(
                                     &theme,
-                                    "Files",
-                                    "How the file editor saves, wraps and lists files.",
+                                    &tr(cx, msg::chat::right_pane_files),
+                                    &tr(cx, msg::native::how_the_file_editor_saves_wraps_and_lists_files),
                                 ))
                                 .child(widgets::section_stack().child(
-                                    widgets::group(&theme, "Editor", "").child(card.mt_0()),
+                                    widgets::group(&theme, tr(cx, msg::commands::command_group_editor), "").child(card.mt_0()),
                                 )),
                         ),
                 )

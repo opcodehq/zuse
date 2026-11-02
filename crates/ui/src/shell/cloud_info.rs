@@ -1,6 +1,8 @@
 //! Cloud environment details and host-owned local sync, matching the reference top-bar menu.
 use super::*;
+use crate::localization::message as tr;
 use serde_json::{Value, json};
+use zuse_i18n::messages as msg;
 
 #[derive(Default)]
 pub(super) struct CloudInfo {
@@ -234,7 +236,7 @@ impl Shell {
             }),
         )
         .role(gpui::Role::Button)
-        .aria_label("Cloud workspace details")
+        .aria_label(tr(cx, msg::native::cloud_workspace_details))
         .aria_expanded(open)
         .on_mouse_down(
             MouseButton::Left,
@@ -334,7 +336,7 @@ impl Shell {
                 popover::menu_row(&theme, false, "pause-cloud-workspace")
                     .id("pause-cloud-workspace")
                     .child(icon(icons::DITHER_CLOUD).size(px(14.)))
-                    .child("Pause workspace")
+                    .child(tr(cx, msg::native::pause_workspace))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.close_cloud_info(cx);
                         let composer = this.composer.clone();
@@ -348,14 +350,20 @@ impl Shell {
                 popover::menu_row(&theme, false, "cloud-sync-toggle")
                     .id("cloud-sync-toggle")
                     .role(gpui::Role::Switch)
-                    .aria_label("Sync to a local directory")
+                    .aria_label(tr(
+                        cx,
+                        msg::connections::cloud_workspace_info_sync_to_a_local_directory,
+                    ))
                     .aria_toggled(if enabled {
                         gpui::Toggled::True
                     } else {
                         gpui::Toggled::False
                     })
                     .opacity(if busy || !loaded { 0.5 } else { 1. })
-                    .child(div().flex_1().child("Sync to a local directory"))
+                    .child(div().flex_1().child(tr(
+                        cx,
+                        msg::connections::cloud_workspace_info_sync_to_a_local_directory,
+                    )))
                     .child(crate::settings::widgets::toggle_switch(
                         &theme,
                         enabled,
@@ -384,7 +392,7 @@ impl Shell {
             card = card.child(
                 popover::menu_row(&theme, false, "cloud-sync-path")
                     .id("cloud-sync-path")
-                    .aria_label("Copy local sync folder")
+                    .aria_label(tr(cx, msg::native::copy_local_sync_folder))
                     .child(icon(icons::FOLDER).size(px(14.)))
                     .child(div().min_w_0().flex_1().truncate().child(path))
                     .child(icon(icons::COPY).size(px(14.)))
@@ -396,7 +404,7 @@ impl Shell {
         card = card.child(
             popover::menu_row(&theme, false, "cloud-sync-folder")
                 .id("cloud-sync-folder")
-                .child("Choose folder…")
+                .child(tr(cx, msg::native::choose_folder))
                 .opacity(if busy { 0.5 } else { 1. })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if !busy {
@@ -408,7 +416,7 @@ impl Shell {
             card = card.child(
                 popover::menu_row(&theme, false, "cloud-sync-retry")
                     .id("cloud-sync-retry")
-                    .child("Retry sync")
+                    .child(tr(cx, msg::native::retry_sync))
                     .opacity(if busy { 0.5 } else { 1. })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !busy {

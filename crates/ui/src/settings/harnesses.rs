@@ -19,10 +19,12 @@
 //! enforces the same gates where the state lives, so a raced or stale toggle
 //! self-corrects from the RPC reply.
 
+use crate::localization::message as tr;
 use gpui::{
     AnyElement, Context, Entity, IntoElement, Render, SharedString, Task, Window, div, prelude::*,
     px,
 };
+use zuse_i18n::messages as msg;
 
 use zuse_engine::registry::{HarnessDescriptor, descriptor_enabled};
 
@@ -337,10 +339,10 @@ impl HarnessesPage {
         {
             let command = zuse_providers::install::manual_command(harness);
             return div().flex().flex_col().gap(px(6.)).px(px(12.)).pt(px(4.)).pb(px(16.))
-                .child(div().text_size(px(11.)).font_weight(gpui::FontWeight::MEDIUM).text_color(theme.text_muted).child("Install"))
+                .child(div().text_size(px(11.)).font_weight(gpui::FontWeight::MEDIUM).text_color(theme.text_muted).child(tr(cx, msg::providers::provider_card_install)))
                 .child(div().flex().items_center().gap(px(8.)).rounded(px(7.)).bg(theme.settings_frame_bg().opacity(0.4)).px(px(10.)).py(px(6.))
                     .child(div().flex_1().min_w_0().font_family(theme.font_mono.clone()).text_size(px(11.)).child(command.unwrap_or("Install this agent on the execution host, then refresh its status.")))
-                    .when_some(command, |row, command| row.child(widgets::action_button(theme, widgets::ActionTone::Quiet).id("copy-provider-install").aria_label("Copy install command").role(gpui::Role::Button).tab_index(0).size(px(24.)).px_0().justify_center().child(crate::icons::icon(crate::icons::COPY).size(px(12.)).text_color(theme.text_muted)).on_click(move |_,_,cx|cx.write_to_clipboard(gpui::ClipboardItem::new_string(command.to_owned()))))))
+                    .when_some(command, |row, command| row.child(widgets::action_button(theme, widgets::ActionTone::Quiet).id("copy-provider-install").aria_label(tr(cx, msg::native::copy_install_command)).role(gpui::Role::Button).tab_index(0).size(px(24.)).px_0().justify_center().child(crate::icons::icon(crate::icons::COPY).size(px(12.)).text_color(theme.text_muted)).on_click(move |_,_,cx|cx.write_to_clipboard(gpui::ClipboardItem::new_string(command.to_owned()))))))
                 .into_any_element();
         }
         let accounts = accounts::signs_in(harness)
@@ -373,6 +375,7 @@ impl HarnessesPage {
                             expanded,
                             phase,
                             true,
+                            cx,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if !this.open_options.insert(harness) {
@@ -1116,7 +1119,7 @@ impl HarnessesPage {
                                                     this.install(harness, cx)
                                                 }))
                                             })
-                                            .child("Install"),
+                                            .child(tr(cx, msg::providers::provider_card_install)),
                                     )
                                 },
                             )
@@ -1129,7 +1132,7 @@ impl HarnessesPage {
                                             cx.stop_propagation();
                                             this.cancel_install(cx)
                                         }))
-                                        .child("Cancel"),
+                                        .child(tr(cx, msg::settings::organizations_cancel)),
                                 )
                             }),
                     )
@@ -1371,7 +1374,7 @@ impl Render for HarnessesPage {
                                 page.load(cx);
                                 cx.notify();
                             }))
-                            .child("Retry updates"),
+                            .child(tr(cx, msg::native::retry_updates)),
                     )
                     .into_any_element(),
             ),
@@ -1421,7 +1424,7 @@ impl Render for HarnessesPage {
                 div()
                     .id("refresh-provider-status")
                     .role(gpui::Role::Button)
-                    .aria_label("Refresh provider status")
+                    .aria_label(tr(cx, msg::settings::settings_page_refresh_provider_status))
                     .tab_index(0)
                     .size(px(28.))
                     .flex_none()
@@ -1482,7 +1485,7 @@ impl Render for HarnessesPage {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::settings_page_column(window)
-                                .child(widgets::section_title(&theme, "Providers", "Verify what's installed, signed in, and which subscription each provider runs on."))
+                                .child(widgets::section_title(&theme, &tr(cx, msg::settings::settings_page_providers), &tr(cx, msg::native::verify_what_s_installed_signed_in_and_which_subscription_each_provider_runs_on)))
                                 .child(div().mt(px(20.)).flex().flex_col().gap(px(16.))
                                     .child(widgets::group_with_action(&theme, "Agent providers", "Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.", Some(div().flex().items_center().gap(px(6.)).child(check).into_any_element()))
                                         .children(update_error).child(body))

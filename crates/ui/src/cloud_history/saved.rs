@@ -1,8 +1,10 @@
 //! Native saved history uses account HTTP reads and never opens an execution connection.
 use super::*;
+use crate::localization::message as tr;
 use crate::state::CloudTarget;
 use gpui::{App, Subscription, Window, WindowBounds, WindowOptions, size};
 use serde_json::{Value, json};
+use zuse_i18n::messages as msg;
 use zuse_protocol::methods;
 
 pub(crate) fn open(target: CloudTarget, cx: &mut App) {
@@ -260,7 +262,7 @@ impl Render for Saved {
                                 div()
                                     .id("saved-cloud-retry")
                                     .cursor_pointer()
-                                    .child("Refresh")
+                                    .child(tr(cx, msg::chat::attempts_refresh))
                                     .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
                             )
                             .when(self.authorized, |v| {
@@ -268,7 +270,7 @@ impl Render for Saved {
                                     div()
                                         .id("saved-cloud-connect")
                                         .cursor_pointer()
-                                        .child("Resume")
+                                        .child(tr(cx, msg::chat::queue_tray_resume))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.connect(this.target.initial_session.clone(), cx)
                                         })),

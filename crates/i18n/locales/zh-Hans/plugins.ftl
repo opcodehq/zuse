@@ -1,0 +1,264 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+plugins-plugins_title = 插件
+
+plugins-plugins_subtitle = 连接你的工具，让智能体在任何聊天中都能使用它们。
+
+plugins-plugins_search = 搜索插件
+
+plugins-plugins_refresh = 刷新插件
+
+plugins-plugins_account = 插件账户
+
+plugins-plugins_tab_browse = 浏览
+
+plugins-plugins_tab_connected = 已连接
+
+plugins-plugins_featured = 精选
+
+plugins-plugins_all = 全部插件
+
+plugins-plugins_results = 搜索结果
+
+plugins-plugins_show_more = 显示更多
+
+plugins-plugins_loading = 正在加载插件…
+
+plugins-plugins_load_failed = 无法加载插件。请检查网络连接后重试。
+
+plugins-plugins_sign_in = 登录你的 Zuse 账户以连接插件。
+
+plugins-plugins_retry = 重试
+
+plugins-plugins_no_results = 没有与“{ $query }”匹配的插件。
+
+plugins-plugins_none_connected = 你连接的插件会显示在这里。
+
+plugins-plugins_connect_named = 连接{ " " }{ $name }
+
+plugins-plugins_manage_named = 管理{ " " }{ $name }
+
+plugins-plugins_connecting_named = 正在连接{ " " }{ $name }
+
+plugins-plugins_back = 插件
+
+plugins-plugins_connect = 连接
+
+plugins-plugins_connected = 已连接
+
+plugins-plugins_disconnect = 断开连接
+
+plugins-plugins_waiting = 正在等待浏览器…
+
+plugins-plugins_reopen = 重新打开浏览器
+
+plugins-plugins_cancel = 取消
+
+plugins-plugins_pending = 请在浏览器中完成{ " " }{ $name }{ " " }的登录。Zuse 会自动接收。
+
+plugins-plugins_connected_toast = { $name }{ " " }已连接
+
+plugins-plugins_connected_toast_detail = 智能体可以在新聊天中使用它。
+
+plugins-plugins_connect_failed = 无法连接{ " " }{ $name }
+
+plugins-plugins_connect_failed_detail = 该服务拒绝了连接，或需要 Zuse 尚不支持的设置。
+
+plugins-plugins_return_failed_detail = 登录已过期或属于另一个 Zuse 账户。请从插件页面重新连接。
+
+plugins-plugins_return_cancelled = { $name }{ " " }未连接
+
+plugins-plugins_return_cancelled_detail = 登录已取消。你可以随时重试。
+
+plugins-plugins_disconnect_failed = 无法断开{ " " }{ $name }。请重试。
+
+plugins-plugins_cancel_failed = 无法取消。请重试。
+
+plugins-plugins_information = 信息
+
+plugins-plugins_website = 网站
+
+plugins-plugins_category = 类别
+
+plugins-plugins_access = 访问权限
+
+plugins-plugins_access_value = 读取和写入，受每个聊天的权限限制
+
+plugins-plugins_connections = 连接
+
+plugins-plugins_connected_on = 连接于{ " " }{ $date }
+
+plugins-plugins_privacy = 连接仅属于你的 Zuse 账户。令牌在 Zuse 服务器上加密保存，绝不会传到智能体所在的机器。断开连接会立即停止新的调用。
+
+plugins-plugins_settings_subtitle = 为你的智能体开启或关闭插件、MCP 服务器和技能。
+
+plugins-plugins_settings_tab_plugins = 插件
+
+plugins-plugins_settings_tab_skills = 技能
+
+plugins-plugins_settings_search = 搜索
+
+plugins-plugins_settings_browse = 浏览插件
+
+plugins-plugins_settings_add = 添加
+
+plugins-plugins_settings_toggle_failed = 无法更新{ " " }{ $name }。请重试。
+
+plugins-plugins_skills_none = 未找到技能。
+
+plugins-plugins_skills_load_failed = 无法加载技能。
+
+plugins-plugins_skills_always_on = 始终开启
+
+plugins-plugins_skills_personal = 个人
+
+plugins-plugins_skills_project = 项目
+
+plugins-plugins_skills_codex_note = Codex 的开关保存在 Codex 自身的配置中，因此在 Zuse 之外也会生效。
+
+plugins-plugins_skills_loading = 正在加载技能…
+
+plugins-plugins_rename = 重命名
+
+plugins-plugins_connection_name = 连接名称
+
+plugins-plugins_connection_name_placeholder = 工作、个人或公司名称
+
+plugins-plugins_connect_another = 连接另一个账户
+
+plugins-plugins_connection_name_exists = 此名称已被使用。请选择其他连接名称。
+
+plugins-plugins_add_server = 添加 MCP 服务器
+
+plugins-plugins_add_server_workspace_personal = 将添加到你的个人工作区。
+
+plugins-plugins_add_server_workspace_organization = 将添加到{ " " }{ $name }{ " " }组织。连接后成员即可使用。
+
+plugins-plugins_add_server_name = 名称
+
+plugins-plugins_add_server_name_placeholder = 内部工具
+
+plugins-plugins_add_server_url = 服务器 URL
+
+plugins-plugins_add_server_url_placeholder = https://mcp.example.com/mcp
+
+plugins-plugins_add_server_auth = 身份验证
+
+plugins-plugins_auth_auto = 登录或无需验证
+
+plugins-plugins_auth_bearer = Bearer 令牌
+
+plugins-plugins_auth_header = 自定义请求头
+
+plugins-plugins_auth_header_named = 自定义请求头（{ $header }）
+
+plugins-plugins_add_server_auth_auto_hint = Zuse 会检测服务器是需要登录还是对所有人开放。
+
+plugins-plugins_add_server_token = 令牌
+
+plugins-plugins_add_server_header_name = 请求头名称
+
+plugins-plugins_add_server_header_name_placeholder = X-API-Key
+
+plugins-plugins_add_server_header_value = 值
+
+plugins-plugins_add_server_key_hint = 密钥在 Zuse 服务器上加密存储，绝不会发送到智能体所在的机器。
+
+plugins-plugins_add_server_submit = 添加服务器
+
+plugins-plugins_add_server_added = 已添加{ " " }{ $name }
+
+plugins-plugins_add_server_failed = 无法添加服务器。请检查网络连接后重试。
+
+plugins-plugins_add_server_admins_only = 只有组织管理员可以添加服务器。
+
+plugins-plugins_add_server_name_required = 请输入此服务器的名称。
+
+plugins-plugins_add_server_name_too_long = 名称不能超过 60 个字符。
+
+plugins-plugins_add_server_url_invalid = 请输入服务器完整的 https:// URL。
+
+plugins-plugins_add_server_header_invalid = 请求头名称只能包含字母、数字和连字符。
+
+plugins-plugins_add_server_value_required = 请输入此服务器所需的密钥。
+
+plugins-plugins_error_auth_unsupported = 此服务器未提供登录。如果它需要 API 密钥，请选择 Bearer 令牌或自定义请求头。
+
+plugins-plugins_error_client_registration_unsupported = 此服务器的登录需要预先注册的应用，Zuse 无法自动完成。如果该服务提供 API 密钥，请改用密钥。
+
+plugins-plugins_error_setup_unsupported = 此服务需要 Zuse 暂不支持的设置。
+
+plugins-plugins_error_unreachable = Zuse 无法连接到此服务器。请检查 URL 并确认服务器在线。
+
+plugins-plugins_error_url_rejected = 请使用默认端口上的公开 https:// URL。不支持本地地址和 IP 地址。
+
+plugins-plugins_error_credentials_rejected = 服务器拒绝了此密钥。请检查后重试。
+
+plugins-plugins_error_limit_reached = 此工作区已达到连接数上限。请移除一个连接后再添加。
+
+plugins-plugins_custom = 自定义
+
+plugins-plugins_custom_servers = 自定义服务器
+
+plugins-plugins_api_key = API 密钥
+
+plugins-plugins_api_key_placeholder = 此账户的密钥
+
+plugins-plugins_remove_server = 移除服务器
+
+plugins-plugins_remove_server_title = 移除{ " " }{ $name }？
+
+plugins-plugins_remove_server_description = 这会断开所有账户，并从此工作区移除该服务器。智能体将立即失去访问权限。
+
+plugins-plugins_remove_server_done = 已移除{ " " }{ $name }
+
+plugins-plugins_remove_server_failed = 无法移除{ " " }{ $name }。请重试。
+
+plugins-plugins_manage_admins_only = 只有组织管理员可以更改此工作区的插件。
+
+plugins-plugins_workspace_personal = 个人
+
+plugins-plugins_popover_empty = 此工作区尚未连接任何插件。连接一个插件，或添加你自己的 MCP 服务器。
+
+plugins-plugins_popover_manage = 管理插件
+
+plugins-plugins_popover_enabled_count = 已启用{ " " }{ $enabled }/{ $total }
+
+plugins-plugins_more_actions = 更多操作
+
+plugins-plugins_copy_url = 复制服务器 URL
+
+plugins-plugins_url_copied = 已复制服务器 URL
+
+plugins-plugins_copy_failed = 无法复制，请重试。
+
+plugins-plugins_visit_website = 访问网站
+
+plugins-plugins_privacy_organization = 连接会与此组织的成员共享。令牌在 Zuse 服务器上加密保存，绝不会发送到智能体所在的机器。断开连接后，新的调用会立即停止。
+
+plugins-plugins_account_actions = { $name }{ " " }的操作
+
+plugins-plugins_error_sign_in_failed = 你已登录，但 Zuse 无法完成连接。请重试。如果仍然失败，说明暂不支持此服务的登录方式。
+
+plugins-plugins_connected_accounts = 已连接的账户
+
+plugins-plugins_turn_off = 对智能体关闭
+
+plugins-plugins_turn_on = 对智能体开启
+
+plugins-plugins_connection_off = 已关闭 · 智能体无法使用此账户
+
+plugins-plugins_transport = 连接类型
+
+plugins-plugins_remote = 远程
+
+plugins-plugins_local = 本地命令
+
+plugins-plugins_local_config = MCP 配置（JSON）
+
+plugins-plugins_local_hint = 在此电脑的个人工作区中运行。粘贴一个 stdio 服务器配置，包含 command、args 和可选的 env。Paper 等桌面应用必须安装在此电脑上。
+
+plugins-plugins_local_config_invalid = 请输入有效的 stdio MCP 配置，包含一个命令、args 数组和可选的 env 值。
+
+plugins-plugins_local_connect_failed = 无法启动本地 MCP 服务器。请检查命令，并确认应用已安装且正在运行。

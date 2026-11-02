@@ -1,9 +1,11 @@
 //! Provider updates are owned by the connected computer and confirmed by its watch.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     settings_style as s,
     shell::{BORDER, MUTED, column, row},
 };
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     HarnessId, HarnessUpdatePhase as Phase, HarnessUpdatePolicy, HarnessUpdateStatus,
 };
@@ -269,9 +271,11 @@ impl WorkspaceView {
             ) {
                 title = title.child(
                     s::description_text(match status.phase {
-                        Phase::Updated => "Updated",
-                        Phase::Checking => "Checking…",
-                        _ => "Update failed",
+                        Phase::Updated => crate::localization::text("providers-updated", cx),
+                        Phase::Checking => {
+                            crate::localization::text("simulators-status_checking", cx)
+                        }
+                        _ => crate::localization::text("chat-update_banner_update_failed", cx),
                     })
                     .text_size(px(10.)),
                 );
@@ -341,7 +345,7 @@ impl WorkspaceView {
             row()
                 .id("provider-update-policies")
                 .role(Role::RadioGroup)
-                .aria_label("Provider update policy")
+                .aria_label(tr(cx, msg::native::provider_update_policy))
                 .track_focus(&self.provider_policy_focus)
                 .tab_index(0)
                 .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
@@ -349,7 +353,10 @@ impl WorkspaceView {
                 }))
                 .gap_2()
                 .flex_wrap()
-                .child(s::description_text("Updates"))
+                .child(s::description_text(tr(
+                    cx,
+                    msg::settings::update_channel_updates,
+                )))
                 .children(
                     choices
                         .into_iter()
@@ -414,11 +421,13 @@ impl WorkspaceView {
                     .gap_2()
                     .child(s::description_text(command.clone()).flex_1().min_w_0())
                     .child(
-                        s::button(("copy-update-command", index), "Copy command").on_click(
-                            move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(command.clone()))
-                            },
-                        ),
+                        s::button(
+                            ("copy-update-command", index),
+                            tr(cx, msg::settings::snapshot_copy_command),
+                        )
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(command.clone()))
+                        }),
                     ),
             );
         }

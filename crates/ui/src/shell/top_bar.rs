@@ -2,6 +2,8 @@
 //! checkout's branch with its changed-file count, the branch menu, and a
 //! copy-branch button. The conversation tabs sit on their own row below.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 
 /// The conversation tab row under the top bar.
 pub(super) const CONVERSATION_TAB_ROW_HEIGHT: f32 = 36.0;
@@ -108,7 +110,7 @@ impl Shell {
             .id("top-bar-branch")
             .debug_selector(|| "top-bar-branch".into())
             .role(gpui::Role::Button)
-            .aria_label("Switch branch")
+            .aria_label(tr(cx, msg::chat::top_bar_switch_branch))
             .aria_expanded(open)
             .h(px(24.0))
             .min_w_0()
@@ -180,7 +182,7 @@ impl Shell {
                 .id("top-bar-identity")
                 .debug_selector(|| "top-bar-identity".into())
                 .role(gpui::Role::Navigation)
-                .aria_label("Branch")
+                .aria_label(tr(cx, msg::projects::pr_pane_branch))
                 .min_w_0()
                 .flex()
                 .items_center()
@@ -355,7 +357,7 @@ impl Shell {
                             div()
                                 .flex_none()
                                 .text_color(theme.text_muted)
-                                .child("Switching…"),
+                                .child(tr(cx, msg::native::switching)),
                         )
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -424,9 +426,9 @@ impl Shell {
                                 .text_size(crate::typography::text_xs())
                                 .text_color(theme.text_muted)
                                 .child(if loading {
-                                    "Loading branches…"
+                                    ("Loading branches…").to_string()
                                 } else {
-                                    "No local branches"
+                                    crate::localization::text("chat-top_bar_no_local_branches", cx)
                                 }),
                         )
                     }),

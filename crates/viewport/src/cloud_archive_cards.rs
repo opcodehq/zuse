@@ -1,4 +1,5 @@
 //! Cloud archive presentation uses only acknowledged workspace metadata.
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     palette::rgb,
@@ -6,6 +7,7 @@ use crate::{
     shell::{MUTED, TEXT},
 };
 use gpui::{prelude::*, *};
+use zuse_i18n::messages as msg;
 use zuse_model::cloud::Workspace;
 use zuse_protocol::cloud::{ArchivePhase, CloudArchiveStatus};
 
@@ -462,8 +464,10 @@ pub fn panel<C: 'static>(
             card = card.children(recovery_details(row));
             if let Some(cleanup) = &row.local_mirror_cleanup {
                 if cleanup.state == "pending" {
-                    card = card
-                        .child(s::description_text("Cleaning up local files…").text_size(px(12.)));
+                    card = card.child(
+                        s::description_text(tr(cx, msg::native::cleaning_up_local_files))
+                            .text_size(px(12.)),
+                    );
                 } else if cleanup.state == "error" {
                     card = card.child(error(
                         "cloud-archive-cleanup-error",

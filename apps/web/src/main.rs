@@ -105,10 +105,31 @@ mod browser {
         }
         super::environment::install(events.clone());
         spawn_local(super::connection::run(outbound, events));
+        let browser_window = web_sys::window().unwrap();
+        let language = browser_window
+            .local_storage()
+            .ok()
+            .flatten()
+            .and_then(|storage| storage.get_item("zuse.language.v1").ok().flatten())
+            .unwrap_or_else(|| "system".into());
+        let language = zuse_i18n::LanguagePreference::from(language);
+        let languages = browser_window
+            .navigator()
+            .languages()
+            .iter()
+            .filter_map(|v| v.as_string())
+            .collect::<Vec<_>>();
+        if let Some(root) = browser_window
+            .document()
+            .and_then(|document| document.document_element())
+        {
+            let _ = root.set_attribute("lang", language.resolve(&languages).code());
+        }
         let application = gpui_platform::application()
             .with_assets(zuse_viewport::assets::Assets)
             .run_embedded(move |cx: &mut App| {
                 zuse_viewport::initialize(cx);
+                zuse_viewport::localization::configure(language, languages, cx);
                 let bounds = Bounds::centered(None, size(px(1320.), px(880.)), cx);
                 let workspace = cx
                     .open_window(

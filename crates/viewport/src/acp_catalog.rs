@@ -1,4 +1,5 @@
 //! The selected computer supplies registry metadata; both hosts render this picker.
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     input::{self, TextInput},
@@ -11,6 +12,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     HarnessId,
     custom_acp::{
@@ -195,7 +197,7 @@ impl CatalogDialog {
             Some(Offer::BuiltIn(_)) => div()
                 .text_size(px(10.))
                 .text_color(rgb(MUTED))
-                .child("Built in")
+                .child(tr(cx, msg::native::built_in))
                 .into_any_element(),
             Some(Offer::Add(ref config) | Offer::Manual(ref config))
                 if self.installed.contains(&config.id) =>
@@ -203,7 +205,7 @@ impl CatalogDialog {
                 div()
                     .text_size(px(10.))
                     .text_color(rgb(MUTED))
-                    .child("Added")
+                    .child(tr(cx, msg::projects::pr_pane_added))
                     .into_any_element()
             }
             Some(offer @ (Offer::Add(_) | Offer::Manual(_))) => {
@@ -215,7 +217,11 @@ impl CatalogDialog {
                 let pending = self.adding == Some(config.id);
                 s::button(
                     ("acp-catalog-add", index),
-                    if manual { "Set up" } else { "Add" },
+                    if manual {
+                        crate::localization::text("settings-cloud_hosting_set_up", cx)
+                    } else {
+                        crate::localization::text("chat-chat_composer_add_menu", cx)
+                    },
                 )
                 .tab_index(0)
                 .px(px(12.))
@@ -247,7 +253,7 @@ impl CatalogDialog {
             None => div()
                 .text_size(px(10.))
                 .text_color(rgb(MUTED))
-                .child("Unavailable")
+                .child(tr(cx, msg::chat::cloud_setup_unavailable))
                 .into_any_element(),
         };
         let source = agent
@@ -325,17 +331,20 @@ impl Render for CatalogDialog {
             .justify_between()
             .gap(px(6.))
             .child(
-                s::button("acp-catalog-custom", "Use a custom command…")
-                    .tab_index(0)
-                    .border_0()
-                    .bg(transparent_black())
-                    .px(px(10.))
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        cx.emit(Event::Custom);
-                    })),
+                s::button(
+                    "acp-catalog-custom",
+                    tr(cx, msg::settings::acp_agents_custom_command),
+                )
+                .tab_index(0)
+                .border_0()
+                .bg(transparent_black())
+                .px(px(10.))
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.emit(Event::Custom);
+                })),
             )
             .child(
-                s::button("acp-catalog-done", "Done")
+                s::button("acp-catalog-done", tr(cx, msg::chat::voice_stop))
                     .track_focus(&self.done)
                     .tab_index(0)
                     .border_0()
@@ -346,7 +355,7 @@ impl Render for CatalogDialog {
         let panel = div()
             .id("acp-catalog-dialog")
             .role(Role::Dialog)
-            .aria_label("Add ACP agent")
+            .aria_label(tr(cx, msg::settings::acp_agents_add_title))
             .track_focus(&self.root)
             .tab_group()
             .tab_stop(false)
@@ -403,7 +412,7 @@ impl Render for CatalogDialog {
                     .text_size(px(15.))
                     .line_height(px(15.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Add ACP agent"),
+                    .child(tr(cx, msg::settings::acp_agents_add_title)),
             )
             .child(
                 div().px(px(16.)).pb(px(8.)).child(
@@ -465,9 +474,15 @@ impl Render for CatalogDialog {
                                             .as_ref()
                                             .is_some_and(|data| !data.agents.is_empty())
                                         {
-                                            "No matching agents"
+                                            crate::localization::text(
+                                                "settings-acp_agents_no_matches",
+                                                cx,
+                                            )
                                         } else {
-                                            "The registry is unavailable"
+                                            crate::localization::text(
+                                                "settings-acp_agents_registry_unavailable",
+                                                cx,
+                                            )
                                         },
                                     )
                                     .font_weight(FontWeight::MEDIUM)

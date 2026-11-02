@@ -1,7 +1,8 @@
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use std::{net::SocketAddr, path::PathBuf};
 use zuse_engine::{Engine, EngineConfig, EngineProfile};
+use zuse_i18n::{LanguagePreference, Localizer, messages::cli as m};
 use zuse_protocol::HarnessId;
 use zuse_serve::{BrowserServer, TlsConfig};
 
@@ -11,6 +12,8 @@ use zuse_serve::{BrowserServer, TlsConfig};
     about = "Serve the Zuse Rust browser client and local agent engine"
 )]
 struct Args {
+    #[arg(long, env = "ZUSE_LANGUAGE", global = true, default_value = "system", value_parser = ["system", "en", "fr", "de", "zh-Hans", "zh-Hant", "ja", "ko"])]
+    language: String,
     #[command(subcommand)]
     command: Option<Command>,
     #[arg(long, default_value = "127.0.0.1:27656")]
@@ -56,11 +59,118 @@ fn main() -> anyhow::Result<()> {
         .build()?
         .block_on(run())
 }
+fn language_from(
+    arguments: &[std::ffi::OsString],
+    environment: Option<String>,
+    system: &[String],
+) -> Localizer {
+    let mut selected = environment.unwrap_or_else(|| "system".into());
+    let mut arguments = arguments.iter().skip(1);
+    while let Some(argument) = arguments.next() {
+        if argument == "--" {
+            break;
+        }
+        if argument == "--language" {
+            if let Some(value) = arguments.next() {
+                selected = value.to_string_lossy().into_owned();
+            }
+        } else if let Some(value) = argument
+            .to_str()
+            .and_then(|value| value.strip_prefix("--language="))
+        {
+            selected = value.into();
+        }
+    }
+    Localizer::new(LanguagePreference::from(selected).resolve(system))
+}
+
+fn localized_command(l10n: &Localizer) -> clap::Command {
+    let template = format!(
+        "{{about-with-newline}}\n{}: {{usage}}\n\n{}:\n{{subcommands}}\n{}:\n{{options}}",
+        m::usage(l10n),
+        m::commands(l10n),
+        m::options(l10n)
+    );
+    let help = clap::Arg::new("help")
+        .short('h')
+        .long("help")
+        .action(clap::ArgAction::Help)
+        .help(m::help(l10n));
+    let mut command = Args::command()
+        .about(m::about(l10n))
+        .help_template(template.clone())
+        .disable_help_flag(true)
+        .arg(help.clone())
+        .disable_help_subcommand(true);
+    for (id, help) in [
+        ("language", m::language(l10n)),
+        ("listen", m::listen(l10n)),
+        ("ipc_port", m::ipc_port(l10n)),
+        ("data_dir", m::data_dir(l10n)),
+        ("assets", m::assets(l10n)),
+        ("token", m::token(l10n)),
+        ("public_origin", m::public_origin(l10n)),
+        ("tls_cert", m::tls_cert(l10n)),
+        ("tls_key", m::tls_key(l10n)),
+        ("relay_origin", m::relay_origin(l10n)),
+        ("relay_host_token_file", m::relay_host_token_file(l10n)),
+    ] {
+        command = command.mut_arg(id, |arg| arg.help(help));
+    }
+    command = command.mut_subcommand("mcp", |subcommand| {
+        subcommand
+            .about(m::mcp(l10n))
+            .help_template(template)
+            .disable_help_flag(true)
+            .arg(help)
+    });
+    command
+}
+
+fn parse_arguments(arguments: Vec<std::ffi::OsString>, l10n: &Localizer) -> Args {
+    let mut command = localized_command(l10n);
+    match command.try_get_matches_from_mut(arguments) {
+        Ok(matches) => Args::from_arg_matches(&matches).expect("Clap validated arguments"),
+        Err(error) => {
+            use clap::error::ErrorKind;
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) {
+                let _ = error.print();
+                std::process::exit(0);
+            }
+            let detail = match error.kind() {
+                ErrorKind::UnknownArgument | ErrorKind::InvalidSubcommand => {
+                    m::unknown_argument(l10n)
+                }
+                ErrorKind::MissingRequiredArgument | ErrorKind::MissingSubcommand => {
+                    m::missing_argument(l10n)
+                }
+                _ => m::invalid_arguments(l10n),
+            };
+            let argument = error
+                .get(clap::error::ContextKind::InvalidArg)
+                .or_else(|| error.get(clap::error::ContextKind::InvalidSubcommand))
+                .map(|value| format!("\n{value}"))
+                .unwrap_or_default();
+            eprintln!("{detail}{argument}\n\n{}", command.render_help());
+            std::process::exit(error.exit_code());
+        }
+    }
+}
+
 async fn run() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    let args = Args::parse();
+    let arguments = std::env::args_os().collect::<Vec<_>>();
+    let l10n = language_from(
+        &arguments,
+        std::env::var("ZUSE_LANGUAGE").ok(),
+        &zuse_i18n::system_languages(),
+    );
+    let args = parse_arguments(arguments, &l10n);
     if matches!(args.command, Some(Command::Mcp)) {
         zuse_mcp::run(zuse_mcp::McpConfig::from_env()).await?;
         return Ok(());
@@ -70,29 +180,29 @@ async fn run() -> anyhow::Result<()> {
             Some((zuse_serve::relay::validate_origin(origin)?, path.clone()))
         }
         (None, None) => None,
-        _ => anyhow::bail!("Relay access requires its origin and host token file"),
+        _ => anyhow::bail!(m::relay_requires_credentials(&l10n)),
     };
     let shutdown = tokio_util::sync::CancellationToken::new();
     let tls = match (&args.tls_cert, &args.tls_key) {
         (Some(certificate), Some(key)) => Some(TlsConfig::from_pem_files(certificate, key)?),
         (None, None) => None,
-        _ => anyhow::bail!("Direct HTTPS requires both --tls-cert and --tls-key"),
+        _ => anyhow::bail!(m::https_requires_keys(&l10n)),
     };
     anyhow::ensure!(
         args.listen.ip().is_loopback() || tls.is_some() || args.public_origin.is_some(),
-        "Non-loopback listening requires --tls-cert/--tls-key or --public-origin for an HTTPS reverse proxy"
+        m::https_required(&l10n)
     );
-    let data_dir = args.data_dir.unwrap_or_else(|| {
-        PathBuf::from(std::env::var_os("HOME").expect("HOME or --data-dir is required"))
-            .join(".zuse-native")
-    });
-    std::fs::create_dir_all(&data_dir).context("Could not create the local data directory")?;
-    let data_dir =
-        std::fs::canonicalize(data_dir).context("Could not resolve the local data directory")?;
+    let data_dir = match args.data_dir {
+        Some(path) => path,
+        None => PathBuf::from(std::env::var_os("HOME").context(m::missing_home(&l10n))?)
+            .join(".zuse-native"),
+    };
+    std::fs::create_dir_all(&data_dir).context(m::create_data_failed(&l10n))?;
+    let data_dir = std::fs::canonicalize(data_dir).context(m::resolve_data_failed(&l10n))?;
     // Bind before starting engine workers, so port conflicts leave no live runtime.
     let ipc = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, args.ipc_port))
         .await
-        .context("Could not bind the agent RPC port; choose another --ipc-port")?;
+        .context(m::bind_failed(&l10n))?;
     let ipc_port = ipc.local_addr()?.port();
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     let address = listener.local_addr()?;
@@ -148,8 +258,15 @@ async fn run() -> anyhow::Result<()> {
         .control()
         .register_external(address, origin.clone(), tls.is_none())
         .await;
-    println!("Agent tools listen on 127.0.0.1:{ipc_port}");
-    println!("Open {origin}/#token={token}");
+    // Isolating controls must not enter copyable terminal access links.
+    println!(
+        "{}",
+        m::listening(&l10n, ipc_port.to_string()).replace(['\u{2068}', '\u{2069}'], "")
+    );
+    println!(
+        "{}",
+        m::open(&l10n, format!("{origin}/#token={token}")).replace(['\u{2068}', '\u{2069}'], "")
+    );
     if let Some((origin, host_token_file)) = relay {
         // Explicit command-line configuration replaces saved startup settings.
         runtime.core().relay_access.control().stop().await;
@@ -179,4 +296,76 @@ async fn run() -> anyhow::Result<()> {
     ipc_task.abort();
     runtime.shutdown().await;
     result
+}
+
+#[cfg(test)]
+mod localization_tests {
+    use super::*;
+    use zuse_i18n::Locale;
+    fn arguments(values: &[&str]) -> Vec<std::ffi::OsString> {
+        values.iter().map(Into::into).collect()
+    }
+    #[test]
+    fn language_precedence_is_flag_then_environment_then_system() {
+        let system = vec!["zh-TW".into()];
+        assert_eq!(
+            language_from(&arguments(&["zuse-server"]), None, &system).locale(),
+            Locale::ZhHant
+        );
+        assert_eq!(
+            language_from(&arguments(&["zuse-server"]), Some("de".into()), &system).locale(),
+            Locale::De
+        );
+        assert_eq!(
+            language_from(
+                &arguments(&["zuse-server", "mcp", "--language=fr"]),
+                Some("de".into()),
+                &system
+            )
+            .locale(),
+            Locale::Fr
+        );
+        assert_eq!(
+            language_from(
+                &arguments(&["zuse-server", "--language", "en"]),
+                Some("de".into()),
+                &system
+            )
+            .locale(),
+            Locale::En
+        );
+    }
+    #[test]
+    fn help_is_localized_and_command_spelling_is_stable() {
+        for locale in Locale::ALL {
+            let localizer = Localizer::new(locale);
+            let mut command = localized_command(&localizer);
+            let help = command.render_long_help().to_string();
+            assert!(help.contains(&m::about(&localizer)));
+            assert!(help.contains("--language"));
+            assert!(help.contains("--tls-cert"));
+            assert!(help.contains("mcp"));
+            assert!(help.contains("ZUSE_LANGUAGE"));
+            let matches = command
+                .try_get_matches_from(["zuse-server", "mcp", "--language", locale.code()])
+                .unwrap();
+            assert_eq!(
+                Args::from_arg_matches(&matches).unwrap().language,
+                locale.code()
+            );
+        }
+    }
+    #[test]
+    fn invalid_language_is_a_parser_error_and_mcp_help_uses_its_own_description() {
+        let localizer = Localizer::new(Locale::ZhHans);
+        let error = localized_command(&localizer)
+            .try_get_matches_from(["zuse-server", "--language", "unknown"])
+            .unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+        let error = localized_command(&localizer)
+            .try_get_matches_from(["zuse-server", "mcp", "--help"])
+            .unwrap_err();
+        assert_eq!(error.exit_code(), 0);
+        assert!(error.to_string().contains(&m::mcp(&localizer)));
+    }
 }

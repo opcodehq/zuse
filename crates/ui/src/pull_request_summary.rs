@@ -2,6 +2,8 @@
 //! and change totals over a hairline), compact property rows, and the
 //! description. Rows carry no card chrome; hairlines and spacing group them.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 
 /// Width of the property rows' label column (icon and name).
 pub(super) const PROPERTY_LABEL: f32 = 112.0;
@@ -56,7 +58,11 @@ pub(super) fn state_pill(state: &str, draft: bool, theme: &Theme) -> AnyElement 
 
 /// Title, byline with the checkout command, refs with the change totals,
 /// then a hairline. Shared by the loaded page and its placeholder.
-pub(super) fn detail_header(facts: HeaderFacts, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+pub(super) fn detail_header(
+    facts: HeaderFacts,
+    theme: &Theme,
+    cx: &gpui::App,
+) -> gpui::Stateful<gpui::Div> {
     let HeaderFacts {
         title,
         author,
@@ -125,7 +131,10 @@ pub(super) fn detail_header(facts: HeaderFacts, theme: &Theme) -> gpui::Stateful
                     .id("pr-copy-checkout")
                     .debug_selector(|| "pr-copy-checkout".into())
                     .role(gpui::Role::Button)
-                    .aria_label("Copy checkout command")
+                    .aria_label(crate::localization::message(
+                        cx,
+                        zuse_i18n::messages::native::copy_checkout,
+                    ))
                     .tab_index(0)
                     .flex_none()
                     .px(px(4.0))
@@ -421,7 +430,11 @@ impl PullRequestDetailPage {
                 .items_center()
                 .gap(px(6.0))
                 .when(reviewers.is_empty(), |el| {
-                    el.child(div().text_color(theme.text_muted).child("None"))
+                    el.child(
+                        div()
+                            .text_color(theme.text_muted)
+                            .child(tr(cx, msg::native::none)),
+                    )
                 })
                 .children(reviewers.iter().enumerate().map(|(index, login)| {
                     div()
@@ -680,9 +693,9 @@ impl PullRequestDetailPage {
                 .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted)
                 .child(if detail.head_ref_oid.is_empty() {
-                    "Unavailable".to_owned()
+                    crate::localization::text("chat-cloud_setup_unavailable", cx).to_owned()
                 } else {
-                    detail.head_ref_oid.chars().take(7).collect::<String>()
+                    (detail.head_ref_oid.chars().take(7).collect::<String>()).to_string()
                 }),
             theme,
         );
@@ -693,7 +706,7 @@ impl PullRequestDetailPage {
             .debug_selector(|| "pr-description-toggle".into())
             .role(gpui::Role::Button)
             .tab_index(0)
-            .aria_label("Description")
+            .aria_label(tr(cx, msg::projects::pr_pane_description))
             .aria_expanded(!collapsed)
             .mt(px(20.0))
             .h(px(26.0))
@@ -707,7 +720,7 @@ impl PullRequestDetailPage {
             .text_color(theme.text_muted)
             .cursor_pointer()
             .hover(|style| style.text_color(theme.text))
-            .child("Description")
+            .child(tr(cx, msg::projects::pr_pane_description))
             .child(
                 crate::icons::icon(if collapsed {
                     crate::icons::ALT_ARROW_RIGHT
@@ -730,7 +743,7 @@ impl PullRequestDetailPage {
                 .px(px(8.0))
                 .when(detail.body.is_empty(), |el| {
                     el.text_color(theme.text_muted)
-                        .child("No description provided.")
+                        .child(tr(cx, msg::projects::pr_pane_no_description))
                 })
                 .when_some(
                     self.body.as_ref().filter(|_| !detail.body.is_empty()),

@@ -1,11 +1,13 @@
 //! Automatic thread titles reuse the model picker and the connected host's catalog.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     model_picker::PickerTarget,
     settings_style as s,
     shell::{column, row},
 };
+use zuse_i18n::messages as msg;
 use zuse_protocol::TitleSettings;
 
 pub(super) struct TitleSettingsView {
@@ -256,12 +258,12 @@ impl WorkspaceView {
             .when(open, |view| {
                 view.child(deferred(self.composer_picker(cx, Some(bounds))).priority(1))
             });
-        s::frame().child(s::header("Thread naming", "Choose which agent and model automatically name new threads on this computer."))
+        s::frame().child(s::header(tr(cx, msg::native::thread_naming), tr(cx, msg::native::choose_which_agent_and_model_automatically_name_new_threads_on_this_computer)))
             .child(s::card()
-                .child(s::setting_row(true).child(s::details("Title model", "Follow the thread’s agent, or choose a specific model. This does not change your chat model." )).child(trigger))
+                .child(s::setting_row(true).child(s::details(tr(cx, msg::native::title_model), tr(cx, msg::native::follow_the_thread_s_agent_or_choose_a_specific_model_this_does_not_change_your_chat_model) )).child(trigger))
                 .child(s::setting_row(false).justify_end()
-                    .child(s::button("refresh-thread-naming", "Refresh").on_click(cx.listener(|this, _, _, cx| { this.refresh_title_settings(); cx.notify(); })))
-                    .child(s::button("reset-thread-naming", "Follow thread agent").opacity(if enabled && provider.is_some() { 1. } else { 0.45 })
+                    .child(s::button("refresh-thread-naming", tr(cx, msg::settings::organizations_refresh)).on_click(cx.listener(|this, _, _, cx| { this.refresh_title_settings(); cx.notify(); })))
+                    .child(s::button("reset-thread-naming", tr(cx, msg::native::follow_thread_agent)).opacity(if enabled && provider.is_some() { 1. } else { 0.45 })
                         .on_click(cx.listener(move |this, _, _, cx| { if enabled && provider.is_some() { this.save_title_model(None, None, cx); } })))))
             .when_some(state.error.clone(), |view, error| view.child(s::description_text(error).text_color(rgb(0xec9292)).px_3().py_2()))
             .into_any_element()

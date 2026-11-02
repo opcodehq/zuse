@@ -1,8 +1,10 @@
 //! Shared account presentation. Hosts own identity requests and preference storage.
+use crate::localization::message as tr;
 use crate::{assets::icon, input::edit_menu, palette, settings_style as s};
 use gpui::{prelude::*, *};
 use gpui_base::input::{InputEditorStyle, InputEvent, InputState};
 use serde_json::Value;
+use zuse_i18n::messages as msg;
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct Colors {
@@ -53,7 +55,8 @@ impl AccountCard {
         };
         let owner = cx.weak_entity();
         let name = cx.new(|cx| {
-            let mut input = InputState::new(window, cx).placeholder("Your name");
+            let mut input = InputState::new(window, cx)
+                .placeholder(tr(cx, msg::settings::settings_page_your_name));
             input.on_context_menu(edit_menu::handler(owner, input.focus_handle(cx)));
             input
         });
@@ -162,9 +165,9 @@ impl AccountCard {
             .id("general-account-email")
             .role(Role::Button)
             .aria_label(if revealed {
-                "Hide email"
+                crate::localization::text("chat-blurred_email_hide_email", cx)
             } else {
-                "Reveal email"
+                crate::localization::text("chat-blurred_email_reveal_email", cx)
             })
             .tab_index(0)
             .relative()
@@ -235,11 +238,11 @@ impl Render for AccountCard {
         let action = s::button(
             "general-account-sign-in",
             if signed_in {
-                "Sign out"
+                crate::localization::text("common-signOut", cx)
             } else if busy {
-                "Signing in…"
+                crate::localization::text("connections-cloud_connection_notice_signing_in", cx)
             } else {
-                "Sign in"
+                crate::localization::text("settings-acp_agents_sign_in", cx)
             },
         )
         .tab_index(0)
@@ -313,7 +316,7 @@ impl Render for AccountCard {
                             div()
                                 .id("general-edit-display-name")
                                 .role(Role::Button)
-                                .aria_label("Edit display name")
+                                .aria_label(tr(cx, msg::settings::settings_page_edit_display_name))
                                 .track_focus(&self.edit_focus)
                                 .tab_index(0)
                                 .cursor_pointer()
@@ -366,18 +369,18 @@ impl Render for AccountCard {
         } else {
             let (title, description) = if !available {
                 (
-                    "Account unavailable",
-                    "Reconnect this computer to load the saved account session.",
+                    tr(cx, msg::native::account_unavailable),
+                    tr(cx, msg::native::reconnect_account),
                 )
             } else if !p.loaded {
                 (
-                    "Checking account…",
-                    "Loading the saved account session from this computer.",
+                    "Checking account…".to_owned(),
+                    "Loading the saved account session from this computer.".to_owned(),
                 )
             } else {
                 (
-                    "Not signed in",
-                    "You're using Zuse (Beta) locally without an account. Sign in to sync and unlock remote agents.",
+                    "Not signed in".to_owned(),
+                    "You're using Zuse (Beta) locally without an account. Sign in to sync and unlock remote agents.".to_owned(),
                 )
             };
             card = card.child(
@@ -416,7 +419,7 @@ impl Render for AccountCard {
                                     d.child(
                                         s::button(
                                             "general-authorize-account",
-                                            "Continue in browser",
+                                            tr(cx, msg::native::continue_in_browser),
                                         )
                                         .tab_index(0)
                                         .on_click(move |_, _, cx| cx.open_url(&url)),
@@ -424,14 +427,19 @@ impl Render for AccountCard {
                                 },
                             )
                             .child(
-                                s::button("general-cancel-sign-in", "Cancel")
-                                    .tab_index(0)
-                                    .when(p.busy, |d| d.opacity(0.64))
-                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                s::button(
+                                    "general-cancel-sign-in",
+                                    tr(cx, msg::settings::organizations_cancel),
+                                )
+                                .tab_index(0)
+                                .when(p.busy, |d| d.opacity(0.64))
+                                .on_click(cx.listener(
+                                    move |_, _, _, cx| {
                                         if !p_busy && available {
                                             cx.emit(Event::SignOut);
                                         }
-                                    })),
+                                    },
+                                )),
                             ),
                     ),
             );
@@ -461,7 +469,7 @@ impl Render for AccountCard {
                     .child(error),
             );
         }
-        s::frame().text_color(c.text).child(s::header("Account","Sign in to sync your account across devices and (soon) drive remote agents from your phone."))
+        s::frame().text_color(c.text).child(s::header(tr(cx, msg::settings::settings_page_account),tr(cx, msg::settings::settings_page_sign_in_to_sync_your_account_across_devices_and_soon_drive_remote_agen)))
             .child(card).when_some(self.menu.as_ref(),|view,menu|view.child(edit_menu::render(menu,cx)))
     }
 }

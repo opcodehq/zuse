@@ -1,7 +1,9 @@
 //! Shared plugin details and connection controls; account operations stay with the host.
+use crate::localization::message as tr;
 use crate::{assets::icon, plugin_catalog, plugin_setup::SetupColors};
 use gpui::{prelude::*, *};
 use serde_json::Value;
+use zuse_i18n::messages as msg;
 use zuse_protocol::plugins::PluginDefinition;
 
 #[derive(Default)]
@@ -315,7 +317,7 @@ pub fn render<T: 'static>(
                 .id("plugin-detail-connect-another")
                 .track_focus(&connect_focus)
                 .role(Role::Button)
-                .aria_label("Connect another account")
+                .aria_label(tr(cx, msg::providers::accounts_connect))
                 .tab_index(0)
                 .cursor_pointer()
                 .flex()
@@ -328,7 +330,7 @@ pub fn render<T: 'static>(
                 .hover(|d| d.bg(colors.border.opacity(0.3)))
                 .when(busy, |d| d.opacity(0.6))
                 .child(add_glyph(colors))
-                .child("Connect another account")
+                .child(tr(cx, msg::providers::accounts_connect))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if available {
                         action(this, Action::Connect, window, cx);
@@ -366,7 +368,7 @@ pub fn render<T: 'static>(
                 .gap(px(6.))
                 .text_color(colors.muted)
                 .child(icon("refresh").size(px(14.)))
-                .child("Waiting…"),
+                .child(tr(cx, msg::native::waiting)),
         )
     });
     if !definition.custom || can_manage {
@@ -427,9 +429,15 @@ pub fn render<T: 'static>(
                                         .size(px(14.)),
                                     )
                                     .child(if custom {
-                                        "Remove server"
+                                        crate::localization::text(
+                                            "plugins-plugins_remove_server",
+                                            cx,
+                                        )
                                     } else {
-                                        "Visit website"
+                                        crate::localization::text(
+                                            "plugins-plugins_visit_website",
+                                            cx,
+                                        )
                                     })
                                     .when(custom, |d| d.text_color(colors.danger))
                                     .when(custom && busy, |d| d.opacity(0.5))
@@ -458,7 +466,7 @@ pub fn render<T: 'static>(
                 button("plugin-detail-copy-url", "Copy URL")
                     .bg(colors.border.opacity(0.4))
                     .child(icon("copy").size(px(14.)))
-                    .child("Copy URL")
+                    .child(tr(cx, msg::native::copy_url))
                     .on_click(move |_, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(url.clone()))
                     }),
@@ -501,7 +509,7 @@ pub fn render<T: 'static>(
                                 .px_0()
                                 .text_size(px(13.))
                                 .text_color(colors.muted)
-                                .child("Plugins")
+                                .child(tr(cx, msg::plugins::plugins_back))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     action(this, Action::Back, window, cx)
                                 })),
@@ -561,7 +569,10 @@ pub fn render<T: 'static>(
                                                             .line_height(px(16.))
                                                             .font_weight(FontWeight::MEDIUM)
                                                             .text_color(colors.muted)
-                                                            .child("Custom"),
+                                                            .child(tr(
+                                                                cx,
+                                                                msg::chat::browser_pane_custom,
+                                                            )),
                                                     )
                                                 }),
                                         )
@@ -590,11 +601,10 @@ pub fn render<T: 'static>(
                         )
                     })
                     .when(!can_manage, |d| {
-                        d.child(
-                            div().text_color(colors.muted).child(
-                                "Only workspace administrators can manage these connections.",
-                            ),
-                        )
+                        d.child(div().text_color(colors.muted).child(tr(
+                            cx,
+                            msg::native::only_workspace_administrators_can_manage_these_connections,
+                        )))
                     }),
             )
         })
@@ -629,7 +639,9 @@ pub fn render<T: 'static>(
             ))
             .child(info_row(
                 "Transport",
-                div().child("Local (stdio)").into_any_element(),
+                div()
+                    .child(tr(cx, msg::native::local_stdio))
+                    .into_any_element(),
             ));
     } else if definition.custom {
         info = info
@@ -685,15 +697,15 @@ pub fn render<T: 'static>(
     info = info.child(info_row(
         "Access",
         div()
-            .child("Read and write, within each chat's permissions")
+            .child(tr(cx, msg::plugins::plugins_access_value))
             .into_any_element(),
     ));
     view=view.child(section("Information",div().child(info).child(div().mt(px(16.)).max_w(px(560.)).text_size(px(11.)).line_height(px(16.)).text_color(colors.muted)
         .child(if definition.command.is_some() {
-            "Runs on this computer with your permissions. Its command and environment are stored on this computer and are not sent to Zuse servers. Turning it off stops the process."
+            ("Runs on this computer with your permissions. Its command and environment are stored on this computer and are not sent to Zuse servers. Turning it off stops the process.").to_string()
         } else if snapshot["tenantId"].as_str().is_some_and(|id|id.starts_with("organization:")) {
-            "Connections are shared with members of this organization. Tokens stay encrypted on Zuse servers and never reach agent machines. Disconnecting stops new calls immediately."
-        }else{"Connections are private to your Zuse account. Tokens stay encrypted on Zuse servers and never reach agent machines. Disconnecting stops new calls immediately."})).into_any_element()));
+            crate::localization::text("plugins-plugins_privacy_organization", cx)
+        }else{crate::localization::text("plugins-plugins_privacy", cx)})).into_any_element()));
     view.into_any_element()
 }
 

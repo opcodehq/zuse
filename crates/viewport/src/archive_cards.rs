@@ -1,4 +1,5 @@
 //! Saved-chat cards and filtering shared by the global archive screens.
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     palette::rgb,
@@ -6,6 +7,7 @@ use crate::{
     shell::{MUTED, TEXT},
 };
 use gpui::{prelude::*, *};
+use zuse_i18n::messages as msg;
 use zuse_protocol::Chat;
 
 pub const PAGE_SIZE: usize = 40;
@@ -227,14 +229,17 @@ pub fn pagination<C: 'static>(
             .text_size(px(11.))
             .text_color(rgb(MUTED))
             .child(
-                s::button("saved-archive-previous", "Previous")
-                    .tab_index(0)
-                    .when(current == 0, |v| v.opacity(0.4))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if current > 0 {
-                            run(this, Action::Page(current - 1), window, cx);
-                        }
-                    })),
+                s::button(
+                    "saved-archive-previous",
+                    tr(cx, msg::projects::masters_memory_previous),
+                )
+                .tab_index(0)
+                .when(current == 0, |v| v.opacity(0.4))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if current > 0 {
+                        run(this, Action::Page(current - 1), window, cx);
+                    }
+                })),
             )
             .child(format!(
                 "{}–{} of {}",
@@ -243,14 +248,17 @@ pub fn pagination<C: 'static>(
                 total
             ))
             .child(
-                s::button("saved-archive-next", "Next")
-                    .tab_index(0)
-                    .when(current == next, |v| v.opacity(0.4))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if current < next {
-                            run(this, Action::Page(next), window, cx);
-                        }
-                    })),
+                s::button(
+                    "saved-archive-next",
+                    tr(cx, msg::chat::next_unread_button_next),
+                )
+                .tab_index(0)
+                .when(current == next, |v| v.opacity(0.4))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if current < next {
+                        run(this, Action::Page(next), window, cx);
+                    }
+                })),
             )
             .into_any_element(),
     )

@@ -48,6 +48,34 @@ async fn auth_status() -> Result<bool, ()> {
     }
 }
 fn local_action(frame: &Value, events: &Sender) -> bool {
+    if frame["ui"] == "documentLanguage" {
+        if let Some(language) = frame["language"].as_str() {
+            if let Some(root) = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.document_element())
+            {
+                let _ = root.set_attribute("lang", language);
+            }
+        }
+        return true;
+    }
+    if frame["ui"] == "saveLanguage" {
+        let preference = frame["preference"].as_str().unwrap_or("system");
+        let saved = web_sys::window()
+            .unwrap()
+            .local_storage()
+            .ok()
+            .flatten()
+            .is_some_and(|storage| storage.set_item("zuse.language.v1", preference).is_ok());
+        let value = if saved {
+            json!({"localization":{"preference":preference}})
+        } else {
+            json!({"localization":{"saveFailed":true}})
+        };
+        let _ = events.unbounded_send(value);
+        return true;
+    }
+
     if crate::account_connection::action(frame, events) {
         return true;
     }

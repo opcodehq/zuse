@@ -1,6 +1,8 @@
 //! Per-chat permissions follow the same configuration used by Run and queues.
 use super::*;
+use crate::localization::message as tr;
 use crate::{icons, popover};
+use zuse_i18n::messages as msg;
 
 use zuse_protocol::presentation::{ACCESS_LEVELS as LEVELS, access_details};
 fn label(level: SandboxLevel) -> &'static str {
@@ -195,11 +197,11 @@ impl Composer {
                     )
                     .when(!icon_only, |el| {
                         el.child(if pending {
-                            "Saving…"
+                            crate::localization::text("settings-wallpaper_saving", cx)
                         } else if unconfirmed {
-                            "Check access"
+                            ("Check access").to_string()
                         } else {
-                            label(selected)
+                            (label(selected)).to_string()
                         })
                     })
                     .when(icon_only, |el| {
@@ -301,52 +303,53 @@ impl Composer {
                     }
                     rows.push(row(index, level).into_any_element());
                 }
-                let menu =
-                    popover::popover_card(&popup_theme)
-                        .id("composer-permission-menu")
-                        .role(Role::ListBox)
-                        .w(px(260.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(popover::menu_heading(&popup_theme, "Agent access"))
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.permission_open = false;
-                            cx.notify();
-                        }))
-                        .children(rows)
-                        .when(self.state.read(cx).selected_chat.is_some(), |menu| {
-                            menu.child(popover::menu_separator()).child(
-                                div()
-                                    .id("open-permission-rules")
-                                    .role(Role::Button)
-                                    .aria_label("Saved permission rules")
-                                    .px(px(10.))
-                                    .py(px(8.))
-                                    .text_size(crate::typography::text_xs())
-                                    .text_color(popup_theme.text)
-                                    .cursor_pointer()
-                                    .child("Saved permission rules…")
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                let menu = popover::popover_card(&popup_theme)
+                    .id("composer-permission-menu")
+                    .role(Role::ListBox)
+                    .w(px(260.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(popover::menu_heading(&popup_theme, "Agent access"))
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.permission_open = false;
+                        cx.notify();
+                    }))
+                    .children(rows)
+                    .when(self.state.read(cx).selected_chat.is_some(), |menu| {
+                        menu.child(popover::menu_separator()).child(
+                            div()
+                                .id("open-permission-rules")
+                                .role(Role::Button)
+                                .aria_label(tr(cx, msg::native::saved_permission_rules_c6bd67ad))
+                                .px(px(10.))
+                                .py(px(8.))
+                                .text_size(crate::typography::text_xs())
+                                .text_color(popup_theme.text)
+                                .cursor_pointer()
+                                .child(tr(cx, msg::native::saved_permission_rules))
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| {
                                         this.open_permission_inspector(cx)
-                                    })),
-                            )
-                        });
+                                    }),
+                                ),
+                        )
+                    });
                 let menu = menu.when(unconfirmed, |view| {
                     view.child(
                         div()
                             .id("refresh-saved-permissions")
                             .role(Role::Button)
-                            .aria_label("Refresh saved chat choices")
+                            .aria_label(tr(cx, msg::native::refresh_saved_chat_choices))
                             .cursor_pointer()
                             .px(px(8.))
                             .py(px(8.))
                             .text_size(crate::typography::text_xs())
                             .text_color(popup_theme.accent)
                             .child(if pending {
-                                "Reading saved chat choices…"
+                                ("Reading saved chat choices…").to_string()
                             } else {
-                                "Refresh saved chat choices"
+                                crate::localization::text("native-refresh_saved_chat_choices", cx)
                             })
                             .on_click(cx.listener(|this, _, _, cx| this.refresh_permission(cx))),
                     )

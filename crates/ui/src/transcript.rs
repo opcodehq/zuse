@@ -25,12 +25,14 @@
 //! Wheel/touch releases that anchor immediately, including when background
 //! streaming has advanced beyond the last measured frame.
 
+use crate::localization::message as tr;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
+use zuse_i18n::messages as msg;
 
 use gpui::{
     AnyElement, Bounds, ClipboardItem, ContentMask, Context, Entity, ListAlignment, ListOffset,
@@ -6335,14 +6337,14 @@ impl Transcript {
                 Thumb::Loading => frame
                     .text_size(px(TOOL_TEXT_SIZE))
                     .text_color(theme.text_faint)
-                    .child("Loading image…"),
+                    .child(tr(cx, msg::chat::image_gallery_loading)),
                 Thumb::Failed => frame
                     .flex_col()
                     .gap(px(4.0))
                     .px(px(12.0))
                     .text_size(px(TOOL_TEXT_SIZE))
                     .text_color(theme.text_faint)
-                    .child("Image unavailable")
+                    .child(tr(cx, msg::chat::image_gallery_unavailable))
                     .child(div().max_w_full().truncate().child(name)),
             }
         });
@@ -6557,7 +6559,7 @@ impl Transcript {
             .debug_selector(|| "transcript-fork-menu".into())
             .track_focus(&self.fork_menu_focus)
             .role(gpui::Role::Menu)
-            .aria_label("Fork chat")
+            .aria_label(tr(cx, msg::native::fork_chat))
             .w(px(212.0))
             .flex()
             .flex_col()
@@ -7169,7 +7171,7 @@ impl Transcript {
                     .w(px(dimensions.0 as f32 * scale))
                     .h(px(dimensions.1 as f32 * scale))
                     .role(gpui::Role::Button)
-                    .aria_label("Preview generated image")
+                    .aria_label(tr(cx, msg::native::preview_generated_image))
                     .tab_index(0)
                     .cursor_pointer()
                     .focus_visible(move |style| style.border_2().border_color(theme.accent))
@@ -7191,11 +7193,11 @@ impl Transcript {
             }
             AttachmentSnapshot::Loading => frame
                 .text_color(theme.text_muted)
-                .child("Loading generated image…")
+                .child(tr(cx, msg::native::loading_generated_image))
                 .into_any_element(),
             AttachmentSnapshot::Error { .. } => frame
                 .text_color(theme.text_muted)
-                .child("Generated image unavailable")
+                .child(tr(cx, msg::native::generated_image_unavailable))
                 .into_any_element(),
         }
     }
@@ -8162,7 +8164,7 @@ impl Transcript {
                     .rounded(px(Theme::CONTROL_RADIUS))
                     .cursor_pointer()
                     .role(gpui::Role::Button)
-                    .aria_label("Fork chat")
+                    .aria_label(tr(cx, msg::native::fork_chat))
                     .bg(if fork_menu_here {
                         crate::theme::ink(0.08)
                     } else {
@@ -9727,7 +9729,9 @@ fn fork_marker(source_title: SharedString, theme: &Theme) -> AnyElement {
                         .flex_none()
                         .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted.opacity(0.7))
-                        .child("Forked from"),
+                        .child(crate::localization::element(
+                            zuse_i18n::messages::native::forked_from,
+                        )),
                 )
                 .child(rule()),
         )
@@ -10266,7 +10270,7 @@ fn chip_header_row(
                     .flex_none()
                     .text_size(px(TOOL_TEXT_SIZE - 1.0))
                     .text_color(theme.danger)
-                    .child("error"),
+                    .child(tr(cx, msg::tools::tool_row_error_2)),
             )
         })
         .when_some(detail_el, |row, detail| {

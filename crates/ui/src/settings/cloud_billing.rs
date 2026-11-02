@@ -670,6 +670,7 @@ impl Render for CloudBillingPage {
                         .when(pending, |view| view.opacity(0.6))
                         .on_click(cx.listener(|this, _, _, cx| this.sign_in(cx))),
                         error,
+                        cx,
                     )
                     .mt(px(20.)),
                 );

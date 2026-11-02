@@ -1,5 +1,6 @@
 //! Shared inline review cards for diffs and Markdown file previews.
 use crate::changes::ACCENT_BAR_WIDTH;
+use crate::localization::message as tr;
 use crate::{
     comments::{self, ReviewComment},
     composer::ComposerInput,
@@ -7,6 +8,7 @@ use crate::{
     theme::Theme,
 };
 use gpui::{AnyElement, Context, Entity, SharedString, div, prelude::*, px};
+use zuse_i18n::messages as msg;
 
 /// Align review controls with a centered document column while keeping the card full width.
 #[derive(Clone, Copy)]
@@ -31,7 +33,7 @@ pub(crate) fn render_comment_adder<T: 'static>(
         .bg(theme.solid)
         .cursor_pointer()
         .role(gpui::Role::Button)
-        .aria_label("Add comment")
+        .aria_label(tr(cx, msg::native::add_comment))
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(cx.listener(move |this, _, window, cx| {
             cx.stop_propagation();
@@ -163,7 +165,7 @@ pub(crate) fn render_comment_edit<T: 'static>(
         .rounded(px(4.0))
         .cursor_pointer()
         .role(gpui::Role::Button)
-        .aria_label("Edit comment")
+        .aria_label(tr(cx, msg::projects::diff_pane_edit_comment))
         .opacity(0.0)
         .group_hover(group, |style| style.opacity(1.0))
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())

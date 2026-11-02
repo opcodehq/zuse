@@ -8,11 +8,13 @@
 //! in free functions with unit tests; rendering is an `impl Transcript`
 //! extension since the rail shares the transcript's rows and `ListState`.
 
+use crate::localization::message as tr;
 use gpui::{AnyElement, Context, ListOffset, SharedString, div, prelude::*, px};
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
 };
+use zuse_i18n::messages as msg;
 
 use zuse_doc::{MessagePart, MessageRole, SessionMessageEntry};
 
@@ -562,7 +564,7 @@ impl Transcript {
             .id("transcript-outline-trigger")
             .debug_selector(|| "transcript-outline-trigger".into())
             .role(gpui::Role::Button)
-            .aria_label("Navigate conversation")
+            .aria_label(tr(cx, msg::chat::chat_turn_navigator_navigate_conversation))
             .aria_expanded(open)
             .w(px(OUTLINE_WIDTH))
             .py(px(4.0))
@@ -692,7 +694,7 @@ impl Transcript {
                         .id("transcript-outline-list")
                         .debug_selector(|| "transcript-outline-list".into())
                         .role(gpui::Role::ListBox)
-                        .aria_label("Conversation turns")
+                        .aria_label(tr(cx, msg::chat::chat_turn_navigator_conversation_turns))
                         .h(px(height))
                         .overflow_y_scroll()
                         .track_scroll(&scroll)

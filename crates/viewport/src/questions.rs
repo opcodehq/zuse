@@ -1,6 +1,8 @@
 //! Approval and question controls use the engine's durable respond-input command.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{column, control, label};
+use zuse_i18n::messages as msg;
 use zuse_protocol::UserInputQuestion;
 
 impl WorkspaceView {
@@ -207,7 +209,7 @@ impl WorkspaceView {
                     }),
             );
         if q.multi_select {
-            tray = tray.child(label("Select one or more options."));
+            tray = tray.child(label(tr(cx, msg::chat::question_card_multiple_choice_hint)));
         }
         for (i, option) in q.options.iter().enumerate() {
             let request = request.to_owned();
@@ -252,64 +254,70 @@ impl WorkspaceView {
         if secret {
             let request = request.to_owned();
             let id = q.id.strip_prefix("private-secret:").unwrap().to_owned();
-            footer = footer.child(control("decline-composer-secret", "Decline").on_click(
-                cx.listener(move |this, _, _, cx| {
+            footer = footer.child(
+                control(
+                    "decline-composer-secret",
+                    tr(cx, msg::projects::masters_decline),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
                     this.submit_secret_composer(&request, &id, true, cx)
-                }),
-            ));
+                })),
+            );
         }
         if index > 0 {
             let request = request.to_owned();
             let id = questions[index - 1].id.clone();
             footer = footer.child(
-                control("question-composer-back", "Back").on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        if let Some((_, qs)) = this.pending_composer_question() {
-                            let active = this
-                                .input_editing
-                                .as_ref()
-                                .and_then(|(_, qid)| qs.iter().find(|q| &q.id == qid))
-                                .unwrap_or(&qs[0])
-                                .clone();
-                            this.stash_question_text(&request, &active, cx);
-                        }
-                        this.input_editing = Some((request.clone(), id.clone()));
-                        let question = this
-                            .pending_composer_question()
-                            .and_then(|(_, qs)| qs.into_iter().find(|q| q.id == id));
-                        let text = question
+                control(
+                    "question-composer-back",
+                    tr(cx, msg::chat::checkpoints_back),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some((_, qs)) = this.pending_composer_question() {
+                        let active = this
+                            .input_editing
                             .as_ref()
-                            .map(|q| {
-                                this.input_answers
-                                    .get(&request)
-                                    .map(|a| {
-                                        a.selected(&id)
-                                            .iter()
-                                            .filter(|v| !q.options.contains(v))
-                                            .cloned()
-                                            .collect::<Vec<_>>()
-                                            .join("\n")
-                                    })
-                                    .unwrap_or_default()
-                            })
-                            .unwrap_or_default();
-                        this.input_text.update(cx, |i, cx| i.set_value(text, cx));
-                        cx.notify();
-                    },
-                )),
+                            .and_then(|(_, qid)| qs.iter().find(|q| &q.id == qid))
+                            .unwrap_or(&qs[0])
+                            .clone();
+                        this.stash_question_text(&request, &active, cx);
+                    }
+                    this.input_editing = Some((request.clone(), id.clone()));
+                    let question = this
+                        .pending_composer_question()
+                        .and_then(|(_, qs)| qs.into_iter().find(|q| q.id == id));
+                    let text = question
+                        .as_ref()
+                        .map(|q| {
+                            this.input_answers
+                                .get(&request)
+                                .map(|a| {
+                                    a.selected(&id)
+                                        .iter()
+                                        .filter(|v| !q.options.contains(v))
+                                        .cloned()
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                })
+                                .unwrap_or_default()
+                        })
+                        .unwrap_or_default();
+                    this.input_text.update(cx, |i, cx| i.set_value(text, cx));
+                    cx.notify();
+                })),
             );
         }
         footer = footer.child(
             control(
                 "question-composer-send",
                 if busy {
-                    "Sending…"
+                    ("Sending…").to_string()
                 } else if secret {
-                    "Approve and use"
+                    ("Approve and use").to_string()
                 } else if index + 1 == questions.len() {
-                    "Submit answer"
+                    crate::localization::text("chat-question_card_submit_answer", cx)
                 } else {
-                    "Continue"
+                    crate::localization::text("chat-question_card_continue", cx)
                 },
             )
             .on_click(cx.listener(|this, _, _, cx| this.send_question_answer(cx))),

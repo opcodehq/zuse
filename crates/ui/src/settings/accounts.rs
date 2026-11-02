@@ -11,12 +11,14 @@
 //! every call here surfaces failures as inline UI states rather than assuming
 //! the methods exist.
 
+use crate::localization::message as tr;
 use chrono::{DateTime, Utc};
 use gpui::{
     AnyElement, Context, Entity, Hsla, SharedString, Subscription, Task, Window, div, prelude::*,
     px,
 };
 use std::time::Duration;
+use zuse_i18n::messages as msg;
 
 use zuse_protocol::{
     AgentAccount, AgentAccountsSnapshot, AgentLoginMode, AgentLoginPoll, AgentLoginStart,
@@ -1821,7 +1823,7 @@ impl AccountsPage {
                     .mt(px(4.0))
                     .id("accounts-inline-retry")
                     .role(gpui::Role::Button)
-                    .aria_label("Retry loading accounts")
+                    .aria_label(tr(cx, msg::native::retry_loading_accounts))
                     .tab_index(0)
                     .cursor_pointer()
                     .focus_visible(|s| s.border_2().border_color(theme.accent))
@@ -1950,7 +1952,7 @@ impl AccountsPage {
                             .justify_center()
                             .when(refreshing, |el| el.opacity(0.5))
                             .role(gpui::Role::Button)
-                            .aria_label("Refresh accounts")
+                            .aria_label(tr(cx, msg::settings::model_connections_refresh))
                             .tooltip(widgets::text_tooltip("Refresh usage"))
                             .tab_index(0)
                             .focus_visible(|s| s.border_2().border_color(theme.accent))

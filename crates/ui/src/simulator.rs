@@ -1,4 +1,5 @@
 //! Simulator picker, setup requirements, and a bounded native image viewer.
+use crate::localization::message as tr;
 use crate::{state::EngineHandle, theme::Theme};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gpui::{
@@ -9,6 +10,7 @@ use gpui::{
 use gpui_base::input::{Input as TextInput, InputEditorStyle, InputEvent, InputState};
 use serde_json::{Value, json};
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
+use zuse_i18n::messages as msg;
 use zuse_protocol::simulators::{
     AgentStatus, Device, Frame, FrameEvent, Input, Platform, Setup, SetupStatus, State,
 };
@@ -46,7 +48,8 @@ impl SimulatorPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Type on device…"));
+        let input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(tr(cx, msg::native::type_on_device)));
         let events = cx.subscribe_in(&input, window, |this, _, event, _, cx| {
             if matches!(event, InputEvent::PressEnter { .. }) {
                 this.type_text(cx);
@@ -362,7 +365,7 @@ impl SimulatorPane {
                     div()
                         .py(px(8.))
                         .text_color(theme.text_muted)
-                        .child("Checking this host…"),
+                        .child(tr(cx, msg::native::checking_this_host)),
                 );
             }
             for requirement in &setup.requirements {
@@ -468,7 +471,7 @@ impl SimulatorPane {
                 div()
                     .id("simulator-setup-agents")
                     .role(Role::Switch)
-                    .aria_label("Allow agents to control devices")
+                    .aria_label(tr(cx, msg::native::allow_agents_to_control_devices))
                     .aria_toggled(if agents {
                         gpui::Toggled::True
                     } else {
@@ -487,7 +490,7 @@ impl SimulatorPane {
                             .flex()
                             .items_center()
                             .gap(px(12.))
-                            .child(div().flex_1().min_w_0().child("Allow agent control"))
+                            .child(div().flex_1().min_w_0().child(tr(cx, msg::native::allow_agent_control)))
                             .child(crate::settings::widgets::toggle_switch(
                                 &theme,
                                 agents,
@@ -499,7 +502,7 @@ impl SimulatorPane {
                             .text_size(px(11.))
                             .line_height(px(16.))
                             .text_color(theme.text_muted)
-                            .child("Let agents inspect and interact with the device in this chat."),
+                            .child(tr(cx, msg::native::let_agents_inspect_and_interact_with_the_device_in_this_chat)),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.setup_agents = Some(!agents);
@@ -871,7 +874,7 @@ impl Render for SimulatorPane {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .child(div().child("Devices"))
+                    .child(div().child(tr(cx, msg::simulators::devices)))
                     .child(
                         div().text_size(px(11.)).text_color(theme.text_muted).child(
                             self.state
@@ -920,16 +923,15 @@ impl Render for SimulatorPane {
                     .px(px(12.0))
                     .py(px(6.0))
                     .text_color(theme.text_muted)
-                    .child("Preparing device…"),
+                    .child(tr(cx, msg::native::preparing_device)),
             );
         }
         let Some(state) = self.state.as_ref() else {
             return body
-                .child(
-                    div()
-                        .p(px(20.0))
-                        .child("Checking simulator tools on the chat's host…"),
-                )
+                .child(div().p(px(20.0)).child(tr(
+                    cx,
+                    msg::native::checking_simulator_tools_on_the_chat_s_host,
+                )))
                 .into_any_element();
         };
         if !enabled {
@@ -953,13 +955,13 @@ impl Render for SimulatorPane {
                     .child(
                         div()
                             .text_size(px(14.))
-                            .child("Your app, right beside your chat"),
+                            .child(tr(cx, msg::native::your_app_right_beside_your_chat)),
                     )
                     .child(
                         div()
                             .text_color(theme.text_muted)
                             .line_height(px(20.))
-                            .child("Run an iOS Simulator or Android emulator on this chat’s host."),
+                            .child(tr(cx, msg::native::run_an_ios_simulator_or_android_emulator_on_this_chat_s_host)),
                     )
                     .child(
                         self.button("simulator-enable", "Enable devices", cx, |this, _, cx| {
@@ -972,7 +974,7 @@ impl Render for SimulatorPane {
                             .mt(px(16.))
                             .text_size(px(11.))
                             .text_color(theme.text_muted)
-                            .child("REQUIREMENTS"),
+                            .child(tr(cx, msg::native::requirements)),
                     )
                     .children(requirements.into_iter().map(|r| {
                         div()
@@ -1276,7 +1278,7 @@ impl Render for SimulatorPane {
                 }
             }
             if state.devices.is_empty() && state.requirements.iter().all(|r| r.ready) {
-                picker = picker.child(div().py(px(24.)).text_color(theme.text_muted).child("No devices found. Create a simulator in Xcode or an AVD in Android Studio, then refresh."));
+                picker = picker.child(div().py(px(24.)).text_color(theme.text_muted).child(tr(cx, msg::native::no_devices_found_create_a_simulator_in_xcode_or_an_avd_in_android_studio_then_refresh)));
             }
             body = body.child(picker);
         }

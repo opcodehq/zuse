@@ -758,6 +758,7 @@ impl Shell {
                 },
                 &theme,
                 cx.listener(move |this, _, _, cx| this.close_pull_request_tab(ix, cx)),
+                cx,
             )
             .aria_label(label)
             .tooltip(move |_, cx| {

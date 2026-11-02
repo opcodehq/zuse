@@ -1,5 +1,7 @@
 //! Image readiness, provider history and retained-image billing views.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 #[path = "delete_dialog.rs"]
 mod delete_dialog;
 fn status(state: &str) -> Div {
@@ -211,13 +213,16 @@ impl RepositoryPanel {
                                 )
                                 .child(s::title_text("boxd"))
                                 .child(cs::badge("Recommended", false, true))
-                                .child(s::description_text("Billed by Zuse")),
+                                .child(s::description_text(tr(
+                                    cx,
+                                    msg::settings::cloud_hosting_zuse_billed,
+                                ))),
                         )
                         .child(
                             div()
                                 .id("cloud-image-history-trigger")
                                 .role(Role::Button)
-                                .aria_label("View boxd build logs")
+                                .aria_label(tr(cx, msg::native::view_boxd_build_logs))
                                 .track_focus(&trigger.clone().tab_stop(true))
                                 .tab_index(0)
                                 .h(px(28.))
@@ -231,9 +236,15 @@ impl RepositoryPanel {
                                 .focus_visible(|v| {
                                     v.border_1().border_color(palette::rgb(0x89ca21))
                                 })
-                                .child(s::description_text("Zuse image"))
+                                .child(s::description_text(tr(
+                                    cx,
+                                    msg::settings::cloud_hosting_zuse_image,
+                                )))
                                 .child(status(state))
-                                .child(s::description_text("Logs"))
+                                .child(s::description_text(tr(
+                                    cx,
+                                    msg::settings::diagnostics_pane_logs,
+                                )))
                                 .child(icon("alt-arrow-right").size(px(14.)))
                                 .on_key_down(|e: &KeyDownEvent, _, cx| {
                                     if matches!(e.keystroke.key.as_str(), "enter" | "space") {
@@ -383,7 +394,7 @@ impl RepositoryPanel {
         }
         let view = s::frame()
             .child(s::header(
-                "Image storage",
+                tr(cx, msg::settings::cloud_snapshot_storage),
                 format!(
                     "{} per 30 days, prorated while retained.",
                     zuse_model::cloud_billing::usd(storage.monthly_cost_micros)
@@ -418,7 +429,7 @@ impl RepositoryPanel {
                     .py(px(8.))
                     .text_size(px(12.))
                     .text_color(palette::rgb(MUTED))
-                    .child("No image builds yet."),
+                    .child(tr(cx, msg::native::no_image_builds_yet)),
             );
         }
         if builds.len() > 1 {
@@ -428,7 +439,7 @@ impl RepositoryPanel {
                 div()
                     .id("previous-cloud-builds")
                     .role(Role::Button)
-                    .aria_label("Previous builds")
+                    .aria_label(tr(cx, msg::native::previous_builds))
                     .aria_expanded(open)
                     .track_focus(&handle.clone().tab_stop(true))
                     .tab_index(0)
@@ -522,7 +533,7 @@ impl RepositoryPanel {
             .id("cloud-image-history-dialog")
             .relative()
             .role(Role::Dialog)
-            .aria_label("View boxd build logs")
+            .aria_label(tr(cx, msg::native::view_boxd_build_logs))
             .w(px(
                 576_f32.min(f32::from(window.viewport_size().width) - 32.)
             ))
@@ -547,7 +558,7 @@ impl RepositoryPanel {
                             .text_size(px(15.))
                             .line_height(px(15.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("View boxd build logs"),
+                            .child(tr(cx, msg::native::view_boxd_build_logs)),
                     ),
             )
             .child(body)
@@ -793,7 +804,7 @@ impl RepositoryPanel {
                             div()
                                 .w(px(112.))
                                 .text_color(palette::rgb(MUTED))
-                                .child("Runtime"),
+                                .child(tr(cx, msg::native::runtime)),
                         )
                         .child(build.runtime_version.clone()),
                 );

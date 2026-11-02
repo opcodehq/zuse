@@ -1,10 +1,12 @@
 //! Saved cloud history uses a separate viewport with no execution transport.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     settings_style as s,
     shell::{BORDER, MUTED, column, row},
 };
+use zuse_i18n::messages as msg;
 use zuse_model::cloud::{ArchivedCloud, Head, Workspace};
 const LIST: &str = zuse_protocol::methods::CLOUD_WORKSPACES;
 const READ: &str = zuse_protocol::methods::CLOUD_HISTORY;
@@ -415,14 +417,14 @@ impl WorkspaceView {
                     .w(px(420.))
                     .p_5()
                     .role(Role::Dialog)
-                    .aria_label("Delete Cloud chat?")
-                    .child(div().text_size(px(18.)).child("Delete Cloud chat?"))
+                    .aria_label(tr(cx, msg::native::delete_cloud_chat))
+                    .child(div().text_size(px(18.)).child(tr(cx, msg::native::delete_cloud_chat)))
                     .child(s::description_text(
-                        "This permanently removes all conversations, Cloud files and recovery backups for this chat. This cannot be undone."
+                        tr(cx, msg::native::this_permanently_removes_all_conversations_cloud_files_and_recovery_backups_for_cb2de551)
                     ).mt_3())
                     .child(
                         row().mt_4().gap_3().justify_end()
-                            .child(s::button("cloud-delete-cancel", "Cancel")
+                            .child(s::button("cloud-delete-cancel", tr(cx, msg::common::cancel))
                                 .track_focus(&focus[1])
                                 .tab_index(0)
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -430,7 +432,7 @@ impl WorkspaceView {
                                     window.focus(&this.settings_nav_focus, cx);
                                     cx.notify();
                                 })))
-                            .child(s::button("cloud-delete-confirm", "Delete permanently")
+                            .child(s::button("cloud-delete-confirm", tr(cx, msg::native::delete_permanently))
                                 .track_focus(&focus[2])
                                 .tab_index(0)
                                 .text_color(rgb(0xec9292))
@@ -631,7 +633,7 @@ impl WorkspaceView {
             .child(
                 s::frame()
                     .child(s::header(
-                        "Saved chats",
+                        tr(cx, msg::native::saved_chats),
                         format!(
                             "{} matching conversations across your projects and computers.",
                             count
@@ -694,15 +696,14 @@ impl WorkspaceView {
                     .border_b_1()
                     .border_color(rgb(BORDER))
                     .child(
-                        s::button("cloud-history-back", "Back").on_click(cx.listener(
-                            |this, _, _, cx| {
+                        s::button("cloud-history-back", tr(cx, msg::chat::checkpoints_back))
+                            .on_click(cx.listener(|this, _, _, cx| {
                                 this.cloud_archive.state.back();
                                 this.cloud_archive.view = None;
                                 this.cloud_archive.loaded = false;
                                 this.load_cloud_archive();
                                 cx.notify();
-                            },
-                        )),
+                            })),
                     )
                     .child(
                         div().flex_1().child(
@@ -716,7 +717,7 @@ impl WorkspaceView {
                         div()
                             .text_size(px(11.))
                             .text_color(rgb(MUTED))
-                            .child("Cloud"),
+                            .child(tr(cx, msg::chat::computer_picker_cloud_sandbox)),
                     ),
             )
             .child(crate::cloud_archive_cards::sessions(
@@ -733,7 +734,7 @@ impl WorkspaceView {
                     .items_center()
                     .justify_center()
                     .text_color(rgb(MUTED))
-                    .child("Loading saved conversation…")
+                    .child(tr(cx, msg::native::loading_saved_conversation))
                     .into_any_element()
             } else {
                 self.cloud_archive.view.clone().unwrap().into_any_element()
@@ -756,7 +757,7 @@ impl WorkspaceView {
                             .flex_1()
                             .text_size(px(12.))
                             .text_color(rgb(MUTED))
-                            .child("This chat is archived.")
+                            .child(tr(cx, msg::chat::archived_chats_page_this_chat_is_archived))
                             .when_some(self.cloud_archive.state.error.clone(), |v, error| {
                                 v.child(error)
                             }),

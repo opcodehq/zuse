@@ -1,5 +1,7 @@
 //! Cloud Setup catalog presentation. Mutations remain owned by RepositoryPanel.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 pub(super) fn avatar(name: &str, url: Option<&str>, size: f32) -> AnyElement {
     let owner = name.split('/').next().unwrap_or(name);
     let fallback = owner.chars().take(2).collect::<String>().to_uppercase();
@@ -105,7 +107,7 @@ impl RepositoryPanel {
                 false,
             )
             .when(!empty, |v| v.w(px(28.)).px(px(0.)).gap(px(0.)))
-            .aria_label("Repository")
+            .aria_label(tr(cx, msg::connections::cloud_workspace_menu_repository))
             .track_focus(&self.picker_trigger.clone().tab_stop(!disabled))
             .on_click(cx.listener(|this, _, window, cx| this.picker_action(window, cx))),
         );
@@ -193,9 +195,9 @@ impl RepositoryPanel {
                         .line_height(px(16.))
                         .text_color(palette::rgb(MUTED))
                         .child(if available == 0 {
-                            "Every available repository is already included."
+                            crate::localization::text("settings-cloud_workspace_repositories_every_available_repository_is_already_included", cx)
                         } else {
-                            "No repositories match this search."
+                            crate::localization::text("settings-cloud_workspace_repositories_no_repositories_match_this_search", cx)
                         }),
                 );
             }
@@ -207,7 +209,7 @@ impl RepositoryPanel {
             let menu = column()
                 .id("cloud-repository-picker")
                 .role(Role::Dialog)
-                .aria_label("Choose repositories")
+                .aria_label(tr(cx, msg::projects::masters_guide_repositories_title))
                 .key_context("CloudRepositoryPicker")
                 .on_action(cx.listener(|this, _: &CloseRepositoryPicker, window, cx| {
                     this.close_picker(window, cx);
@@ -355,9 +357,15 @@ impl RepositoryPanel {
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(palette::rgb(TEXT).opacity(0.85))
                         .child(if busy {
-                            "Loading repositories…"
+                            crate::localization::text(
+                                "projects-project_setup_dialog_loading_repositories",
+                                cx,
+                            )
                         } else {
-                            "No repositories included"
+                            crate::localization::text(
+                                "settings-cloud_workspace_repositories_no_repositories_included",
+                                cx,
+                            )
                         }),
                 )
                 .child(

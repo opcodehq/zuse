@@ -3,6 +3,7 @@ use super::{
     links::*,
     render::{LinkUi, activate_link, range_rects},
 };
+use crate::localization::message as tr;
 use crate::{icons, popover, theme::Theme};
 use gpui::{
     AnyElement, App, AvailableSpace, Bounds, ClickEvent, DispatchPhase, Element, ElementId,
@@ -14,6 +15,7 @@ use std::{
     ops::Range,
     rc::Rc,
 };
+use zuse_i18n::messages as msg;
 
 #[cfg(feature = "browser-fixture")]
 thread_local! {
@@ -504,7 +506,7 @@ impl Element for LinkRanges {
                                     .text_color(theme.text_muted),
                             )
                         }))
-                        .child("Open links in Zuse")
+                        .child(tr(cx, msg::native::open_links_in_zuse))
                         .track_focus(&state.menu_focus[6])
                         .role(Role::Button)
                         .aria_label(if open_in_zuse {

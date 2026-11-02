@@ -1,10 +1,12 @@
 //! Settings uses the same rail, framed groups and card rows as Zuse.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     settings_style as s,
     shell::{BG, BORDER, MUTED, TEXT, column, provider_icon, row},
 };
+use zuse_i18n::messages as msg;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Section {
     General,
@@ -28,17 +30,17 @@ impl Section {
         Self::Shortcuts,
         Self::Archived,
     ];
-    fn title(self) -> &'static str {
+    fn title(self, cx: &App) -> String {
         match self {
-            Self::Cloud => "Cloud workspaces",
-            Self::General => "General",
-            Self::Providers => "Providers",
-            Self::Defaults => "Default models",
-            Self::Devices => "Remote access",
-            Self::Plugins => "Plugins",
-            Self::Usage => "Accounts & usage",
-            Self::Shortcuts => "Keyboard shortcuts",
-            Self::Archived => "Archived chats",
+            Self::Cloud => tr(cx, msg::native::cloud_workspaces),
+            Self::General => tr(cx, msg::settings::settings_page_general),
+            Self::Providers => tr(cx, msg::providers::opencode_provider_manager_providers),
+            Self::Defaults => tr(cx, msg::settings::settings_page_default_models),
+            Self::Devices => tr(cx, msg::settings::settings_page_remote_access),
+            Self::Plugins => tr(cx, msg::plugins::plugins_title),
+            Self::Usage => tr(cx, msg::native::accounts_usage),
+            Self::Shortcuts => tr(cx, msg::settings::keybindings_editor_keyboard_shortcuts),
+            Self::Archived => tr(cx, msg::chat::archived_chats_page_archived_chats),
         }
     }
     fn icon(self) -> &'static str {
@@ -54,21 +56,21 @@ impl Section {
             Self::Archived => "archive-minimalistic",
         }
     }
-    fn description(self) -> &'static str {
+    fn description(self, cx: &App) -> String {
         match self {
             Self::Cloud => {
-                "Connect GitHub and your coding agents, then keep work running when this app is closed."
+                tr(cx, msg::native::connect_github_and_your_coding_agents_then_keep_work_running_when_this_app_is_closed)
             }
-            Self::General => "Workspace defaults and your personal app preferences.",
+            Self::General => tr(cx, msg::native::workspace_defaults_and_your_personal_app_preferences),
             Self::Providers => {
-                "Verify what’s installed, signed in, and which subscription each provider runs on."
+                tr(cx, msg::native::verify_what_s_installed_signed_in_and_which_subscription_each_provider_runs_on_bc027e5e)
             }
-            Self::Defaults => "Choose how new chats start.",
-            Self::Devices => "Use this computer from your phone, a browser, or another computer.",
-            Self::Plugins => "Your Zuse account and the tools shared across your agents.",
-            Self::Usage => "Provider accounts, plans and current usage.",
-            Self::Shortcuts => "Keyboard shortcuts for the browser workspace.",
-            Self::Archived => "Read saved conversations or restore them to your workspace.",
+            Self::Defaults => tr(cx, msg::native::choose_how_new_chats_start),
+            Self::Devices => tr(cx, msg::native::use_this_computer_from_your_phone_a_browser_or_another_computer),
+            Self::Plugins => tr(cx, msg::native::your_zuse_account_and_the_tools_shared_across_your_agents),
+            Self::Usage => tr(cx, msg::native::provider_accounts_plans_and_current_usage),
+            Self::Shortcuts => tr(cx, msg::native::keyboard_shortcuts_for_the_browser_workspace),
+            Self::Archived => tr(cx, msg::native::read_saved_conversations_or_restore_them_to_your_workspace),
         }
     }
 }
@@ -198,7 +200,7 @@ impl WorkspaceView {
         let navigation = column()
             .id("settings-navigation")
             .role(Role::TabList)
-            .aria_label("Settings sections")
+            .aria_label(tr(cx, msg::native::settings_sections))
             .track_focus(&self.settings_nav_focus)
             .tab_index(0)
             .on_key_down(cx.listener(Self::on_settings_nav_key))
@@ -220,7 +222,7 @@ impl WorkspaceView {
                         item == section
                             || (item == Section::Providers && section == Section::Usage),
                     )
-                    .aria_label(item.title())
+                    .aria_label(item.title(cx))
                     .cursor_pointer()
                     .min_h(px(28.))
                     .px(px(if compact { 6. } else { 10. }))
@@ -237,7 +239,7 @@ impl WorkspaceView {
                             .text_color(rgb(if item == section { TEXT } else { MUTED })),
                     )
                     .when(!compact, |row| {
-                        row.child(div().text_size(px(12.)).child(item.title()))
+                        row.child(div().text_size(px(12.)).child(item.title(cx)))
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.settings_nav_active = index;
@@ -249,6 +251,7 @@ impl WorkspaceView {
             Section::General => column()
                 .gap_4()
                 .child(self.account_settings(cx))
+                .child(self.language_settings(cx))
                 .child(self.appearance_settings(cx))
                 .child(self.completion_sound_settings(cx))
                 .child(self.motion_settings(cx))
@@ -299,13 +302,13 @@ impl WorkspaceView {
                                         .line_height(px(28.))
                                         .font_weight(FontWeight::MEDIUM)
                                         .child(if section == Section::Cloud {
-                                            "Cloud workspaces (Beta)"
+                                            tr(cx, msg::native::cloud_workspaces_beta)
                                         } else {
-                                            section.title()
+                                            (section.title(cx)).to_string()
                                         }),
                                 )
                                 .child(
-                                    s::description_text(section.description())
+                                    s::description_text(section.description(cx))
                                         .text_size(px(12.))
                                         .line_height(px(20.)),
                                 ),
@@ -351,7 +354,7 @@ impl WorkspaceView {
                             .id("settings-back")
                             .tab_index(0)
                             .role(Role::Button)
-                            .aria_label("Back to app")
+                            .aria_label(tr(cx, msg::settings::settings_page_back_to_app))
                             .cursor_pointer()
                             .rounded(px(4.))
                             .p(px(4.))
@@ -360,7 +363,7 @@ impl WorkspaceView {
                             .text_color(rgb(MUTED))
                             .hover(|view| view.bg(s::frame_bg().opacity(0.4)).text_color(rgb(TEXT)))
                             .child(icon("alt-arrow-left").size(px(14.)).text_color(rgb(MUTED)))
-                            .child("Back to app")
+                            .child(tr(cx, msg::settings::settings_page_back_to_app))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 if this.project_archive.global {
                                     this.close_project_archives();
@@ -389,11 +392,11 @@ impl WorkspaceView {
                                 .size(px(14.)),
                             )
                             .child(if self.account_remote {
-                                "Account computer"
+                                ("Account computer").to_string()
                             } else if self.paired {
-                                "Paired computer"
+                                ("Paired computer").to_string()
                             } else {
-                                "Local workspace"
+                                crate::localization::text("native-local_workspace", cx)
                             }),
                     ),
             )
@@ -441,7 +444,7 @@ impl WorkspaceView {
                                     .size(px(24.))
                                     .px_0()
                                     .tab_index(0)
-                                    .aria_label("Dismiss archive error")
+                                    .aria_label(tr(cx, msg::native::dismiss_archive_error))
                                     .child(icon("close").size(px(12.)))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.archive_error = None;
@@ -498,26 +501,30 @@ impl WorkspaceView {
                     .into_iter()
                     .enumerate()
                     .map(|(index, mode)| {
-                        s::choice(("general-theme", index), mode.label(), selected == mode)
-                            .when(selected == mode, |view| view.bg(rgb(BG)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.preferences.appearance = mode;
-                                this.save_preferences();
-                                cx.notify();
-                            }))
+                        s::choice(
+                            ("general-theme", index),
+                            crate::localization::appearance_label(mode, cx),
+                            selected == mode,
+                        )
+                        .when(selected == mode, |view| view.bg(rgb(BG)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.preferences.appearance = mode;
+                            this.save_preferences();
+                            cx.notify();
+                        }))
                     }),
             );
         s::frame()
             .child(s::header(
-                "Appearance",
-                "Choose the app theme, or follow your system setting.",
+                tr(cx, msg::settings::settings_page_appearance),
+                tr(cx, msg::settings::settings_page_choose_the_app_theme_or_follow_your_system_setting),
             ))
             .child(
                 s::card().child(
                     s::setting_row(true)
                         .child(s::details(
-                            "Theme",
-                            "Choose the app theme, or follow your system setting.",
+                            tr(cx, msg::settings::settings_page_theme),
+                            tr(cx, msg::settings::settings_page_choose_the_app_theme_or_follow_your_system_setting),
                         ))
                         .child(row().h(px(28.)).flex_none().child(choices)),
                 ),
@@ -528,7 +535,7 @@ impl WorkspaceView {
         let motion = row()
             .id("reduce-motion-options")
             .role(Role::RadioGroup)
-            .aria_label("Reduce motion")
+            .aria_label(tr(cx, msg::native::reduce_motion))
             .gap_1()
             .children(
                 zuse_protocol::presentation::motion::ReduceMotion::ALL
@@ -537,7 +544,7 @@ impl WorkspaceView {
                     .map(|(i, mode)| {
                         s::choice(
                             ("reduce-motion", i),
-                            mode.label(),
+                            crate::localization::motion_label(mode, cx),
                             self.preferences.reduce_motion == mode,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -548,11 +555,11 @@ impl WorkspaceView {
                     }),
             );
         let paused = self.preferences.pause_animations_in_background;
-        s::frame().child(s::header("Motion","Choose how the app animates."))
+        s::frame().child(s::header(tr(cx, msg::native::motion),tr(cx, msg::native::choose_how_the_app_animates)))
             .child(s::card()
-                .child(s::setting_row(true).child(s::details("Reduce motion","Follow system motion preferences, keep animations still, or allow motion.")).child(motion))
-                .child(s::setting_row(false).child(s::details("Pause animations in background","Keep animations still while the app is out of focus."))
-                    .child(s::toggle("pause-animations-background",paused,"Pause animations in background").tab_index(0)
+                .child(s::setting_row(true).child(s::details(tr(cx, msg::native::reduce_motion),tr(cx, msg::native::follow_system_motion_preferences_keep_animations_still_or_allow_motion))).child(motion))
+                .child(s::setting_row(false).child(s::details(tr(cx, msg::native::pause_animations_in_background),tr(cx, msg::native::keep_animations_still_while_the_app_is_out_of_focus)))
+                    .child(s::toggle("pause-animations-background",paused,tr(cx, msg::native::pause_animations_in_background)).tab_index(0)
                         .on_click(cx.listener(|this,_,_,cx|{this.preferences.pause_animations_in_background=!this.preferences.pause_animations_in_background;this.save_preferences();cx.notify();}))))).into_any_element()
     }
     fn default_model_settings(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -661,7 +668,7 @@ impl WorkspaceView {
                     .justify_between()
                     .role(Role::ComboBox)
                     .tab_index(0)
-                    .aria_label("Default permission mode")
+                    .aria_label(tr(cx, msg::settings::settings_page_default_permission_mode))
                     .aria_expanded(self.default_permission_menu)
                     .child(icon("alt-arrow-down").size(px(14.)))
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -743,10 +750,10 @@ impl WorkspaceView {
             .map(|name| format!("Model for new chats · {name}"))
             .unwrap_or_else(|| "Model for new chats.".into());
         let card = s::card()
-            .child(s::setting_row(true).child(s::details("Default model", description)).child(trigger))
-            .child(s::setting_row(false).child(s::details("Default permission mode", "How new chats handle tool calls. Each chat can override this from the composer.")).child(permission));
+            .child(s::setting_row(true).child(s::details(tr(cx, msg::settings::settings_page_default_model), description)).child(trigger))
+            .child(s::setting_row(false).child(s::details(tr(cx, msg::settings::settings_page_default_permission_mode), tr(cx, msg::settings::settings_page_how_new_chats_handle_tool_calls_each_chat_can_override_this_from_the_c))).child(permission));
         column()
-            .child(s::frame().child(s::header("Chat defaults", "These choices apply when you start a new chat. You can still change either one from the composer.")).child(card))
+            .child(s::frame().child(s::header(tr(cx, msg::settings::settings_page_chat_defaults), tr(cx, msg::settings::settings_page_these_choices_apply_when_you_start_a_new_chat_you_can_still_change_eit))).child(card))
             .into_any_element()
     }
     fn on_default_permission_key(
@@ -793,15 +800,22 @@ impl WorkspaceView {
         s::frame()
             .child(
                 s::header(
-                    "Provider usage",
-                    "Usage and plan information reported by your signed-in agents.",
+                    tr(cx, msg::native::provider_usage),
+                    tr(
+                        cx,
+                        msg::native::usage_and_plan_information_reported_by_your_signed_in_agents,
+                    ),
                 )
-                .child(s::button("refresh-settings-usage", "Refresh").on_click(
-                    cx.listener(|this, _, _, cx| {
+                .child(
+                    s::button(
+                        "refresh-settings-usage",
+                        tr(cx, msg::settings::organizations_refresh),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
                         this.call(methods::LIST_AGENT_ACCOUNTS, json!({"forceUsage":true}));
                         cx.notify();
-                    }),
-                )),
+                    })),
+                ),
             )
             .child(
                 s::card()
@@ -809,8 +823,11 @@ impl WorkspaceView {
                         accounts.is_none_or(|accounts| accounts.is_empty()),
                         |card| {
                             card.child(s::setting_row(true).child(s::details(
-                                "No provider accounts yet",
-                                "Sign in to an agent to see its plan and usage here.",
+                                tr(cx, msg::native::no_provider_accounts_yet),
+                                tr(
+                                    cx,
+                                    msg::native::sign_in_to_an_agent_to_see_its_plan_and_usage_here,
+                                ),
                             )))
                         },
                     )

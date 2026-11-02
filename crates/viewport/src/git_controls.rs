@@ -1,8 +1,10 @@
 //! Shared native/browser Git panel. The host supplies transport; actions never replay.
+use crate::localization::message as tr;
 use crate::plugin_setup::SetupColors;
 use gpui::{prelude::*, *};
 use gpui_base::input::{InputEditorStyle, InputState, TextareaState};
 use serde_json::{Value, json};
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     GitFileState,
     git_workspace::{GitOperation, GitWorkspace},
@@ -73,7 +75,7 @@ impl GitControls {
         let pr_repository = field("Base repository (optional owner/repo)");
         let pr_body = cx.new(|cx| {
             let mut input = TextareaState::new(window, cx)
-                .placeholder("Description")
+                .placeholder(tr(cx, msg::projects::pr_pane_description))
                 .auto_grow(2, 5)
                 .submit_on_enter(false);
             input.set_editor_style(style.clone());
@@ -484,7 +486,7 @@ impl Render for GitControls {
                     }));
                 return view
                     .child(div().text_size(px(11.)).text_color(self.colors.muted).child(
-                        "Push this branch first. Blank base and repository use hosted defaults.",
+                        tr(cx, msg::native::push_this_branch_first_blank_base_and_repository_use_hosted_defaults),
                     ))
                     .child(self.pr_title.clone())
                     .child(self.pr_body.clone())
@@ -531,7 +533,7 @@ impl Render for GitControls {
                     d.child(
                         div()
                             .text_color(self.colors.danger)
-                            .child("Partial status. Actions are unavailable."),
+                            .child(tr(cx, msg::native::partial_status_actions_are_unavailable)),
                     )
                 })
                 .child(

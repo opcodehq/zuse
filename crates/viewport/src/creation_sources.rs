@@ -1,4 +1,5 @@
 //! Source picker shared by the native and browser composers.
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     input::TextInput,
@@ -8,6 +9,7 @@ use crate::{
 use gpui::{prelude::*, *};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use zuse_i18n::messages as msg;
 use zuse_protocol::creation_source::{self as wire, Resolution, Row, Source, Tab};
 
 gpui::actions!(creation_source_picker, [DismissSourceMenu]);
@@ -338,9 +340,11 @@ impl Render for SourcePicker {
             .gap(px(4.))
             .text_color(palette::rgb(MUTED));
         if self.preparing {
-            view = view
-                .child(icon("loading").size(px(14.)))
-                .child(div().text_size(px(12.)).child("Preparing…"));
+            view = view.child(icon("loading").size(px(14.))).child(
+                div()
+                    .text_size(px(12.))
+                    .child(tr(cx, msg::native::preparing)),
+            );
         } else if self.attempt.is_some() && self.error.is_some() && !self.open {
             view = view
                 .child(
@@ -354,10 +358,10 @@ impl Render for SourcePicker {
                     div()
                         .id("source-resolve-retry")
                         .role(Role::Button)
-                        .aria_label("Retry source selection")
+                        .aria_label(tr(cx, msg::native::retry_source_selection))
                         .cursor_pointer()
                         .text_size(px(12.))
-                        .child("Retry")
+                        .child(tr(cx, msg::chat::attempts_retry))
                         .on_click(cx.listener(|this, _, _, cx| this.resolve(cx))),
                 );
         } else if let Some(label) = label {
@@ -374,7 +378,7 @@ impl Render for SourcePicker {
                     div()
                         .id("source-clear")
                         .role(Role::Button)
-                        .aria_label("Clear selected source")
+                        .aria_label(tr(cx, msg::native::clear_selected_source))
                         .cursor_pointer()
                         .size(px(20.))
                         .flex_none()
@@ -399,7 +403,7 @@ impl Render for SourcePicker {
                 .relative()
                 .flex_none()
                 .role(Role::Button)
-                .aria_label("Create from…")
+                .aria_label(tr(cx, msg::chat::create_from_menu_create_from))
                 .aria_expanded(self.open)
                 .track_focus(&self.trigger)
                 .h(px(28.))
@@ -449,7 +453,7 @@ impl Render for SourcePicker {
                 .id("creation-source-menu")
                 .relative()
                 .role(Role::Dialog)
-                .aria_label("Create from…")
+                .aria_label(tr(cx, msg::chat::create_from_menu_create_from))
                 .occlude()
                 .key_context("CreationSourcePicker")
                 .on_action(cx.listener(|this, _: &DismissSourceMenu, _, cx| {
@@ -567,7 +571,7 @@ impl Render for SourcePicker {
                         .text_center()
                         .text_size(px(14.))
                         .line_height(px(20.))
-                        .child("Loading…"),
+                        .child(tr(cx, msg::common::loading)),
                 );
             } else if let Some(error) = self.error.clone() {
                 list = list
@@ -576,12 +580,12 @@ impl Render for SourcePicker {
                         div()
                             .id("source-list-retry")
                             .role(Role::Button)
-                            .aria_label("Retry source list")
+                            .aria_label(tr(cx, msg::native::retry_source_list))
                             .cursor_pointer()
                             .px(px(12.))
                             .py(px(8.))
                             .text_size(px(13.))
-                            .child("Retry")
+                            .child(tr(cx, msg::chat::attempts_retry))
                             .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
                     );
             } else if rows.is_empty() {
@@ -666,11 +670,11 @@ impl Render for SourcePicker {
                             .line_height(px(16.))
                             .text_color(palette::rgb(MUTED))
                             .child(if row.in_use {
-                                "In use"
+                                crate::localization::text("chat-create_from_menu_in_use", cx)
                             } else if i == self.active {
-                                "Select ↵"
+                                crate::localization::text("chat-create_from_menu_select", cx)
                             } else {
-                                ""
+                                ("").to_string()
                             }),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.choose(row.clone(), cx)))

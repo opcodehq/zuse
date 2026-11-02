@@ -1,0 +1,330 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+providers-add_computer_dialog_your_computers = 귀하의 컴퓨터
+
+providers-add_computer_dialog_connect_a_computer = 컴퓨터 연결
+
+providers-add_computer_dialog_rename_reconnect_or_remove_computers_saved_on_this_device = 이 장치에 저장된 컴퓨터의 이름을 바꾸거나 다시 연결하거나 제거하십시오.
+
+providers-add_computer_dialog_review_this_link_then_press_connect_to_pair_with_the_other_computer = 이 링크를 검토한 다음 연결을 눌러 다른 컴퓨터와 페어링하세요.
+
+providers-add_computer_dialog_use_a_connect_link_or_your_existing_ssh_setup = 연결 링크나 기존 SSH 설정을 사용하세요.
+
+providers-add_computer_dialog_add_computer = 컴퓨터 추가
+
+providers-add_computer_dialog_manage = 관리하다
+
+providers-add_computer_dialog_saved_computers = 저장된 컴퓨터
+
+providers-add_computer_dialog_on_your_account = 귀하의 계정에서
+
+providers-add_computer_dialog_hide = 숨기기
+
+providers-add_computer_dialog_removing_a_computer_only_forgets_it_here_its_projects_and_data_remain = 컴퓨터를 제거하면 여기서만 잊어버립니다. 프로젝트와 데이터는 그대로 유지됩니다.
+
+providers-add_computer_dialog_on_the_other_computer_open_settings_remote_access_connect_a_device_the = 다른 컴퓨터에서 설정 → 원격 액세스 → 장치 연결을 연 다음 링크를 복사하세요. 모든 Zuse 연결 링크가 여기에서 작동합니다.
+
+providers-add_computer_dialog_connect_link = 링크 연결
+
+providers-add_computer_dialog_zuse_connect_pair = zuse:///connect/pair?...
+
+providers-add_computer_dialog_linux_computer = 리눅스 컴퓨터
+
+providers-add_computer_dialog_sign_in_to_see_the_computers_on_your_zuse_account = Zuse 계정의 컴퓨터를 보려면 로그인하세요.
+
+providers-add_computer_dialog_computers_signed_in_to_your_zuse_account_appear_here_automatically = Zuse 계정에 로그인된 컴퓨터가 여기에 자동으로 나타납니다.
+
+providers-add_computer_dialog_suggestions = 제안
+
+providers-add_computer_dialog_tailnet = 테일넷
+
+providers-add_computer_dialog_ssh_config = SSH 구성
+
+providers-add_computer_dialog_host = 호스트
+
+providers-add_computer_dialog_server_example_com = server.example.com
+
+providers-add_computer_dialog_build_computer = 컴퓨터 구축
+
+providers-model_picker_change_model = 모델 변경
+
+providers-model_picker_change_default_model_for_new_chats = 새 채팅의 기본 모델 변경
+
+providers-model_picker_change_model_applies_to_next_message = 모델 변경 — 다음 메시지에 적용
+
+providers-model_picker_model_provider = 모델 제공자
+
+providers-model_picker_all_models = 모든 모델
+
+providers-model_picker_checking_available_agents = 사용 가능한 에이전트 확인 중…
+
+providers-model_picker_no_models_match = 일치하는 모델이 없습니다.
+
+providers-model_picker_no_authenticated_agents = 인증된 에이전트가 없습니다.
+
+providers-model_picker_models = 모델
+
+providers-model_picker_all = 모두
+
+providers-model_picker_live_from_local_daemon = 로컬 데몬에서 라이브
+
+providers-model_picker_current = 현재
+
+providers-model_picker_open_in_new_tab = 새 탭에서 열기
+
+providers-model_picker_default_model = 기본 모델
+
+providers-model_picker_make_default_model = 기본 모델로 만들기
+
+providers-model_picker_make_default = 기본값으로 설정
+
+providers-model_picker_selected = 선택됨
+
+providers-opencode_provider_manager_providers = 공급자
+
+providers-opencode_provider_manager_refresh_providers = 새로 고침 공급자
+
+providers-opencode_provider_manager_loading_providers = 제공업체 로드 중…
+
+providers-opencode_provider_manager_add_your_first_provider = 첫 번째 공급자 추가
+
+providers-opencode_provider_manager_add_provider = 제공업체 추가
+
+providers-opencode_provider_manager_custom_endpoint = 커스텀 엔드포인트
+
+providers-opencode_provider_manager_custom = 관습 ·{ " " }
+
+providers-opencode_provider_manager_model = { " " }모델
+
+providers-opencode_provider_manager_remove_credential = 자격증명 제거
+
+providers-opencode_provider_manager_search_providers = 검색 공급자
+
+providers-opencode_provider_manager_connected = 연결됨
+
+providers-opencode_provider_manager_get_an_api_key = API 키 받기
+
+providers-opencode_provider_manager_api_key = API 키
+
+providers-opencode_provider_manager_hide_key = 키 숨기기
+
+providers-opencode_provider_manager_reveal_key = 키 공개
+
+providers-opencode_provider_manager_bring_any_endpoint_that_speaks_a_known_api_shape_vllm_lm_studio_groq_l = 알려진 API 형태(vLLM, LM Studio, Groq, LiteLLM, 게이트웨이 또는 프록시)를 말하는 엔드포인트를 가져오세요.
+
+providers-opencode_provider_manager_name = 이름
+
+providers-opencode_provider_manager_my_gateway = 마이 게이트웨이
+
+providers-opencode_provider_manager_type = 유형
+
+providers-opencode_provider_manager_base_url = 베이스 URL
+
+providers-opencode_provider_manager_sk = sk-…
+
+providers-opencode_provider_manager_models = 모델
+
+providers-opencode_provider_manager_model_id = 모델 ID
+
+providers-opencode_provider_manager_display_name_optional = 표시 이름(선택사항)
+
+providers-opencode_provider_manager_remove_model = 모델 삭제
+
+providers-opencode_provider_manager_add_model = 모델 추가
+
+providers-opencode_provider_manager_add_endpoint = 엔드포인트 추가
+
+providers-opencode_provider_manager_saving = 저장 중…
+
+providers-opencode_provider_manager_configure = 구성
+
+providers-opencode_provider_manager_filter_models = 모델 필터링
+
+providers-opencode_provider_manager_advanced = 고급
+
+providers-opencode_provider_manager_show_in_picker = 선택도구에 표시
+
+providers-provider_card_update_cli = CLI 업데이트
+
+providers-provider_card_install = 설치
+
+providers-provider_card_sandboxed_with_auto_review = 자동 검토 기능을 갖춘 샌드박스
+
+providers-provider_card_local_edits_and_commands_run_through_the_bundled_sdk_sandbox_calls_rej = 로컬 편집 및 명령은 번들 SDK 샌드박스를 통해 실행됩니다. 자동 검토에 의해 거부된 통화는 메시지를 표시하는 대신 차단됩니다.
+
+providers-provider_card_api_key_optional = API 키(옵션)
+
+providers-provider_card_at_least_one_model_must_stay_visible = 하나 이상의 모델이 계속 표시되어야 합니다.
+
+providers-provider_card_custom = 관습
+
+providers-provider_card_enter_a_model_id = 모델 ID를 입력하세요.
+
+providers-provider_card_subscribe = 구독
+
+providers-provider_card_signed_in_refreshing = 로그인했습니다. 새로고침 중…
+
+providers-provider_card_waiting_for_browser_sign_in = 브라우저 로그인을 기다리는 중…
+
+providers-provider_card_open_browser_again = 브라우저를 다시 엽니다
+
+providers-provider_card_try_again = 다시 시도하세요
+
+providers-provider_card_or_run_manually = 아니면 수동으로 실행하세요
+
+providers-add_computer_dialog_connected_to = { $connectedLabel }에 연결됨
+
+providers-opencode_provider_manager_remove = { $name }{ " " }제거
+
+providers-opencode_provider_manager_openai_compatible = OpenAI 호환
+
+providers-opencode_provider_manager_openrouter_compatible = OpenRouter 호환
+
+providers-opencode_provider_manager_anthropic_compatible = Anthropic 호환
+
+providers-opencode_provider_manager_google_compatible = Google 호환
+
+providers-opencode_provider_manager_other_npm_package = 다른 npm 패키지…
+
+providers-provider_card_requires_a_subscription = { $value1 }에는{ " " }{ $plan }{ " " }구독이 필요합니다.
+
+providers-provider_card_enable = { $value1 }{ " " }활성화
+
+providers-provider_card_requires_subscription = { $plan }{ " " }구독이 필요합니다
+
+providers-provider_card_custom_model_id = 사용자 정의{ " " }{ $value1 }{ " " }모델 ID
+
+providers-provider_card_starting_sign_in = { $label }{ " " }로그인 시작 중…
+
+providers-add_computer_dialog_show_hidden_computers_sentence = 숨겨진 컴퓨터 표시({ $value })
+
+providers-add_computer_dialog_computer_name_optional_sentence = 컴퓨터 이름 <part0>선택 사항</part0>
+
+providers-add_computer_dialog_username_optional_sentence = 사용자 이름 <part0>선택 사항</part0>
+
+providers-add_computer_dialog_port_optional_sentence = 포트 <part0>선택 사항</part0>
+
+providers-add_computer_dialog_label_optional_sentence = 라벨 <part0>선택 사항</part0>
+
+providers-add_computer_dialog_zuse_will_forget_this_computer_on_this_device_projects_and_d_sentence = Zuse는 이 장치에서 이 컴퓨터를 삭제합니다.{ " " }{ $value }의 프로젝트와 데이터는 삭제되지 않습니다.
+
+providers-opencode_provider_manager_configured_sentence = { $value }{ " " }구성됨
+
+providers-opencode_provider_manager_no_providers_match_sentence = “{ $query }”와 일치하는 공급자가 없습니다.
+
+providers-opencode_provider_manager_view_all_providers_sentence = 모든{ " " }{ $value }{ " " }공급자 보기
+
+providers-opencode_provider_manager_id_sentence = ID: <part0>{ $value }</part0>
+
+providers-opencode_provider_manager_models_of_shown_sentence = <part0>모델</part0><part1>{ $selected }{ " " }{ $total }{ " " }표시</part1>
+
+providers-opencode_provider_manager_no_models_match_sentence = "{ $query }"와 일치하는 모델이 없습니다.
+
+providers-provider_card_models_shown_sentence = <part0>모델</part0><part1>{ $value }{ " " }표시</part1>
+
+providers-provider_card_custom_ids_are_passed_directly_to_sentence = 사용자 정의 ID는{ " " }{ $value }로 직접 전달됩니다.
+
+providers-provider_card_requires_subscription_sentence = { $value }{ " " }구독이 필요합니다
+
+providers-provider_card_sessions_will_fail_if_your_plan_doesn_apos_t_include_subscri_sentence = 계획에{ " " }{ $value }가 포함되어 있지 않으면 세션이 실패합니다.{ " " }{ $value2 }를 사용하기 전에 구독(또는 기존 계획 확인)하세요.
+
+providers-provider_card_sign_in_to_sentence = { $label }에 로그인
+
+providers-provider_card_or_run_sentence = 또는 <part0>${ " " }{ $manualCommand }</part0>를 실행하세요.
+
+providers-add_computer_dialog_label_for = { $value1 }용 라벨
+
+providers-add_computer_dialog_edit_label_for = { $value1 }의 라벨 편집
+
+providers-add_computer_dialog_retry = { $value1 }{ " " }다시 시도
+
+providers-add_computer_dialog_disconnect = { $value1 }{ " " }연결 해제
+
+providers-add_computer_dialog_remove = { $value1 }{ " " }제거
+
+providers-add_computer_dialog_could_not_load_account_computers = 계정 컴퓨터를 로드할 수 없습니다:{ " " }{ $accountDiscoveryError }
+
+providers-model_picker_match = { $value1 }{ " " }매치{ $value2 }
+
+providers-model_picker_model = { $value1 }{ " " }모델{ $value2 }
+
+providers-model_picker_context_window = { $value1 }{ " " }컨텍스트 창
+
+providers-model_picker_credit_multiplier = { $value1 }{ " " }신용 승수
+
+providers-provider_card_remove_custom_model = 사용자 정의 모델{ " " }{ $modelId }{ " " }제거
+
+providers-muse_sign_in_hint = Muse Code가 로그인을 관리합니다. 터미널에서 <part0>muse login</part0>을 실행하거나 <part1>muse auth set</part1>으로 Meta API 키를 저장하세요. Zuse는 META_API_KEY를 전달하지 않습니다.
+
+providers-pi_setup_hint = Pi가 인증과 도구 권한을 관리합니다. 터미널에서 <part0>pi</part0>를 실행하고 <part1>/login</part1>으로 로그인하세요.
+
+providers-pi_binary_path = Pi 실행 파일 경로
+
+providers-pi_binary_placeholder = PATH에서 pi 찾기
+
+providers-pi_binary_help = 실행 파일의 절대 경로를 입력하거나 비워 두면 PATH에서 검색합니다.
+
+providers-provider_row_configure = { $label }{ " " }설정
+
+providers-updating = 업데이트 중…
+
+providers-updated = 업데이트됨
+
+providers-update_failed = 실패
+
+providers-cancel_update = 업데이트 취소
+
+providers-update_to_version = { $name }을(를) v{ $version }(으)로 업데이트
+
+providers-update_to_latest = { $name }을(를) 최신 버전으로 업데이트
+
+providers-sign_in_failed = 로그인에 실패했습니다.
+
+providers-sign_in_incomplete = 로그인이 완료되기 전에 종료되었습니다.
+
+providers-update_incomplete = 업데이트가 완료되기 전에 종료되었습니다.
+
+providers-remove_computer_account_description = 계정에서{ " " }{ $value }을(를) 제거하여 컴퓨터 등록 한 자리를 확보합니다. Zuse를 통한 원격 액세스가 중단됩니다. 컴퓨터의 프로젝트와 데이터는 유지됩니다.
+
+providers-accounts_title = 계정
+
+providers-accounts_name = 계정 이름
+
+providers-accounts_hint = 새 채팅은 기본 계정으로 시작합니다. 채팅이 한도에 도달하면 입력창에서 다른 계정으로 전환할 수 있습니다.
+
+providers-accounts_default = 기본 로그인
+
+providers-accounts_waiting = 브라우저에서 로그인을 완료하세요.
+
+providers-accounts_open_browser = 브라우저 열기
+
+providers-accounts_signed_in = 로그인됨
+
+providers-accounts_remove_description = 설정에서 이 계정을 제거합니다. 이 계정을 사용하는 채팅은 재개할 수 없습니다. 로그인 파일과 대화 기록은 유지됩니다.
+
+providers-model_picker_switch_pending = 현재 작업이 끝나면 전환됩니다
+
+providers-accounts_default_detail = CLI 로그인 또는 API 키
+
+providers-accounts_suggested_name = 계정{ " " }{ $index }
+
+providers-accounts_actions = { $name }{ " " }작업
+
+providers-accounts_sign_in_again = 다시 로그인
+
+providers-accounts_rename = 이름 변경
+
+providers-accounts_connect = 다른 계정 연결
+
+providers-accounts_use_for_new_chats = 새 채팅에 사용
+
+providers-accounts_default_badge = 기본값
+
+providers-accounts_add = 계정 추가
+
+providers-accounts_use = 새 채팅에 사용
+
+providers-accounts_selected = 선택됨
+
+providers-model_picker_unavailable_selection = { $model }{ " " }(사용 불가)

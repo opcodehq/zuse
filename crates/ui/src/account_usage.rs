@@ -502,7 +502,7 @@ impl AccountUsage {
     fn card(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let theme = &Theme::of(cx).for_popup();
         let context =
-            crate::context_usage::context_section(self.state.read(cx).context_usage, theme);
+            crate::context_usage::context_section(self.state.read(cx).context_usage, theme, cx);
         let has_context = context.is_some();
         let plan = self.plan_section(theme, cx);
         popover::popover_card_flush(theme)

@@ -2,9 +2,11 @@
 //! devices, with Unarchive (Mutate setChatArchived false) and a confirmed
 //! Delete all (Mutate deleteChat per archived chat).
 
+use crate::localization::message as tr;
 use gpui::{
     AnyElement, Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*, px,
 };
+use zuse_i18n::messages as msg;
 
 use zuse_protocol::Chat;
 use zuse_rpc::methods;
@@ -510,7 +512,7 @@ impl ArchivedPage {
         let focus = self.cloud_delete_focus.clone()?;
         let theme = Theme::of(cx).for_popup();
         let card = popover::dialog_card(&theme)
-            .id("cloud-delete-card").role(gpui::Role::Dialog).aria_label("Delete Cloud chat?")
+            .id("cloud-delete-card").role(gpui::Role::Dialog).aria_label(tr(cx, msg::native::delete_cloud_chat))
             .track_focus(&focus[0]).tab_group().tab_stop(false)
             .capture_key_down(cx.listener(|page,event:&gpui::KeyDownEvent,window,cx| {
                 match event.keystroke.key.as_str() {
@@ -532,7 +534,7 @@ impl ArchivedPage {
             )))
             .child(
                 div().mt(px(16.)).flex().justify_end().gap(px(8.))
-                    .child(popover::btn_ghost(&theme, "Cancel", "cloud-delete-cancel")
+                    .child(popover::btn_ghost(&theme, &tr(cx, msg::settings::organizations_cancel), "cloud-delete-cancel")
                         .id("cloud-delete-cancel").role(gpui::Role::Button).tab_index(0).track_focus(&focus[1])
                         .on_click(cx.listener(|page, _, window, cx| page.cancel_cloud_delete(window,cx))))
                     .child(popover::btn_danger(&theme, "Delete permanently")
@@ -829,12 +831,16 @@ impl ArchivedPage {
                     .justify_end()
                     .gap(px(8.0))
                     .child(
-                        popover::btn_ghost(&theme, "Cancel", "delete-archived-cancel")
-                            .id("delete-archived-cancel")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.delete_all_confirm = None;
-                                cx.notify();
-                            })),
+                        popover::btn_ghost(
+                            &theme,
+                            &tr(cx, msg::settings::organizations_cancel),
+                            "delete-archived-cancel",
+                        )
+                        .id("delete-archived-cancel")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.delete_all_confirm = None;
+                            cx.notify();
+                        })),
                     )
                     .child(
                         popover::btn_danger(&theme, "Delete all")

@@ -1,8 +1,10 @@
 //! GPUI browser controls and existing project-preview discovery. The platform
 //! owns one isolated web surface; it never owns chat or engine mutations.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{column, control, icon_button, label, row};
 use std::{cell::Cell, rc::Rc};
+use zuse_i18n::messages as msg;
 
 pub(super) struct Browser {
     address: Entity<input::TextInput>,
@@ -206,7 +208,7 @@ impl WorkspaceView {
                 .child(icon_button("browser-reload","refresh","Reload page").opacity(if has_url{1.}else{0.4}).on_click(cx.listener(|this,_,_,cx|{if this.browser.url.is_some(){this.browser.loading=true;this.browser_command("reload",json!({}));cx.notify();}})))
                 .when_some(self.browser.url.clone(),|d,url|d.child(icon_button("browser-external","arrow-up-right","Open page in a new tab").on_click(move|_,_,cx|cx.open_url(&url)))))
             .when_some(self.browser.error.clone(),|d,error|d.child(label(error).p_3().text_color(rgb(0xe5a0a0))))
-            .when(self.browser.supported==Some(false),|d|d.child(label("Embedded pages are unavailable in this browser. Open the URL in a new tab.").p_3()))
+            .when(self.browser.supported==Some(false),|d|d.child(label(tr(cx, msg::native::embedded_pages_are_unavailable_in_this_browser_open_the_url_in_a_new_tab)).p_3()))
             .when_some(self.browser.snapshot.error.clone(),|d,error|d.child(label(error).p_2()))
             .when(!self.browser.snapshot.services.is_empty(),|d|d.child(
                 row().id("browser-project-previews").overflow_x_scroll().gap_2().p_2().children(self.browser.snapshot.services.iter().map(|service|{
@@ -215,9 +217,9 @@ impl WorkspaceView {
                         .on_click(cx.listener(move|this,_,_,cx|{if can_open{this.browser.address.update(cx,|input,cx|input.set_value(url.clone(),cx));this.navigate_browser(true,cx);}else{this.browser.error=Some("Enter the preview’s published URL to open it from this browser.".into());cx.notify();}}))
                 }).collect::<Vec<_>>())
             ))
-            .when(!has_url,|d|d.child(column().p_4().gap_2().child(label("Web preview")).child(label("Open a running project preview above, or enter a website address."))
-                .when(!self.browser_local,|d|d.child(label("Project proxy URLs are local to the execution computer. Use a published URL from this browser.")))))
-            .when(self.browser.loading,|d|d.child(label("Loading page…").px_3().py_1()))
+            .when(!has_url,|d|d.child(column().p_4().gap_2().child(label(tr(cx, msg::native::web_preview))).child(label(tr(cx, msg::native::open_a_running_project_preview_above_or_enter_a_website_address)))
+                .when(!self.browser_local,|d|d.child(label(tr(cx, msg::native::project_proxy_urls_are_local_to_the_execution_computer_use_a_published_url_from_f4d971d6))))))
+            .when(self.browser.loading,|d|d.child(label(tr(cx, msg::native::loading_page)).px_3().py_1()))
             .child(div().flex_1().min_h_0().overflow_hidden().child(canvas(move|_,_,_|{},move|bounds,_,_,_|{
                 let rect=[f32::from(bounds.left()),f32::from(bounds.top()),f32::from(bounds.size.width),f32::from(bounds.size.height)];
                 if measured.get()!=Some(rect){measured.set(Some(rect));let _=requests.unbounded_send(json!({"ui":"browserFrame","action":"bounds","generation":generation,"bounds":rect}));}

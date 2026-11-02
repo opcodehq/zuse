@@ -1,5 +1,8 @@
 //! Browser-compatible GPUI views. Native process/filesystem access stays behind RPC.
 
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
+
 mod access;
 pub mod account_settings;
 pub mod acp_catalog;
@@ -38,6 +41,8 @@ mod history;
 pub mod import_chat;
 mod import_chat_adapter;
 pub mod input;
+pub mod language_fonts;
+pub mod localization;
 mod managed_access;
 mod model_catalog;
 mod model_config;
@@ -376,15 +381,12 @@ pub struct WorkspaceView {
 
 impl WorkspaceView {
     pub fn new(transport: Transport, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        localization::initialize(cx);
         cx.observe_self(|this, cx| this.persist_drafts(cx)).detach();
         let workspace_focus = cx.focus_handle();
         window.focus(&workspace_focus, cx);
         let input = cx.new(|cx| {
-            input::TextInput::multiline(
-                "Ask to make changes at the @ mentioned files or run slash commands…",
-                window,
-                cx,
-            )
+            input::TextInput::multiline(&tr(cx, msg::native::composer_placeholder), window, cx)
         });
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         let project_input =
@@ -1006,6 +1008,9 @@ impl WorkspaceView {
             return;
         }
         if self.receive_draft_journal(&frame, cx) {
+            return;
+        }
+        if self.receive_localization(&frame, cx) {
             return;
         }
         if let Some(value) = frame.get("preferences") {
@@ -1886,6 +1891,8 @@ pub fn initialize(cx: &mut App) {
         return;
     }
     cx.set_global(WorkspaceInitialized);
+    localization::initialize(cx);
+    language_fonts::register(cx);
     input::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-k", SearchSessions, Some("Workspace")),

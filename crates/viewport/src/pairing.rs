@@ -1,7 +1,9 @@
 //! Pairing capabilities stay in this transient view, outside UI preferences.
 use super::*;
+use crate::localization::message as tr;
 use crate::settings_style as s;
 use crate::shell::{column, row};
+use zuse_i18n::messages as msg;
 
 impl WorkspaceView {
     pub(super) fn refresh_pairings(&mut self) {
@@ -308,6 +310,7 @@ impl WorkspaceView {
                 } else {
                     "Turn on"
                 },
+                cx,
             )
             .when(!network_available || busy || running && !managed, |v| {
                 v.opacity(0.5).cursor_default()
@@ -319,15 +322,15 @@ impl WorkspaceView {
             })),
         );
         let connect = r::frame(
-            "Connect another device",
-            "Create a temporary link that authorizes another Zuse app or browser to use this computer.",
+            crate::localization::text("settings-connect_link_card_connect_another_device", cx),
+            crate::localization::text("settings-connect_link_card_create_a_temporary_link_that_authorizes_another_zuse_app_or_browser_to", cx),
             None,
         )
         .child(
             s::card().child(
-                r::connect_row(ready)
+                r::connect_row(ready, cx)
                     .child(
-                        r::small_button("create-pairing", "Create link")
+                        r::small_button("create-pairing", crate::localization::text("settings-connect_link_card_create_link", cx))
                             .when(!ready || busy, |v| v.opacity(0.5).cursor_default())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if ready && !busy {
@@ -344,16 +347,19 @@ impl WorkspaceView {
             .into_any_element();
         let peers = self.pairings.as_array().cloned().unwrap_or_default();
         let devices = r::frame(
-            "Connected devices",
+            crate::localization::text("chat-environment_summary_connected_devices", cx),
             "Manage devices that have connected to this computer.",
             Some(
-                r::button("refresh-pairings", "Refresh")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.refresh_pairings();
-                        this.refresh_managed_access();
-                        cx.notify();
-                    }))
-                    .into_any_element(),
+                r::button(
+                    "refresh-pairings",
+                    crate::localization::text("chat-attempts_refresh", cx),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.refresh_pairings();
+                    this.refresh_managed_access();
+                    cx.notify();
+                }))
+                .into_any_element(),
             ),
         )
         .child(
@@ -377,28 +383,36 @@ impl WorkspaceView {
                             r::details(
                                 label.clone(),
                                 if peer["pairedAt"].is_number() {
-                                    "Connected"
+                                    crate::localization::text("plugins-plugins_connected", cx)
                                 } else if peer["expiresAt"].as_u64().is_some_and(|expiry| {
                                     expiry <= chrono::Utc::now().timestamp().max(0) as u64
                                 }) {
-                                    "Invitation expired"
+                                    ("Invitation expired").to_string()
                                 } else {
-                                    "Invitation pending"
+                                    crate::localization::text(
+                                        "settings-organizations_invitation_pending",
+                                        cx,
+                                    )
                                 },
                             )
                             .flex_1(),
                         )
                         .child(
-                            r::small_button(("revoke-pairing", index), "Revoke")
-                                .border_color(gpui::transparent_black())
-                                .text_color(s::destructive_text())
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            r::small_button(
+                                ("revoke-pairing", index),
+                                crate::localization::text("chat-device_bridge_panel_revoke", cx),
+                            )
+                            .border_color(gpui::transparent_black())
+                            .text_color(s::destructive_text())
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.pairing_action(
                                         methods::REVOKE_PAIRING,
                                         json!({"pairId":id}),
                                     );
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         )
                 })),
         );
@@ -407,8 +421,8 @@ impl WorkspaceView {
             .p(px(12.))
             .child(
                 r::frame(
-                    "Remote access to this computer",
-                    "Choose how other Zuse apps and browsers can reach this computer.",
+                    crate::localization::text("settings-remote_access_title", cx),
+                    crate::localization::text("settings-access_methods_card_choose_how_other_zuse_apps_and_browsers_can_reach_this_computer", cx),
                     None,
                 )
                 .child(s::card().child(self.managed_access_method(cx)).child(local)),
@@ -447,8 +461,8 @@ impl WorkspaceView {
                         s::card().child(
                             s::setting_row(true)
                                 .child(s::details(
-                                    "Return to controller",
-                                    "Save local edits before returning to your controller.",
+                                    tr(cx, msg::native::return_to_controller),
+                                    tr(cx, msg::native::save_local_edits_before_returning_to_your_controller),
                                 ))
                                 .child(r::button("return-to-controller", "Return").on_click(
                                     cx.listener(|this, _, _, _| {
@@ -467,8 +481,8 @@ impl WorkspaceView {
                         s::card().child(
                             s::setting_row(true)
                                 .child(s::details(
-                                    "Forget paired access",
-                                    "This reloads the tab. Save local drafts first.",
+                                    tr(cx, msg::native::forget_paired_access),
+                                    tr(cx, msg::native::this_reloads_the_tab_save_local_drafts_first),
                                 ))
                                 .child(
                                     r::button("forget-browser-pairing", "Forget pairing").on_click(
@@ -509,22 +523,26 @@ impl WorkspaceView {
                 .child(
                     s::setting_row(true)
                         .child(s::details(
-                            "Relay",
+                            tr(cx, msg::native::relay),
                             if running {
-                                self.relay_status["origin"].as_str().unwrap_or("Running")
+                                (self.relay_status["origin"].as_str().unwrap_or("Running"))
+                                    .to_string()
                             } else {
-                                "Stopped"
+                                crate::localization::text("chat-background_group_stopped", cx)
                             },
                         ))
                         .child(
                             r::button(
                                 "browser-relay-access",
                                 if self.relay_action.is_some() {
-                                    "Working…"
+                                    crate::localization::text(
+                                        "settings-model_connections_working",
+                                        cx,
+                                    )
                                 } else if running {
-                                    "Stop relay"
+                                    ("Stop relay").to_string()
                                 } else {
-                                    "Start relay"
+                                    ("Start relay").to_string()
                                 },
                             )
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -536,35 +554,44 @@ impl WorkspaceView {
                 .child(
                     s::setting_row(false)
                         .child(s::details(
-                            "Start when Zuse opens",
-                            "Start relay once to save its configuration.",
+                            tr(cx, msg::native::start_when_zuse_opens),
+                            tr(cx, msg::native::start_relay_once_to_save_its_configuration),
                         ))
                         .child(
-                            s::toggle("browser-relay-auto-start", auto, "Start when Zuse opens")
-                                .tab_index(0)
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            s::toggle(
+                                "browser-relay-auto-start",
+                                auto,
+                                tr(cx, msg::native::start_when_zuse_opens),
+                            )
+                            .tab_index(0)
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.send_relay_action(
                                         methods::SET_RELAY_AUTO_START,
                                         json!({"enabled":!auto}),
                                     );
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         ),
                 )
                 .when(!running, |v| {
                     v.child(
                         s::setting_row(false)
                             .child(s::details(
-                                "Relay URL",
-                                "Leave both fields blank to resume the saved relay.",
+                                tr(cx, msg::native::relay_url),
+                                tr(
+                                    cx,
+                                    msg::native::leave_both_fields_blank_to_resume_the_saved_relay,
+                                ),
                             ))
                             .child(s::field().child(self.relay_origin.clone())),
                     )
                     .child(
                         s::setting_row(false)
                             .child(s::details(
-                                "Host credential",
-                                "Private token file on this computer.",
+                                tr(cx, msg::native::host_credential),
+                                tr(cx, msg::native::private_token_file_on_this_computer),
                             ))
                             .child(s::field().child(self.relay_credential.clone())),
                     )
@@ -619,7 +646,14 @@ impl WorkspaceView {
                     .child(
                         r::button(
                             "generate-pairing",
-                            if busy { "Creating…" } else { "Create link" },
+                            if busy {
+                                crate::localization::text("projects-github_creating", cx)
+                            } else {
+                                crate::localization::text(
+                                    "settings-connect_link_card_create_link",
+                                    cx,
+                                )
+                            },
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
                             let name = this.pairing_name.read(cx).value(cx);
@@ -644,16 +678,31 @@ impl WorkspaceView {
                         .child(
                             row()
                                 .gap(px(8.))
-                                .child(r::button("copy-pairing-link", "Copy link").on_click(
-                                    move |_, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            copy.clone(),
-                                        ))
-                                    },
-                                ))
                                 .child(
-                                    r::button("open-pairing-link", "Open link")
-                                        .on_click(move |_, _, cx| cx.open_url(&link)),
+                                    r::button(
+                                        "copy-pairing-link",
+                                        crate::localization::text(
+                                            "chat-markdown_body_copy_link",
+                                            cx,
+                                        ),
+                                    )
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                copy.clone(),
+                                            ))
+                                        },
+                                    ),
+                                )
+                                .child(
+                                    r::button(
+                                        "open-pairing-link",
+                                        crate::localization::text(
+                                            "chat-markdown_body_open_link",
+                                            cx,
+                                        ),
+                                    )
+                                    .on_click(move |_, _, cx| cx.open_url(&link)),
                                 ),
                         );
                 }
@@ -702,9 +751,9 @@ impl WorkspaceView {
             r::button(
                 "close-remote-dialog",
                 if matches!(dialog, RemoteDialog::Invitation) {
-                    "Done"
+                    crate::localization::text("chat-voice_stop", cx)
                 } else {
-                    "Cancel"
+                    crate::localization::text("common-cancel", cx)
                 },
             )
             .track_focus(&self.remote_ui.focus)

@@ -1,5 +1,6 @@
 //! Native, virtualized preview of a file's current Markdown buffer.
 use crate::image_media::release_media;
+use crate::localization::message as tr;
 use crate::{
     markdown::{
         parser::{self, Block, BlockTree, InlineRun},
@@ -18,6 +19,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use zuse_i18n::messages as msg;
 
 const MAX_MEDIA_BYTES: usize = 64 * 1024 * 1024;
 const MAX_MEDIA_ENTRIES: usize = 32;
@@ -1385,16 +1387,14 @@ impl Render for MarkdownPreview {
                     div()
                         .px(px(24.0))
                         .text_color(theme.text_muted)
-                        .child("Loading preview…"),
+                        .child(tr(cx, msg::projects::file_editor_loading_preview)),
                 )
             })
             .when(self.truncated, |el| {
-                el.child(
-                    div()
-                        .px(px(24.0))
-                        .text_color(theme.warning_muted)
-                        .child("Large file preview is truncated and read-only."),
-                )
+                el.child(div().px(px(24.0)).text_color(theme.warning_muted).child(tr(
+                    cx,
+                    msg::native::large_file_preview_is_truncated_and_read_only,
+                )))
             })
             .child(
                 list(self.list.clone(), cx.processor(Self::render_row))

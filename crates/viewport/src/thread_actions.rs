@@ -1,10 +1,12 @@
 //! Thread lifecycle controls keep the draft until the engine acknowledges a change.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     settings_style as s,
     shell::{BG, BORDER, MUTED, TEXT, column, row},
 };
+use zuse_i18n::messages as msg;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum DialogPage {
@@ -352,15 +354,18 @@ impl WorkspaceView {
                             .min_w_0()
                             .text_size(px(12.))
                             .text_color(rgb(MUTED))
-                            .child("This chat is archived."),
+                            .child(tr(cx, msg::chat::archived_chats_page_this_chat_is_archived)),
                     )
                     .child(
                         s::button(
                             "unarchive-thread",
                             if pending {
-                                "Unarchiving…"
+                                crate::localization::text(
+                                    "chat-archived_chats_page_unarchiving",
+                                    cx,
+                                )
                             } else {
-                                "Unarchive"
+                                crate::localization::text("chat-archived_chats_page_unarchive", cx)
                             },
                         )
                         .opacity(if self.connected && !pending { 1. } else { 0.45 })
@@ -414,7 +419,7 @@ impl WorkspaceView {
                     .child(button(0, "Cancel").opacity(if busy { 0.45 } else { 1. }).on_click(cx.listener(|this, _, window, cx| this.close_thread_dialog(window, cx))))
                     .child(button(1, if busy { "Saving…" } else { "Save name" }).on_click(cx.listener(move |this, _, _, cx| { if available { this.commit_thread_rename(cx); } })))).into_any_element(),
             DialogPage::Delete => column().gap_3()
-                .child(s::description_text("Remove this thread from the workspace? This cannot be undone here. Project files are kept."))
+                .child(s::description_text(tr(cx, msg::native::remove_this_thread_from_the_workspace_this_cannot_be_undone_here_project_files_are_kept)))
                 .child(row().justify_end().gap_2()
                     .child(button(0, "Cancel").opacity(if busy { 0.45 } else { 1. }).on_click(cx.listener(|this, _, window, cx| this.close_thread_dialog(window, cx))))
                     .child(button(1, if busy { "Deleting…" } else { "Delete thread" }).text_color(rgb(0xec9292))
@@ -464,12 +469,16 @@ impl WorkspaceView {
                     )
                     .child(contents)
                     .when(!self.connected, |view| {
-                        view.child(s::description_text("Reconnect to manage this thread."))
+                        view.child(s::description_text(tr(
+                            cx,
+                            msg::native::reconnect_to_manage_this_thread,
+                        )))
                     })
                     .when(self.connected && chat.is_none(), |view| {
-                        view.child(s::description_text(
-                            "This thread is no longer in the workspace.",
-                        ))
+                        view.child(s::description_text(tr(
+                            cx,
+                            msg::native::this_thread_is_no_longer_in_the_workspace,
+                        )))
                     })
                     .when_some(dialog.error.clone(), |view, error| {
                         view.child(s::description_text(error).text_color(rgb(0xec9292)))

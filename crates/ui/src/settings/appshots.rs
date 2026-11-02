@@ -2,7 +2,9 @@
 //! keyboard settings, while keeping capture setup on its own route.
 use super::*;
 use crate::appshots::{AppshotPlatform, CapabilityState};
+use crate::localization::message as tr;
 use crate::settings::widgets;
+use zuse_i18n::messages as msg;
 
 fn row(
     theme: &Theme,
@@ -245,7 +247,7 @@ impl ShortcutsPage {
             self.conflict_notice.clone().unwrap_or_default()
         };
         let refresh = action("appshots-refresh-permissions", "Check again")
-            .aria_label("Check permissions again")
+            .aria_label(tr(cx, msg::native::check_permissions_again))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.appshot_capabilities = crate::appshots::capabilities();
                 cx.notify();
@@ -290,12 +292,22 @@ impl ShortcutsPage {
                             widgets::settings_page_column(window)
                                 .child(widgets::section_title(
                                     &theme,
-                                    "Appshots",
-                                    "Capture an app window and attach it to a chat.",
+                                    &tr(cx, msg::native::appshots),
+                                    &tr(
+                                        cx,
+                                        msg::native::capture_an_app_window_and_attach_it_to_a_chat,
+                                    ),
                                 ))
                                 .child(
                                     widgets::section_stack()
-                                        .child(widgets::group(&theme, "Capture", "").child(card))
+                                        .child(
+                                            widgets::group(
+                                                &theme,
+                                                tr(cx, msg::native::capture),
+                                                "",
+                                            )
+                                            .child(card),
+                                        )
                                         .child(
                                             widgets::group_with_action(
                                                 &theme,
