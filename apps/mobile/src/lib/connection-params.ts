@@ -1,0 +1,26 @@
+import { DEFAULT_LOCAL_DESKTOP_PORT } from "@zuse/contracts";
+import type { WsProtocolOptions } from "~/rpc/ws-protocol";
+import type { ConnectionRecord } from "~/store/connections";
+
+export const normalizeConnParam = (
+	param: string | string[] | undefined,
+): string => (Array.isArray(param) ? (param[0] ?? "") : (param ?? ""));
+
+export const parseConnectionKey = (key: string): WsProtocolOptions => {
+	const [host = "127.0.0.1", port = String(DEFAULT_LOCAL_DESKTOP_PORT)] =
+		key.split(":");
+	return { host, port: Number(port) || DEFAULT_LOCAL_DESKTOP_PORT };
+};
+
+export const optionsForConnection = (
+	key: string,
+	connections: ConnectionRecord[],
+): WsProtocolOptions | null => {
+	const existing = connections.find(
+		(connection) => connection.key === key || connection.environmentId === key,
+	);
+	if (existing !== undefined) return existing;
+	if (/^(cloud|paired|api|manual|relay):/.test(key)) return null;
+	if (!key.includes(":")) return null;
+	return parseConnectionKey(key);
+};

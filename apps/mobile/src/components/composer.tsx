@@ -1,0 +1,838 @@
+import "@zuse/i18n/english/chat";
+import { useAtomValue } from "@effect/atom-react";
+import type { ComposerTrigger } from "@zuse/client-runtime/composer-trigger";
+import { retainComposerReferences } from "@zuse/client-runtime/composer-trigger";
+import {
+	chooseComposerSubmitRoute,
+	composerSendBlocked,
+} from "@zuse/client-runtime/plan-interactions";
+import {
+	type FileRef,
+	Message,
+	type MessageContent,
+	MessageId,
+	type PermissionMode,
+	type RuntimeMode,
+	type Session,
+	type SessionId,
+	type SessionStatus,
+	type SkillRef,
+} from "@zuse/contracts";
+import { useMessages } from "@zuse/i18n/react";
+import { Effect } from "effect";
+import * as Crypto from "expo-crypto";
+import { router } from "expo-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Keyboard, Pressable, Text, View } from "react-native";
+import {
+	captureComposerImage,
+	type LocalComposerAttachment,
+	pickComposerFiles,
+	pickComposerImages,
+	uploadComposerAttachment,
+} from "~/lib/composer-attachments";
+import { composerSendFailureDisposition } from "~/lib/composer-send-failure";
+import {
+	type ComposerActivity,
+	composerExpanded,
+	isInterruptVisible,
+	nextModelChangeActions,
+} from "~/lib/composer-state";
+import { createComposerSubmitGate } from "~/lib/composer-submit-gate";
+import { connectionErrorMessage } from "~/lib/connection-error-message";
+import { availableProviderIds } from "~/lib/model-options";
+import { mobileReleaseFeatures } from "~/lib/release-features";
+import { connectionSessionKey } from "~/lib/session-key";
+import {
+	flushServerQueue,
+	interruptSession,
+	makeTextInput,
+	queueMessage,
+	sendCloudMessage,
+	sendMessage,
+	setSessionModel,
+	setSessionProvider,
+} from "~/rpc/actions";
+import type { WsProtocolOptions } from "~/rpc/ws-protocol";
+import {
+	connectionAvailabilityAtom,
+	hydrateAvailability,
+} from "~/store/availability";
+import { cloudAuthenticatedProvidersAtom } from "~/store/cloud-catalog";
+import {
+	clearComposerDraft,
+	composerDraft,
+	hydrateComposerDraft,
+	setComposerDraft,
+} from "~/store/composer-drafts";
+import {
+	addOptimisticMessage,
+	removeOptimisticMessage,
+	sessionHealthAtom,
+} from "~/store/messages";
+import {
+	activeModelCatalogAtom,
+	hydrateModelCatalog,
+} from "~/store/model-catalog";
+import { enqueueOutboxMessage } from "~/store/outbox";
+import {
+	sessionModelOptionsAtom,
+	setSessionModelOptions,
+} from "~/store/session-model-options";
+import {
+	setPermissionMode as setPermissionModeOptimistic,
+	setRuntimeMode as setRuntimeModeOptimistic,
+} from "~/store/sessions";
+import { colors } from "~/theme";
+import { ComposerActionSlot } from "./composer-action-slot";
+import { ComposerApprovalMenu } from "./composer-approval-menu";
+import { ComposerAttachmentStrip } from "./composer-attachment-strip";
+import {
+	ComposerContextPicker,
+	type ComposerPickerRow,
+} from "./composer-context-picker";
+import { ComposerContextTray } from "./composer-context-tray";
+import { ComposerInputFrame } from "./composer-input-frame";
+import { ComposerModeChip } from "./composer-mode-chip";
+import { ComposerPlusMenu } from "./composer-plus-menu";
+import { ComposerSendButton } from "./composer-send-button";
+import {
+	ComposerTextInput,
+	type ComposerTextInputHandle,
+} from "./composer-text-input";
+import { ComposerVoiceButton } from "./composer-voice-button";
+import { InlineErrorNotice } from "./inline-error-notice";
+import type { ModelModeValue } from "./model-mode-menu";
+import { ModelSheet } from "./model-sheet";
+import { ModelSheetTrigger } from "./model-sheet-trigger";
+import { GlassSurface } from "./ui/glass-surface";
+
+export const Composer = ({
+	connKey,
+	connection,
+	sessionId,
+	session,
+	status,
+	fresh,
+	online,
+	onFocusChange,
+	onMessageAppendFailed,
+	onMessageWillAppend,
+	currentActivity = null,
+	bottomInset,
+	voiceEnabled = false,
+}: {
+	connKey: string;
+	connection: WsProtocolOptions;
+	sessionId: SessionId;
+	session: Session | null;
+	status?: SessionStatus;
+	fresh: boolean;
+	online: boolean;
+	onFocusChange?: (focused: boolean) => void;
+	onMessageAppendFailed?: () => void;
+	onMessageWillAppend?: () => void;
+
+	currentActivity?: ComposerActivity | null;
+	bottomInset?: number;
+	voiceEnabled?: boolean;
+}) => {
+	const stateKey = connectionSessionKey(connKey, sessionId);
+	const { message } = useMessages(["chat"]);
+	const health = useAtomValue(sessionHealthAtom(stateKey));
+
+	const [initialDraft] = useState(() => composerDraft(stateKey));
+	const inputRef = useRef<ComposerTextInputHandle>(null);
+	const submitGateRef = useRef(createComposerSubmitGate());
+	const [hydratedText, setHydratedText] = useState(initialDraft.text);
+	const [draftHydrated, setDraftHydrated] = useState(false);
+	const [hasText, setHasText] = useState(initialDraft.text.trim().length > 0);
+	const [busy, setBusy] = useState(false);
+	const [focused, setFocused] = useState(false);
+	const [modelSheetOpen, setModelSheetOpen] = useState(false);
+	const [attachments, setAttachments] = useState<LocalComposerAttachment[]>([
+		...initialDraft.attachments,
+	]);
+	const [goalMode, setGoalMode] = useState(initialDraft.goalMode);
+	const [fileRefs, setFileRefs] = useState<FileRef[]>([
+		...(initialDraft.fileRefs ?? []),
+	]);
+	const [skillRefs, setSkillRefs] = useState<SkillRef[]>([
+		...(initialDraft.skillRefs ?? []),
+	]);
+	const [trigger, setTrigger] = useState<ComposerTrigger | null>(null);
+	const [composerError, setComposerError] = useState<string | null>(null);
+	useEffect(() => {
+		let active = true;
+		void hydrateComposerDraft(stateKey).then((draft) => {
+			if (!active) return;
+			if (draft !== null) {
+				const currentText = inputRef.current?.getText() ?? hydratedText;
+				if (currentText === initialDraft.text) {
+					setHydratedText(draft.text);
+					setHasText(draft.text.trim().length > 0);
+					inputRef.current?.replaceAll(draft.text);
+					setAttachments([...draft.attachments]);
+					setGoalMode(draft.goalMode);
+					setFileRefs([...(draft.fileRefs ?? [])]);
+					setSkillRefs([...(draft.skillRefs ?? [])]);
+				}
+			}
+			setDraftHydrated(true);
+		});
+		return () => {
+			active = false;
+		};
+	}, [hydratedText, initialDraft.text, stateKey]);
+
+	const shouldAutoFocus = useRef(false);
+
+	useEffect(() => {
+		if (!draftHydrated) return;
+		setComposerDraft(stateKey, {
+			text: inputRef.current?.getText() ?? hydratedText,
+			attachments,
+			goalMode,
+			fileRefs,
+			skillRefs,
+		});
+	}, [
+		attachments,
+		draftHydrated,
+		fileRefs,
+		goalMode,
+		hydratedText,
+		skillRefs,
+		stateKey,
+	]);
+	const persistDraftText = (text: string) => {
+		if (text.length === 0 && attachments.length === 0 && !goalMode) {
+			clearComposerDraft(stateKey);
+			return;
+		}
+		setComposerDraft(stateKey, {
+			text,
+			attachments,
+			goalMode,
+			fileRefs,
+			skillRefs,
+		});
+	};
+
+	const availability = useAtomValue(connectionAvailabilityAtom(connKey));
+	useAtomValue(activeModelCatalogAtom);
+	useEffect(() => {
+		void hydrateAvailability(connKey, connection);
+		void hydrateModelCatalog(connKey, connection);
+	}, [connKey, connection]);
+	const cloudProviders = useAtomValue(cloudAuthenticatedProvidersAtom);
+	const availableProviders = useMemo(
+		() =>
+			connection.cloudWorkspaceId === undefined
+				? availableProviderIds(availability)
+				: cloudProviders,
+		[availability, cloudProviders, connection.cloudWorkspaceId],
+	);
+	const goalSupported =
+		availability
+			?.find((entry) => entry.providerId === session?.providerId)
+			?.capabilities?.includes("goalMode") === true;
+
+	const canSend = (hasText || attachments.length > 0) && !busy;
+	const showInterrupt = isInterruptVisible(status);
+	const modelOptions = useAtomValue(sessionModelOptionsAtom(stateKey));
+	const modelValue: ModelModeValue | null =
+		session === null
+			? null
+			: {
+					providerId: session.providerId,
+					model: session.model,
+					runtimeMode: session.runtimeMode,
+					permissionMode: session.permissionMode,
+					modelOptions:
+						modelOptions === undefined ? undefined : { ...modelOptions },
+				};
+	const planMode = modelValue?.permissionMode === "plan";
+
+	const expanded = composerExpanded({
+		focused,
+		hasText,
+		hasAttachments: attachments.length > 0,
+		sheetOpen: modelSheetOpen,
+	});
+	const agentCount = currentActivity?.agents ?? 0;
+	const hasPills = agentCount > 0;
+	const finishSuccessfulSubmission = ({
+		dismissKeyboard,
+	}: {
+		dismissKeyboard: boolean;
+	}) => {
+		clearComposerDraft(stateKey);
+		inputRef.current?.clear();
+		setHasText(false);
+		setAttachments([]);
+		setFileRefs([]);
+		setSkillRefs([]);
+		setTrigger(null);
+		setGoalMode(false);
+		if (dismissKeyboard) Keyboard.dismiss();
+	};
+
+	const performSubmit = async () => {
+		if (composerSendBlocked(health)) {
+			setComposerError(message("chat:send_blocked"));
+			return;
+		}
+
+		if (!canSend) return;
+		if (session === null) {
+			setComposerError("Wait for this chat to load before sending.");
+			return;
+		}
+		const value = (inputRef.current?.getText() ?? "").trim();
+		if (value.length === 0 && attachments.length === 0) return;
+		if (!online && connection.cloudWorkspaceId === undefined) {
+			if (attachments.length > 0) {
+				setComposerError("Attachments require an active connection.");
+				return;
+			}
+			await enqueueOutboxMessage(connKey, sessionId, value, goalMode);
+			finishSuccessfulSubmission({ dismissKeyboard: true });
+			return;
+		}
+		setBusy(true);
+		setComposerError(null);
+		let optimisticMessageId: MessageId | null = null;
+		let didPrepareAppend = false;
+		try {
+			const uploaded = await Promise.all(
+				attachments.map((attachment) =>
+					uploadComposerAttachment(connection, sessionId, attachment),
+				),
+			);
+			const input = makeTextInput(
+				value,
+				uploaded,
+				goalMode,
+				fileRefs,
+				skillRefs,
+			);
+			const route = chooseComposerSubmitRoute({
+				sendPlanFeedbackNow: false,
+				goalSendMode: goalMode,
+				shouldQueue: showInterrupt,
+			});
+			if (route === "queue") {
+				await Effect.runPromise(
+					queueMessage({
+						rejectIfBlocked: true,
+						connection,
+						sessionId,
+						input,
+					}),
+				);
+				await Effect.runPromise(flushServerQueue({ connection, sessionId }));
+				finishSuccessfulSubmission({ dismissKeyboard: true });
+				return;
+			}
+			const messageId = MessageId.make(Crypto.randomUUID());
+
+			onMessageWillAppend?.();
+			didPrepareAppend = true;
+			optimisticMessageId = messageId;
+			const optimisticContent: MessageContent =
+				uploaded.length > 0 || fileRefs.length > 0 || skillRefs.length > 0
+					? {
+							_tag: "user_rich",
+							text: value,
+							attachments: uploaded,
+							fileRefs,
+							skillRefs,
+							annotations: [],
+							goal: goalMode,
+						}
+					: {
+							_tag: "user",
+							text: value,
+							goal: goalMode,
+						};
+			addOptimisticMessage(
+				stateKey,
+				Message.make({
+					id: messageId,
+					sessionId,
+					role: "user",
+					content: optimisticContent,
+					createdAt: new Date(),
+				}),
+			);
+			const messageOptions = {
+				connection,
+				sessionId,
+				input,
+				asGoal: goalMode,
+				clientMessageId: messageId,
+				modelOptions,
+			};
+			if (connection.cloudWorkspaceId !== undefined) {
+				const handle = sendCloudMessage(messageOptions);
+				void handle.result.catch(() => undefined);
+				await handle.accepted;
+			} else await Effect.runPromise(sendMessage(messageOptions));
+			finishSuccessfulSubmission({ dismissKeyboard: false });
+		} catch (cause) {
+			if (
+				composerSendFailureDisposition(cause, optimisticMessageId !== null) ===
+				"retrying"
+			) {
+				finishSuccessfulSubmission({ dismissKeyboard: false });
+				return;
+			}
+			setComposerError(connectionErrorMessage(cause));
+			if (optimisticMessageId !== null) {
+				removeOptimisticMessage(stateKey, optimisticMessageId);
+			}
+			if (didPrepareAppend) onMessageAppendFailed?.();
+		} finally {
+			setBusy(false);
+		}
+	};
+	const submit = () => {
+		void submitGateRef.current.tryRun(performSubmit);
+	};
+
+	const removeToken = (token: string) => {
+		const text = inputRef.current?.getText() ?? "";
+		const from = text.indexOf(token);
+		if (from >= 0) {
+			inputRef.current?.replaceRange(from, from + token.length, "");
+		}
+	};
+
+	const selectContext = (row: ComposerPickerRow) => {
+		if (trigger === null) return;
+		if (row.kind === "file") {
+			const token = `@${row.value.relPath}`;
+			setFileRefs((current) =>
+				current.some((item) => item.relPath === row.value.relPath)
+					? current
+					: [...current, row.value],
+			);
+			inputRef.current?.replaceRange(trigger.from, trigger.to, `${token} `);
+		} else if (row.kind === "skill") {
+			const token = `$${row.value.name}`;
+			setSkillRefs((current) =>
+				current.some((item) => item.name === row.value.name)
+					? current
+					: [
+							...current,
+							{
+								name: row.value.name,
+								scope: row.value.scope,
+								args: "",
+								providerId: row.value.providerId,
+							},
+						],
+			);
+			inputRef.current?.replaceRange(trigger.from, trigger.to, `${token} `);
+		} else {
+			inputRef.current?.replaceRange(
+				trigger.from,
+				trigger.to,
+				`/${row.value.name} `,
+			);
+		}
+		setTrigger(null);
+	};
+
+	const interrupt = async () => {
+		if (!showInterrupt) return;
+		setBusy(true);
+		setComposerError(null);
+		try {
+			await Effect.runPromise(interruptSession({ connection, sessionId }));
+		} catch (cause) {
+			setComposerError(connectionErrorMessage(cause));
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const changeModelMode = async (next: ModelModeValue) => {
+		if (session === null) return;
+		const actions = nextModelChangeActions(session, next, fresh);
+		setComposerError(null);
+
+		setSessionModelOptions(stateKey, next.modelOptions);
+		try {
+			for (const action of actions) {
+				switch (action.type) {
+					case "setProvider":
+						await Effect.runPromise(
+							setSessionProvider({
+								connection,
+								sessionId,
+								providerId: action.providerId,
+								model: action.model,
+							}),
+						);
+						break;
+					case "setModel":
+						await Effect.runPromise(
+							setSessionModel({ connection, sessionId, model: action.model }),
+						);
+						break;
+					case "setRuntimeMode":
+						if (
+							!(await setRuntimeModeOptimistic(
+								connKey,
+								connection,
+								sessionId,
+								action.runtimeMode,
+							))
+						)
+							throw new Error(
+								"Could not change approval mode. Tap the option to retry.",
+							);
+						break;
+					case "setPermissionMode":
+						if (
+							!(await setPermissionModeOptimistic(
+								connKey,
+								connection,
+								sessionId,
+								action.permissionMode,
+							))
+						)
+							throw new Error("Could not change Plan mode. Tap Plan to retry.");
+						break;
+				}
+			}
+		} catch (cause) {
+			setComposerError(connectionErrorMessage(cause));
+		}
+	};
+
+	const setRuntimeMode = (runtimeMode: RuntimeMode) => {
+		if (modelValue === null) return;
+		void changeModelMode({ ...modelValue, runtimeMode });
+	};
+	const setPermissionMode = (permissionMode: PermissionMode) => {
+		if (modelValue === null) return;
+		void changeModelMode({ ...modelValue, permissionMode });
+	};
+	const addAttachments = (
+		pick: () => Promise<LocalComposerAttachment[]>,
+	): void => {
+		void pick()
+			.then((items) => setAttachments((current) => [...current, ...items]))
+			.catch((cause) => setComposerError(connectionErrorMessage(cause)));
+	};
+	const captureImage = () => addAttachments(captureComposerImage);
+	const pickImages = () => addAttachments(pickComposerImages);
+	const pickFiles = () => addAttachments(pickComposerFiles);
+
+	return (
+		<View className="px-3 pt-2" style={{ paddingBottom: bottomInset ?? 12 }}>
+			{hasPills ? (
+				<View className="mb-2 flex-row flex-wrap items-center justify-center gap-2">
+					{agentCount > 0 ? (
+						<StatusPill
+							label={`${agentCount} ${agentCount === 1 ? "agent" : "agents"}`}
+							tone="neutral"
+							onPress={
+								currentActivity?.agentItemId == null
+									? undefined
+									: () =>
+											router.push({
+												pathname: "/c/[conn]/session/[sessionId]/tool/[itemId]",
+												params: {
+													conn: connKey,
+													sessionId,
+													itemId: currentActivity?.agentItemId ?? "",
+												},
+											})
+							}
+						/>
+					) : null}
+				</View>
+			) : null}
+			{composerError ? (
+				<View className="mb-1">
+					<InlineErrorNotice
+						message={composerError}
+						compact
+						onDismiss={() => setComposerError(null)}
+					/>
+				</View>
+			) : null}
+
+			<GlassSurface
+				tinted
+				style={{
+					gap: 8,
+
+					marginHorizontal: expanded ? 0 : 12,
+					paddingLeft: expanded ? 12 : 6,
+
+					paddingRight: expanded ? 12 : 8,
+					paddingVertical: expanded ? 8 : 0,
+					borderRadius: 22,
+				}}
+			>
+				{expanded ? (
+					<>
+						{trigger !== null && session !== null ? (
+							<ComposerContextPicker
+								kind={trigger.kind}
+								query={trigger.query}
+								connection={connection}
+								projectId={session.projectId}
+								worktreeId={session.worktreeId}
+								sessionId={sessionId}
+								providerId={session.providerId}
+								onSelect={selectContext}
+							/>
+						) : null}
+						<ComposerContextTray
+							fileRefs={fileRefs}
+							skillRefs={skillRefs}
+							onRemoveFile={(relPath) => {
+								setFileRefs((current) =>
+									current.filter((item) => item.relPath !== relPath),
+								);
+								removeToken(`@${relPath}`);
+							}}
+							onRemoveSkill={(name) => {
+								setSkillRefs((current) =>
+									current.filter((item) => item.name !== name),
+								);
+								removeToken(`$${name}`);
+							}}
+						/>
+						<ComposerAttachmentStrip
+							attachments={attachments}
+							onRemove={(id) =>
+								setAttachments((current) =>
+									current.filter((item) => item.id !== id),
+								)
+							}
+						/>
+						<ComposerInputFrame
+							input={
+								<ComposerTextInput
+									ref={inputRef}
+									initialText={hydratedText}
+									placeholder={
+										online ? "Ask Zuse" : "Offline · message will queue"
+									}
+									autoFocusOnMountRef={shouldAutoFocus}
+									onHasTextChange={setHasText}
+									onFocus={() => {
+										setFocused(true);
+										onFocusChange?.(true);
+									}}
+									onBlur={() => {
+										setFocused(false);
+										onFocusChange?.(false);
+									}}
+									onPersist={persistDraftText}
+									onTextChange={(text) => {
+										setFileRefs((current) =>
+											retainComposerReferences(
+												current,
+												text,
+												(file) => `@${file.relPath}`,
+											),
+										);
+										setSkillRefs((current) =>
+											retainComposerReferences(
+												current,
+												text,
+												(skill) => `$${skill.name}`,
+											),
+										);
+									}}
+									onTriggerChange={setTrigger}
+								/>
+							}
+							leadingAction={
+								modelValue === null ? null : (
+									<View className="flex-row items-center gap-1">
+										<ComposerActionSlot>
+											<ComposerPlusMenu
+												goalMode={goalMode}
+												goalSupported={goalSupported}
+												planMode={planMode}
+												onCaptureImage={captureImage}
+												onPickImages={pickImages}
+												onPickFiles={pickFiles}
+												onToggleGoal={setGoalMode}
+												onTogglePlan={(next) =>
+													setPermissionMode(next ? "plan" : "default")
+												}
+											/>
+										</ComposerActionSlot>
+										<ComposerActionSlot>
+											<ComposerApprovalMenu
+												runtimeMode={modelValue.runtimeMode}
+												onChange={setRuntimeMode}
+											/>
+										</ComposerActionSlot>
+										{planMode ? (
+											<ComposerModeChip
+												label="Plan"
+												plan
+												onClear={() => setPermissionMode("default")}
+											/>
+										) : null}
+										{goalMode ? (
+											<ComposerModeChip
+												label="Goal"
+												onClear={() => setGoalMode(false)}
+											/>
+										) : null}
+									</View>
+								)
+							}
+							trailingAction={
+								<View className="min-w-0 flex-row items-center gap-1.5">
+									{modelValue === null ? null : (
+										<ModelSheetTrigger
+											value={modelValue}
+											onPress={() => setModelSheetOpen(true)}
+										/>
+									)}
+									{mobileReleaseFeatures.voice ? (
+										<ComposerVoiceButton
+											connection={connection}
+											enabled={voiceEnabled}
+											online={online}
+											onTranscript={(text) =>
+												inputRef.current?.insertAtCursor(text)
+											}
+											onError={setComposerError}
+										/>
+									) : null}
+									<ComposerSendButton
+										showInterrupt={showInterrupt}
+										online={online}
+										busy={busy}
+										disabled={showInterrupt ? busy || !online : !canSend}
+										onPress={showInterrupt ? interrupt : submit}
+									/>
+								</View>
+							}
+						/>
+					</>
+				) : (
+					<View className="h-11 flex-row items-center gap-0.5">
+						{modelValue === null ? null : (
+							<ComposerActionSlot>
+								<ComposerPlusMenu
+									goalMode={goalMode}
+									goalSupported={goalSupported}
+									planMode={planMode}
+									onCaptureImage={captureImage}
+									onPickImages={pickImages}
+									onPickFiles={pickFiles}
+									onToggleGoal={setGoalMode}
+									onTogglePlan={(next) =>
+										setPermissionMode(next ? "plan" : "default")
+									}
+								/>
+							</ComposerActionSlot>
+						)}
+						{planMode ? (
+							<ComposerModeChip
+								label="Plan"
+								plan
+								onClear={() => setPermissionMode("default")}
+							/>
+						) : null}
+						{goalMode ? (
+							<ComposerModeChip
+								label="Goal"
+								onClear={() => setGoalMode(false)}
+							/>
+						) : null}
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel="Write a message"
+							className="min-h-11 flex-1 justify-center px-1"
+							onPress={() => {
+								shouldAutoFocus.current = true;
+								setFocused(true);
+							}}
+						>
+							<Text
+								numberOfLines={1}
+								className="font-sans text-[16px] text-muted-foreground"
+							>
+								{online ? "Ask Zuse" : "Offline · message will queue"}
+							</Text>
+						</Pressable>
+						<ComposerSendButton
+							round
+							showInterrupt={showInterrupt}
+							online={online}
+							busy={busy}
+							disabled={showInterrupt ? busy || !online : !canSend}
+							onPress={showInterrupt ? interrupt : submit}
+						/>
+					</View>
+				)}
+			</GlassSurface>
+			{modelValue === null ? null : (
+				<ModelSheet
+					open={modelSheetOpen}
+					onOpenChange={setModelSheetOpen}
+					value={modelValue}
+					availableProviders={availableProviders}
+					strictProviders={connection.cloudWorkspaceId !== undefined}
+					canChangeProvider={fresh}
+					canChangeReasoning
+					onChange={(next) => void changeModelMode(next)}
+				/>
+			)}
+		</View>
+	);
+};
+
+function StatusPill({
+	label,
+	tone,
+	onPress,
+}: {
+	label: string;
+	tone: "neutral" | "warning" | "danger";
+	onPress?: () => void;
+}) {
+	const color =
+		tone === "warning"
+			? colors.warning
+			: tone === "danger"
+				? colors.danger
+				: colors.secondaryFg;
+	const content = (
+		<View
+			className="min-h-11 justify-center rounded-full border border-border bg-card px-3"
+			style={{ borderCurve: "continuous" }}
+		>
+			<Text
+				selectable
+				className="font-sans-medium text-[12px]"
+				style={{ color, fontVariant: ["tabular-nums"] }}
+			>
+				{label}
+			</Text>
+		</View>
+	);
+	return onPress === undefined ? (
+		content
+	) : (
+		<Pressable accessibilityRole="button" onPress={onPress}>
+			{content}
+		</Pressable>
+	);
+}

@@ -1,0 +1,9 @@
+{
+	"platforms": ["apple", "android"],
+	"apple": {
+		"modules": ["ZuseMobilePlatformModule"]
+	},
+	"android": {
+		"modules": ["com.zuse.mobileplatform.ZuseMobilePlatformModule"]
+	}
+}

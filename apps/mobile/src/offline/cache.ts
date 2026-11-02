@@ -1,0 +1,428 @@
+import type {
+	ClientCommand,
+	CommandFingerprint,
+	CommandReceipt,
+	OutboxEntry,
+} from "@zuse/client-runtime/client-persistence";
+import { commandFingerprint } from "@zuse/client-runtime/client-persistence";
+import {
+	CommandId,
+	EnvironmentId,
+	GitHubTarget,
+	MessageEnvelope,
+	ResolvedModelCatalog,
+	SessionStreamCursor,
+	SessionTimelineProjection,
+} from "@zuse/contracts";
+import { Effect, Schema } from "effect";
+import * as FileSystem from "expo-file-system/legacy";
+
+import { CacheCorrupt } from "../rpc/errors";
+import { slugConnectionKey } from "./cache-utils";
+import { SessionsSnapshot } from "./sessions-snapshot";
+
+export type { SessionsSnapshot } from "./sessions-snapshot";
+
+const ROOT = `${FileSystem.documentDirectory ?? ""}zuse-cache`;
+
+export const clearOfflineCache = () => deletePath(ROOT);
+
+const downloadedPaths = (connectionRoot: string) => [
+	`${connectionRoot}/sessions.json`,
+	`${connectionRoot}/messages`,
+	`${connectionRoot}/github`,
+];
+
+const pathSize = async (path: string): Promise<number> => {
+	const info = await FileSystem.getInfoAsync(path);
+	if (!info.exists) return 0;
+	if (!info.isDirectory) return info.size;
+	const children = await FileSystem.readDirectoryAsync(path);
+	return (
+		await Promise.all(children.map((child) => pathSize(`${path}/${child}`)))
+	).reduce((total, size) => total + size, 0);
+};
+
+const connectionRoots = async (): Promise<string[]> => {
+	const info = await FileSystem.getInfoAsync(ROOT);
+	if (!info.exists || !info.isDirectory) return [];
+	return (await FileSystem.readDirectoryAsync(ROOT)).map(
+		(name) => `${ROOT}/${name}`,
+	);
+};
+
+export const downloadedCacheSize = async (): Promise<number> => {
+	const roots = await connectionRoots();
+	const sizes = await Promise.all(
+		roots.flatMap((root) => downloadedPaths(root)).map(pathSize),
+	);
+	return sizes.reduce((total, size) => total + size, 0);
+};
+
+export const clearDownloadedCache = () =>
+	Effect.tryPromise({
+		try: async () => {
+			const roots = await connectionRoots();
+			await Promise.all(
+				roots
+					.flatMap((root) => downloadedPaths(root))
+					.map((path) => FileSystem.deleteAsync(path, { idempotent: true })),
+			);
+		},
+		catch: (cause) => cause,
+	});
+
+export type MessagesSnapshot = {
+	schemaVersion: 1;
+	appliedVersion: number;
+	cursor?: typeof SessionStreamCursor.Type;
+	projection: SessionTimelineProjection;
+	savedAt: number;
+};
+
+/** One message the user sent while offline, awaiting flush to the server. */
+export type QueuedMessage = {
+	clientId: string;
+	text: string;
+	asGoal?: boolean;
+	createdAt: number;
+};
+
+export type OutboxSnapshot = {
+	items: readonly QueuedMessage[];
+};
+
+export type ClientCommandOutboxSnapshot = {
+	entries: readonly OutboxEntry[];
+	receipts: readonly CommandReceipt[];
+};
+
+export const ensureDir = (path: string) =>
+	Effect.tryPromise({
+		try: async () => {
+			await FileSystem.makeDirectoryAsync(path, { intermediates: true });
+		},
+		catch: (cause) => cause,
+	});
+
+export const readJson = <A>(
+	path: string,
+	decode: (u: unknown) => A,
+): Effect.Effect<A | null, CacheCorrupt> =>
+	Effect.tryPromise({
+		try: async () => {
+			const info = await FileSystem.getInfoAsync(path);
+			if (!info.exists) return null;
+			const raw = await FileSystem.readAsStringAsync(path);
+			return decode(JSON.parse(raw));
+		},
+		catch: (cause) =>
+			new CacheCorrupt({
+				path,
+				message: cause instanceof Error ? cause.message : String(cause),
+			}),
+	});
+
+export const writeJson = (path: string, value: unknown) =>
+	Effect.tryPromise({
+		try: () => FileSystem.writeAsStringAsync(path, JSON.stringify(value)),
+		catch: (cause) => cause,
+	});
+
+export const modelCatalogPath = (connKey: string) =>
+	`${ROOT}/${slugConnectionKey(connKey)}/model-catalog.json`;
+
+export const readModelCatalogSnapshot = (connKey: string) =>
+	readJson(modelCatalogPath(connKey), (u) =>
+		Schema.decodeUnknownSync(ResolvedModelCatalog)(u),
+	).pipe(
+		Effect.catchTag("CacheCorrupt", (error) =>
+			Effect.andThen(deletePath(error.path), Effect.succeed(null)),
+		),
+	);
+
+export const writeModelCatalogSnapshot = (
+	connKey: string,
+	catalog: ResolvedModelCatalog,
+) =>
+	ensureDir(`${ROOT}/${slugConnectionKey(connKey)}`).pipe(
+		Effect.andThen(
+			writeJson(
+				modelCatalogPath(connKey),
+				Schema.encodeSync(ResolvedModelCatalog)(catalog),
+			),
+		),
+	);
+
+export const sessionsPath = (connKey: string) =>
+	`${ROOT}/${slugConnectionKey(connKey)}/sessions.json`;
+
+export const messagesPath = (connKey: string, sessionId: string) =>
+	`${ROOT}/${slugConnectionKey(connKey)}/messages/${slugConnectionKey(sessionId)}.json`;
+
+export const outboxPath = (connKey: string, sessionId: string) =>
+	`${ROOT}/${slugConnectionKey(connKey)}/outbox/${slugConnectionKey(sessionId)}.json`;
+
+const clientCommandOutboxPath = () => `${ROOT}/client-command-outbox.json`;
+
+export const readSessionsSnapshot = (connKey: string) =>
+	readJson(
+		sessionsPath(connKey),
+		Schema.decodeUnknownSync(SessionsSnapshot),
+	).pipe(
+		Effect.catchTag("CacheCorrupt", (error) =>
+			Effect.andThen(deletePath(error.path), Effect.succeed(null)),
+		),
+	);
+
+export const writeSessionsSnapshot = (
+	connKey: string,
+	snapshot: SessionsSnapshot,
+) =>
+	ensureDir(`${ROOT}/${slugConnectionKey(connKey)}`).pipe(
+		Effect.andThen(
+			writeJson(
+				sessionsPath(connKey),
+				Schema.encodeSync(SessionsSnapshot)(snapshot),
+			),
+		),
+	);
+
+const EncodedMessagesSnapshot = Schema.Struct({
+	schemaVersion: Schema.Literal(1),
+	appliedVersion: Schema.Number,
+	cursor: Schema.optional(SessionStreamCursor),
+	projection: SessionTimelineProjection,
+	savedAt: Schema.Number,
+});
+
+export const readMessagesSnapshot = (connKey: string, sessionId: string) =>
+	readJson(messagesPath(connKey, sessionId), (u) =>
+		Schema.decodeUnknownSync(EncodedMessagesSnapshot)(u),
+	).pipe(
+		Effect.catchTag("CacheCorrupt", (error) =>
+			Effect.andThen(deletePath(error.path), Effect.succeed(null)),
+		),
+	);
+
+export const writeMessagesSnapshot = (
+	connKey: string,
+	sessionId: string,
+	snapshot: MessagesSnapshot,
+) => {
+	const path = messagesPath(connKey, sessionId);
+	const dir = path.slice(0, path.lastIndexOf("/"));
+	return ensureDir(dir).pipe(
+		Effect.andThen(
+			writeJson(path, Schema.encodeSync(EncodedMessagesSnapshot)(snapshot)),
+		),
+	);
+};
+
+export const readOutboxSnapshot = (connKey: string, sessionId: string) =>
+	readJson(outboxPath(connKey, sessionId), decodeOutboxSnapshot).pipe(
+		Effect.catchTag("CacheCorrupt", (error) =>
+			Effect.andThen(deletePath(error.path), Effect.succeed(null)),
+		),
+	);
+
+const decodeOutboxSnapshot = (value: unknown): OutboxSnapshot => {
+	if (typeof value !== "object" || value === null || !("items" in value))
+		return { items: [] };
+	const raw = Reflect.get(value, "items");
+	if (!Array.isArray(raw)) return { items: [] };
+	return {
+		items: raw.flatMap((item) => {
+			if (typeof item !== "object" || item === null) return [];
+			const clientId = Reflect.get(item, "clientId");
+			const text = Reflect.get(item, "text");
+			const createdAt = Reflect.get(item, "createdAt");
+			if (
+				typeof clientId !== "string" ||
+				typeof text !== "string" ||
+				typeof createdAt !== "number"
+			)
+				return [];
+			const asGoal = Reflect.get(item, "asGoal");
+			return [
+				{
+					clientId,
+					text,
+					createdAt,
+					...(typeof asGoal === "boolean" ? { asGoal } : {}),
+				},
+			];
+		}),
+	};
+};
+
+export const writeOutboxSnapshot = (
+	connKey: string,
+	sessionId: string,
+	snapshot: OutboxSnapshot,
+) => {
+	const path = outboxPath(connKey, sessionId);
+	const dir = path.slice(0, path.lastIndexOf("/"));
+	return ensureDir(dir).pipe(Effect.andThen(writeJson(path, snapshot)));
+};
+
+const decodeClientCommand = (value: unknown): ClientCommand | null => {
+	if (typeof value !== "object" || value === null) return null;
+	const commandId = Reflect.get(value, "commandId");
+	const environmentId = Reflect.get(value, "environmentId");
+	const kind = Reflect.get(value, "kind");
+	const retry = Reflect.get(value, "retry");
+	const createdAt = Reflect.get(value, "createdAt");
+	if (
+		typeof commandId !== "string" ||
+		typeof environmentId !== "string" ||
+		typeof kind !== "string" ||
+		(retry !== "safe" && retry !== "never") ||
+		typeof createdAt !== "number"
+	)
+		return null;
+	return {
+		kind,
+		commandId: CommandId.make(commandId),
+		environmentId: EnvironmentId.make(environmentId),
+		resource: (Reflect.get(value, "resource") ??
+			null) as ClientCommand["resource"],
+		payload: Reflect.get(value, "payload"),
+		retry,
+		createdAt,
+		...(Reflect.get(value, "awaitResourceReflection") === true
+			? { awaitResourceReflection: true }
+			: {}),
+		...(Reflect.get(value, "resourceReflection") === undefined
+			? {}
+			: {
+					resourceReflection: Reflect.get(
+						value,
+						"resourceReflection",
+					) as ClientCommand["resourceReflection"],
+				}),
+	};
+};
+
+export const readClientCommandOutbox = () =>
+	readJson(clientCommandOutboxPath(), (value): ClientCommandOutboxSnapshot => {
+		if (typeof value !== "object" || value === null) {
+			throw new Error("Invalid command outbox");
+		}
+		const entries = Reflect.get(value, "entries");
+		const receipts = Reflect.get(value, "receipts");
+		if (!Array.isArray(entries) || !Array.isArray(receipts))
+			throw new Error("Invalid command outbox entries");
+		return {
+			entries: Array.isArray(entries)
+				? entries.flatMap((entry) => {
+						if (typeof entry !== "object" || entry === null)
+							throw new Error("Invalid command outbox entry");
+						const command = decodeClientCommand(Reflect.get(entry, "command"));
+						const attempts = Reflect.get(entry, "attempts");
+						const lastAttemptAt = Reflect.get(entry, "lastAttemptAt");
+						const fingerprint = Reflect.get(entry, "fingerprint");
+						if (command === null || typeof attempts !== "number")
+							throw new Error("Invalid persisted command identity");
+						return command !== null && typeof attempts === "number"
+							? [
+									{
+										command,
+
+										...(Reflect.get(entry, "encryptedEnvelope") === undefined
+											? {}
+											: {
+													encryptedEnvelope: Reflect.get(
+														entry,
+														"encryptedEnvelope",
+													),
+												}),
+										...(Reflect.get(entry, "acceptance") === undefined
+											? {}
+											: {
+													acceptance: Reflect.get(
+														entry,
+														"acceptance",
+													) as OutboxEntry["acceptance"],
+												}),
+										...(Reflect.get(entry, "deliveryStatus") === undefined
+											? {}
+											: {
+													deliveryStatus: Reflect.get(
+														entry,
+														"deliveryStatus",
+													) as OutboxEntry["deliveryStatus"],
+												}),
+										fingerprint:
+											typeof fingerprint === "string"
+												? (fingerprint as CommandFingerprint)
+												: commandFingerprint(command),
+										attempts,
+										lastAttemptAt:
+											typeof lastAttemptAt === "number" ? lastAttemptAt : null,
+									},
+								]
+							: [];
+					})
+				: [],
+			receipts: Array.isArray(receipts)
+				? receipts.flatMap((receipt) => {
+						if (typeof receipt !== "object" || receipt === null) return [];
+						const commandId = Reflect.get(receipt, "commandId");
+						const fingerprint = Reflect.get(receipt, "fingerprint");
+						const receivedAt = Reflect.get(receipt, "receivedAt");
+						return typeof commandId === "string" &&
+							typeof fingerprint === "string" &&
+							typeof receivedAt === "number"
+							? [
+									{
+										commandId: CommandId.make(commandId),
+										fingerprint: fingerprint as CommandFingerprint,
+										receivedAt,
+										result: Reflect.get(receipt, "result"),
+										...(Reflect.get(receipt, "terminalError") === undefined
+											? {}
+											: {
+													terminalError: Reflect.get(
+														receipt,
+														"terminalError",
+													) as CommandReceipt["terminalError"],
+												}),
+									},
+								]
+							: [];
+					})
+				: [],
+		};
+	});
+
+export const writeClientCommandOutbox = (
+	snapshot: ClientCommandOutboxSnapshot,
+) =>
+	ensureDir(ROOT).pipe(
+		Effect.andThen(writeJson(clientCommandOutboxPath(), snapshot)),
+	);
+
+export const decodeEnvelopeFixture = (value: unknown): MessageEnvelope =>
+	Schema.decodeUnknownSync(MessageEnvelope)(value);
+
+export const deletePath = (path: string) =>
+	Effect.tryPromise({
+		try: async () => {
+			await FileSystem.deleteAsync(path, { idempotent: true });
+		},
+		catch: (cause) => cause,
+	});
+
+const githubTargetPath = (connection: string, checkout: string) =>
+	`${ROOT}/${slugConnectionKey(connection)}/github/${slugConnectionKey(checkout)}.json`;
+export const readGithubTarget = (connection: string, checkout: string) =>
+	readJson(
+		githubTargetPath(connection, checkout),
+		Schema.decodeUnknownSync(GitHubTarget),
+	).pipe(Effect.catch(() => Effect.succeed(null)));
+export const writeGithubTarget = (
+	connection: string,
+	checkout: string,
+	target: GitHubTarget,
+) => writeJson(githubTargetPath(connection, checkout), target);
