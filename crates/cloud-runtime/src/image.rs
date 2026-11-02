@@ -90,6 +90,8 @@ pub struct ImageManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust_environment_recipe_version: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_slack_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust_launch_model_config_version: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust_launch_assets_version: Option<u32>,
@@ -729,6 +731,7 @@ pub fn prepare(plan: &ImagePlan) -> Result<ImageManifest> {
             command_admission,
             rust_environment_recipe_version: Some(1),
             rust_launch_assets_version: Some(1),
+            rust_slack_version: Some(1),
             rust_launch_model_config_version: Some(1),
             version: 1,
             build_id: plan.build_id.clone(),

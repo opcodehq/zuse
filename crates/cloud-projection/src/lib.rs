@@ -300,6 +300,7 @@ mod tests {
             })
             .collect();
         let head = Head {
+            slack_results: Default::default(),
             schema_version: 1,
             payload_format: FORMAT.into(),
             workspace_id: "workspace".into(),

@@ -1442,6 +1442,10 @@ pub fn rows_for_entry(
     let entry_id: SharedString = entry.id.clone().into();
 
     if entry.role == MessageRole::User {
+        let source = entry.parts.iter().find_map(|part| match part {
+            MessagePart::MessageSource { source, .. } => Some(source.clone()),
+            _ => None,
+        });
         let raw: String = entry
             .parts
             .iter()
@@ -1451,6 +1455,7 @@ pub fn rows_for_entry(
             })
             .collect::<Vec<_>>()
             .join("\n\n");
+        let raw = source.as_ref().map(|s| s.text().to_owned()).unwrap_or(raw);
         // Attachment refs ride the plain text (the `withAttachments`
         // transport); split them back out for the thumbnail strip.
         let parsed = crate::attachments::parse_user_message_images(&raw);
@@ -1464,6 +1469,8 @@ pub fn rows_for_entry(
             Some((sender, body)) => (Some(sender), body.to_owned()),
             None => (None, agent_message_display(&body)),
         };
+        // A Slack request reads like any message sent on someone's behalf.
+        let sender = sender.or_else(|| source.as_ref().map(|s| s.sender()));
         // Draft chips become attachment references above the sent bubble.
         // Resolve uploads before lifting their spans so ordinary text and links
         // keep their original meaning; the draft editor is unaffected.
@@ -1514,7 +1521,14 @@ pub fn rows_for_entry(
         let turn_start = rows.is_empty();
         rows.push(Row {
             id: entry.id.clone().into(),
-            version: (raw.len() as u64) << 1 | pending as u64 | ((!turn_start) as u64) << 62,
+            version: if source.is_some() {
+                fnv1a(
+                    &serde_json::to_vec(&(raw.as_str(), &source, pending, turn_start))
+                        .unwrap_or_default(),
+                )
+            } else {
+                (raw.len() as u64) << 1 | pending as u64 | ((!turn_start) as u64) << 62
+            },
             turn_start,
             kind: RowKind::User {
                 sender,
@@ -1916,6 +1930,7 @@ pub fn rows_for_entry(
                     // nothing reaches here.
                     MessagePart::Tool { .. }
                     | MessagePart::Reasoning { .. }
+                    | MessagePart::MessageSource { .. }
                     | MessagePart::AgentContext { .. } => {}
                 }
             }
@@ -11742,7 +11757,10 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
     for part in &entry.parts {
         acc.extend_from_slice(part.id().as_bytes());
         acc.extend_from_slice(&(part.byte_len() as u64).to_le_bytes());
-        if matches!(part, MessagePart::AgentContext { .. }) {
+        if matches!(
+            part,
+            MessagePart::AgentContext { .. } | MessagePart::MessageSource { .. }
+        ) {
             acc.extend_from_slice(&serde_json::to_vec(part).unwrap_or_default());
         }
         if let MessagePart::Tool {
@@ -18516,5 +18534,30 @@ impl Transcript {
         if let Some(action) = action {
             self.dispatch_image_menu(action, cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod slack_tests {
+    use super::*;
+    #[test]
+    fn slack_bubble_shows_the_sender_channel_and_original_words() {
+        let entry:SessionMessageEntry=serde_json::from_value(serde_json::json!({"id":"slack-message","role":"user","parts":[{"kind":"text","id":"t","text":"Full prompt including prior Slack thread"},{"kind":"messageSource","id":"source","source":{"_tag":"slack","text":"Fix the test","author":"Ada Lovelace","channel":"engineering"}}],"createdAt":1,"deviceId":"runtime"})).unwrap();
+        let rows = rows_for_entry(&entry, false, false, &mut |_, _| {
+            panic!("User messages do not parse assistant markdown")
+        });
+        let RowKind::User {
+            text,
+            sender: Some(sender),
+            ..
+        } = &rows[0].kind
+        else {
+            panic!("Slack user row missing")
+        };
+        assert_eq!(text.as_ref(), "Fix the test");
+        // Shown with the shared "Sent by …" header.
+        assert_eq!(sender.name, "Ada Lovelace in #engineering · Slack");
+        assert!(!sender.activity);
+        assert!(!text.contains("prior Slack thread"));
     }
 }

@@ -447,10 +447,14 @@ impl WorkspaceView {
                 cx,
             )
         });
+        self.slack_panel.update(cx, |panel, cx| {
+            panel.bind_owner(self.billing.owner.clone(), cx)
+        });
         if self.billing.tab == crate::cloud_settings::Tab::Setup {
             // Account/repository/environment setup is available before compute
             // entitlement. Allocation keeps its independent server-side gate.
             body = body.child(self.repository_panel.clone());
+            body = body.child(self.slack_panel.clone());
         } else {
             if storage {
                 body = body.child(self.repository_panel.clone());

@@ -137,6 +137,9 @@ pub fn handles(method: &str) -> bool {
     matches!(
         method,
         LIST | READ
+            | zuse_protocol::methods::SLACK_CONNECTIONS
+            | zuse_protocol::methods::SLACK_CONNECT
+            | zuse_protocol::methods::SLACK_DISCONNECT
             | zuse_protocol::methods::CLOUD_LOCAL_TERMINAL
             | zuse_protocol::methods::CLOUD_SYNC_STATUS
             | zuse_protocol::methods::CLOUD_SYNC_CONFIGURE
@@ -392,6 +395,25 @@ impl CloudApi {
                         "Automatic environment preparation is not enabled on this service yet."
                     );
                 }
+            }
+            if path.get(2) == Some(&"slack") {
+                let error: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                anyhow::bail!(
+                    "{}",
+                    match error["error"].as_str() {
+                        Some("slack_project_not_ready") =>
+                            "Prepare or rebuild this repository's cloud image before connecting Slack.",
+                        Some("slack_organization_runtime_unavailable") =>
+                            "Organization cloud runtimes are not available yet. Choose Personal for Slack tasks.",
+                        Some("slack_model_unavailable") =>
+                            "Choose an available cloud model for Slack.",
+                        Some("slack_workspace_mismatch") =>
+                            "Your workspace changed. Refresh Slack settings.",
+                        _ if status.as_u16() == 404 =>
+                            "Slack is not enabled on this cloud service.",
+                        _ => "Slack settings are unavailable. Refresh and try again.",
+                    }
+                );
             }
             if path
                 .get(2)
@@ -767,6 +789,64 @@ impl CloudApi {
                 )
                 .await?;
                 json!({"accountId":account,"data":value})
+            }
+            zuse_protocol::methods::SLACK_CONNECTIONS
+            | zuse_protocol::methods::SLACK_CONNECT
+            | zuse_protocol::methods::SLACK_DISCONNECT => {
+                let mut body = params.clone();
+                if let Some(map) = body.as_object_mut() {
+                    map.remove("expectedAccountId");
+                    map.remove("expectedOrganizationId");
+                }
+                let (path, body) = match method {
+                    zuse_protocol::methods::SLACK_CONNECT => (
+                        vec!["v1", "cloud", "slack", "connect"],
+                        Some(serde_json::to_value(serde_json::from_value::<
+                            zuse_protocol::slack::ConnectRequest,
+                        >(body)?)?),
+                    ),
+                    zuse_protocol::methods::SLACK_DISCONNECT => {
+                        if let Some(map) = body.as_object_mut() {
+                            map.remove("workspaceId");
+                        }
+                        (vec!["v1", "cloud", "slack", "disconnect"], Some(body))
+                    }
+                    _ => (vec!["v1", "cloud", "slack"], None),
+                };
+                let selected = match params["workspaceId"].as_str() {
+                    None => organization.clone(),
+                    Some("personal") => None,
+                    Some(value) => Some(
+                        value
+                            .strip_prefix("organization:")
+                            .filter(|id| {
+                                !id.is_empty()
+                                    && id.len() <= 128
+                                    && id.bytes().all(|b| {
+                                        b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
+                                    })
+                            })
+                            .ok_or_else(|| anyhow::anyhow!("Invalid Slack workspace selection."))?
+                            .to_owned(),
+                    ),
+                };
+                let value = self
+                    .request_scoped(&token, &path, body, selected.as_deref(), &[])
+                    .await?;
+                if method == zuse_protocol::methods::SLACK_CONNECT {
+                    let url = reqwest::Url::parse(value["url"].as_str().ok_or_else(|| {
+                        anyhow::anyhow!("Slack returned an invalid connection link.")
+                    })?)?;
+                    ensure!(
+                        url.origin() == self.origin.origin()
+                            && url.path() == "/slack/oauth/start"
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                            && url.fragment().is_none(),
+                        "Slack returned an invalid connection link."
+                    );
+                }
+                json!({"accountId":account,"organizationId":organization,"data":value})
             }
 
             zuse_protocol::methods::CLOUD_PREPAID_BALANCE

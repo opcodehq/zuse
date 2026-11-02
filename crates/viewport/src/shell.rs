@@ -751,6 +751,7 @@ impl WorkspaceView {
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);
                 let user = message["role"] == "user";
+                let source=entry.parts.iter().find_map(|part|match part {zuse_model::MessagePart::MessageSource {source,..}=>Some(source),_=>None});
                 column()
                     .id(SharedString::from(format!("message-{}",entry.id)))
                     .group("message")
@@ -772,9 +773,9 @@ impl WorkspaceView {
                                 let kind = part["kind"].as_str().unwrap_or_default();
                                 match kind {
                                     "text" => {
-                                        let text = part["text"].as_str().unwrap_or_default();
+                                        let text = if user {source.map(|s|s.text()).unwrap_or_else(||part["text"].as_str().unwrap_or_default())}else{part["text"].as_str().unwrap_or_default()};
                                         Some(if user {
-                                            let attribution = zuse_protocol::presentation::zot_message::parse_display(text);
+                                            let attribution = zuse_protocol::presentation::zot_message::parse_display(text).or_else(|| source.map(|s| (s.sender(), text)));
                                             let parsed = zuse_protocol::message_attachments::parse(attribution.as_ref().map(|(_,body)|*body).unwrap_or(text));
                                             if let Some((sender, body)) = attribution.as_ref().filter(|(s,_)|s.activity) {
                                                 crate::zot_issues::activity_notice(sender, body, entry.created_at).into_any_element()

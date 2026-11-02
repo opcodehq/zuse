@@ -397,3 +397,7 @@ watchers retain their contract. Browser response queues hold byte admission
 through the actual write, so dequeue alone cannot free an 8 MiB traffic budget.
 An intact larger response acquires the budget exclusively. These bounds apply
 to direct, paired and account browser sessions and the paired relay path.
+
+## Slack integration
+
+The first-party Slack app runs alongside `zuse-cloud-api` behind an explicit feature flag. See [Slack setup and recovery](slack-app.md) for server-only secrets, the additive migration, manifest, runtime image compatibility and fixture tests. Settings → Cloud → Slack shares one component across native and browser hosts; each connected member chooses a Zuse workspace and prepared repository before authorizing Slack.
