@@ -712,6 +712,22 @@ pub fn default_registry() -> HarnessRegistry {
         Box::new(|| zuse_providers::PiHarness::new().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::PiHarness::new()) as Arc<dyn Harness>)),
     );
+    // Muse Code over its native session protocol (`muse serve`). Efforts
+    // are per model (`model/list` variants); steers ride `turn/steer`.
+    registry.register_lazy(
+        HarnessDescriptor {
+            id: HarnessId::Muse,
+            name: "Muse Code".into(),
+            supports_steering: true,
+            steering_mode: SteeringMode::StepBoundary,
+            reasoning_levels: Vec::new(),
+            installed: true,
+            can_install: false,
+            enabled: None,
+        },
+        Box::new(|| zuse_providers::MuseHarness::new().installed()),
+        Box::new(|| Ok(Arc::new(zuse_providers::MuseHarness::new()) as Arc<dyn Harness>)),
+    );
     // opencode over its NATIVE HTTP/SSE protocol (the one the opencode
     // desktop app speaks — `opencode serve` + the /global/event bus), same
     // lazy pattern: the static descriptor mirrors OpencodeHarness exactly.
@@ -856,6 +872,7 @@ mod tests {
                 HarnessId::Grok,
                 HarnessId::Hermes,
                 HarnessId::Pi,
+                HarnessId::Muse,
                 HarnessId::Opencode,
                 HarnessId::Antigravity,
                 HarnessId::Kiro,
@@ -921,6 +938,11 @@ mod tests {
         assert_eq!(pi.display_name(), "Pi");
         assert_eq!(pi.steering_mode(), SteeringMode::StepBoundary);
         assert!(pi.reasoning_levels().is_empty());
+        let muse = registry.resolve(HarnessId::Muse).unwrap();
+        assert_eq!(muse.id(), HarnessId::Muse);
+        assert_eq!(muse.display_name(), "Muse Code");
+        assert_eq!(muse.steering_mode(), SteeringMode::StepBoundary);
+        assert!(muse.reasoning_levels().is_empty());
     }
 
     /// Catalogs serialized by engines that predate the `installed`/`enabled`

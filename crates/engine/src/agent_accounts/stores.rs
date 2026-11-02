@@ -141,6 +141,7 @@ pub(super) fn cli_name(harness: HarnessId) -> &'static str {
         HarnessId::Antigravity => "Antigravity",
         HarnessId::Gemini => "gemini",
         HarnessId::Kiro => "kiro-cli",
+        HarnessId::Muse => "muse",
         HarnessId::Zuse => "zuse",
         HarnessId::Mock => "mock",
         HarnessId::CustomAcp(_) => "the configured ACP agent",

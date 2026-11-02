@@ -205,6 +205,7 @@ impl From<HarnessId> for String {
             HarnessId::Pi => "pi",
             HarnessId::Opencode => "opencode",
             HarnessId::Antigravity => "antigravity",
+            HarnessId::Muse => "muse",
             HarnessId::Mock => "mock",
             HarnessId::CustomAcp(id) => return id.as_str().to_owned(),
         }
@@ -227,6 +228,7 @@ impl TryFrom<String> for HarnessId {
             "pi" => Self::Pi,
             "opencode" => Self::Opencode,
             "antigravity" => Self::Antigravity,
+            "muse" => Self::Muse,
             "mock" => Self::Mock,
             _ => Self::CustomAcp(CustomAcpId::parse(&value)?),
         })

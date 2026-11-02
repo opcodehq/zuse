@@ -52,8 +52,19 @@ pub fn login_command(harness: HarnessId) -> Option<&'static str> {
         HarnessId::Pi => "pi",
         HarnessId::Hermes => "hermes auth add",
         HarnessId::Kiro => "kiro-cli login",
+        HarnessId::Muse => "muse login",
         _ => return None,
     })
+}
+/// Setup guidance for agents whose CLI owns sign-in entirely.
+pub fn login_hint(harness: HarnessId) -> Option<&'static str> {
+    match harness {
+        HarnessId::Muse => Some(
+            "Muse Code manages sign-in. Run `muse login` in a terminal, or save a Meta API key \
+             with `muse auth set`. Zuse doesn't pass META_API_KEY through.",
+        ),
+        _ => None,
+    }
 }
 #[derive(Clone)]
 pub enum Phase {
@@ -196,9 +207,17 @@ pub fn render<C: 'static>(
                 );
             }
             if command.is_some() {
-                choices = choices.child(command_row("or run").text_size(px(10.)));
+                let label = if login_options(data.harness).is_empty() {
+                    "Run"
+                } else {
+                    "or run"
+                };
+                choices = choices.child(command_row(label).text_size(px(10.)));
             }
             body = body.child(choices);
+            if let Some(hint) = login_hint(data.harness) {
+                body = body.child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(hint));
+            }
         }
         Phase::Waiting { message } => {
             let text = message.clone().unwrap_or_else(|| {

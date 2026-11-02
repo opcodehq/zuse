@@ -107,6 +107,35 @@ enum UpdatePlan {
     AntigravityArchive,
     CodexStandalone(CodexStandaloneInstall),
     Homebrew(HomebrewPackage),
+    /// Muse Code: re-run the official installer into `dir`.
+    MuseInstaller {
+        dir: PathBuf,
+    },
+}
+
+const MUSE_INSTALL_POSIX: &str = "curl -fsSL https://dev.meta.ai/install.sh | bash";
+const MUSE_INSTALL_WINDOWS: &str = "irm https://dev.meta.ai/install.ps1 | iex";
+
+/// The installer invocation that updates Muse Code in place: the script
+/// reads `MUSE_INSTALL_DIR` to target the current binary's directory.
+fn muse_installer(dir: &Path) -> (PathBuf, Vec<&'static str>, Vec<(&'static str, String)>) {
+    let env = vec![("MUSE_INSTALL_DIR", dir.display().to_string())];
+    if cfg!(windows) {
+        (
+            PathBuf::from("powershell"),
+            vec![
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                MUSE_INSTALL_WINDOWS,
+            ],
+            env,
+        )
+    } else {
+        (PathBuf::from("sh"), vec!["-c", MUSE_INSTALL_POSIX], env)
+    }
 }
 
 struct ReleaseAsset {
@@ -284,6 +313,14 @@ fn provider(id: HarnessId) -> ProviderSpec {
             update_args: None,
             manual_command: "kiro-cli update",
         },
+        HarnessId::Muse => ProviderSpec {
+            version_args: &["--version"],
+            // No release feed: updating re-runs the official installer into
+            // the directory that holds the current binary.
+            latest: LatestSource::Manual,
+            update_args: None,
+            manual_command: MUSE_INSTALL_POSIX,
+        },
         HarnessId::Zuse | HarnessId::Mock | HarnessId::CustomAcp(_) => ProviderSpec {
             version_args: &["--version"],
             latest: LatestSource::Manual,
@@ -299,6 +336,13 @@ fn update_plan(harness: HarnessId, executable: &Path) -> Result<UpdatePlan, Stri
     }
     if harness == HarnessId::ClaudeCode && claude_package_manager_command(executable).is_some() {
         return Err("update Claude Code with its package manager".into());
+    }
+    if harness == HarnessId::Muse
+        && let Some(dir) = executable.parent().filter(|d| !d.as_os_str().is_empty())
+    {
+        return Ok(UpdatePlan::MuseInstaller {
+            dir: dir.to_path_buf(),
+        });
     }
     if let Some(args) = provider(harness).update_args {
         return Ok(UpdatePlan::Command {
@@ -1072,6 +1116,17 @@ impl HarnessUpdateCoordinator {
                 self.install_codex_standalone(harness, &current, install, &cancel)
                     .await
             }
+            UpdatePlan::MuseInstaller { dir } => match self.begin_install(harness, &cancel) {
+                Ok(()) => {
+                    let (program, args, env) = muse_installer(&dir);
+                    let env: Vec<(&str, &str)> =
+                        env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                    run_command_output_env(&program, &args, UPDATE_TIMEOUT, &env)
+                        .await
+                        .map(drop)
+                }
+                Err(error) => Err(error),
+            },
             UpdatePlan::Homebrew(package) => match resolve_brew(&package.brew) {
                 Ok(brew) => {
                     let args = package.upgrade_args();
@@ -2361,10 +2416,12 @@ fn version_is_newer(latest: &str, installed: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        LatestSource, activate_codex_release, codex_standalone_install, extract_latest_version,
-        extract_version, installed_version, opencode_release_package, provider,
-        validate_codex_package, version_is_newer,
+        LatestSource, UpdatePlan, activate_codex_release, can_apply_update,
+        codex_standalone_install, extract_latest_version, extract_version, installed_version,
+        muse_installer, opencode_release_package, provider, update_plan, validate_codex_package,
+        version_is_newer,
     };
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
@@ -2635,6 +2692,27 @@ esac
         registry.register(Arc::new(ExecutableHarness(executable, HarnessId::Grok)));
         let coordinator = super::HarnessUpdateCoordinator::new(temp.path(), registry);
         (temp, coordinator)
+    }
+
+    #[test]
+    fn muse_updates_rerun_the_installer_into_the_current_directory() {
+        assert!(matches!(
+            provider(HarnessId::Muse).latest,
+            LatestSource::Manual
+        ));
+        assert_eq!(
+            provider(HarnessId::Muse).manual_command,
+            "curl -fsSL https://dev.meta.ai/install.sh | bash"
+        );
+        let executable = Path::new("/opt/it's/bin/muse");
+        let Ok(UpdatePlan::MuseInstaller { dir }) = update_plan(HarnessId::Muse, executable) else {
+            panic!("Muse updates through its installer");
+        };
+        assert_eq!(dir, Path::new("/opt/it's/bin"));
+        assert!(can_apply_update(HarnessId::Muse, executable));
+        let (_, args, env) = muse_installer(&dir);
+        assert!(args.iter().any(|a| a.contains("dev.meta.ai/install")));
+        assert_eq!(env, [("MUSE_INSTALL_DIR", "/opt/it's/bin".to_owned())]);
     }
 
     #[test]

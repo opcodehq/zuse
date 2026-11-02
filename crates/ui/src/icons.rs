@@ -189,6 +189,7 @@ icon_assets![
     (KIRO_MARK, "kiro-mark"),
     (HERMES_MARK, "hermes-mark"),
     (PI_MARK, "pi-mark"),
+    (MUSE_MARK, "muse-mark"),
     (OPENCODE_MARK, "opencode-mark"),
     (ANTIGRAVITY_MARK, "antigravity-mark"),
     // Site marks for compact links (`site_links`), drawn in one tint.
