@@ -1,0 +1,913 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0858644327948396587C4D1A /* AttachmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7217AC99454A994E8318927D /* AttachmentView.swift */; };
+		091B8952E5972BCDC282327E /* NearbyBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3878C69AE2F87271BF478449 /* NearbyBrowser.swift */; };
+		1801A546197909EBFF8A4DC7 /* CloudInfrastructureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 068107E8114614B815890947 /* CloudInfrastructureView.swift */; };
+		18BC33DB8FD05C69AFD9CA60 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CE741A9B131DFFEAFA3154CD /* Assets.xcassets */; };
+		1ABB6E95D793074F4FC62ADC /* PreviewData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A929586919FB530061F41D6 /* PreviewData.swift */; };
+		1CB58C880D8134CA585A7ACB /* AddProjectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41C8FE748BE9FCB39489A247 /* AddProjectView.swift */; };
+		21FBEBBCDED22B50DEA8D055 /* RuntimeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C565500557EAA2B15445D249 /* RuntimeSettingsView.swift */; };
+		237AAEE4E761DFA8A7A71799 /* InteractionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB383162406E497000EE1AB8 /* InteractionView.swift */; };
+		23B5520F859B16DB6E80B303 /* ServeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2AFFEE7BAB24693F3D69BC6 /* ServeSettingsView.swift */; };
+		275AB9B7A7A1334B2E35A0CB /* UISpecView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D66357E7254C67C64AE3811 /* UISpecView.swift */; };
+		27B52FE6C432AF3E58C529B1 /* UISpecView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D66357E7254C67C64AE3811 /* UISpecView.swift */; };
+		27FEE3977204B7ED4AEA7225 /* NewChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0C17265E9F0320C36EE078 /* NewChatView.swift */; };
+		29EE2A3A22096BA35472F9A9 /* SettingsSchema.json in Resources */ = {isa = PBXBuildFile; fileRef = 44223CEF596EF52E186162E9 /* SettingsSchema.json */; };
+		33CD1C5AC2038B7A770FF11C /* CloudSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A5AE5995DD6581CBB6A523 /* CloudSettingsView.swift */; };
+		389E74F56B00E489BC6763E5 /* CloudLaunchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C2445B57043626773264BD /* CloudLaunchView.swift */; };
+		38D99079744708747ADD7D21 /* ModelCatalog.json in Resources */ = {isa = PBXBuildFile; fileRef = A5B5AD6D410D81432C2BE664 /* ModelCatalog.json */; };
+		3AD413BE092F884CE0654C5F /* NativeMacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BB137E8E5CAA1EB6EBCFCA0 /* NativeMacTests.swift */; };
+		3B7D1CBEB564F6D827B48F72 /* CloudInfrastructureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 068107E8114614B815890947 /* CloudInfrastructureView.swift */; };
+		40229378CE55192A02287CE6 /* PreviewData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A929586919FB530061F41D6 /* PreviewData.swift */; };
+		40D712856A60865910C10D1F /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5070297FC4F4213DC485A3E4 /* ChatMarkdown.swift */; };
+		4B33EF4669A0B6151262502E /* ThirdPartyNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = C0AD970990E3E4147036EE4B /* ThirdPartyNotices.txt */; };
+		4BD647F389442F29D48EF677 /* FileContentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33B93EF57C9556B0A89B511D /* FileContentsView.swift */; };
+		4E6C16F143A6099D518CE3B1 /* Mermaid-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 618163A1C24645C679EC1D21 /* Mermaid-LICENSE.txt */; };
+		4F5620F2B4F753C71F5E90F7 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5A7175AF77F1B7DA4792383 /* Foundation.framework */; };
+		54848106F0A926C61EA8F149 /* RegisteredDevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A26C4383CC9940B8C9234EF /* RegisteredDevicesView.swift */; };
+		5949162A8C6878AB8A64F7F0 /* WorkspaceModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79D31982FFE1BD8EB7D55532 /* WorkspaceModel.swift */; };
+		5A849218196A09A1FB22CD5B /* ServeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2AFFEE7BAB24693F3D69BC6 /* ServeSettingsView.swift */; };
+		5B37AF591909D4FC7579C75A /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C5A44ADF00F4D99F7C2C4C /* HomeView.swift */; };
+		5B89493F7F7A496D4F4ACE68 /* AttachmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7217AC99454A994E8318927D /* AttachmentView.swift */; };
+		5C257516821A3C2E06563856 /* NativeChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A846520562087CAC257BDACB /* NativeChatTests.swift */; };
+		5D29E27E6183706728D89FD4 /* InteractionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB383162406E497000EE1AB8 /* InteractionView.swift */; };
+		5FAFE63A190A49B030893807 /* NativePlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF10973A86F8E4E217DC6ED3 /* NativePlatform.swift */; };
+		5FC08F5094EE6E85F786413F /* QRScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6CF9EFE66F4C697B3351EF2 /* QRScanner.swift */; };
+		60EA480F78FE103D6D2864DD /* ThirdPartyNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = C0AD970990E3E4147036EE4B /* ThirdPartyNotices.txt */; };
+		691AB2CD163DE0A10CC99CF7 /* MessageDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E48A444141F677012936E0E /* MessageDetails.swift */; };
+		7247E4D0E5999EC1F3A29610 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C5A44ADF00F4D99F7C2C4C /* HomeView.swift */; };
+		73AE832D6ADA44075BDB8DBE /* CloudIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 284C66862992341F24C9D602 /* CloudIntent.swift */; };
+		7885E60604BC78D4320850D1 /* Mermaid.js in Resources */ = {isa = PBXBuildFile; fileRef = 100D42955C1085C764B6B9CB /* Mermaid.js */; };
+		7F6DEE2E200FA49418628075 /* Account.swift in Sources */ = {isa = PBXBuildFile; fileRef = 536673D9FA3422743BBE1670 /* Account.swift */; };
+		7FFE9D4946A12A3C82ACE33A /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E8F45EBEC4719648FBFE52A /* DiffView.swift */; };
+		8801E3A3F915A7F8C0A0C6D1 /* CloudLaunchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63C2445B57043626773264BD /* CloudLaunchView.swift */; };
+		8C1E2DFEC6A1EB506C2F6061 /* FileContentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33B93EF57C9556B0A89B511D /* FileContentsView.swift */; };
+		8E08DF849BC43E0705E7B2DD /* SettingsSchema.json in Resources */ = {isa = PBXBuildFile; fileRef = 44223CEF596EF52E186162E9 /* SettingsSchema.json */; };
+		96C8505B222A0CFD0735A135 /* ComputerAccessView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B1BCCFE2442FC8055FC249F /* ComputerAccessView.swift */; };
+		996B9A7A8AD2ED8E0AEEAF70 /* ChatMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5070297FC4F4213DC485A3E4 /* ChatMarkdown.swift */; };
+		9E81370298E733F13445260F /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B6C8277FA8A6DE69D7C389C8 /* Cocoa.framework */; };
+		A7BB52A20CE26830686CE89D /* Diagram.html in Resources */ = {isa = PBXBuildFile; fileRef = CD74D514FFFF2C0566AD5F19 /* Diagram.html */; };
+		AAADE082E51C0074E12235A5 /* Account.swift in Sources */ = {isa = PBXBuildFile; fileRef = 536673D9FA3422743BBE1670 /* Account.swift */; };
+		B175D768481FA2F0AF0FD7B2 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = AD054EC2B414C7EE659951E4 /* Textual */; };
+		B23674C954F4A68BD5EBE5DC /* UIParser.js in Resources */ = {isa = PBXBuildFile; fileRef = A4B72E1E21D77D0F4D66B7E2 /* UIParser.js */; };
+		B2831517D917A3F880CEA1AB /* Mermaid-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 618163A1C24645C679EC1D21 /* Mermaid-LICENSE.txt */; };
+		B8D6D98A8D2D71FBEAB74937 /* NearbyBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3878C69AE2F87271BF478449 /* NearbyBrowser.swift */; };
+		BC1B3D73F9439A25514519C0 /* WorkspaceModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79D31982FFE1BD8EB7D55532 /* WorkspaceModel.swift */; };
+		C119260BFDD69F890BFB1EB9 /* CloudSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A5AE5995DD6581CBB6A523 /* CloudSettingsView.swift */; };
+		C32C439B0609035A6D912A83 /* MessageDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E48A444141F677012936E0E /* MessageDetails.swift */; };
+		C62A83988288AAE4C5FA49BE /* NativePlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF10973A86F8E4E217DC6ED3 /* NativePlatform.swift */; };
+		CF9C8E60E12F51DAB539EF97 /* RuntimeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C565500557EAA2B15445D249 /* RuntimeSettingsView.swift */; };
+		D1DEBAF39C9A77012F82EF8B /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3710D736455937160AB4BD /* TranscriptView.swift */; };
+		D265E5F111CCF15C0DA1B899 /* ModelCatalog.json in Resources */ = {isa = PBXBuildFile; fileRef = A5B5AD6D410D81432C2BE664 /* ModelCatalog.json */; };
+		D2BE706B527E7ECF1279B35D /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E8F45EBEC4719648FBFE52A /* DiffView.swift */; };
+		D4661F3175C0D7B23E63807B /* ComputerAccessView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B1BCCFE2442FC8055FC249F /* ComputerAccessView.swift */; };
+		D5DA74BFF8B8B83977E22A21 /* CloudIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 284C66862992341F24C9D602 /* CloudIntent.swift */; };
+		D74DBC337C07BA0BA186966D /* ZuseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 6C4B7833C9262A4B6D8C0028 /* ZuseCore */; };
+		D844FAEA00EC01BC3627772F /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 01B39DBAAE1C7E72926F582E /* Textual */; };
+		DB8067FC4A287B8534992131 /* AddProjectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41C8FE748BE9FCB39489A247 /* AddProjectView.swift */; };
+		DCFF39EB6265570AED805833 /* Mermaid.js in Resources */ = {isa = PBXBuildFile; fileRef = 100D42955C1085C764B6B9CB /* Mermaid.js */; };
+		E00D0BAE23FD498D9147E0A8 /* ZuseApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7989531468DAFAB0DEF5A822 /* ZuseApp.swift */; };
+		E0134CD12B577CDB4324E9C5 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B6C8277FA8A6DE69D7C389C8 /* Cocoa.framework */; };
+		E246F661B0B3C30465B6E62F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CE741A9B131DFFEAFA3154CD /* Assets.xcassets */; };
+		E425E0D386052C861D6D469A /* UIParser.js in Resources */ = {isa = PBXBuildFile; fileRef = A4B72E1E21D77D0F4D66B7E2 /* UIParser.js */; };
+		E5DC6D065ED2985DAE79B3FD /* NewChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0C17265E9F0320C36EE078 /* NewChatView.swift */; };
+		EB6AFE633792A6D57214F139 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5A7175AF77F1B7DA4792383 /* Foundation.framework */; };
+		EDE37FC0B15B69011E315099 /* QRScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6CF9EFE66F4C697B3351EF2 /* QRScanner.swift */; };
+		EE335EDBA79BB531220DFD7C /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3710D736455937160AB4BD /* TranscriptView.swift */; };
+		EF4F8B753C9F3B521D718165 /* Diagram.html in Resources */ = {isa = PBXBuildFile; fileRef = CD74D514FFFF2C0566AD5F19 /* Diagram.html */; };
+		F5A83BF48D659A510F3EAFA7 /* RegisteredDevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A26C4383CC9940B8C9234EF /* RegisteredDevicesView.swift */; };
+		F6A570C04D5484B85261DB62 /* ZuseCore in Frameworks */ = {isa = PBXBuildFile; productRef = CD5EB6F0D0EE09241CB98476 /* ZuseCore */; };
+		FEAFFBDDE732D7A2C9563BCA /* ZuseApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7989531468DAFAB0DEF5A822 /* ZuseApp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		0623B090FE20E3010A856BA5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A91394E48C91440D66DA956 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 07A46862BDAEEFADD97F9DF5;
+			remoteInfo = Zuse;
+		};
+		A087FF683BE5F347FE556922 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A91394E48C91440D66DA956 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D11DD11DE0B2EB793702D95A;
+			remoteInfo = ZuseMac;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		068107E8114614B815890947 /* CloudInfrastructureView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CloudInfrastructureView.swift; sourceTree = "<group>"; };
+		09C5A44ADF00F4D99F7C2C4C /* HomeView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		0A26C4383CC9940B8C9234EF /* RegisteredDevicesView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RegisteredDevicesView.swift; sourceTree = "<group>"; };
+		100D42955C1085C764B6B9CB /* Mermaid.js */ = {isa = PBXFileReference; includeInIndex = 1; path = Mermaid.js; sourceTree = "<group>"; };
+		27A5AE5995DD6581CBB6A523 /* CloudSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CloudSettingsView.swift; sourceTree = "<group>"; };
+		284C66862992341F24C9D602 /* CloudIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CloudIntent.swift; sourceTree = "<group>"; };
+		2B1BCCFE2442FC8055FC249F /* ComputerAccessView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ComputerAccessView.swift; sourceTree = "<group>"; };
+		33B93EF57C9556B0A89B511D /* FileContentsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FileContentsView.swift; sourceTree = "<group>"; };
+		3878C69AE2F87271BF478449 /* NearbyBrowser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NearbyBrowser.swift; sourceTree = "<group>"; };
+		3A0C17265E9F0320C36EE078 /* NewChatView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NewChatView.swift; sourceTree = "<group>"; };
+		3D66357E7254C67C64AE3811 /* UISpecView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = UISpecView.swift; sourceTree = "<group>"; };
+		41C8FE748BE9FCB39489A247 /* AddProjectView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AddProjectView.swift; sourceTree = "<group>"; };
+		42067124CFD28143321257D7 /* ZuseMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZuseMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		44223CEF596EF52E186162E9 /* SettingsSchema.json */ = {isa = PBXFileReference; includeInIndex = 1; path = SettingsSchema.json; sourceTree = "<group>"; };
+		4A3C64A8F0E29E511808A79F /* Zuse Native.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Zuse Native.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		4B3710D736455937160AB4BD /* TranscriptView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TranscriptView.swift; sourceTree = "<group>"; };
+		5070297FC4F4213DC485A3E4 /* ChatMarkdown.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ChatMarkdown.swift; sourceTree = "<group>"; };
+		536673D9FA3422743BBE1670 /* Account.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Account.swift; sourceTree = "<group>"; };
+		5BB137E8E5CAA1EB6EBCFCA0 /* NativeMacTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativeMacTests.swift; sourceTree = "<group>"; };
+		5E48A444141F677012936E0E /* MessageDetails.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MessageDetails.swift; sourceTree = "<group>"; };
+		5E8F45EBEC4719648FBFE52A /* DiffView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DiffView.swift; sourceTree = "<group>"; };
+		618163A1C24645C679EC1D21 /* Mermaid-LICENSE.txt */ = {isa = PBXFileReference; includeInIndex = 1; path = "Mermaid-LICENSE.txt"; sourceTree = "<group>"; };
+		63C2445B57043626773264BD /* CloudLaunchView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CloudLaunchView.swift; sourceTree = "<group>"; };
+		6A6E93AA7C8A417AEA566C8D /* Zuse Native.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Zuse Native.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		7217AC99454A994E8318927D /* AttachmentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AttachmentView.swift; sourceTree = "<group>"; };
+		7989531468DAFAB0DEF5A822 /* ZuseApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ZuseApp.swift; sourceTree = "<group>"; };
+		79D31982FFE1BD8EB7D55532 /* WorkspaceModel.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WorkspaceModel.swift; sourceTree = "<group>"; };
+		8A929586919FB530061F41D6 /* PreviewData.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PreviewData.swift; sourceTree = "<group>"; };
+		8AEF5EAAC8D5DD2AB93B7D15 /* ZuseUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ZuseUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A4B72E1E21D77D0F4D66B7E2 /* UIParser.js */ = {isa = PBXFileReference; includeInIndex = 1; path = UIParser.js; sourceTree = "<group>"; };
+		A5B5AD6D410D81432C2BE664 /* ModelCatalog.json */ = {isa = PBXFileReference; includeInIndex = 1; path = ModelCatalog.json; sourceTree = "<group>"; };
+		A846520562087CAC257BDACB /* NativeChatTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativeChatTests.swift; sourceTree = "<group>"; };
+		AB383162406E497000EE1AB8 /* InteractionView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = InteractionView.swift; sourceTree = "<group>"; };
+		B6C8277FA8A6DE69D7C389C8 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		C0AD970990E3E4147036EE4B /* ThirdPartyNotices.txt */ = {isa = PBXFileReference; includeInIndex = 1; path = ThirdPartyNotices.txt; sourceTree = "<group>"; };
+		C565500557EAA2B15445D249 /* RuntimeSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RuntimeSettingsView.swift; sourceTree = "<group>"; };
+		CD74D514FFFF2C0566AD5F19 /* Diagram.html */ = {isa = PBXFileReference; includeInIndex = 1; path = Diagram.html; sourceTree = "<group>"; };
+		CE741A9B131DFFEAFA3154CD /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		D2AFFEE7BAB24693F3D69BC6 /* ServeSettingsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ServeSettingsView.swift; sourceTree = "<group>"; };
+		D6CF9EFE66F4C697B3351EF2 /* QRScanner.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = QRScanner.swift; sourceTree = "<group>"; };
+		E5A7175AF77F1B7DA4792383 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		EF10973A86F8E4E217DC6ED3 /* NativePlatform.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NativePlatform.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		27F277B3884E8786A8ABCACF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EB6AFE633792A6D57214F139 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BC377D78CF1585D1FDBE0E61 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E0134CD12B577CDB4324E9C5 /* Cocoa.framework in Frameworks */,
+				F6A570C04D5484B85261DB62 /* ZuseCore in Frameworks */,
+				D844FAEA00EC01BC3627772F /* Textual in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C810952691A2D2D49068850A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4F5620F2B4F753C71F5E90F7 /* Foundation.framework in Frameworks */,
+				D74DBC337C07BA0BA186966D /* ZuseCore in Frameworks */,
+				B175D768481FA2F0AF0FD7B2 /* Textual in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EF03CAE5F895014309A196B8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9E81370298E733F13445260F /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1B78947C9DA04859A88F85EF /* MacUITests */ = {
+			isa = PBXGroup;
+			children = (
+				5BB137E8E5CAA1EB6EBCFCA0 /* NativeMacTests.swift */,
+			);
+			name = MacUITests;
+			path = MacUITests;
+			sourceTree = "<group>";
+		};
+		342DE246A62656A066FA3FAF = {
+			isa = PBXGroup;
+			children = (
+				943377CCCEA0422277E3EAC6 /* Products */,
+				9F25BC018037F1399C74B9F2 /* Frameworks */,
+				F2F481659E1020F391C45F6B /* App */,
+				CFAB61EC288615BF66BA16BE /* UITests */,
+				1B78947C9DA04859A88F85EF /* MacUITests */,
+			);
+			sourceTree = "<group>";
+		};
+		88D4FADD071C932925AC4B40 /* OS X */ = {
+			isa = PBXGroup;
+			children = (
+				B6C8277FA8A6DE69D7C389C8 /* Cocoa.framework */,
+			);
+			name = "OS X";
+			sourceTree = "<group>";
+		};
+		943377CCCEA0422277E3EAC6 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4A3C64A8F0E29E511808A79F /* Zuse Native.app */,
+				8AEF5EAAC8D5DD2AB93B7D15 /* ZuseUITests.xctest */,
+				6A6E93AA7C8A417AEA566C8D /* Zuse Native.app */,
+				42067124CFD28143321257D7 /* ZuseMacUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		9F25BC018037F1399C74B9F2 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B70C1C0FEF031B2229893033 /* iOS */,
+				88D4FADD071C932925AC4B40 /* OS X */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		B70C1C0FEF031B2229893033 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				E5A7175AF77F1B7DA4792383 /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		CFAB61EC288615BF66BA16BE /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				A846520562087CAC257BDACB /* NativeChatTests.swift */,
+			);
+			name = UITests;
+			path = UITests;
+			sourceTree = "<group>";
+		};
+		F2F481659E1020F391C45F6B /* App */ = {
+			isa = PBXGroup;
+			children = (
+				536673D9FA3422743BBE1670 /* Account.swift */,
+				41C8FE748BE9FCB39489A247 /* AddProjectView.swift */,
+				7217AC99454A994E8318927D /* AttachmentView.swift */,
+				5070297FC4F4213DC485A3E4 /* ChatMarkdown.swift */,
+				068107E8114614B815890947 /* CloudInfrastructureView.swift */,
+				284C66862992341F24C9D602 /* CloudIntent.swift */,
+				63C2445B57043626773264BD /* CloudLaunchView.swift */,
+				27A5AE5995DD6581CBB6A523 /* CloudSettingsView.swift */,
+				2B1BCCFE2442FC8055FC249F /* ComputerAccessView.swift */,
+				5E8F45EBEC4719648FBFE52A /* DiffView.swift */,
+				33B93EF57C9556B0A89B511D /* FileContentsView.swift */,
+				09C5A44ADF00F4D99F7C2C4C /* HomeView.swift */,
+				AB383162406E497000EE1AB8 /* InteractionView.swift */,
+				5E48A444141F677012936E0E /* MessageDetails.swift */,
+				EF10973A86F8E4E217DC6ED3 /* NativePlatform.swift */,
+				3878C69AE2F87271BF478449 /* NearbyBrowser.swift */,
+				3A0C17265E9F0320C36EE078 /* NewChatView.swift */,
+				8A929586919FB530061F41D6 /* PreviewData.swift */,
+				D6CF9EFE66F4C697B3351EF2 /* QRScanner.swift */,
+				0A26C4383CC9940B8C9234EF /* RegisteredDevicesView.swift */,
+				C565500557EAA2B15445D249 /* RuntimeSettingsView.swift */,
+				D2AFFEE7BAB24693F3D69BC6 /* ServeSettingsView.swift */,
+				4B3710D736455937160AB4BD /* TranscriptView.swift */,
+				3D66357E7254C67C64AE3811 /* UISpecView.swift */,
+				79D31982FFE1BD8EB7D55532 /* WorkspaceModel.swift */,
+				7989531468DAFAB0DEF5A822 /* ZuseApp.swift */,
+				A5B5AD6D410D81432C2BE664 /* ModelCatalog.json */,
+				44223CEF596EF52E186162E9 /* SettingsSchema.json */,
+				A4B72E1E21D77D0F4D66B7E2 /* UIParser.js */,
+				CE741A9B131DFFEAFA3154CD /* Assets.xcassets */,
+				CD74D514FFFF2C0566AD5F19 /* Diagram.html */,
+				100D42955C1085C764B6B9CB /* Mermaid.js */,
+				618163A1C24645C679EC1D21 /* Mermaid-LICENSE.txt */,
+				C0AD970990E3E4147036EE4B /* ThirdPartyNotices.txt */,
+			);
+			name = App;
+			path = App;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		07A46862BDAEEFADD97F9DF5 /* Zuse */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4C7D3534753F741D9846B2DC /* Build configuration list for PBXNativeTarget "Zuse" */;
+			buildPhases = (
+				D3B886E83EB3A3E96326849B /* Sources */,
+				C810952691A2D2D49068850A /* Frameworks */,
+				571D0DF6C93B761B8B30DAB1 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Zuse;
+			packageProductDependencies = (
+				6C4B7833C9262A4B6D8C0028 /* ZuseCore */,
+				AD054EC2B414C7EE659951E4 /* Textual */,
+			);
+			productName = "Zuse Native";
+			productReference = 4A3C64A8F0E29E511808A79F /* Zuse Native.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B959C86F76D01FD843A75384 /* ZuseMacUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 78647671289641D266A661B8 /* Build configuration list for PBXNativeTarget "ZuseMacUITests" */;
+			buildPhases = (
+				736092CAECF4D0AC0148FDA4 /* Sources */,
+				EF03CAE5F895014309A196B8 /* Frameworks */,
+				8374E402A51E05DE3051F1A1 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				6966941B4417949B5DAE07AC /* PBXTargetDependency */,
+			);
+			name = ZuseMacUITests;
+			productName = ZuseMacUITests;
+			productReference = 42067124CFD28143321257D7 /* ZuseMacUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		BF203CF5D8003747E6E2F57C /* ZuseUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D14DDC6CEA69E96D6B17CC41 /* Build configuration list for PBXNativeTarget "ZuseUITests" */;
+			buildPhases = (
+				D335051A566506DFDD1A1CDB /* Sources */,
+				27F277B3884E8786A8ABCACF /* Frameworks */,
+				374216FEE0F5527B88790E95 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				15E47F74F2FC78124D88EB6A /* PBXTargetDependency */,
+			);
+			name = ZuseUITests;
+			productName = ZuseUITests;
+			productReference = 8AEF5EAAC8D5DD2AB93B7D15 /* ZuseUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		D11DD11DE0B2EB793702D95A /* ZuseMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6BECE98EA725EC59098ECBB7 /* Build configuration list for PBXNativeTarget "ZuseMac" */;
+			buildPhases = (
+				FFF807290CF4D18FAE752EC8 /* Sources */,
+				BC377D78CF1585D1FDBE0E61 /* Frameworks */,
+				C142C92C1D7F16696C327B31 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ZuseMac;
+			packageProductDependencies = (
+				CD5EB6F0D0EE09241CB98476 /* ZuseCore */,
+				01B39DBAAE1C7E72926F582E /* Textual */,
+			);
+			productName = "Zuse Native";
+			productReference = 6A6E93AA7C8A417AEA566C8D /* Zuse Native.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		1A91394E48C91440D66DA956 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = C91947A0A32E0D4B235C7E3D /* Build configuration list for PBXProject "Zuse" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 342DE246A62656A066FA3FAF;
+			minimizedProjectReferenceProxies = 0;
+			packageReferences = (
+				B0AD84367CFDF1C5D5C77BC9 /* XCLocalSwiftPackageReference "." */,
+				F4F48B1EC7DD125B44DCBE18 /* XCRemoteSwiftPackageReference "textual" */,
+			);
+			preferredProjectObjectVersion = 100;
+			productRefGroup = 943377CCCEA0422277E3EAC6 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				07A46862BDAEEFADD97F9DF5 /* Zuse */,
+				BF203CF5D8003747E6E2F57C /* ZuseUITests */,
+				D11DD11DE0B2EB793702D95A /* ZuseMac */,
+				B959C86F76D01FD843A75384 /* ZuseMacUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		374216FEE0F5527B88790E95 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		571D0DF6C93B761B8B30DAB1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				38D99079744708747ADD7D21 /* ModelCatalog.json in Resources */,
+				8E08DF849BC43E0705E7B2DD /* SettingsSchema.json in Resources */,
+				B23674C954F4A68BD5EBE5DC /* UIParser.js in Resources */,
+				18BC33DB8FD05C69AFD9CA60 /* Assets.xcassets in Resources */,
+				A7BB52A20CE26830686CE89D /* Diagram.html in Resources */,
+				DCFF39EB6265570AED805833 /* Mermaid.js in Resources */,
+				B2831517D917A3F880CEA1AB /* Mermaid-LICENSE.txt in Resources */,
+				60EA480F78FE103D6D2864DD /* ThirdPartyNotices.txt in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8374E402A51E05DE3051F1A1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C142C92C1D7F16696C327B31 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D265E5F111CCF15C0DA1B899 /* ModelCatalog.json in Resources */,
+				29EE2A3A22096BA35472F9A9 /* SettingsSchema.json in Resources */,
+				E425E0D386052C861D6D469A /* UIParser.js in Resources */,
+				E246F661B0B3C30465B6E62F /* Assets.xcassets in Resources */,
+				EF4F8B753C9F3B521D718165 /* Diagram.html in Resources */,
+				7885E60604BC78D4320850D1 /* Mermaid.js in Resources */,
+				4E6C16F143A6099D518CE3B1 /* Mermaid-LICENSE.txt in Resources */,
+				4B33EF4669A0B6151262502E /* ThirdPartyNotices.txt in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		736092CAECF4D0AC0148FDA4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3AD413BE092F884CE0654C5F /* NativeMacTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D335051A566506DFDD1A1CDB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5C257516821A3C2E06563856 /* NativeChatTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D3B886E83EB3A3E96326849B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7F6DEE2E200FA49418628075 /* Account.swift in Sources */,
+				1CB58C880D8134CA585A7ACB /* AddProjectView.swift in Sources */,
+				0858644327948396587C4D1A /* AttachmentView.swift in Sources */,
+				996B9A7A8AD2ED8E0AEEAF70 /* ChatMarkdown.swift in Sources */,
+				3B7D1CBEB564F6D827B48F72 /* CloudInfrastructureView.swift in Sources */,
+				73AE832D6ADA44075BDB8DBE /* CloudIntent.swift in Sources */,
+				8801E3A3F915A7F8C0A0C6D1 /* CloudLaunchView.swift in Sources */,
+				33CD1C5AC2038B7A770FF11C /* CloudSettingsView.swift in Sources */,
+				D4661F3175C0D7B23E63807B /* ComputerAccessView.swift in Sources */,
+				7FFE9D4946A12A3C82ACE33A /* DiffView.swift in Sources */,
+				4BD647F389442F29D48EF677 /* FileContentsView.swift in Sources */,
+				5B37AF591909D4FC7579C75A /* HomeView.swift in Sources */,
+				237AAEE4E761DFA8A7A71799 /* InteractionView.swift in Sources */,
+				C32C439B0609035A6D912A83 /* MessageDetails.swift in Sources */,
+				5FAFE63A190A49B030893807 /* NativePlatform.swift in Sources */,
+				B8D6D98A8D2D71FBEAB74937 /* NearbyBrowser.swift in Sources */,
+				27FEE3977204B7ED4AEA7225 /* NewChatView.swift in Sources */,
+				1ABB6E95D793074F4FC62ADC /* PreviewData.swift in Sources */,
+				EDE37FC0B15B69011E315099 /* QRScanner.swift in Sources */,
+				54848106F0A926C61EA8F149 /* RegisteredDevicesView.swift in Sources */,
+				21FBEBBCDED22B50DEA8D055 /* RuntimeSettingsView.swift in Sources */,
+				23B5520F859B16DB6E80B303 /* ServeSettingsView.swift in Sources */,
+				D1DEBAF39C9A77012F82EF8B /* TranscriptView.swift in Sources */,
+				27B52FE6C432AF3E58C529B1 /* UISpecView.swift in Sources */,
+				BC1B3D73F9439A25514519C0 /* WorkspaceModel.swift in Sources */,
+				FEAFFBDDE732D7A2C9563BCA /* ZuseApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FFF807290CF4D18FAE752EC8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AAADE082E51C0074E12235A5 /* Account.swift in Sources */,
+				DB8067FC4A287B8534992131 /* AddProjectView.swift in Sources */,
+				5B89493F7F7A496D4F4ACE68 /* AttachmentView.swift in Sources */,
+				40D712856A60865910C10D1F /* ChatMarkdown.swift in Sources */,
+				1801A546197909EBFF8A4DC7 /* CloudInfrastructureView.swift in Sources */,
+				D5DA74BFF8B8B83977E22A21 /* CloudIntent.swift in Sources */,
+				389E74F56B00E489BC6763E5 /* CloudLaunchView.swift in Sources */,
+				C119260BFDD69F890BFB1EB9 /* CloudSettingsView.swift in Sources */,
+				96C8505B222A0CFD0735A135 /* ComputerAccessView.swift in Sources */,
+				D2BE706B527E7ECF1279B35D /* DiffView.swift in Sources */,
+				8C1E2DFEC6A1EB506C2F6061 /* FileContentsView.swift in Sources */,
+				7247E4D0E5999EC1F3A29610 /* HomeView.swift in Sources */,
+				5D29E27E6183706728D89FD4 /* InteractionView.swift in Sources */,
+				691AB2CD163DE0A10CC99CF7 /* MessageDetails.swift in Sources */,
+				C62A83988288AAE4C5FA49BE /* NativePlatform.swift in Sources */,
+				091B8952E5972BCDC282327E /* NearbyBrowser.swift in Sources */,
+				E5DC6D065ED2985DAE79B3FD /* NewChatView.swift in Sources */,
+				40229378CE55192A02287CE6 /* PreviewData.swift in Sources */,
+				5FC08F5094EE6E85F786413F /* QRScanner.swift in Sources */,
+				F5A83BF48D659A510F3EAFA7 /* RegisteredDevicesView.swift in Sources */,
+				CF9C8E60E12F51DAB539EF97 /* RuntimeSettingsView.swift in Sources */,
+				5A849218196A09A1FB22CD5B /* ServeSettingsView.swift in Sources */,
+				EE335EDBA79BB531220DFD7C /* TranscriptView.swift in Sources */,
+				275AB9B7A7A1334B2E35A0CB /* UISpecView.swift in Sources */,
+				5949162A8C6878AB8A64F7F0 /* WorkspaceModel.swift in Sources */,
+				E00D0BAE23FD498D9147E0A8 /* ZuseApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		15E47F74F2FC78124D88EB6A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = Zuse;
+			target = 07A46862BDAEEFADD97F9DF5 /* Zuse */;
+			targetProxy = 0623B090FE20E3010A856BA5 /* PBXContainerItemProxy */;
+		};
+		6966941B4417949B5DAE07AC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ZuseMac;
+			target = D11DD11DE0B2EB793702D95A /* ZuseMac */;
+			targetProxy = A087FF683BE5F347FE556922 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0AEBCCADE5DFBA987F87A557 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		213CE4892701A85693AA30CB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sh.zuse.native;
+				PRODUCT_NAME = "Zuse Native";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		23E13F4C9E0666261C69684C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = MacAppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/MacInfo.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sh.zuse.native.mac;
+				PRODUCT_NAME = "Zuse Native";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		4AACA85A69F13225E987D184 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sh.zuse.native.mac.uitests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = ZuseMac;
+			};
+			name = Debug;
+		};
+		891C84215657F9F5989DCF31 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sh.zuse.native.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Zuse;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		9D4CE50444D1F1770B3045AD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sh.zuse.native;
+				PRODUCT_NAME = "Zuse Native";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		B6E546206B8F64DD2ABB1909 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sh.zuse.native.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Zuse;
+			};
+			name = Debug;
+		};
+		E348CE9E89E6326D5B6FF21B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = MacAppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/MacInfo.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sh.zuse.native.mac;
+				PRODUCT_NAME = "Zuse Native";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		F11AC938FAA66B8F5BD12910 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sh.zuse.native.mac.uitests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = ZuseMac;
+			};
+			name = Release;
+		};
+		F3B265D5619626CD22A9056F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4C7D3534753F741D9846B2DC /* Build configuration list for PBXNativeTarget "Zuse" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9D4CE50444D1F1770B3045AD /* Release */,
+				213CE4892701A85693AA30CB /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		6BECE98EA725EC59098ECBB7 /* Build configuration list for PBXNativeTarget "ZuseMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E348CE9E89E6326D5B6FF21B /* Release */,
+				23E13F4C9E0666261C69684C /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		78647671289641D266A661B8 /* Build configuration list for PBXNativeTarget "ZuseMacUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F11AC938FAA66B8F5BD12910 /* Release */,
+				4AACA85A69F13225E987D184 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C91947A0A32E0D4B235C7E3D /* Build configuration list for PBXProject "Zuse" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F3B265D5619626CD22A9056F /* Debug */,
+				0AEBCCADE5DFBA987F87A557 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D14DDC6CEA69E96D6B17CC41 /* Build configuration list for PBXNativeTarget "ZuseUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				891C84215657F9F5989DCF31 /* Release */,
+				B6E546206B8F64DD2ABB1909 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		B0AD84367CFDF1C5D5C77BC9 /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		F4F48B1EC7DD125B44DCBE18 /* XCRemoteSwiftPackageReference "textual" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/textual.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.5.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		01B39DBAAE1C7E72926F582E /* Textual */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F4F48B1EC7DD125B44DCBE18 /* XCRemoteSwiftPackageReference "textual" */;
+			productName = Textual;
+		};
+		6C4B7833C9262A4B6D8C0028 /* ZuseCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B0AD84367CFDF1C5D5C77BC9 /* XCLocalSwiftPackageReference "." */;
+			productName = ZuseCore;
+		};
+		AD054EC2B414C7EE659951E4 /* Textual */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F4F48B1EC7DD125B44DCBE18 /* XCRemoteSwiftPackageReference "textual" */;
+			productName = Textual;
+		};
+		CD5EB6F0D0EE09241CB98476 /* ZuseCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B0AD84367CFDF1C5D5C77BC9 /* XCLocalSwiftPackageReference "." */;
+			productName = ZuseCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 1A91394E48C91440D66DA956 /* Project object */;
+}

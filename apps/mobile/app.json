@@ -1,0 +1,63 @@
+{
+	"expo": {
+		"name": "Zuse",
+		"slug": "zuse",
+		"scheme": "zuse",
+		"version": "1.1.0",
+		"orientation": "default",
+		"icon": "./assets/icon.png",
+		"userInterfaceStyle": "automatic",
+		"ios": {
+			"supportsTablet": true,
+			"buildNumber": "1",
+			"infoPlist": {
+				"NSCameraUsageDescription": "Scan pairing codes and capture images to attach to Zuse messages.",
+				"NSPhotoLibraryUsageDescription": "Choose images to attach to your Zuse messages.",
+				"NSPhotoLibraryAddUsageDescription": "Save image previews to your photo library.",
+				"NSMicrophoneUsageDescription": "Record speech and send audio to OpenAI to create a transcript for your Zuse message.",
+				"NSLocalNetworkUsageDescription": "Connect to a local Zuse server on your network.",
+				"NSBonjourServices": ["_zuse._tcp", "_expo._tcp"],
+				"NSAppTransportSecurity": {
+					"NSAllowsLocalNetworking": true
+				}
+			},
+			"entitlements": {
+				"keychain-access-groups": [
+					"$(AppIdentifierPrefix)com.zuse.shared-connectivity"
+				]
+			},
+			"bundleIdentifier": "com.zuse.sh",
+			"appleTeamId": "HMCST4VV42",
+			"requireFullScreen": false
+		},
+		"plugins": [
+			"expo-router",
+			"./plugins/with-android-architectures",
+			"./plugins/with-android-cleartext-traffic",
+			"./plugins/with-android-material-theme",
+			"./plugins/with-android-release",
+			"expo-dev-client",
+			"expo-secure-store",
+			"expo-notifications",
+			"expo-font",
+			"expo-asset",
+			"expo-web-browser",
+			"expo-status-bar",
+			"expo-image",
+			"expo-audio",
+			"expo-screen-orientation",
+			"expo-localization"
+		],
+		"extra": {
+			"router": {},
+			"eas": {
+				"projectId": "4d277893-90f5-41c7-8d3a-14add4308f57"
+			}
+		},
+		"owner": "swarajbachu",
+		"android": {
+			"package": "com.zuse.sh",
+			"versionCode": 1
+		}
+	}
+}

@@ -11,3 +11,13 @@ __pycache__/
 
 # Independent toolkit checkout; the application pins its published Git revision.
 /vendor/zkit/
+
+# Native mobile build outputs and local SDK settings.
+/apps/ios/.build/
+/apps/ios/DerivedData/
+/apps/ios/Native/ZusePairing.xcframework/
+/apps/android/.gradle/
+/apps/android/.kotlin/
+/apps/android/**/build/
+/apps/android/local.properties
+/apps/mobile/.expo/

@@ -1,0 +1,609 @@
+import { cloudFailurePresentation } from "@zuse/client-runtime/cloud-failure-presentation";
+import { isWaitingCloudSend } from "@zuse/client-runtime/cloud-send-delivery";
+import { subscribeOnAnimationFrame } from "@zuse/client-runtime/frame-subscription";
+import type {
+	FailedCommand,
+	PendingCommand,
+} from "@zuse/client-runtime/resource-state";
+import {
+	deriveSessionPresentation,
+	type SessionPresentation,
+} from "@zuse/client-runtime/session-presentation";
+import type {
+	ComposerInput,
+	EnvironmentId,
+	Message,
+	MessageId,
+	QueuedMessage,
+	SessionExecutionStep,
+	SessionId,
+	SessionInteraction,
+} from "@zuse/contracts";
+import { Atom } from "effect/unstable/reactivity";
+import { connectionErrorMessage } from "~/lib/connection-error-message";
+import { connectionSessionKey } from "~/lib/session-key";
+import { cloudRuntimeReady } from "~/rpc/cloud-runtime";
+import { reportConnectionFailure } from "~/rpc/connection";
+import type { WsProtocolOptions } from "~/rpc/ws-protocol";
+import {
+	dispatchMobileSessionCommandResult,
+	loadOlderMobileMessages,
+	mobileClientBus,
+	mobilePendingMessageIntents,
+	registerMobileEnvironment,
+	resetMobileClientBus,
+	retainMobileHistory,
+	sessionTimelineKey,
+} from "./mobile-client-bus";
+import { appAtomRegistry, batchAtomUpdates } from "./registry";
+import {
+	markSessionTurnStartFailed,
+	markSessionTurnWaiting,
+	resetSessionTurnActivity,
+	syncSessionTurnActivity,
+} from "./session-turn-activity";
+
+const executionStepsBySessionAtom = Atom.make<
+	Record<string, readonly SessionExecutionStep[]>
+>({}).pipe(Atom.keepAlive);
+const EMPTY_EXECUTION_STEPS: readonly SessionExecutionStep[] = [];
+export const sessionExecutionStepsAtom = Atom.family((key: string) =>
+	Atom.make(
+		(get) => get(executionStepsBySessionAtom)[key] ?? EMPTY_EXECUTION_STEPS,
+	),
+);
+
+const healthBySessionAtom = Atom.make<
+	Record<string, SessionPresentation["health"]>
+>({}).pipe(Atom.keepAlive);
+export const sessionHealthAtom = Atom.family((key: string) =>
+	Atom.make((get) => get(healthBySessionAtom)[key] ?? "unknown"),
+);
+
+const interactionsBySessionAtom = Atom.make<
+	Record<string, readonly SessionInteraction[]>
+>({}).pipe(Atom.keepAlive);
+const EMPTY_INTERACTIONS: readonly SessionInteraction[] = [];
+export const sessionInteractionsAtom = Atom.family((key: string) =>
+	Atom.make((get) => get(interactionsBySessionAtom)[key] ?? EMPTY_INTERACTIONS),
+);
+
+export const messagesBySessionAtom = Atom.make<
+	Record<string, readonly Message[]>
+>({}).pipe(Atom.keepAlive);
+export const queueBySessionAtom = Atom.make<
+	Record<string, readonly QueuedMessage[]>
+>({}).pipe(Atom.keepAlive);
+export const queuePausedBySessionAtom = Atom.make<Record<string, boolean>>(
+	{},
+).pipe(Atom.keepAlive);
+export const reconnectingBySessionAtom = Atom.make<Record<string, boolean>>(
+	{},
+).pipe(Atom.keepAlive);
+export const messagesErrorBySessionAtom = Atom.make<
+	Record<string, string | null>
+>({}).pipe(Atom.keepAlive);
+
+const EMPTY_MESSAGES: readonly Message[] = [];
+const transcriptReadyBySessionAtom = Atom.make<Record<string, boolean>>(
+	{},
+).pipe(Atom.keepAlive);
+export const sessionTranscriptReadyAtom = Atom.family((key: string) =>
+	Atom.make((get) => get(transcriptReadyBySessionAtom)[key] === true),
+);
+const EMPTY_QUEUE: readonly QueuedMessage[] = [];
+const EMPTY_DELIVERY = {
+	pending: [] as readonly PendingCommand[],
+	failed: [] as readonly FailedCommand[],
+};
+export const deliveryBySessionAtom = Atom.make<
+	Record<string, typeof EMPTY_DELIVERY>
+>({}).pipe(Atom.keepAlive);
+export const sessionDeliveryAtom = Atom.family((key: string) =>
+	Atom.make((get) => get(deliveryBySessionAtom)[key] ?? EMPTY_DELIVERY),
+);
+export const olderMessagesBySessionAtom = Atom.make<Record<string, boolean>>(
+	{},
+).pipe(Atom.keepAlive);
+export const hasOlderMessagesAtom = Atom.family((key: string) =>
+	Atom.make((get) => get(olderMessagesBySessionAtom)[key] ?? false),
+);
+export const loadOlderMessages = (connKey: string, sessionId: SessionId) => {
+	const retained = retainedTimelines.get(
+		connectionSessionKey(connKey, sessionId),
+	);
+	return retained === undefined
+		? Promise.resolve()
+		: loadOlderMobileMessages({
+				environmentId: retained.environmentId,
+				sessionId,
+			}).then(() => undefined);
+};
+
+/** Per-session transcript; notifies only when this session's messages change. */
+export const sessionMessagesAtom = Atom.family((key: string) =>
+	Atom.make((get) => get(messagesBySessionAtom)[key] ?? EMPTY_MESSAGES),
+);
+/** Per-session server queue; notifies only for this session. */
+export const sessionQueueAtom = Atom.family((key: string) =>
+	Atom.make((get) => get(queueBySessionAtom)[key] ?? EMPTY_QUEUE),
+);
+export const sessionQueuePausedAtom = Atom.family((key: string) =>
+	Atom.make((get) => get(queuePausedBySessionAtom)[key] === true),
+);
+export const sessionMessagesErrorAtom = Atom.family((key: string) =>
+	Atom.make((get) => get(messagesErrorBySessionAtom)[key] ?? null),
+);
+
+type RetainedTimeline = Readonly<{
+	environmentId: EnvironmentId;
+
+	cloud: boolean;
+	key: ReturnType<typeof sessionTimelineKey>;
+	lease: ReturnType<ReturnType<typeof mobileClientBus>["retain"]>;
+	unsubscribe: () => void;
+}>;
+
+const retainedTimelines = new Map<string, RetainedTimeline>();
+export const currentSessionTurnId = (connKey: string, sessionId: SessionId) =>
+	(() => {
+		const retained = retainedTimelines.get(
+			connectionSessionKey(connKey, sessionId),
+		);
+		return retained === undefined
+			? undefined
+			: mobileClientBus().snapshot(retained.key).data?.activeTurn?.id;
+	})();
+const optimisticIds = new Set<MessageId>();
+const dispatchSessionCommand = async <Result>(
+	connKey: string,
+	options: WsProtocolOptions,
+	sessionId: SessionId,
+	kind: string,
+	payload: unknown,
+): Promise<Result> => {
+	return dispatchMobileSessionCommandResult<Result>({
+		connKey,
+		connection: options,
+		sessionId,
+		kind,
+		payload,
+	});
+};
+
+const patchQueue = (key: string, items: readonly QueuedMessage[]): void => {
+	appAtomRegistry.update(queueBySessionAtom, (state) => ({
+		...state,
+		[key]: items,
+	}));
+};
+
+const patchQueuePaused = (key: string, paused: boolean): void => {
+	appAtomRegistry.update(queuePausedBySessionAtom, (state) => ({
+		...state,
+		[key]: paused,
+	}));
+};
+
+const patchReconnecting = (key: string, reconnecting: boolean): void => {
+	appAtomRegistry.update(reconnectingBySessionAtom, (state) => ({
+		...state,
+		[key]: reconnecting,
+	}));
+};
+
+const patchError = (key: string, error: string | null): void => {
+	appAtomRegistry.update(messagesErrorBySessionAtom, (state) => ({
+		...state,
+		[key]: error,
+	}));
+};
+
+const publishTimeline = (liveKey: string, retained: RetainedTimeline): void => {
+	const view = mobileClientBus().snapshot(retained.key);
+	const projection = view.data;
+	appAtomRegistry.update(deliveryBySessionAtom, (state) => ({
+		...state,
+		[liveKey]: { pending: view.pendingCommands, failed: view.failedCommands },
+	}));
+	appAtomRegistry.update(olderMessagesBySessionAtom, (state) => ({
+		...state,
+		[liveKey]: projection?.olderMessageSequence != null,
+	}));
+	const presentation = deriveSessionPresentation({ view });
+	appAtomRegistry.update(healthBySessionAtom, (state) =>
+		state[liveKey] === presentation.health
+			? state
+			: { ...state, [liveKey]: presentation.health },
+	);
+	const running = presentation.turnInFlight;
+	if (!running && view.failedCommands.length > 0)
+		markSessionTurnStartFailed(liveKey);
+	else if (
+		!running &&
+		retained.cloud &&
+		view.pendingCommands.some(isWaitingCloudSend)
+	)
+		markSessionTurnWaiting(liveKey);
+	syncSessionTurnActivity(liveKey, running);
+	if (projection !== null && projection !== undefined) {
+		appAtomRegistry.update(executionStepsBySessionAtom, (state) =>
+			state[liveKey] === projection.executionSteps
+				? state
+				: {
+						...state,
+						[liveKey]: projection.executionSteps ?? EMPTY_EXECUTION_STEPS,
+					},
+		);
+		appAtomRegistry.update(interactionsBySessionAtom, (state) =>
+			state[liveKey] === projection.interactions
+				? state
+				: { ...state, [liveKey]: projection.interactions },
+		);
+		appAtomRegistry.update(transcriptReadyBySessionAtom, (state) =>
+			state[liveKey] ? state : { ...state, [liveKey]: true },
+		);
+		const durable = projection.messages;
+		const durableIds = new Set(durable.map((message) => message.id));
+		for (const id of optimisticIds) {
+			if (durableIds.has(id)) optimisticIds.delete(id);
+		}
+		batchAtomUpdates(() => {
+			appAtomRegistry.update(messagesBySessionAtom, (state) => {
+				const current = state[liveKey] ?? [];
+				const pending = current.filter(
+					(message) =>
+						optimisticIds.has(message.id) && !durableIds.has(message.id),
+				);
+				if (
+					pending.length === 0 &&
+					current.length === durable.length &&
+					current.every((message, index) => message === durable[index])
+				)
+					return state;
+				return {
+					...state,
+					[liveKey]: [...durable, ...pending],
+				};
+			});
+			patchQueue(liveKey, projection.queue.items);
+			patchQueuePaused(liveKey, projection.queue.paused);
+		});
+	}
+	const reconnecting =
+		view.connection === "connecting" ||
+		view.connection === "reconnecting" ||
+		view.connection === "waking";
+	batchAtomUpdates(() => {
+		patchReconnecting(liveKey, reconnecting);
+
+		const failedOther = view.failedCommands.filter(
+			(command) => command.kind !== "messages.send",
+		);
+		patchError(
+			liveKey,
+			failedOther.length > 0
+				? (cloudFailurePresentation({
+						state: failedOther.at(-1)?.terminal?.state,
+						category: failedOther.at(-1)?.terminal?.category,
+						cause: failedOther.at(-1)?.error,
+					})?.message ??
+						failedOther.at(-1)?.error ??
+						null)
+				: view.sync === "failed" || view.sync === "stale"
+					? "Transcript synchronization failed."
+					: view.connection === "failed" || view.connection === "offline"
+						? mobileClientBus().connection(retained.environmentId).error
+						: null,
+		);
+	});
+};
+
+export const resetMessagesRuntime = async (): Promise<void> => {
+	optimisticIds.clear();
+	for (const retained of retainedTimelines.values()) {
+		retained.unsubscribe();
+		retained.lease.release();
+	}
+	retainedTimelines.clear();
+	await resetMobileClientBus();
+	resetSessionTurnActivity();
+	batchAtomUpdates(() => {
+		appAtomRegistry.set(messagesBySessionAtom, {});
+		appAtomRegistry.set(interactionsBySessionAtom, {});
+		appAtomRegistry.set(healthBySessionAtom, {});
+		appAtomRegistry.set(executionStepsBySessionAtom, {});
+		appAtomRegistry.set(transcriptReadyBySessionAtom, {});
+		appAtomRegistry.set(queueBySessionAtom, {});
+		appAtomRegistry.set(queuePausedBySessionAtom, {});
+		appAtomRegistry.set(reconnectingBySessionAtom, {});
+		appAtomRegistry.set(messagesErrorBySessionAtom, {});
+		appAtomRegistry.set(deliveryBySessionAtom, {});
+		appAtomRegistry.set(olderMessagesBySessionAtom, {});
+	});
+};
+
+/**
+ * Releases a screen's interest in a session timeline. The live stream and
+ * projection stay warm for five minutes (and for as long as a turn is still
+ * running) so returning to the thread resumes instantly instead of replaying.
+ */
+export const releaseMessages = async (
+	connKey: string,
+	sessionId: SessionId,
+): Promise<void> => {
+	const key = connectionSessionKey(connKey, sessionId);
+	const retained = retainedTimelines.get(key);
+	if (retained === undefined) return;
+	retained.unsubscribe();
+	retained.lease.release();
+	retainedTimelines.delete(key);
+};
+
+export const hydrateMessages = async (
+	connKey: string,
+	options: WsProtocolOptions,
+	sessionId: SessionId,
+): Promise<void> => {
+	const liveKey = connectionSessionKey(connKey, sessionId);
+	const activation =
+		options.cloudWorkspaceId !== undefined &&
+		!cloudRuntimeReady(options.cloudWorkspaceId)
+			? "sync"
+			: "connect";
+	const existing = retainedTimelines.get(liveKey);
+	const environmentId = registerMobileEnvironment(connKey, options);
+	if (existing !== undefined) {
+		existing.lease.activate(activation);
+		publishTimeline(liveKey, existing);
+		return;
+	}
+	const key = sessionTimelineKey(environmentId, sessionId);
+	const lease = mobileClientBus().retain(key, { activation });
+	const retained: RetainedTimeline = {
+		environmentId,
+		cloud: options.cloudWorkspaceId !== undefined,
+		key,
+		lease,
+		unsubscribe: () => undefined,
+	};
+	const listen = () => publishTimeline(liveKey, retained);
+	const subscribe = (callback: () => void) =>
+		mobileClientBus().subscribe(key, callback);
+	const unsubscribe = subscribeOnAnimationFrame(subscribe, listen);
+	const releaseHistory = retainMobileHistory({ environmentId, sessionId });
+	retainedTimelines.set(liveKey, {
+		...retained,
+		unsubscribe: () => {
+			releaseHistory();
+			unsubscribe();
+		},
+	});
+	if (options.cloudWorkspaceId !== undefined) {
+		const pending = await mobilePendingMessageIntents({
+			environmentId,
+			sessionId,
+		});
+		if (retainedTimelines.get(liveKey)?.lease !== lease) return;
+		for (const message of pending) addOptimisticMessage(liveKey, message);
+	}
+	const current = retainedTimelines.get(liveKey);
+	if (current !== undefined) publishTimeline(liveKey, current);
+};
+
+/**
+ * Reopens a retained transcript from an authoritative server snapshot.
+ *
+ * A mounted RPC stream can appear healthy after its underlying socket has been
+ * replaced. Reusing that fiber also reuses its stale current-turn projection,
+ * so a screen refresh must replace both rather than treating warm state as
+ * proof of liveness.
+ */
+export const refreshMessages = (
+	connKey: string,
+	options: WsProtocolOptions,
+	sessionId: SessionId,
+): Promise<void> => {
+	const liveKey = connectionSessionKey(connKey, sessionId);
+	const existing = retainedTimelines.get(liveKey);
+	if (existing === undefined)
+		return hydrateMessages(connKey, options, sessionId);
+	registerMobileEnvironment(connKey, options);
+	const connection = mobileClientBus().connection(existing.environmentId);
+	mobileClientBus().reportConnectionFault(
+		existing.environmentId,
+		{ phase: "failed", message: "Transcript refresh requested." },
+		connection.generation,
+	);
+	existing.lease.activate("connect");
+	mobileClientBus().retryConnection(existing.environmentId);
+	return Promise.resolve();
+};
+
+export const flushMessages = async (
+	connKey: string,
+	sessionId: SessionId,
+): Promise<void> => {
+	const liveKey = connectionSessionKey(connKey, sessionId);
+	const retained = retainedTimelines.get(liveKey);
+	if (retained === undefined) return;
+	const view = mobileClientBus().snapshot(retained.key);
+	if (
+		view.sync !== "live" ||
+		view.data === null ||
+		view.data.activeTurn !== null
+	) {
+		return;
+	}
+};
+
+export const deleteQueuedMessage = async (
+	connKey: string,
+	options: WsProtocolOptions,
+	sessionId: SessionId,
+	queueId: string,
+): Promise<void> => {
+	const liveKey = connectionSessionKey(connKey, sessionId);
+	const previous = appAtomRegistry.get(queueBySessionAtom)[liveKey] ?? [];
+	patchQueue(
+		liveKey,
+		previous.filter((item) => item.id !== queueId),
+	);
+	try {
+		await dispatchSessionCommand(
+			connKey,
+			options,
+			sessionId,
+			"messages.queue.delete",
+			{
+				sessionId,
+				queueId,
+			},
+		);
+	} catch (cause) {
+		reportConnectionFailure(options, cause);
+		patchQueue(liveKey, previous);
+	}
+};
+
+export const updateQueuedMessage = async (
+	connKey: string,
+	options: WsProtocolOptions,
+	sessionId: SessionId,
+	queueId: string,
+	input: ComposerInput,
+): Promise<void> => {
+	const key = connectionSessionKey(connKey, sessionId);
+	const previous = appAtomRegistry.get(queueBySessionAtom)[key] ?? [];
+	try {
+		const updated = await dispatchSessionCommand<QueuedMessage>(
+			connKey,
+			options,
+			sessionId,
+			"messages.queue.update",
+			{
+				sessionId,
+				queueId,
+				input,
+			},
+		);
+		appAtomRegistry.update(queueBySessionAtom, (state) => ({
+			...state,
+			[key]: (state[key] ?? []).map((item) =>
+				item.id === queueId ? updated : item,
+			),
+		}));
+	} catch (cause) {
+		reportConnectionFailure(options, cause);
+		batchAtomUpdates(() => {
+			patchQueue(key, previous);
+			patchError(key, connectionErrorMessage(cause));
+		});
+		throw cause;
+	}
+};
+
+export const reorderQueuedMessages = async (
+	connKey: string,
+	options: WsProtocolOptions,
+	sessionId: SessionId,
+	queueIds: readonly string[],
+): Promise<void> => {
+	const key = connectionSessionKey(connKey, sessionId);
+	const previous = appAtomRegistry.get(queueBySessionAtom)[key] ?? [];
+	const byId = new Map(previous.map((item) => [item.id, item]));
+	const optimistic = queueIds.flatMap((id) => byId.get(id) ?? []);
+	patchQueue(key, optimistic);
+	try {
+		const next = await dispatchSessionCommand<readonly QueuedMessage[]>(
+			connKey,
+			options,
+			sessionId,
+			"messages.queue.reorder",
+			{
+				sessionId,
+				queueIds: [...queueIds],
+			},
+		);
+		patchQueue(key, next);
+	} catch (cause) {
+		reportConnectionFailure(options, cause);
+		patchQueue(key, previous);
+		throw cause;
+	}
+};
+
+export const runQueuedMessageNext = async (
+	connKey: string,
+	options: WsProtocolOptions,
+	sessionId: SessionId,
+	queueId: string,
+): Promise<void> => {
+	const key = connectionSessionKey(connKey, sessionId);
+	const previous = appAtomRegistry.get(queueBySessionAtom)[key] ?? [];
+	patchQueue(
+		key,
+		previous.filter((item) => item.id !== queueId),
+	);
+	try {
+		await dispatchSessionCommand(
+			connKey,
+			options,
+			sessionId,
+			"messages.queue.runNext",
+			{
+				sessionId,
+				queueId,
+			},
+		);
+	} catch (cause) {
+		reportConnectionFailure(options, cause);
+		patchQueue(key, previous);
+		throw cause;
+	}
+};
+
+export const resumeQueue = async (
+	connKey: string,
+	options: WsProtocolOptions,
+	sessionId: SessionId,
+): Promise<void> => {
+	const key = connectionSessionKey(connKey, sessionId);
+	patchQueuePaused(key, false);
+	try {
+		await dispatchSessionCommand(
+			connKey,
+			options,
+			sessionId,
+			"messages.queue.resume",
+			{ sessionId },
+		);
+	} catch (cause) {
+		reportConnectionFailure(options, cause);
+		patchQueuePaused(key, true);
+		throw cause;
+	}
+};
+
+export const addOptimisticMessage = (key: string, message: Message): void => {
+	optimisticIds.add(message.id);
+	appAtomRegistry.update(messagesBySessionAtom, (state) => {
+		const current = state[key] ?? [];
+		if (current.some((item) => item.id === message.id)) return state;
+		return {
+			...state,
+			[key]: [...current, message].slice(-500),
+		};
+	});
+};
+
+export const removeOptimisticMessage = (
+	key: string,
+	messageId: MessageId,
+): void => {
+	optimisticIds.delete(messageId);
+	appAtomRegistry.update(messagesBySessionAtom, (state) => ({
+		...state,
+		[key]: (state[key] ?? []).filter((message) => message.id !== messageId),
+	}));
+};
