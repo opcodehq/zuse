@@ -794,6 +794,15 @@ fn hermes_and_pi_descriptor_surfaces_match_registry_expectations() {
     assert!(pi.supports_steering());
     assert_eq!(pi.steering_mode(), SteeringMode::StepBoundary);
     assert!(pi.reasoning_levels().is_empty());
+
+    let muse = zuse_providers::MuseHarness::new();
+    assert_eq!(muse.id(), HarnessId::Muse);
+    assert_eq!(muse.display_name(), "Muse Code");
+    assert!(muse.supports_steering());
+    assert_eq!(muse.steering_mode(), SteeringMode::StepBoundary);
+    assert!(muse.reasoning_levels().is_empty());
+    assert!(muse.deterministic_turn_end());
+    assert!(muse.stops_turn_in_place());
 }
 
 fn antigravity_harness() -> AcpHarness {

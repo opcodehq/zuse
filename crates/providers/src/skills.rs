@@ -130,7 +130,8 @@ fn project_dirs(harness: HarnessId) -> &'static [&'static str] {
         HarnessId::Kiro => &[".agents/skills", ".kiro/skills"],
         HarnessId::Zuse => &[".agents/skills", ".zuse/skills"],
         HarnessId::CustomAcp(_) => &[".agents/skills"],
-        HarnessId::Mock => &[],
+        // Muse Code resolves its own skills host-side; Zuse lists none for it.
+        HarnessId::Muse | HarnessId::Mock => &[],
     }
 }
 

@@ -163,6 +163,7 @@ pub fn harness_label(id: &str) -> String {
         "grok" => "Grok",
         "hermes" => "Hermes",
         "pi" => "Pi",
+        "muse" => "Muse Code",
         "cursor" => "Cursor",
         "opencode" => "OpenCode",
         "antigravity" => "Antigravity",
@@ -342,6 +343,9 @@ pub fn fallback_models(harness: &str) -> Vec<ModelInfo> {
                 service_tier(),
             ),
         ],
+        // Muse Code ships no bundled catalog: its models are the account's
+        // live `model/list`, so there is nothing honest to show offline.
+        "muse" => vec![],
         // claude-code (mock shares it)
         _ => vec![
             model(
@@ -645,6 +649,12 @@ impl DiskCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn muse_has_a_label_and_no_bundled_models() {
+        assert_eq!(harness_label("muse"), "Muse Code");
+        assert!(fallback_models("muse").is_empty());
+    }
 
     #[test]
     fn labels_resolve_curated_and_unknown_models() {
