@@ -1,0 +1,44 @@
+// Compiled GPUI shell geometry, persisted resize controls and navigation.
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {spawn,execFileSync} from 'node:child_process';
+import {engine,browser,fixture,artifact,sleep} from './harness.mjs';
+import {sidebarAccounts} from './fixtures/sidebar-data.mjs';
+let host,proxy,page,url,stage='startup';
+const press=key=>page.run(['press',key]);
+const click=async(x,y)=>{page.click(x,y);await sleep(200);};
+const shot=name=>page.screenshot('workspace-layout-'+name+'.png');
+const prefs=()=>page.evaluate('JSON.parse(localStorage.getItem("zuse.workspace.preferences.v1"))');
+const red=(file,points)=>execFileSync('convert',['.context/workspace-layout-'+file+'.png','-format',points.map(([x,y])=>`%[fx:int(255*p{${x},${y}}.r)]`).join(' '),'info:'],{encoding:'utf8'}).trim().split(/\s+/).map(Number);
+const drag=async(from,to,release=true)=>{page.run(['mouse','move',String(from),'500']);page.run(['mouse','down']);page.run(['mouse','move',String(to),'500']);if(release)page.run(['mouse','up']);await sleep(200);};
+try{
+ host=await engine('workspace-layout');const ready=path.join(host.root,'fixture.ready');
+ proxy=spawn('bun',[fixture('general-settings.mjs'),String(host.port),ready,path.resolve('dist/web')],{stdio:'ignore'});
+ for(let n=0;n<100&&!fs.existsSync(ready);n++)await sleep(100);
+ url=fs.readFileSync(ready,'utf8');await fetch(url+'/__fixture',{method:'POST',body:JSON.stringify({cloud:true,providers:{accounts:sidebarAccounts},state:{user:{id:'avery',name:'Avery Parker',email:'avery@example.test'},login:null,error:null}})});
+ page=browser('workspace-layout');page.open(url,fixture('general-settings-observer.js'));page.wait('window.__generalParity.methods.includes("WatchChats")');await sleep(350);
+ stage='surface gutters and landing card';shot('home');
+ const edges=red('home',[[800,1],[800,4],[1,500],[4,500],[231,500],[234,500],[236,500],[1278,500],[800,998]]);
+ assert.ok(edges[0]>edges[1]&&edges[2]>edges[3]&&edges[5]>edges[4]&&edges[5]>edges[6]&&edges[7]>edges[6]&&edges[8]>edges[6],'Four-pixel shell gutters separate the two rounded surfaces: '+edges);
+ const card=red('home',[[384,918],[1127,918],[756,862],[756,967],[383,918],[1128,918],[756,968]]);
+ assert.ok(card.slice(0,4).every(r=>r>=30&&r<65)&&card.slice(4).every(r=>r<20),'744×106 landing card at x384, y862: '+card);
+ await click(600,894);page.run(['keyboard','type','Keep the workspace layout draft']);
+ stage='pointer resizing and Escape rollback';await drag(232,300);assert.equal(prefs().sidebarWidth,300);shot('maximum');
+ press('Enter');await sleep(150);assert.equal(prefs().sidebarWidth,232);
+ await drag(232,280,false);press('Escape');page.run(['mouse','up']);await sleep(150);assert.equal(prefs().sidebarWidth,232,'Escape restores the previous persisted size');shot('resize-cancelled');
+ stage='keyboard resize, clamping and persistence';press('Home');await sleep(100);assert.equal(prefs().sidebarWidth,200);press('ArrowLeft');assert.equal(prefs().sidebarWidth,200);press('End');press('ArrowRight');assert.equal(prefs().sidebarWidth,300);press('Enter');
+ page.run(['reload']);page.wait('window.__generalParity.methods.includes("WatchChats")');await sleep(350);assert.equal(prefs().sidebarWidth,232);shot('restored');
+ stage='compact sidebar and usage popup';page.run(['set','viewport','760','900']);await sleep(500);
+ await drag(232,200);assert.equal(prefs().sidebarWidth,200);shot('compact');
+ const compact=red('compact',[[232,818],[727,818],[480,762],[480,867],[231,818],[728,818],[480,868]]);
+ assert.ok(compact.slice(0,4).every(r=>r>=30&&r<65)&&compact.slice(4).every(r=>r<20),'Compact composer matches the 496×106 reference frame: '+compact);
+ await click(148,878);press('ArrowDown');press('ArrowRight');await sleep(200);shot('compact-usage');assert.ok(red('compact-usage',[[700,690]])[0]>=24,'Provider detail remains in the compact window');press('Escape');
+ stage='collapsed landing chrome, search and settings';await click(182,22);shot('collapsed');press('Control+k');await sleep(180);shot('search');press('Escape');
+ await click(178,878);await sleep(150);shot('settings');await click(82,18);shot('returned');
+ stage='light surfaces and saved width';const current=prefs();page.evaluate(`localStorage.setItem('zuse.workspace.preferences.v1',JSON.stringify(${JSON.stringify({...current,appearance:'light'})}))`);page.run(['reload']);page.wait('window.__generalParity.methods.includes("WatchChats")');await sleep(350);assert.equal(prefs().sidebarWidth,200);shot('light');
+ assert.equal(page.run(['errors']).errors.length,0);const proof=await fetch(url+'/__fixture').then(r=>r.json());
+ assert.equal(proof.events.filter(e=>['QueueMessage','QueueCommand','CloudCreate','CloudEnvironment','CloudBillingCheckout'].includes(e.method||e.blocked)).length,0);
+ artifact('workspace-layout-acceptance.json',{compiledGpui:true,disposableEngine:true,sourceRevision:'43e14c1',surfaceGutters4:true,card:{x:384,y:862,width:744,height:106},pointerResize:true,escapeRollback:true,keyboardBounds:[200,300],savedWidthReload:true,compactUsage:true,collapseSearchSettings:true,light:true,executionRequests:0,liveServiceAcceptance:false});
+ console.log('Workspace layout passed: gutters/card bounds, resizing, rollback, persistence, compact usage, collapse/search/settings and light surfaces.');
+}catch(error){try{shot('failure');artifact('workspace-layout-failure.json',{stage,error:error.message,preferences:prefs()});}catch{}console.error('Workspace layout failed at '+stage+': '+error.message);process.exitCode=1;}finally{page?.close();proxy?.kill('SIGTERM');await host?.close();}

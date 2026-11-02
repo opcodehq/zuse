@@ -1,0 +1,19 @@
+[package]
+name = "zuse-voice-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+zuse-voice-session.workspace = true
+async-trait.workspace = true
+zuse-protocol.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+semver = "1"
+
+[dev-dependencies]
+tempfile.workspace = true

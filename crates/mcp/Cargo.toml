@@ -1,0 +1,24 @@
+[package]
+name = "zuse-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+zuse-protocol.workspace = true
+zuse-doc.workspace = true
+zuse-rpc.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+base64 = "0.22"
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+zuse-visual.workspace = true

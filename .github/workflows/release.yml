@@ -1,0 +1,137 @@
+name: Release
+
+# Builds the native packages from a version tag and publishes them as a
+# GitHub release. Push a `vX.Y.Z` tag whose version matches the workspace
+# version and has a matching `## X.Y.Z` section in CHANGELOG.md; a tag with a
+# pre-release suffix (`v0.27.0-preview.1`) publishes a pre-release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build and publish (for example v0.26.0)
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - id: version
+        name: Match the tag to the workspace version and changelog
+        run: |
+          version="${TAG#v}"
+          workspace=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"])')
+          base="${version%%-*}"
+          if [ "$base" != "$workspace" ]; then
+            echo "::error::Tag $TAG does not match workspace version $workspace"
+            exit 1
+          fi
+          if ! grep -q "^## $base\b" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## $base' section"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$version" != "$base" ]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x86_64
+          - os: macos-latest
+            platform: macos
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    env:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+      HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      # The browser client rebuilds std for wasm threads.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.21.14
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
+      - run: cargo fetch --locked
+      - name: Package
+        run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --output dist/release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zuse-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/release/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [verify, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/release
+          merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          cd dist/release
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          cd ../..
+          base="${{ needs.verify.outputs.version }}"
+          base="${base%%-*}"
+          awk -v heading="## $base" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > dist/notes.md
+          test -s dist/notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          flags=()
+          if [ "${{ needs.verify.outputs.prerelease }}" = "true" ]; then flags+=(--prerelease); else flags+=(--latest); fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/release/* --clobber
+            gh release edit "$TAG" --notes-file dist/notes.md --draft=false "${flags[@]}"
+          else
+            gh release create "$TAG" dist/release/* --verify-tag \
+              --title "Zuse ${{ needs.verify.outputs.version }}" \
+              --notes-file dist/notes.md "${flags[@]}"
+          fi

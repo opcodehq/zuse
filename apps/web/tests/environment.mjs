@@ -1,0 +1,23 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+const source=await readFile(new URL('../src/environment.js',import.meta.url),'utf8');
+const {observeEnvironment}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+test('one page observer reports changed accessibility, focus and visibility signals without polling',()=>{
+  const media=Object.assign(new EventTarget(),{matches:false});
+  let focused=true;
+  const window=Object.assign(new EventTarget(),{matchMedia:()=>media});
+  const document=Object.assign(new EventTarget(),{visibilityState:'visible',hasFocus:()=>focused});
+  Object.assign(globalThis,{window,document});
+  const events=[];observeEnvironment(value=>events.push(JSON.parse(value).environment));
+  assert.deepEqual(events,[{reduced:false,visible:true,focused:true}]);
+  window.dispatchEvent(new Event('focus'));assert.equal(events.length,1);
+  media.matches=true;media.dispatchEvent(new Event('change'));
+  assert.equal(events.at(-1).reduced,true);
+  focused=false;window.dispatchEvent(new Event('blur'));assert.equal(events.at(-1).focused,false);
+  document.visibilityState='hidden';document.dispatchEvent(new Event('visibilitychange'));
+  assert.equal(events.at(-1).visible,false);
+  document.visibilityState='visible';focused=true;document.dispatchEvent(new Event('visibilitychange'));
+  assert.deepEqual(events.at(-1),{reduced:true,visible:true,focused:true});
+  assert.equal(events.length,5);
+});

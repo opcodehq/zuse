@@ -1,0 +1,32 @@
+{
+  "url": "https://github.com/example/project/pull/17",
+  "number": 17,
+  "state": "OPEN",
+  "headRefName": "fix-ci",
+  "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ci": {
+    "state": "failed",
+    "totalCount": 2
+  },
+  "statusCheckRollup": [
+    {
+      "name": "linux test",
+      "databaseId": 11,
+      "status": "COMPLETED",
+      "conclusion": "FAILURE",
+      "startedAt": "2026-10-01T00:00:00Z",
+      "completedAt": "2026-10-01T00:01:00Z",
+      "detailsUrl": "https://github.com/example/project/actions/runs/1/job/11"
+    },
+    {
+      "name": "format",
+      "databaseId": 12,
+      "status": "COMPLETED",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/example/project/actions/runs/1/job/12"
+    }
+  ],
+  "headRepository": {
+    "nameWithOwner": "example/project"
+  }
+}

@@ -1,0 +1,197 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: validate-${{ github.ref }}
+  # Let the current native build finish and save its cache during iterative pushes.
+  cancel-in-progress: false
+
+jobs:
+  packaging:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: opcodehq/zkit
+          ref: 38173c5aeb16855b50cab64e2500283170e35b3d
+          path: vendor/zkit
+      - run: python3 -m unittest discover -s scripts -p test_package.py -v
+
+  engine:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
+      - run: cargo fmt --all --check
+      - run: cargo check -p zuse-cli -p zuse-relay
+      - run: cargo test -p zuse-cli --test startup
+      - run: cargo test -p zuse-relay --test startup
+      - run: cargo test -p zuse-remote
+      - run: cargo test -p zuse-plugins
+      - run: cargo test -p zuse-engine --lib plugins::tests
+      - run: cargo test -p zuse-engine --lib managed_access
+      - run: cargo test -p zuse-engine --test pairing
+      - run: cargo test -p zuse-engine --test browser_access
+      - run: cargo test -p zuse-engine --lib source_control::tests::pr_
+      - run: cargo test -p zuse-engine --test git_workspace
+      - run: cargo test -p zuse-doc --lib session_owner_tests
+      - run: cargo test -p zuse-engine --lib visuals
+      - run: cargo test -p zuse-engine --test voice_runtime
+      - run: cargo test -p zuse-engine --test relay_access
+      - run: cargo test -p zuse-engine --test durable_turn_review
+      - run: cargo test -p zuse-engine --lib diff_sync::turn_snapshot
+      - run: cargo test -p zuse-engine --test thread_sessions
+      - run: cargo test -p zuse-engine --test custom_acp
+      - run: cargo test -p zuse-engine --lib registry::custom_acp::tests
+      - run: cargo test -p zuse-protocol --lib custom_acp::tests
+      - run: cargo test -p zuse-client --test live
+      - run: cargo test -p zuse-protocol --lib methods::retry_tests
+      - run: cargo test -p zuse-protocol --lib browser_link
+      - run: cargo test -p zuse-protocol --lib notifications
+      - run: cargo test -p zuse-protocol --lib completion_sound
+      - run: cargo test -p zuse-protocol --lib presentation
+      - run: cargo test -p zuse-protocol --lib access_posture_tests
+      - run: cargo test -p zuse-protocol --lib input_answers
+      - run: cargo test -p zuse-protocol --lib message_attachments
+      - run: cargo test -p zuse-harness -p zuse-model-accounts
+      - run: cargo test -p zuse-model -p zuse-serve
+      - run: cargo test -p zuse-providers --lib tool_output
+      - run: cargo test -p zuse-providers --lib command_execution_maps_exit_code_to_error
+      - run: cargo test -p zuse-providers --test claude --test codex access_
+      - run: cargo test -p zuse-providers --test acp access_
+      - run: "cargo test -p zuse-providers --lib acp::"
+      - run: "cargo test -p zuse-providers --lib opencode::"
+      - run: cargo test -p zuse-providers --test opencode
+      - run: cargo test -p zuse-providers --features native-fixture --test pi_access --test pi_mcp --test pi_rpc
+      - run: cargo test -p zuse-providers --lib skills::tests
+      - run: cargo test -p zuse-sync --lib tool_blobs
+      - run: cargo test -p zuse-engine --lib doc_host::tool_result_tests
+      - run: cargo test -p zuse-voice-session -p zuse-orb
+      - run: cargo test -p zuse-rpc --lib
+      - run: cargo test -p zuse-engine --lib account::tests
+      - run: cargo test -p zuse-engine --lib harness_models::tests
+      - run: cargo test -p zuse-engine --lib model_connections::tests
+      - run: cargo test -p zuse-engine --lib native_harness::tests
+      - run: cargo test -p zuse-engine --lib native_recovery::tests
+      - run: cargo test -p zuse-engine --lib sessions::tests
+      - run: cargo test -p zuse-engine -p zuse-mcp --lib plugin
+
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+      HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          build-essential cmake clang libclang-dev pkg-config libssl-dev
+          libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev
+          libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+          libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
+      - run: cargo check -p zuse -p zuse-cli -p zuse-relay -p zuse-remote
+      - if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib history::tests
+      - name: Native remote connection recovery
+        run: |
+          cargo test -p zuse-ui --lib state::account_connection::tests
+          cargo test -p zuse-ui --lib native_paired_reconnect_uses_fresh_encryption
+      - name: Browser motion settings
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib environment::tests
+      - name: Browser preview lifecycle
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib browser::tests
+      - name: Browser visual controls
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib visuals::tests
+      - name: Browser voice lifecycle
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib voice::tests
+      - name: Relay settings recovery
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib pairing::tests
+      - name: Account remote settings recovery
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib managed_access::tests
+      - name: Browser PR workflows
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib pull_requests::tests
+      - name: Shared Git panel state
+        if: runner.os == 'Linux'
+        run: cargo test -p zuse-viewport --lib git_controls::tests
+
+  browser:
+    runs-on: ubuntu-24.04
+    env:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+      HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: browser
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.21.14
+      - run: node --test apps/web/tests/voice_media.mjs apps/web/tests/browser_frame.mjs apps/web/tests/environment.mjs
+      - run: bash scripts/build-web.sh
+      - run: bash scripts/build-web.sh --features browser-input-fixture --dist ../../.context/browser-input-fixture-dist
+      - run: cargo +nightly check -p zuse-remote --target wasm32-unknown-unknown
+        env:
+          CARGO_TARGET_DIR: target/browser
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zuse-browser
+          path: dist/web
+
+  model-transport:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-model-transport
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: cargo test --locked -p zuse-harness -p zuse-harness-extensions --all-targets
+      - run: cargo build --locked --release -p zuse-harness --example harness-evaluate
+      - run: python3 scripts/test-harness-evaluation.py --binary target/release/examples/harness-evaluate --output .context/native-transport-fixtures

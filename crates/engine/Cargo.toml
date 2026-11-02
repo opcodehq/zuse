@@ -1,0 +1,76 @@
+[package]
+name = "zuse-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+test-support = []
+
+[dependencies]
+zuse-simulator.workspace = true
+zuse-usage.workspace = true
+zuse-cloud-projection.workspace = true
+jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto"] }
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+ed25519-dalek = { version = "2", features = ["pkcs8"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+zeroize = "1"
+zuse-serve.workspace = true
+zuse-remote.workspace = true
+zuse-harness.workspace = true
+zuse-harness-extensions = { path = "../harness-extensions" }
+zuse-mcp.workspace = true
+zuse-preview.workspace = true
+zuse-protocol.workspace = true
+zuse-plugins.workspace = true
+zuse-model-accounts.workspace = true
+zuse-doc.workspace = true
+zuse-model.workspace = true
+zuse-sync.workspace = true
+zuse-providers.workspace = true
+zuse-rpc.workspace = true
+zuse-update.workspace = true
+zuse-visual.workspace = true
+loro.workspace = true
+tokio.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite = { workspace = true, features = ["backup"] }
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+notify.workspace = true
+portable-pty.workspace = true
+base64 = "0.22"
+toml = "0.8"
+libc.workspace = true
+gethostname.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+sha2.workspace = true
+reqwest.workspace = true
+ignore.workspace = true
+fff-search.workspace = true
+
+same-file = "1"
+tempfile.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+dunce = "1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+zuse-providers = { workspace = true, features = ["installer-fixture"] }
+# Paused-clock tests (the 30-minute idle reaper).
+tokio = { workspace = true, features = ["test-util"] }
+zip.workspace = true
+tokio-tungstenite.workspace = true
+# In-process registry server for the two-engine workspace integration tests.
+zuse-sync = { workspace = true, features = ["mock-server"] }

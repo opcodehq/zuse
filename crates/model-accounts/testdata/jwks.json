@@ -1,0 +1,13 @@
+{
+  "keys": [
+    {
+      "kty": "EC",
+      "crv": "P-256",
+      "kid": "fixture-key",
+      "use": "sig",
+      "alg": "ES256",
+      "x": "8-dsug2E2_9bs7bmZR_40aCe6sIZYeAPlHKmwJv_zcI",
+      "y": "LeP857XNftzr3XjH40bXCW-CsY_Q6kA-Kvba1bwu6X4"
+    }
+  ]
+}

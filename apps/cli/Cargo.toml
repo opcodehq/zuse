@@ -1,0 +1,31 @@
+[package]
+name = "zuse-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "zuse-server"
+path = "src/main.rs"
+
+[dependencies]
+tokio-util = { workspace = true, features = ["rt"] }
+zuse-engine.workspace = true
+zuse-serve.workspace = true
+zuse-protocol.workspace = true
+zuse-rpc.workspace = true
+zuse-mcp.workspace = true
+tokio.workspace = true
+clap = { workspace = true, features = ["env"] }
+anyhow.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+rcgen = "0.14"
+reqwest.workspace = true
+tokio-tungstenite.workspace = true
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+futures.workspace = true

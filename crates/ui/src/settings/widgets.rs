@@ -1,0 +1,1803 @@
+//! Shared scaffolding for the settings pages — a centered page column, large
+//! title, small section labels over filled blocks of hairline-split rows,
+//! badges and small buttons, so every page reads as the same product surface.
+
+use std::rc::Rc;
+
+use gpui::{AnyElement, Context, Pixels, ScrollHandle, SharedString, Window, div, prelude::*, px};
+
+use crate::popover::{self, MenuScrollbarMetrics, MenuScrollbarState, ScrollRailHost};
+use crate::theme::Theme;
+
+/// Width of the section column beside the settings page, published by the
+/// shell each frame so dropdowns and responsive pages measure the page pane.
+struct SettingsSidebarWidth(f32);
+
+impl gpui::Global for SettingsSidebarWidth {}
+
+pub fn set_sidebar_width(width: f32, cx: &mut gpui::App) {
+    if cx.try_global::<SettingsSidebarWidth>().map(|w| w.0) != Some(width) {
+        cx.set_global(SettingsSidebarWidth(width));
+    }
+}
+
+fn sidebar_width(cx: &gpui::App) -> f32 {
+    cx.try_global::<SettingsSidebarWidth>()
+        .map_or(crate::settings::SIDEBAR_DEFAULT, |w| w.0)
+}
+
+/// The page pane: right of the section column, below the titlebar strip.
+pub fn pane_bounds(viewport: gpui::Size<Pixels>, sidebar_width: f32) -> gpui::Bounds<Pixels> {
+    let left = px(sidebar_width).min(viewport.width);
+    let top = px(Theme::TITLEBAR_HEIGHT).min(viewport.height);
+    gpui::Bounds::new(
+        gpui::point(left, top),
+        gpui::size(viewport.width - left, viewport.height - top),
+    )
+}
+
+/// Inner width of the [`page_column`] at the current window size, for pages
+/// that choose a layout by the room they get (the Devices grid).
+pub fn column_width(window: &gpui::Window, cx: &gpui::App) -> f32 {
+    let pane = f32::from(
+        pane_bounds(window.viewport_size(), sidebar_width(cx))
+            .size
+            .width,
+    );
+    pane.min(768. + 2. * page_padding(window)) - 2. * page_padding(window)
+}
+
+pub fn dropdown(
+    id: impl Into<SharedString>,
+    content: gpui::Div,
+    closing: Option<std::time::Instant>,
+    trigger_height: f32,
+) -> AnyElement {
+    SettingsDropdown {
+        id: id.into(),
+        content,
+        closing,
+        trigger_height,
+        align: popover::MenuAlign::End,
+    }
+    .into_any_element()
+}
+
+#[derive(IntoElement)]
+struct SettingsDropdown {
+    id: SharedString,
+    content: gpui::Div,
+    closing: Option<std::time::Instant>,
+    trigger_height: f32,
+    align: popover::MenuAlign,
+}
+
+impl RenderOnce for SettingsDropdown {
+    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        let limits = dropdown_limits(window.viewport_size(), sidebar_width(cx));
+        popover::contained_menu(
+            self.id,
+            self.content,
+            self.closing,
+            self.trigger_height,
+            limits,
+            self.align,
+        )
+    }
+}
+
+fn dropdown_limits(viewport: gpui::Size<Pixels>, sidebar_width: f32) -> gpui::Bounds<Pixels> {
+    let pane = pane_bounds(viewport, sidebar_width);
+    gpui::Bounds::new(
+        pane.origin + gpui::point(px(8.0), px(8.0)),
+        gpui::size(
+            (pane.size.width - px(16.0)).max(px(1.0)),
+            (pane.size.height - px(16.0)).max(px(1.0)),
+        ),
+    )
+}
+
+/// Scroll only a dropdown's options, keeping its frame and optional heading
+/// fixed. The available height follows the same placement budget as the card.
+pub fn dropdown_rows(
+    id: impl Into<SharedString>,
+    rows: impl IntoIterator<Item = AnyElement>,
+    trigger_height: f32,
+    chrome_height: f32,
+) -> AnyElement {
+    DropdownRows {
+        id: id.into(),
+        rows: rows.into_iter().collect(),
+        trigger_height,
+        chrome_height,
+    }
+    .into_any_element()
+}
+
+pub fn dropdown_list_height(
+    viewport: gpui::Size<Pixels>,
+    trigger_height: f32,
+    chrome_height: f32,
+) -> f32 {
+    // Height alone matters here, and the pane's does not depend on the
+    // section column's width.
+    let limits = pane_bounds(viewport, 0.0);
+    let card_height = ((f32::from(limits.size.height) - 16.0 - trigger_height) / 2.0 - 6.0)
+        .max(1.0)
+        .min(320.0);
+    (card_height - chrome_height).max(1.0)
+}
+
+#[derive(IntoElement)]
+struct DropdownRows {
+    id: SharedString,
+    rows: Vec<AnyElement>,
+    trigger_height: f32,
+    chrome_height: f32,
+}
+
+impl RenderOnce for DropdownRows {
+    fn render(self, window: &mut gpui::Window, _: &mut gpui::App) -> impl IntoElement {
+        let key: SharedString = format!("{}-list-scroll", self.id).into();
+        let scroll = window.with_global_id(key.into(), |id, window| {
+            window.with_element_state(id, |previous: Option<ScrollHandle>, _| {
+                let scroll = previous.unwrap_or_default();
+                (scroll.clone(), scroll)
+            })
+        });
+        let list = div()
+            .id(format!("{}-list", self.id))
+            .debug_selector(|| "settings-dropdown-list".into())
+            .max_h(px(dropdown_list_height(
+                window.viewport_size(),
+                self.trigger_height,
+                self.chrome_height,
+            )))
+            .overflow_y_scroll()
+            .track_scroll(&scroll)
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .children(self.rows);
+        crate::edge_fade::edge_faded(12.0, true, true, list).fade_overflow_y(&scroll)
+    }
+}
+
+/// Owned scroll + floating-scrollbar state for one settings page.
+///
+/// This is the dedicated settings scroll container state. It wraps the same
+/// `MenuScrollbarState` treatment as the model-picker (`pickers.rs`) and the
+/// composer popups (`composer.rs`): the rail is hidden until hover/drag and
+/// floats above content without consuming layout width.
+///
+/// Every settings page follows the same shape: a `scroll: PageScroll` field,
+/// a [`ScrollRailHost`] impl on the page delegating here, and a root
+/// `.relative()` host carrying only the list-hover `on_hover` around the
+/// `.overflow_y_scroll().track_scroll(&self.scroll.scroll)` page, with
+/// [`popover::rail`] supplying the rail and all of its listeners.
+pub struct PageScroll {
+    /// Tracked by the page's scrolling list directly — including the appshots
+    /// half of the shortcuts page, which renders from its own file.
+    pub scroll: ScrollHandle,
+    bar: MenuScrollbarState,
+}
+
+impl Default for PageScroll {
+    fn default() -> Self {
+        Self {
+            scroll: ScrollHandle::new(),
+            bar: MenuScrollbarState::default(),
+        }
+    }
+}
+
+impl ScrollRailHost for PageScroll {
+    fn rail_bar(&mut self) -> &mut MenuScrollbarState {
+        &mut self.bar
+    }
+
+    fn rail_scroll(&self) -> Option<ScrollHandle> {
+        Some(self.scroll.clone())
+    }
+}
+
+impl PageScroll {
+    pub fn set_list_hovered(&mut self, hovered: bool) -> bool {
+        self.bar.set_list_hovered(hovered)
+    }
+
+    fn set_bar_hovered(&mut self, hovered: bool) -> bool {
+        self.bar.set_bar_hovered(hovered)
+    }
+
+    fn begin_press(&mut self, pointer_y: Pixels) -> bool {
+        self.bar.begin_press(&self.scroll, pointer_y)
+    }
+
+    fn drag_to(&self, pointer_y: Pixels) -> bool {
+        self.bar.drag_to(&self.scroll, pointer_y)
+    }
+
+    fn end_press(&mut self) -> bool {
+        self.bar.end_press()
+    }
+
+    /// Rewind to the top and drop the rail's activity baseline — what a page
+    /// flip must do when one [`PageScroll`] is rerouted at a different list
+    /// (shortcuts ↔ appshots), so the new page opens unscrolled and the
+    /// offset jump is not read back as scrolling.
+    pub fn reset(&mut self) {
+        popover::reset_menu_scroll(&self.scroll, &mut self.bar);
+    }
+
+    /// Records scroll activity, then computes the rail geometry. Call once
+    /// per render ([`rail`] pairs this with the hide-countdown scheduling).
+    fn metrics(&mut self) -> Option<MenuScrollbarMetrics> {
+        self.bar.note_scroll(&self.scroll);
+        self.bar.metrics(&self.scroll)
+    }
+}
+
+/// [`popover::rail`] for a [`PageScroll`] that is not its view's only rail:
+/// `popover::rail` binds to the view's single [`ScrollRailHost`] impl, and a
+/// page carrying a second, menu-local scroll host (the appearance page's
+/// interface-font dropdown) cannot route that impl at both. The wiring
+/// mirrors [`popover::rail`]; `reach` re-borrows the state from the view
+/// inside the strip's pointer listeners, which fire with a `&mut V`.
+pub fn rail<V: 'static>(
+    scroll: &mut PageScroll,
+    id: &'static str,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    reach: impl Fn(&mut V) -> &mut PageScroll + Copy + 'static,
+) -> Option<AnyElement> {
+    let metrics = scroll.metrics()?;
+    popover::schedule_scrollbar_hide(&mut scroll.bar, cx);
+    let strip = scroll.bar.render_rail(theme, metrics)?;
+    Some(
+        strip
+            .id(id)
+            .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
+                if reach(view).set_bar_hovered(*hovered) {
+                    cx.notify();
+                }
+            }))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |view, event: &gpui::MouseDownEvent, _, cx| {
+                    if reach(view).begin_press(event.position.y) {
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_drag(popover::MenuScrollbarDrag, |_, _, _, cx| {
+                cx.stop_propagation();
+                cx.new(|_| popover::MenuScrollbarDragGhost)
+            })
+            .on_drag_move(cx.listener(
+                move |view, event: &gpui::DragMoveEvent<popover::MenuScrollbarDrag>, _, cx| {
+                    if reach(view).drag_to(event.event.position.y) {
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_mouse_up_out(
+                gpui::MouseButton::Left,
+                cx.listener(move |view, _: &gpui::MouseUpEvent, _, cx| {
+                    reach(view).end_press();
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(move |view, _: &gpui::MouseUpEvent, _, cx| {
+                    reach(view).end_press();
+                    cx.notify();
+                }),
+            )
+            .into_any_element(),
+    )
+}
+
+/// Shared typography for a settings component's title and description. The
+/// Shortcuts page established this compact rhythm; list-style settings reuse
+/// it instead of drifting by page.
+pub const ROW_TITLE_SIZE: f32 = zuse_viewport::settings_style::TITLE_SIZE;
+pub const ROW_DESCRIPTION_SIZE: f32 = zuse_viewport::settings_style::DESCRIPTION_SIZE;
+
+/// The page column's outer max width and side padding: a centered 768px
+/// content measure with generous air on either side.
+const PAGE_MAX_WIDTH: f32 = 816.0;
+const PAGE_PAD_X: f32 = 24.0;
+
+/// Settings content follows the reference's 800px viewport breakpoint.
+pub fn page_padding(window: &Window) -> f32 {
+    if window.viewport_size().width < px(800.) {
+        16.
+    } else {
+        24.
+    }
+}
+
+/// Settings column, including responsive outer padding around its 768px content.
+pub fn settings_page_column(window: &Window) -> gpui::Div {
+    let padding = page_padding(window);
+    page_column()
+        .max_w(px(768. + 2. * padding))
+        .px(px(padding))
+        .pt(px(padding))
+        .pb(px(padding))
+}
+
+/// Centered legacy column used by views outside Settings.
+pub fn page_column() -> gpui::Div {
+    div()
+        .w_full()
+        .max_w(px(PAGE_MAX_WIDTH))
+        .mx_auto()
+        .px(px(PAGE_PAD_X))
+        // The settings header owns titlebar clearance; content starts 24px below it.
+        .pt(px(24.0))
+        .pb(px(48.0))
+        .flex()
+        .flex_col()
+}
+
+/// Page headline row: a large title, optionally followed by a muted count on
+/// the same baseline. Inset to line up with the section labels.
+pub fn page_header(theme: &Theme, title: &str, count: Option<usize>) -> gpui::Div {
+    div()
+        .px(px(SECTION_LABEL_INSET))
+        .flex()
+        .flex_row()
+        .items_baseline()
+        .gap(px(10.0))
+        .child(
+            div()
+                .text_size(crate::typography::ui_rems(20.0))
+                .line_height(crate::typography::ui_rems(26.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.text_strong)
+                .child(SharedString::from(title.to_string())),
+        )
+        .when_some(count, |el, count| {
+            el.child(
+                div()
+                    .text_size(crate::typography::text_sm())
+                    .text_color(theme.text_muted)
+                    .child(SharedString::from(format!("{count}"))),
+            )
+        })
+}
+
+/// Settings SectionTitle, shared by every settings page: a 20px title, one
+/// muted subtitle line and a hairline underneath.
+pub fn section_title(theme: &Theme, title: &str, description: &str) -> gpui::Div {
+    section_title_with_action(theme, title, None, description, None)
+}
+
+/// [`section_title`] with an optional muted count after the title and an
+/// optional page-wide action on the title row ("Restore defaults").
+pub fn section_title_with_action(
+    theme: &Theme,
+    title: &str,
+    count: Option<usize>,
+    description: &str,
+    action: Option<AnyElement>,
+) -> gpui::Div {
+    let heading = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(
+            div()
+                .flex()
+                .items_baseline()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(20.0))
+                        .line_height(crate::typography::ui_rems(28.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text_strong)
+                        .child(SharedString::from(title.to_owned())),
+                )
+                .when_some(count, |row, count| {
+                    row.child(
+                        div()
+                            .text_size(crate::typography::text_sm())
+                            .text_color(theme.text_muted)
+                            .child(SharedString::from(count.to_string())),
+                    )
+                }),
+        )
+        .child(
+            div()
+                .text_size(crate::typography::text_xs())
+                .line_height(crate::typography::ui_rems(20.))
+                .text_color(theme.text_muted)
+                .child(SharedString::from(description.to_owned())),
+        );
+    div()
+        .flex()
+        .items_end()
+        .gap(px(12.))
+        .pb(px(16.))
+        .border_b_1()
+        .border_color(theme.border)
+        .child(heading)
+        .when_some(action, |row, action| {
+            row.child(div().flex_none().flex().items_center().child(action))
+        })
+}
+
+/// Subtitle under the headline: `mt-1 text-[13px] text-muted-foreground`.
+pub fn page_subtitle(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .mt(px(4.0))
+        .px(px(SECTION_LABEL_INSET))
+        .min_w_0()
+        .text_size(crate::typography::text_sm())
+        .line_height(crate::typography::ui_rems(17.0))
+        .text_color(theme.text_muted)
+        .child(copy.into())
+}
+
+/// Small label above a group of controls (`text-[13px] font-medium`) — the
+/// "Theme" caption over a picker, not a page headline.
+pub fn field_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .text_size(crate::typography::text_sm())
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.text_strong)
+        .child(label.into())
+}
+
+/// A row of equally-sized preview cards for picking one of N *visual* options.
+///
+/// Deliberately knows nothing about themes: the caller supplies each preview as
+/// an arbitrary element and picks however many cards it wants, so the same
+/// control works for a density picker, a layout picker or anything else where
+/// the choice is easier to show than to describe. Pair with [`option_card`].
+pub fn option_card_row() -> gpui::Div {
+    div().flex().flex_row().items_start().gap(px(16.0)).w_full()
+}
+
+/// Default height of an [`option_card`] preview frame.
+pub const OPTION_CARD_HEIGHT: f32 = 148.0;
+/// Corner radius of the preview frame.
+///
+/// Public because the preview has to round *itself* to this. gpui content masks
+/// are axis-aligned rectangles, so `overflow_hidden` on the frame clips to its
+/// bounding box and not to its corner radius — a preview that paints its own
+/// background will square off the corners and cover the frame's border with it.
+pub const OPTION_CARD_RADIUS: f32 = 6.0;
+
+/// One card in an [`option_card_row`]: a fixed-height preview frame with a quiet
+/// selected edge and caption underneath. There is deliberately no outer card
+/// or ring; the preview itself is the control.
+///
+/// `preview` fills the frame and **must round its own corners** to
+/// [`OPTION_CARD_RADIUS`] if it paints a background — see that constant.
+///
+/// Returns a plain `Div` like the rest of this module — the caller adds `.id(..)`
+/// and `.on_click(..)`, so selection behaviour stays with the page that owns the
+/// state.
+pub fn option_card(
+    theme: &Theme,
+    icon_path: &'static str,
+    label: impl Into<SharedString>,
+    selected: bool,
+    selection_t: f32,
+    preview: AnyElement,
+) -> gpui::Div {
+    let selected_color = crate::motion::mix(theme.text_muted, theme.accent, selection_t);
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(8.0))
+        .cursor_pointer()
+        .child(
+            div()
+                .h(px(OPTION_CARD_HEIGHT))
+                .flex_none()
+                .w_full()
+                .rounded(px(OPTION_CARD_RADIUS))
+                .overflow_hidden()
+                .border_1()
+                .border_color(crate::motion::mix(theme.border, theme.accent, selection_t))
+                .child(preview),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .text_size(crate::typography::text_sm())
+                .font_weight(if selected {
+                    gpui::FontWeight::MEDIUM
+                } else {
+                    gpui::FontWeight::NORMAL
+                })
+                .text_color(selected_color)
+                .child(
+                    crate::icons::icon(icon_path)
+                        .size(px(16.0))
+                        .text_color(selected_color),
+                )
+                .child(label.into()),
+        )
+}
+
+/// Section labels and page titles sit a little inside the blocks' edge.
+const SECTION_LABEL_INSET: f32 = 8.0;
+/// Air between the page title and its first frame.
+const SECTION_GAP: f32 = 20.0;
+/// Air between one frame and the next.
+const FRAME_GAP: f32 = 16.0;
+
+/// The small plain label above a block ("Startup", "Fonts"): sentence case,
+/// muted, never an uppercase eyebrow.
+pub fn section_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .px(px(SECTION_LABEL_INSET))
+        .text_size(crate::typography::text_sm())
+        .line_height(crate::typography::ui_rems(17.0))
+        .text_color(theme.text_muted)
+        .child(label.into())
+}
+
+/// A [`section_label`] for a group nested inside a block row (an expanded
+/// provider's "Completion", "Accounts"): a small 11px label, as tall as a
+/// compact icon button so a trailing action never shifts it.
+pub fn details_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .min_h(px(24.0))
+        .flex()
+        .flex_row()
+        .items_center()
+        .text_size(crate::typography::text_xs())
+        .line_height(crate::typography::ui_rems(14.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.text_muted)
+        .child(label.into())
+}
+
+/// The inset panel an expanded block row opens into: one quiet rounded
+/// surface under the row, holding its [`details_label`] groups.
+pub fn details_panel(theme: &Theme) -> gpui::Div {
+    div()
+        .mx(px(zuse_viewport::settings_style::ROW_PAD_X))
+        .mb(px(10.0))
+        .px(px(12.0))
+        .pt(px(6.0))
+        .pb(px(8.0))
+        .rounded(px(8.0))
+        .bg(theme.wash(0.03))
+        .border_1()
+        .border_color(row_divider(theme).opacity(0.6))
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+}
+
+/// A compact row inside a [`details_panel`]: 12px title, 11px description,
+/// a trailing control, hairlines between rows.
+pub fn details_row(theme: &Theme, first: bool) -> gpui::Div {
+    div()
+        .min_h(px(36.0))
+        .py(px(5.0))
+        .when(!first, |row| {
+            row.border_t_1().border_color(row_divider(theme))
+        })
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(12.0))
+}
+
+/// Title + description stack for a [`details_row`].
+pub fn details_text(
+    theme: &Theme,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(1.0))
+        .child(
+            div()
+                .truncate()
+                .text_size(crate::typography::text_xs())
+                .line_height(crate::typography::ui_rems(16.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.text_strong)
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .truncate()
+                .text_size(crate::typography::text_xs())
+                .line_height(crate::typography::ui_rems(14.0))
+                .text_color(theme.text_muted)
+                .child(description.into()),
+        )
+}
+
+/// A framed section with a compact header and its bordered settings card.
+/// Pass a [`section_card`] (with `.mt_0()`) or any block as `block`. Renders
+/// exactly like [`group`]; kept for call sites that build the card first.
+pub fn section(
+    theme: &Theme,
+    label: impl Into<SharedString>,
+    block: impl IntoElement,
+) -> gpui::Div {
+    group(theme, label, "").child(block)
+}
+
+/// Vertical stack for a page's frames, placed under its [`section_title`].
+/// Owns the air below the title and between frames so pages never drift.
+pub fn section_stack() -> gpui::Div {
+    div()
+        .mt(px(SECTION_GAP))
+        .flex()
+        .flex_col()
+        .gap(px(FRAME_GAP))
+}
+
+/// Direct counterpart of Zuse's SettingsGroup header and muted frame. Add the
+/// [`section_card`] (with `.mt_0()`) as the frame's child.
+pub fn group(
+    theme: &Theme,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+) -> gpui::Div {
+    group_with_action(theme, title, description, None)
+}
+
+/// [`group`] with an optional control (h 28) at the right of its header.
+pub fn group_with_action(
+    theme: &Theme,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    action: Option<AnyElement>,
+) -> gpui::Div {
+    let description = description.into();
+    let description_empty = description.is_empty();
+    let header = div()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .child(row_title(theme, title))
+        .when(!description.is_empty(), |header| {
+            header.child(
+                div()
+                    .text_size(crate::typography::ui_rems(ROW_DESCRIPTION_SIZE))
+                    .line_height(crate::typography::ui_rems(16.))
+                    .text_color(theme.text_muted)
+                    .child(description),
+            )
+        });
+    div()
+        .flex()
+        .flex_col()
+        .p(px(4.))
+        .rounded(px(zuse_viewport::settings_style::FRAME_RADIUS))
+        .bg(theme.settings_frame_bg())
+        .child(
+            div()
+                .flex()
+                .when(description_empty, |row| row.items_center())
+                .when(!description_empty, |row| row.items_start())
+                .gap(px(12.))
+                .px(px(10.))
+                .py(px(8.))
+                .child(header.flex_1().min_w_0())
+                .when_some(action, |row, action| {
+                    row.child(
+                        div()
+                            .flex_none()
+                            .h(px(zuse_viewport::settings_style::CONTROL_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .child(action),
+                    )
+                }),
+        )
+}
+
+/// Settings card fill from the same theme surface used by the app cards.
+pub fn block_fill(theme: &Theme) -> gpui::Hsla {
+    theme.surface_card
+}
+
+/// The hairline between rows inside a block.
+pub fn row_divider(theme: &Theme) -> gpui::Hsla {
+    // Light hairlines are already the design system's faint #F2F2F2 border;
+    // thinning them further would erase the divider.
+    theme.border
+}
+
+/// A bordered, rounded card of related settings rows. Standalone blocks keep
+/// a section's worth of air above them; inside [`section`] the wrapper owns
+/// the spacing and zeroes this margin.
+pub fn section_card(theme: &Theme) -> gpui::Div {
+    div()
+        .mt(px(24.0))
+        .rounded(px(zuse_viewport::settings_style::CARD_RADIUS))
+        .border_1()
+        .border_color(if theme.variant_id.as_ref() == "zuse-dark" {
+            gpui::white().opacity(0.08)
+        } else {
+            theme.border
+        })
+        .bg(block_fill(theme))
+        .overflow_hidden()
+        .flex()
+        .flex_col()
+}
+
+/// One row in a [`section_card`]: title and muted description on the left,
+/// the control on the right, split from the previous row by a hairline.
+pub fn card_row(theme: &Theme, first: bool) -> gpui::Div {
+    div()
+        .px(px(zuse_viewport::settings_style::ROW_PAD_X))
+        .py(px(zuse_viewport::settings_style::ROW_PAD_Y))
+        .when(!first, |el| {
+            el.border_t_1().border_color(row_divider(theme))
+        })
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap(px(zuse_viewport::settings_style::ROW_GAP))
+        // A 28px control plus the row padding, so title-only rows and rows
+        // with a control line up from page to page.
+        .min_h(px(zuse_viewport::settings_style::CONTROL_HEIGHT
+            + 2.0 * zuse_viewport::settings_style::ROW_PAD_Y))
+}
+
+/// Bare leading glyph for rows whose icon carries identity (a device's
+/// platform), sized to sit beside a two-line title.
+pub fn row_tile(theme: &Theme, icon_path: &'static str) -> gpui::Div {
+    div()
+        .flex_none()
+        .w(px(24.0))
+        .h(px(32.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            crate::icons::icon(icon_path)
+                .size(px(16.0))
+                .text_color(theme.text_muted),
+        )
+}
+
+/// Row title. These metrics intentionally match the Shortcuts rows, whose
+/// title/description rhythm is the reference for the other settings cards.
+pub fn row_title(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .min_w_0()
+        .text_size(crate::typography::ui_rems(ROW_TITLE_SIZE))
+        .line_height(crate::typography::ui_rems(16.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.text_strong)
+        .child(title.into())
+}
+
+/// The quiet meta line under a row title: `text-[12px]
+/// text-muted-foreground/65` fragments joined by dots.
+pub fn meta_line(theme: &Theme, fragments: Vec<AnyElement>) -> gpui::Div {
+    let mut line = div()
+        .mt(px(Theme::TEXT_STACK_GAP))
+        .min_w_0()
+        .max_w_full()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap_x(px(8.0))
+        .gap_y(px(2.0))
+        .text_size(crate::typography::ui_rems(ROW_DESCRIPTION_SIZE))
+        .line_height(crate::typography::ui_rems(16.0))
+        .text_color(theme.text_muted);
+    let mut first = true;
+    for fragment in fragments {
+        if !first {
+            line = line.child(
+                div()
+                    .text_color(theme.text_muted.opacity(0.3))
+                    .child(SharedString::from("·")),
+            );
+        }
+        line = line.child(div().min_w_0().max_w_full().child(fragment));
+        first = false;
+    }
+    line
+}
+
+/// Right-anchored badge pill: a filled wash, like the settings blocks it
+/// sits on (no outline).
+pub fn badge(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .flex_none()
+        .px(px(8.0))
+        .py(px(2.0))
+        .rounded_full()
+        .bg(theme.wash(0.08))
+        .text_size(crate::typography::text_xs())
+        .text_color(theme.text_muted)
+        .child(label.into())
+}
+
+/// Emerald status pill (the Accounts "Active" badge:
+/// `bg-emerald-400/[0.12] text-emerald-300/90`).
+pub fn badge_active(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
+    let emerald = theme.success;
+    let emerald_text = theme.success_muted; // emerald-300
+    div()
+        .flex_none()
+        .px(px(8.0))
+        .py(px(2.0))
+        .rounded_full()
+        .bg(emerald.opacity(0.12))
+        .text_size(crate::typography::text_xs())
+        .text_color(emerald_text.opacity(0.9))
+        .child(label.into())
+}
+
+pub const SWITCH_WIDTH: f32 = 32.0;
+const SWITCH_HEIGHT: f32 = 20.0;
+const SWITCH_THUMB_WIDTH: f32 = 14.0;
+
+/// Zuse’s 32 by 20 switch with its 14px sliding thumb.
+/// The caller owns activation and accessibility; only the thumb interpolates.
+pub fn toggle_switch(theme: &Theme, on: bool, key: impl Into<SharedString>) -> gpui::Div {
+    let key: SharedString = key.into();
+    div()
+        .flex_none()
+        .w(px(SWITCH_WIDTH))
+        .h(px(SWITCH_HEIGHT))
+        .child(SwitchVisual {
+            theme: theme.clone(),
+            on,
+            key: format!("settings-switch-{key}").into(),
+        })
+}
+
+#[derive(IntoElement)]
+struct SwitchVisual {
+    theme: Theme,
+    on: bool,
+    key: SharedString,
+}
+
+struct SwitchTravel {
+    from: f32,
+    target: f32,
+    started: std::time::Instant,
+}
+
+impl SwitchTravel {
+    fn value(&self, now: std::time::Instant) -> f32 {
+        let t = (now.duration_since(self.started).as_secs_f32() / 0.12).min(1.0);
+        self.from + (self.target - self.from) * (1.0 - (1.0 - t).powi(3))
+    }
+}
+
+impl RenderOnce for SwitchVisual {
+    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        let now = std::time::Instant::now();
+        let target = if self.on { 1.0 } else { 0.0 };
+        let reduced = crate::motion::reduced_motion(cx);
+        let position = window.with_global_id(self.key.into(), |id, window| {
+            window.with_element_state(id, |previous: Option<SwitchTravel>, _| {
+                let mut travel = previous.unwrap_or(SwitchTravel {
+                    from: target,
+                    target,
+                    started: now,
+                });
+                let current = travel.value(now);
+                if travel.target != target {
+                    travel = SwitchTravel {
+                        from: current,
+                        target,
+                        started: now,
+                    };
+                }
+                if reduced {
+                    travel.from = target;
+                    travel.target = target;
+                }
+                (travel.value(now), travel)
+            })
+        });
+        if (position - target).abs() > 0.001 {
+            window.request_animation_frame();
+        }
+        let track = if self.on {
+            self.theme.accent
+        } else if self.theme.appearance.is_dark() {
+            self.theme.surface_raised
+        } else {
+            self.theme.surface_raised
+        };
+        let thumb = if self.theme.appearance.is_dark() {
+            self.theme.text
+        } else {
+            gpui::white()
+        };
+        let thumb_left = 2.0 + 14.0 * position;
+        div()
+            .relative()
+            .w(px(SWITCH_WIDTH))
+            .h(px(SWITCH_HEIGHT))
+            .rounded_full()
+            .bg(track)
+            .border_1()
+            .border_color(if self.on {
+                self.theme.accent.opacity(0.6)
+            } else {
+                self.theme.border
+            })
+            .child(
+                div()
+                    .absolute()
+                    .top(px(2.0))
+                    .left(px(thumb_left))
+                    .size(px(SWITCH_THUMB_WIDTH))
+                    .rounded_full()
+                    .bg(thumb)
+                    .border_1()
+                    .border_color(gpui::black().opacity(if self.theme.appearance.is_dark() {
+                        0.3
+                    } else {
+                        0.1
+                    })),
+            )
+    }
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+
+    #[test]
+    fn tab_selection_reverses_from_its_current_opacity() {
+        use std::time::{Duration, Instant};
+
+        let start = Instant::now();
+        let forward = TabSelectionTravel {
+            from: 0.0,
+            target: 1.0,
+            started: start,
+        };
+        let halfway = start + Duration::from_millis(75);
+        let current = forward.value(halfway);
+        let reverse = TabSelectionTravel {
+            from: current,
+            target: 0.0,
+            started: halfway,
+        };
+        assert_eq!(reverse.value(halfway), current);
+        assert_eq!(
+            reverse.value(
+                halfway
+                    + crate::motion::TAB_SLIDE
+                        .total()
+                        .mul_f32(crate::motion::speed_scale())
+            ),
+            0.0
+        );
+    }
+
+    #[test]
+    fn dropdowns_stay_in_the_settings_content_pane() {
+        for (width, sidebar) in [(600.0, 224.0), (1200.0, 256.0), (1200.0, 400.0)] {
+            let viewport = gpui::size(px(width), px(700.0));
+            let pane = pane_bounds(viewport, sidebar);
+            let limits = dropdown_limits(viewport, sidebar);
+            assert_eq!(pane.left(), px(sidebar));
+            assert_eq!(pane.right(), px(width));
+            assert!(limits.left() >= pane.left());
+            assert!(limits.right() <= pane.right());
+            assert!(limits.top() >= px(Theme::TITLEBAR_HEIGHT));
+            assert!(limits.bottom() <= pane.bottom());
+        }
+    }
+
+    #[test]
+    fn switch_reversal_keeps_current_position_and_settles() {
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let forward = SwitchTravel {
+            from: 0.0,
+            target: 1.0,
+            started: now,
+        };
+        let halfway = now + Duration::from_millis(90);
+        let current = forward.value(halfway);
+        let reverse = SwitchTravel {
+            from: current,
+            target: 0.0,
+            started: halfway,
+        };
+        assert_eq!(reverse.value(halfway), current);
+        assert_eq!(reverse.value(halfway + Duration::from_millis(120)), 0.0);
+        assert_eq!(forward.value(now + Duration::from_millis(120)), 1.0);
+    }
+}
+
+struct TabSelectionTravel {
+    from: f32,
+    target: f32,
+    started: std::time::Instant,
+}
+
+impl TabSelectionTravel {
+    fn value(&self, now: std::time::Instant) -> f32 {
+        let seconds = crate::motion::TAB_SLIDE.total().as_secs_f32() * crate::motion::speed_scale();
+        let elapsed = now.saturating_duration_since(self.started).as_secs_f32();
+        let progress = crate::motion::TAB_SLIDE.progress((elapsed / seconds).min(1.0));
+        self.from + (self.target - self.from) * progress
+    }
+}
+
+/// Retargetable selected-state fade for a settings tab. First paint and
+/// reduced-motion changes settle immediately instead of flashing an entrance.
+pub fn tab_selection_t(
+    window: &mut gpui::Window,
+    key: impl Into<SharedString>,
+    selected: bool,
+    reduced_motion: bool,
+) -> f32 {
+    let now = std::time::Instant::now();
+    let target = if selected { 1.0 } else { 0.0 };
+    let value = window.with_global_id(key.into().into(), |id, window| {
+        window.with_element_state(id, |previous: Option<TabSelectionTravel>, _| {
+            let mut travel = previous.unwrap_or(TabSelectionTravel {
+                from: target,
+                target,
+                started: now,
+            });
+            let current = travel.value(now);
+            if travel.target != target {
+                travel = TabSelectionTravel {
+                    from: current,
+                    target,
+                    started: now,
+                };
+            }
+            if reduced_motion {
+                travel.from = target;
+                travel.target = target;
+            }
+            (travel.value(now), travel)
+        })
+    });
+    if (value - target).abs() > 0.001 {
+        window.request_animation_frame();
+    }
+    value
+}
+
+/// One treatment for settings section tabs: the selected wash and text ease
+/// over Zuse's tab timing, while hover keeps the normal sidebar color fade.
+pub fn section_tab(
+    theme: &Theme,
+    selected: bool,
+    selection_t: f32,
+    id: impl Into<SharedString>,
+    hover_key: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    let hover_key = hover_key.into();
+    let active_bg = if theme.variant_id.as_ref() == "zuse-dark" {
+        zuse_viewport::settings_style::SIDEBAR_ACTIVE
+    } else {
+        theme.bg_selected
+    };
+    let base_bg = crate::motion::mix(crate::theme::wash(0.0), active_bg, selection_t);
+    let base_text = crate::motion::mix(theme.text_muted, theme.text_strong, selection_t);
+    // Hover previews the active fill at reduced strength.
+    let hover_bg = if selected {
+        base_bg
+    } else {
+        active_bg.opacity(0.6)
+    };
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .rounded(px(7.0))
+        .px(px(10.0))
+        .py(px(4.0))
+        .min_h(px(28.0))
+        .flex_shrink_0()
+        .text_size(crate::typography::text_xs())
+        .when(selected, |el| el.font_weight(gpui::FontWeight::MEDIUM))
+        .text_color(crate::motion::hover_blend(
+            &hover_key,
+            base_text,
+            theme.text_strong,
+        ))
+        .bg(crate::motion::hover_blend(&hover_key, base_bg, hover_bg))
+        .id(id.into())
+        .on_hover(crate::motion::hover_listener(hover_key))
+}
+
+/// Height of every settings select trigger: the shared 28px row control.
+pub const SELECT_HEIGHT: f32 = zuse_viewport::settings_style::CONTROL_HEIGHT;
+/// Menus never shrink below this, so short values still open a readable list.
+const SELECT_MENU_MIN_WIDTH: f32 = 160.0;
+
+/// A select's fill on a settings block: a translucent wash one step above
+/// [`block_fill`], lifting while hovered or open. Washes read through frost
+/// and stay tonal on solid surfaces, in both appearances.
+pub(crate) fn select_fill(theme: &Theme, lifted: bool) -> gpui::Hsla {
+    theme.wash(if lifted { 0.10 } else { 0.06 })
+}
+
+/// The trigger of every settings dropdown: a borderless filled pill. The
+/// caller adds the value ([`select_value`], after any leading glyph), then
+/// [`select_chevron`], plus its own listeners. The transparent edge is held
+/// for the focus ring, so focusing never shifts the label.
+pub fn select_trigger(
+    theme: &Theme,
+    id: impl Into<SharedString>,
+    open: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let id: SharedString = id.into();
+    let hover_key: SharedString = format!("{id}-hover").into();
+    let lifted = select_fill(theme, true);
+    let accent = theme.accent;
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .max_w_full()
+        .h(px(SELECT_HEIGHT))
+        .pl(px(10.0))
+        .pr(px(8.0))
+        .rounded(px(7.0))
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .bg(if open {
+            lifted
+        } else {
+            crate::motion::hover_blend(&hover_key, select_fill(theme, false), lifted)
+        })
+        .on_hover(crate::motion::hover_listener(hover_key))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .cursor_pointer()
+        .text_size(crate::typography::text_xs())
+        .text_color(theme.text)
+        .tab_index(0)
+        .role(gpui::Role::Button)
+        .aria_expanded(open)
+        .focus_visible(move |s| s.border_color(accent))
+}
+
+/// The trigger's current value, truncating before the chevron.
+pub fn select_value(label: impl Into<SharedString>) -> gpui::Div {
+    div().flex_1().min_w_0().truncate().child(label.into())
+}
+
+pub fn select_chevron(theme: &Theme, open: bool) -> gpui::Svg {
+    crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
+        .size(px(14.0))
+        .flex_none()
+        .text_color(if open { theme.text } else { theme.text_muted })
+}
+
+/// The open menu: the shared popover card, which [`dropdown`] mounts inside
+/// the frosted menu layer (an opaque card where frost is off).
+pub fn select_menu(theme: &Theme) -> gpui::Div {
+    popover::popover_card(theme).flex().flex_col()
+}
+
+/// One option row. `highlighted` is the keyboard cursor; the caller adds the
+/// label, then [`select_check`].
+pub fn select_row(
+    theme: &Theme,
+    selected: bool,
+    highlighted: bool,
+    fade_key: impl Into<SharedString>,
+) -> gpui::Div {
+    popover::menu_row_nav(theme, selected, highlighted, fade_key)
+}
+
+/// The trailing check slot, kept on every row so labels align.
+pub fn select_check(theme: &Theme, selected: bool) -> gpui::Div {
+    div()
+        .w(px(18.0))
+        .flex_none()
+        .flex()
+        .justify_end()
+        .when(selected, |slot| {
+            slot.child(
+                crate::icons::icon(crate::icons::CHECK)
+                    .size(px(14.0))
+                    .text_color(theme.accent),
+            )
+        })
+}
+
+/// Open state for one [`select`], owned by its page: the popup with its exit
+/// phase, and the keyboard highlight.
+#[derive(Default)]
+pub struct SelectState {
+    menu: popover::Popup<()>,
+    highlighted: usize,
+}
+
+impl SelectState {
+    pub fn is_open(&self) -> bool {
+        self.menu.is_open()
+    }
+
+    /// Open with the keyboard highlight on option `highlighted`.
+    pub fn open(&mut self, highlighted: usize) {
+        self.highlighted = highlighted;
+        self.menu.open(());
+    }
+}
+
+/// Close a [`select`] from outside it — another menu on the page opening.
+/// `reach` as in [`select`].
+pub fn close_select<V: 'static>(
+    view: &mut V,
+    reach: impl Fn(&mut V) -> &mut SelectState + 'static,
+    cx: &mut Context<V>,
+) {
+    let reach: SelectReach<V> = Rc::new(reach);
+    close_select_rc(view, &reach, cx);
+}
+
+/// One option in a [`select`] menu.
+pub struct SelectOption {
+    label: SharedString,
+    leading: Option<Rc<dyn Fn() -> AnyElement>>,
+    detail: Option<SharedString>,
+}
+
+impl SelectOption {
+    pub fn new(label: impl Into<SharedString>) -> Self {
+        Self {
+            label: label.into(),
+            leading: None,
+            detail: None,
+        }
+    }
+
+    /// A glyph or swatch before the label, in the row and (when selected)
+    /// the trigger.
+    pub fn leading(mut self, leading: impl Fn() -> AnyElement + 'static) -> Self {
+        self.leading = Some(Rc::new(leading));
+        self
+    }
+
+    /// A quiet note after the label, in the row only.
+    pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+}
+
+type SelectReach<V> = Rc<dyn Fn(&mut V) -> &mut SelectState>;
+type SelectHandler<V> = Rc<dyn Fn(&mut V, usize, &mut Window, &mut Context<V>)>;
+
+/// The settings dropdown: a [`select_trigger`] opening a [`select_menu`] of
+/// options with a check on the current one. Pointer: the trigger toggles and
+/// an outside press dismisses. Keyboard: ↑/↓ open and move the highlight,
+/// Home/End jump, Enter/Space open or commit, Escape closes. `reach`
+/// re-borrows the page's [`SelectState`] inside listeners; `label` names the
+/// control for assistive tech, which hears "label: value".
+pub fn select<V: 'static>(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    theme: &Theme,
+    reach: impl Fn(&mut V) -> &mut SelectState + 'static,
+) -> Select<V> {
+    Select {
+        id: id.into(),
+        label: label.into(),
+        theme: theme.clone(),
+        options: Vec::new(),
+        selected: 0,
+        width: None,
+        menu_width: None,
+        font: None,
+        heading: None,
+        align: popover::MenuAlign::End,
+        reach: Rc::new(reach),
+        on_select: None,
+    }
+}
+
+pub struct Select<V: 'static> {
+    id: SharedString,
+    label: SharedString,
+    theme: Theme,
+    options: Vec<SelectOption>,
+    selected: usize,
+    width: Option<f32>,
+    menu_width: Option<f32>,
+    font: Option<SharedString>,
+    heading: Option<&'static str>,
+    align: popover::MenuAlign,
+    reach: SelectReach<V>,
+    on_select: Option<SelectHandler<V>>,
+}
+
+fn close_select_rc<V: 'static>(view: &mut V, reach: &SelectReach<V>, cx: &mut Context<V>) {
+    if reach(view).menu.begin_close() {
+        let reach = reach.clone();
+        popover::reap_popup(cx, move |view: &mut V| &mut reach(view).menu);
+    }
+    cx.notify();
+}
+
+fn commit_select<V: 'static>(
+    view: &mut V,
+    ix: usize,
+    reach: &SelectReach<V>,
+    on_select: &Option<SelectHandler<V>>,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) {
+    close_select_rc(view, reach, cx);
+    if let Some(on_select) = on_select {
+        on_select(view, ix, window, cx);
+    }
+}
+
+impl<V: 'static> Select<V> {
+    pub fn options(
+        mut self,
+        options: impl IntoIterator<Item = SelectOption>,
+        selected: usize,
+    ) -> Self {
+        self.options = options.into_iter().collect();
+        self.selected = selected;
+        self
+    }
+
+    pub fn on_select(
+        mut self,
+        on_select: impl Fn(&mut V, usize, &mut Window, &mut Context<V>) + 'static,
+    ) -> Self {
+        self.on_select = Some(Rc::new(on_select));
+        self
+    }
+
+    /// Fixed trigger width; the menu matches it unless [`Self::menu_width`]
+    /// says otherwise. Without one the trigger fits its value.
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    pub fn menu_width(mut self, width: f32) -> Self {
+        self.menu_width = Some(width);
+        self
+    }
+
+    /// Font for the value and the rows (key names read in mono).
+    pub fn font_family(mut self, font: SharedString) -> Self {
+        self.font = Some(font);
+        self
+    }
+
+    /// A small heading over the rows.
+    pub fn heading(mut self, heading: &'static str) -> Self {
+        self.heading = Some(heading);
+        self
+    }
+
+    /// Open the menu rightward from the trigger's left edge, for triggers
+    /// that lead a row rather than end it.
+    pub fn open_rightward(mut self) -> Self {
+        self.align = popover::MenuAlign::Start;
+        self
+    }
+
+    pub fn render(self, state: &SelectState, cx: &mut Context<V>) -> gpui::Stateful<gpui::Div> {
+        let Self {
+            id,
+            label,
+            theme,
+            options,
+            selected,
+            width,
+            menu_width,
+            font,
+            heading,
+            align,
+            reach,
+            on_select,
+        } = self;
+        let count = options.len();
+        let open = state.menu.is_open();
+        let current = options.get(selected);
+        let value = current
+            .map(|option| option.label.clone())
+            .unwrap_or_default();
+        let trigger_leading = current.and_then(|option| option.leading.clone());
+
+        let mut trigger = select_trigger(&theme, id.clone(), open)
+            .debug_selector({
+                let id = id.clone();
+                move || id.to_string()
+            })
+            .aria_label(format!("{label}: {value}"))
+            .when_some(width, |el, width| el.w(px(width)))
+            .when_some(font.clone(), |el, font| el.font_family(font))
+            .on_mouse_down(gpui::MouseButton::Left, {
+                let reach = reach.clone();
+                cx.listener(move |view, _, _, _| reach(view).menu.note_trigger_press())
+            })
+            .on_click({
+                let reach = reach.clone();
+                let on_select = on_select.clone();
+                cx.listener(move |view, event: &gpui::ClickEvent, window, cx| {
+                    let state = reach(view);
+                    if event.is_keyboard() && state.menu.is_open() {
+                        let ix = state.highlighted;
+                        commit_select(view, ix, &reach, &on_select, window, cx);
+                    } else if state.menu.take_press_was_open() || state.menu.is_open() {
+                        close_select_rc(view, &reach, cx);
+                    } else {
+                        state.open(selected);
+                        cx.notify();
+                    }
+                })
+            })
+            // Enter/Space arrive as keyboard clicks above; this handles
+            // movement and dismissal.
+            .on_key_down({
+                let reach = reach.clone();
+                cx.listener(move |view, event: &gpui::KeyDownEvent, _, cx| {
+                    let key = event.keystroke.key.as_str();
+                    let modifiers = event.keystroke.modifiers;
+                    let menu_key =
+                        popover::classify_key(key, modifiers.platform, modifiers.control);
+                    let state = reach(view);
+                    if !state.menu.is_open() {
+                        if matches!(menu_key, popover::MenuKey::Up | popover::MenuKey::Down) {
+                            state.open(selected);
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    let current = Some(state.highlighted.min(count.saturating_sub(1)));
+                    state.highlighted = match (key, menu_key) {
+                        (_, popover::MenuKey::Up) => {
+                            popover::menu_step(current, count, -1).unwrap_or_default()
+                        }
+                        (_, popover::MenuKey::Down) => {
+                            popover::menu_step(current, count, 1).unwrap_or_default()
+                        }
+                        ("home", _) => 0,
+                        ("end", _) => count.saturating_sub(1),
+                        (_, popover::MenuKey::Escape) => {
+                            cx.stop_propagation();
+                            close_select_rc(view, &reach, cx);
+                            return;
+                        }
+                        _ => return,
+                    };
+                    cx.stop_propagation();
+                    cx.notify();
+                })
+            })
+            .children(trigger_leading.map(|leading| leading()))
+            .child(select_value(value))
+            .child(select_chevron(&theme, open));
+
+        if state.menu.get().is_some() {
+            let highlighted = state.highlighted;
+            let rows = options.into_iter().enumerate().map(|(ix, option)| {
+                let row_id: SharedString = format!("{id}-option-{ix}").into();
+                let reach = reach.clone();
+                let on_select = on_select.clone();
+                select_row(&theme, ix == selected, ix == highlighted, row_id.clone())
+                    .id(row_id.clone())
+                    .debug_selector(move || row_id.to_string())
+                    .role(gpui::Role::MenuItemRadio)
+                    .aria_label(option.label.clone())
+                    .aria_toggled(if ix == selected {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        cx.stop_propagation();
+                        commit_select(view, ix, &reach, &on_select, window, cx);
+                    }))
+                    .children(option.leading.map(|leading| leading()))
+                    .child(div().flex_1().min_w_0().truncate().child(option.label))
+                    .when_some(option.detail, |row, detail| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .text_size(crate::typography::text_xs())
+                                .text_color(theme.text_muted)
+                                .child(detail),
+                        )
+                    })
+                    .child(select_check(&theme, ix == selected))
+                    .into_any_element()
+            });
+            let menu = select_menu(&theme)
+                .w(px(menu_width
+                    .or(width)
+                    .unwrap_or(0.0)
+                    .max(SELECT_MENU_MIN_WIDTH)))
+                .when_some(font, |menu, font| menu.font_family(font))
+                .on_mouse_down_out({
+                    let reach = reach.clone();
+                    cx.listener(move |view, _, _, cx| close_select_rc(view, &reach, cx))
+                })
+                .when_some(heading, |menu, heading| {
+                    menu.child(popover::menu_heading(&theme, heading))
+                })
+                .child(dropdown_rows(
+                    format!("{id}-list"),
+                    rows,
+                    SELECT_HEIGHT,
+                    if heading.is_some() { 32.0 } else { 8.0 },
+                ));
+            trigger = trigger.child(SettingsDropdown {
+                id: format!("{id}-menu").into(),
+                content: menu,
+                closing: state.menu.closing_since(),
+                trigger_height: SELECT_HEIGHT,
+                align,
+            });
+        }
+        trigger
+    }
+}
+
+/// Settings actions share one size, corner radius, and hover language. Use
+/// outlined for selectors, quiet for secondary actions, filled for row
+/// actions on a block (the dropdown trigger's glass wash), solid for
+/// commits, and danger for destructive actions behind a confirmation.
+#[derive(Clone, Copy)]
+pub enum ActionTone {
+    Quiet,
+    Outlined,
+    Filled,
+    Solid,
+    Danger,
+}
+
+pub fn action_button(theme: &Theme, tone: ActionTone) -> gpui::Div {
+    let button = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .rounded(px(7.0))
+        .min_h(px(zuse_viewport::settings_style::CONTROL_HEIGHT))
+        .px(px(16.0))
+        .py(px(4.0))
+        .text_size(crate::typography::ui_rems(11.0))
+        .cursor_pointer();
+    match tone {
+        ActionTone::Quiet => button
+            .text_color(theme.text_muted)
+            .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text)),
+        ActionTone::Outlined => button
+            .bg(theme.input_glass_bg())
+            .border_1()
+            .border_color(theme.border)
+            .text_color(theme.text)
+            .hover(|s| s.bg(theme.glass_hover()).border_color(theme.border_strong)),
+        ActionTone::Filled => {
+            let lifted = select_fill(theme, true);
+            button
+                .bg(select_fill(theme, false))
+                .text_color(theme.text)
+                .hover(move |s| s.bg(lifted))
+        }
+        ActionTone::Solid => button
+            .bg(theme.solid)
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(theme.on_solid)
+            .hover(|s| s.opacity(0.9)),
+        // The dialogs' destructive fill (`popover::btn_danger`).
+        ActionTone::Danger => button
+            .bg(theme.danger_strong)
+            .text_color(gpui::white())
+            .hover(|s| s.opacity(0.9)),
+    }
+}
+
+pub fn text_action(theme: &Theme, tone: ActionTone, label: impl Into<SharedString>) -> gpui::Div {
+    action_button(theme, tone).child(label.into())
+}
+
+pub fn ghost_action(theme: &Theme) -> gpui::Div {
+    action_button(theme, ActionTone::Quiet)
+}
+
+/// The dismissible red error strip (`flex items-start gap-2 rounded-xl border
+/// border-red-400/20 bg-red-400/[0.06] text-red-300/90` with a leading
+/// `DangerTriangle mt-0.5 size-4`).
+pub fn error_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div {
+    let red = theme.danger; // red-400
+    let red_text = theme.danger_muted; // red-300
+    div()
+        .mt(px(16.0))
+        .px(px(16.0))
+        .py(px(12.0))
+        .rounded(px(12.0))
+        .border_1()
+        .border_color(red.opacity(0.2))
+        .bg(red.opacity(0.06))
+        .text_size(crate::typography::text_sm())
+        .text_color(red_text.opacity(0.9))
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap(px(8.0))
+        .child(
+            div().flex_none().mt(px(2.0)).child(
+                crate::icons::icon(crate::icons::DANGER_TRIANGLE)
+                    .size(px(16.0))
+                    .text_color(red_text.opacity(0.9)),
+            ),
+        )
+        .child(div().min_w_0().child(message.into()))
+}
+
+/// The amber warning strip (`flex items-start gap-2 border-amber-400/20
+/// bg-amber-400/[0.06] text-amber-200/90` with a leading `DangerTriangle
+/// mt-0.5 size-3.5`).
+pub fn warning_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div {
+    let amber = theme.warning; // amber-400
+    let amber_text = theme.warning_muted; // amber-200
+    div()
+        .mt(px(8.0))
+        .px(px(16.0))
+        .py(px(10.0))
+        .rounded(px(12.0))
+        .border_1()
+        .border_color(amber.opacity(0.2))
+        .bg(amber.opacity(0.06))
+        .text_size(crate::typography::text_xs())
+        .text_color(amber_text.opacity(0.9))
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap(px(8.0))
+        .child(
+            div().flex_none().mt(px(2.0)).child(
+                crate::icons::icon(crate::icons::DANGER_TRIANGLE)
+                    .size(px(14.0))
+                    .text_color(amber_text.opacity(0.9)),
+            ),
+        )
+        .child(div().min_w_0().child(message.into()))
+}
+
+/// The sidebar's paint-time overflow fade, with a persistent scroll handle per
+/// settings surface. No fade is painted when the content fits or at a reached edge.
+pub fn scroll_faded(
+    key: impl Into<SharedString>,
+    area: gpui::Stateful<gpui::Div>,
+) -> impl IntoElement {
+    SettingsScroll {
+        key: key.into(),
+        area,
+    }
+}
+
+#[derive(IntoElement)]
+struct SettingsScroll {
+    key: SharedString,
+    area: gpui::Stateful<gpui::Div>,
+}
+
+impl RenderOnce for SettingsScroll {
+    fn render(self, window: &mut gpui::Window, _: &mut gpui::App) -> impl IntoElement {
+        let scroll = window.with_global_id(self.key.into(), |id, window| {
+            window.with_element_state(id, |previous: Option<gpui::ScrollHandle>, _| {
+                let scroll = previous.unwrap_or_default();
+                (scroll.clone(), scroll)
+            })
+        });
+        crate::edge_fade::edge_faded(16.0, true, true, self.area.track_scroll(&scroll))
+            .fade_overflow_y(&scroll)
+    }
+}
+
+/// A one-line hover note for settings controls (reset times, icon-only
+/// actions), in the same frosted chip as the rest of the app's tooltips.
+pub struct TextTooltip {
+    text: SharedString,
+    above: bool,
+}
+
+/// How far a [`text_tooltip_above`] chip sits over the pointer; clears a
+/// small control the pointer is anywhere inside.
+const TOOLTIP_ABOVE_GAP: f32 = 20.0;
+
+impl Render for TextTooltip {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let card = div()
+            .max_w(px(320.0))
+            .px(px(9.0))
+            .py(px(6.0))
+            .rounded(px(7.0))
+            .border_1()
+            .border_color(theme.border)
+            .bg(crate::popover::surface_bg(theme))
+            .text_size(px(11.0))
+            .text_color(theme.text_muted)
+            .child(self.text.clone());
+        let card = crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card);
+        if !self.above {
+            return card.into_any_element();
+        }
+        // gpui hangs a tooltip below-right of the pointer. A zero-height box
+        // with end-aligned content makes the chip overflow upward instead.
+        div()
+            .h(px(0.0))
+            .flex()
+            .flex_col()
+            .justify_end()
+            .child(div().relative().bottom(px(TOOLTIP_ABOVE_GAP)).child(card))
+            .into_any_element()
+    }
+}
+
+/// `.tooltip(...)` builder for a [`TextTooltip`].
+pub fn text_tooltip(
+    text: impl Into<SharedString>,
+) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    let text: SharedString = text.into();
+    move |_, cx| {
+        cx.new(|_| TextTooltip {
+            text: text.clone(),
+            above: false,
+        })
+        .into()
+    }
+}
+
+/// Like [`text_tooltip`], shown above the pointer instead of below it, for
+/// controls with content underneath that the chip would otherwise cover.
+pub fn text_tooltip_above(
+    text: impl Into<SharedString>,
+) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    let text: SharedString = text.into();
+    move |_, cx| {
+        cx.new(|_| TextTooltip {
+            text: text.clone(),
+            above: true,
+        })
+        .into()
+    }
+}

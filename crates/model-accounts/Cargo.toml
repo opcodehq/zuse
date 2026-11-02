@@ -1,0 +1,29 @@
+[package]
+name = "zuse-model-accounts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+aes-gcm = { version = "0.10.3", features = ["std"] }
+zeroize = "1"
+jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto"] }
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+reqwest.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+base64 = "0.22"
+sha2.workspace = true
+subtle.workspace = true
+axum.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

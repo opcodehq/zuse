@@ -1,0 +1,32 @@
+//! Bundled plugin brand images for offline catalog browsing.
+pub fn load_plugin_icon(path: &str) -> Option<&'static [u8]> {
+    match path {
+        "plugin-icons/linear.app" => Some(include_bytes!("../assets/plugins/linear.png")),
+        "plugin-icons/notion.com" => Some(include_bytes!("../assets/plugins/notion.png")),
+        "plugin-icons/atlassian.com" => Some(include_bytes!("../assets/plugins/atlassian.jpg")),
+        "plugin-icons/asana.com" => Some(include_bytes!("../assets/plugins/asana.jpg")),
+        "plugin-icons/canva.com" => Some(include_bytes!("../assets/plugins/canva.jpg")),
+        "plugin-icons/figma.com" => Some(include_bytes!("../assets/plugins/figma.jpg")),
+        "plugin-icons/hubspot.com" => Some(include_bytes!("../assets/plugins/hubspot.jpg")),
+        "plugin-icons/supabase.com" => Some(include_bytes!("../assets/plugins/supabase.jpg")),
+        "plugin-icons/vercel.com" => Some(include_bytes!("../assets/plugins/vercel.png")),
+        "plugin-icons/context7.com" => Some(include_bytes!("../assets/plugins/context7.png")),
+        "plugin-icons/miro.com" => Some(include_bytes!("../assets/plugins/miro.jpg")),
+        "plugin-icons/intercom.com" => Some(include_bytes!("../assets/plugins/intercom.jpg")),
+        "plugin-icons/box.com" => Some(include_bytes!("../assets/plugins/box.jpg")),
+        "plugin-icons/gamma.app" => Some(include_bytes!("../assets/plugins/gamma.jpg")),
+        "plugin-icons/sentry.io" => Some(include_bytes!("../assets/plugins/sentry.svg")),
+        "plugin-icons/granola.ai" => Some(include_bytes!("../assets/plugins/granola.png")),
+        "plugin-icons/zapier.com" => Some(include_bytes!("../assets/plugins/zapier.svg")),
+        "plugin-icons/github.com" => Some(include_bytes!("../assets/plugins/github.png")),
+        "plugin-icons/cloudflare.com" => Some(include_bytes!("../assets/plugins/cloudflare.jpg")),
+        "plugin-icons/stripe.com" => Some(include_bytes!("../assets/plugins/stripe.jpg")),
+        "plugin-icons/posthog.com" => Some(include_bytes!("../assets/plugins/posthog.jpg")),
+        "plugin-icons/workos.com" => Some(include_bytes!("../assets/plugins/workos.jpg")),
+        "plugin-icons/customer.io" => Some(include_bytes!("../assets/plugins/customer-io.svg")),
+        "plugin-icons/betterstack.com" => {
+            Some(include_bytes!("../assets/plugins/better-stack.jpg"))
+        }
+        _ => None,
+    }
+}

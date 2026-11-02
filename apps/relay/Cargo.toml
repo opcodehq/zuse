@@ -1,0 +1,17 @@
+[package]
+name = "zuse-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+zuse-serve.workspace = true
+tokio.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tokio-tungstenite.workspace = true
+reqwest.workspace = true
+tempfile.workspace = true

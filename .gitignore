@@ -1,0 +1,13 @@
+/target/
+/.context/
+node_modules/
+/dist/build/
+/dist/web/
+__pycache__/
+.env
+.env.local
+*.rs.bk
+.DS_Store
+
+# Independent toolkit checkout; the application pins its published Git revision.
+/vendor/zkit/

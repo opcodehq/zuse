@@ -1,0 +1,9 @@
+[build]
+target = "index.html"
+dist = "../../dist/web"
+public_url = "/"
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 27657
+headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder-Policy" = "require-corp" }

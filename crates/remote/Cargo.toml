@@ -1,0 +1,26 @@
+[package]
+name = "zuse-remote"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+url = "2"
+snow = { version = "0.10", default-features = false, features = ["default-resolver", "use-curve25519", "use-chacha20poly1305", "use-blake2", "use-getrandom"] }
+getrandom = "0.3"
+zeroize = "1"
+base64 = "0.22"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio-util = { workspace = true, features = ["rt"] }
+subtle.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
