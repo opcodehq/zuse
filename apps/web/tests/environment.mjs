@@ -3,14 +3,20 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source=await readFile(new URL('../src/environment.js',import.meta.url),'utf8');
 const {observeEnvironment}=await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
-test('one page observer reports changed accessibility, focus and visibility signals without polling',()=>{
+test('one page observer reports changed accessibility, focus, visibility and language signals without polling',()=>{
   const media=Object.assign(new EventTarget(),{matches:false});
   let focused=true;
   const window=Object.assign(new EventTarget(),{matchMedia:()=>media});
   const document=Object.assign(new EventTarget(),{visibilityState:'visible',hasFocus:()=>focused});
-  Object.assign(globalThis,{window,document});
-  const events=[];observeEnvironment(value=>events.push(JSON.parse(value).environment));
-  assert.deepEqual(events,[{reduced:false,visible:true,focused:true}]);
+  const navigator={languages:['fr-FR','en']};
+  const localStorage={getItem:key=>key==='zuse.language.v1'?'de':null};
+  for(const [name,value] of Object.entries({window,document,navigator,localStorage}))
+    Object.defineProperty(globalThis,name,{value,configurable:true,writable:true});
+  const events=[],localization=[];
+  observeEnvironment(value=>{const message=JSON.parse(value);
+    if(message.environment)events.push(message.environment);else localization.push(message.localization);});
+  assert.deepEqual(localization,[{preference:'de',languages:['fr-FR','en']}]);
+  assert.deepEqual(events,[{reduced:false,visible:true,focused:true,languages:['fr-FR','en']}]);
   window.dispatchEvent(new Event('focus'));assert.equal(events.length,1);
   media.matches=true;media.dispatchEvent(new Event('change'));
   assert.equal(events.at(-1).reduced,true);
@@ -18,6 +24,10 @@ test('one page observer reports changed accessibility, focus and visibility sign
   document.visibilityState='hidden';document.dispatchEvent(new Event('visibilitychange'));
   assert.equal(events.at(-1).visible,false);
   document.visibilityState='visible';focused=true;document.dispatchEvent(new Event('visibilitychange'));
-  assert.deepEqual(events.at(-1),{reduced:true,visible:true,focused:true});
+  assert.deepEqual(events.at(-1),{reduced:true,visible:true,focused:true,languages:['fr-FR','en']});
   assert.equal(events.length,5);
+  navigator.languages=['ja'];window.dispatchEvent(new Event('languagechange'));
+  assert.deepEqual(localization.at(-1),{languages:['ja']});
+  window.dispatchEvent(Object.assign(new Event('storage'),{key:'zuse.language.v1'}));
+  assert.deepEqual(localization.at(-1),{preference:'de'});
 });
