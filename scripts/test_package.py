@@ -160,5 +160,41 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(icon[8:12], b"ic10")
 
 
+    def test_macos_signing_helpers_before_bundle_then_notarize_and_staple(self):
+        app = self.root / "Zuse.app"
+        calls = []
+
+        def run(command, **options):
+            calls.append(command)
+            stdout = json.dumps({"id": "submission", "status": "Accepted"})
+            return subprocess.CompletedProcess(command, 0, stdout=stdout)
+
+        self.assertFalse(package.sign_macos(app, run))
+        self.assertEqual(calls, [])
+        environment = {"ZUSE_MACOS_SIGN_IDENTITY": "Developer ID Application: Test (TEAM)",
+                       "APPLE_ID": "dev@example.com", "APPLE_APP_SPECIFIC_PASSWORD": "secret",
+                       "APPLE_TEAM_ID": "TEAM"}
+        with patch.dict(os.environ, environment):
+            self.assertTrue(package.sign_macos(app, run))
+        signed = [command[-1] for command in calls if command[:2] == ["codesign", "--force"]]
+        self.assertEqual(signed, [str(app / "Contents/MacOS/zuse-server"),
+                                  str(app / "Contents/MacOS/zuse-relay"), str(app)])
+        bundle = next(command for command in calls if command[-1] == str(app) and "--force" in command)
+        self.assertIn("runtime", bundle)
+        self.assertIn("--entitlements", bundle)
+        tools = [command[1] if command[0] == "xcrun" else command[0] for command in calls]
+        self.assertEqual(tools[-5:], ["ditto", "notarytool", "stapler", "stapler", "spctl"])
+
+    def test_macos_notarization_rejection_fails_the_package(self):
+        def run(command, **options):
+            stdout = json.dumps({"id": "submission", "status": "Invalid"})
+            return subprocess.CompletedProcess(command, 0, stdout=stdout)
+
+        environment = {"ZUSE_MACOS_SIGN_IDENTITY": "identity", "APPLE_ID": "id",
+                       "APPLE_APP_SPECIFIC_PASSWORD": "password", "APPLE_TEAM_ID": "team"}
+        with patch.dict(os.environ, environment), self.assertRaisesRegex(ValueError, "Invalid"):
+            package.sign_macos(self.root / "Zuse.app", run)
+
+
 if __name__ == "__main__":
     unittest.main()

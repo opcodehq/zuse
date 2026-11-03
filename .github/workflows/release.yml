@@ -88,8 +88,44 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
       - run: cargo fetch --locked
+      # Loads the Developer ID certificate into a throwaway keychain. Without
+      # the secrets the macOS package is built unsigned, with a warning.
+      - name: Load the macOS signing certificate
+        if: runner.os == 'macOS'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          if [ -z "$CSC_LINK" ]; then
+            echo "::warning::CSC_LINK is not set; the macOS package will be unsigned and not notarized"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/zuse-signing.keychain-db"
+          keychain_password=$(uuidgen)
+          echo "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/certificate.p12"
+          identity=$(security find-identity -v -p codesigning "$keychain" | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')
+          if [ -z "$identity" ]; then
+            echo "::error::The certificate in CSC_LINK has no Developer ID Application identity"
+            exit 1
+          fi
+          echo "ZUSE_MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "ZUSE_MACOS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
       - name: Package
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --output dist/release
+      - name: Remove the signing keychain
+        if: always() && runner.os == 'macOS' && env.ZUSE_MACOS_KEYCHAIN != ''
+        run: security delete-keychain "$ZUSE_MACOS_KEYCHAIN"
       - uses: actions/upload-artifact@v4
         with:
           name: zuse-${{ matrix.platform }}-${{ matrix.arch }}
