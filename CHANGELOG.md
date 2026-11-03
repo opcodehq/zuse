@@ -1,11 +1,13 @@
 # Changelog
 
-## 0.26.0 - 2026-10-30
+## 0.26.0 - 2026-11-03
 
 The first stable release of the native Zuse app since 0.25.0. It also includes every change from the 0.25.1 previews.
 
 ### Added
 
+- Muse Code as a built-in agent provider: live model list, approvals, resume, interrupt, `/compact`, image attachments, and install and update through Meta's script.
+- Interface languages: English, French, German, Simplified Chinese, Traditional Chinese, Japanese and Korean across the desktop app, browser and CLI, following the system language by default and switchable without losing drafts.
 - Native Rust model harness: direct Responses, Messages, GenerateContent and Chat Completions transport, durable transition storage with recovery review, bounded child agents, concurrent independent reads, local skills and lazily pooled MCP connections. The production JavaScript model bridge is removed.
 - New project palette: open a folder, clone a repository (search your GitHub repositories or paste a Git URL) or create an Empty, Next.js or Turborepo project, optionally published as a private GitHub repository. Cloning and scaffolding run in the background with progress, cancel and retry above the composer.
 - Local stdio MCP servers in Plugins: add one by pasting its configuration; its tools reach every agent through the plugin gateway.
