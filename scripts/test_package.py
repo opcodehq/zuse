@@ -204,5 +204,27 @@ class PackagingTests(unittest.TestCase):
             package.sign_macos(self.root / "Zuse.app", run)
 
 
+    def test_build_and_package_stages_split_the_dependency_build_from_assembly(self):
+        host = {"Linux": "linux", "Darwin": "macos"}[package.platform.system()]
+        arch = {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}[package.platform.machine()]
+        calls = []
+
+        def run(command, **options):
+            calls.append(command[0])
+            if command[0] == "git":
+                raise subprocess.CalledProcessError(1, command)
+            return subprocess.CompletedProcess(command, 0, stdout="")
+
+        argv = ["package.py", "--platform", host, "--arch", arch]
+        with patch.object(package.subprocess, "run", run), patch.object(sys, "argv", argv + ["--build-only"]):
+            package.main()
+        self.assertEqual(calls, ["bash", "cargo"])
+        calls.clear()
+        with patch.object(package.subprocess, "run", run), patch.object(sys, "argv", argv + ["--skip-build"]), \
+                self.assertRaises(subprocess.CalledProcessError):
+            package.main()
+        self.assertEqual(calls, ["git"])
+
+
 if __name__ == "__main__":
     unittest.main()

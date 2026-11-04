@@ -202,6 +202,11 @@ def main():
     parser.add_argument("--binaries", type=Path, help="Assemble prebuilt executables from this directory; skips all builds")
     parser.add_argument("--assets", type=Path, default=ROOT / "dist/web")
     parser.add_argument("--output", type=Path, default=ROOT / "dist/build")
+    # Release jobs build without signing credentials, then sign in a separate
+    # step that runs no dependency build code.
+    stage = parser.add_mutually_exclusive_group()
+    stage.add_argument("--build-only", action="store_true", help="Build the web assets and executables, then stop")
+    stage.add_argument("--skip-build", action="store_true", help="Assemble what --build-only produced in this checkout")
     args = parser.parse_args()
     system = args.platform or {"Linux": "linux", "Darwin": "macos"}.get(platform.system())
     arch = args.arch or {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}.get(platform.machine())
@@ -214,9 +219,12 @@ def main():
             parser.error("Build on the target host, or supply --binaries for an existing target build")
         if args.assets.resolve() != (ROOT / "dist/web").resolve():
             parser.error("Default builds produce dist/web; use --binaries to assemble other assets")
-        subprocess.run(["bash", "scripts/build-web.sh", "--release"], cwd=ROOT, check=True)
-        subprocess.run(["cargo", "+stable", "build", "--locked", "--profile", args.profile,
-                        "-p", "zuse", "-p", "zuse-cli", "-p", "zuse-relay", "--bins"], cwd=ROOT, check=True)
+        if not args.skip_build:
+            subprocess.run(["bash", "scripts/build-web.sh", "--release"], cwd=ROOT, check=True)
+            subprocess.run(["cargo", "+stable", "build", "--locked", "--profile", args.profile,
+                            "-p", "zuse", "-p", "zuse-cli", "-p", "zuse-relay", "--bins"], cwd=ROOT, check=True)
+        if args.build_only:
+            return
         target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
         if not target.is_absolute():
             target = ROOT / target
