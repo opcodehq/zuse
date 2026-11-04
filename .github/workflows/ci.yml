@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: opcodehq/zkit
-          ref: 38173c5aeb16855b50cab64e2500283170e35b3d
+          ref: cc738a94fcfe6d6c0df63062b933e45e1dbb4df5
           path: vendor/zkit
       - run: python3 -m unittest discover -s scripts -p test_package.py -v
 
@@ -112,7 +112,16 @@ jobs:
     env:
       HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
       HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
+      # The UI test binaries outgrow the hosted runner's disk with debug info.
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
     steps:
+      - if: runner.os == 'Linux'
+        name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
