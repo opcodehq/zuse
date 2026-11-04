@@ -123,9 +123,13 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --output dist/release
-      - name: Remove the signing keychain
-        if: always() && runner.os == 'macOS' && env.ZUSE_MACOS_KEYCHAIN != ''
-        run: security delete-keychain "$ZUSE_MACOS_KEYCHAIN"
+      # Runs even when setup failed part-way, before the keychain was exported.
+      - name: Remove the signing credentials
+        if: always() && runner.os == 'macOS'
+        run: |
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          keychain="$RUNNER_TEMP/zuse-signing.keychain-db"
+          if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
       - uses: actions/upload-artifact@v4
         with:
           name: zuse-${{ matrix.platform }}-${{ matrix.arch }}

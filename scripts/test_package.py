@@ -25,6 +25,14 @@ installer = load("installer", "install-linux.py")
 
 class PackagingTests(unittest.TestCase):
     def setUp(self):
+        # Signing tests opt in explicitly; a signing-configured shell must not
+        # make the fixture builds call codesign.
+        environment = patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        for key in ("ZUSE_MACOS_SIGN_IDENTITY", "ZUSE_MACOS_KEYCHAIN", "APPLE_ID",
+                    "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"):
+            os.environ.pop(key, None)
         self.temporary = tempfile.TemporaryDirectory(prefix="zuse package's ")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
