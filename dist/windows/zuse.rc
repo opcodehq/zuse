@@ -1,0 +1,3 @@
+// Resource ID 1 is the icon the window toolkit loads for every Zuse window.
+1 ICON "zuse.ico"
+1 24 "zuse.manifest"
