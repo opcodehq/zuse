@@ -93,7 +93,9 @@ const SELECTION_SCROLL_MAX_STEP_PX: f32 = 24.0;
 /// Activity row height / gap — analytic, so fold heights need no measurement.
 /// Ordinary tools place their icon on the rail; subagents retain a 30px card.
 /// Rows stack without a gap so the rail continues alongside expanded output.
-pub const CHIP_HEIGHT: f32 = 38.0;
+/// A lone card's row matches [`TOOL_TREE_ROW_HEIGHT`], so stacked subagent
+/// cards sit as close as the rows of a task tree.
+pub const CHIP_HEIGHT: f32 = TOOL_TREE_ROW_HEIGHT;
 pub const CHIP_GAP: f32 = 0.0;
 pub const CHIP_CARD_HEIGHT: f32 = 30.0;
 /// Inner height of the chip header: [`CHIP_CARD_HEIGHT`] is the card's
@@ -859,6 +861,16 @@ const OUTPUT_BODY_PAD: f32 = 12.0;
 
 /// The hairline between an expanded chip's header row and its detail body.
 const DETAIL_SEPARATOR: f32 = 1.0;
+/// An open tool call's command and output sit in a soft tonal card; this is
+/// the room the card keeps below it before the next row.
+const DETAIL_CARD_GAP: f32 = 6.0;
+const DETAIL_CARD_INSET: f32 = 10.0;
+
+/// Whether an open chip frames its body in the detail card: ordinary tool
+/// calls do, while thoughts read as prose and subagents keep their own card.
+fn detail_carded(tool: &ToolItem) -> bool {
+    tool.kind == ToolItemKind::Call && !is_agent_tool(tool)
+}
 
 /// Build a tool part's expandable detail. A diff wins over raw output (it is
 /// the more structured record of the same action); post-strip docs carry diff
@@ -923,17 +935,29 @@ fn output_line(line: &str) -> SharedString {
 /// so the budget is sized to fit the narrowest useful transcript pane.
 pub const CALL_WRAP_COLS: usize = 80;
 
-/// Soft-wrap one raw line into [`CALL_WRAP_COLS`]-char chunks so a long
-/// single-line command stays fully readable instead of ellipsizing.
+/// Soft-wrap one raw line into chunks of at most `cols` chars so a long
+/// single-line command stays fully readable instead of ellipsizing. Breaks
+/// after the last space within the budget when one sits in its back half,
+/// else cuts at the budget (a path or token longer than a line).
 fn wrap_cols(line: &str, cols: usize) -> Vec<SharedString> {
-    if line.chars().count() <= cols {
-        return vec![SharedString::from(line.to_owned())];
+    let cols = cols.max(1);
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0;
+    while chars.len() - start > cols {
+        let window = &chars[start..start + cols];
+        let cut = window
+            .iter()
+            .rposition(|c| c.is_whitespace())
+            .filter(|&ix| ix + 1 >= cols / 2)
+            .map_or(cols, |ix| ix + 1);
+        out.push(SharedString::from(window[..cut].iter().collect::<String>()));
+        start += cut;
     }
-    line.chars()
-        .collect::<Vec<_>>()
-        .chunks(cols)
-        .map(|chunk| SharedString::from(chunk.iter().collect::<String>()))
-        .collect()
+    out.push(SharedString::from(
+        chars[start..].iter().collect::<String>(),
+    ));
+    out
 }
 
 /// Build a chip's full-invocation block — the complete tool call the header
@@ -2160,7 +2184,9 @@ pub fn top_gap_for(prev: Option<&Row>, row: &Row) -> f32 {
     } else if matches!(row.kind, RowKind::ToolGroup { .. })
         || prev.is_some_and(|row| matches!(row.kind, RowKind::ToolGroup { .. }))
     {
-        Theme::SPACE_MD
+        // A tool group's summary row already pads its label, so it sits
+        // close to the prose around it, reading as part of the same reply.
+        Theme::SPACE_XS
     } else {
         Theme::SPACE_SM
     }
@@ -3563,12 +3589,6 @@ pub struct Transcript {
     /// identity, so the virtual list must explicitly discard cached heights.
     typography_generation: u32,
     content_width: f32,
-    /// Width held free at the column's right for a docked side card; the
-    /// reading column centers in what remains.
-    right_reserve: f32,
-    /// Room the shell keeps clear at the top right (a docked session card),
-    /// so the outline control steps left of it.
-    outline_inset: f32,
     /// Review fixture: every work group renders open.
     #[cfg(feature = "browser-fixture")]
     fixture_open_groups: bool,
@@ -3981,8 +4001,6 @@ impl Transcript {
             rendered_rows: HashSet::new(),
             typography_generation: crate::typography::generation(cx),
             content_width: crate::settings::transcript_width(cx),
-            right_reserve: 0.0,
-            outline_inset: 0.0,
             #[cfg(feature = "browser-fixture")]
             fixture_open_groups: false,
             code_fences_generation: crate::settings::code_fences_generation(cx),
@@ -4047,22 +4065,6 @@ impl Transcript {
 
     // ---- rail plumbing (rendering lives in crate::rail) ----
 
-    /// Shell-driven width gate: the rail hides below 48rem of container width.
-    /// Shell-driven: hold `reserve` px free on the right of the reading
-    /// column (a docked side card), so the column and card center together.
-    pub fn set_right_reserve(&mut self, reserve: f32, cx: &mut Context<Self>) {
-        let reserve = reserve.max(0.0);
-        if (self.right_reserve - reserve).abs() > 0.25 {
-            self.right_reserve = reserve;
-            // Rows rewrap at the new width, including virtual ones offscreen.
-            self.list.remeasure();
-            if self.pinned {
-                self.wake_spring();
-            }
-            cx.notify();
-        }
-    }
-
     /// Review fixture: show `entry_id`'s hover footer (timestamp, copy,
     /// fork) as if the pointer rested on it.
     #[cfg(feature = "browser-fixture")]
@@ -4085,18 +4087,6 @@ impl Transcript {
             active: Some(0),
         });
         cx.notify();
-    }
-
-    pub fn set_outline_inset(&mut self, inset: f32, cx: &mut Context<Self>) {
-        let inset = inset.max(0.0);
-        if (self.outline_inset - inset).abs() > 0.25 {
-            self.outline_inset = inset;
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn outline_inset(&self) -> f32 {
-        self.outline_inset
     }
 
     pub fn set_rail_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -7167,8 +7157,7 @@ impl Transcript {
             .map(|config| crate::pickers::harness_brand_icon(config.harness).0);
         let list_width = f32::from(self.list.viewport_bounds().size.width);
         let column = if list_width > 0.0 {
-            self.content_width
-                .min((list_width - self.right_reserve).max(1.0))
+            self.content_width.min(list_width.max(1.0))
         } else {
             self.content_width
         };
@@ -8443,10 +8432,8 @@ impl Transcript {
             .justify_center()
             .pt(px(top_gap))
             .pb(px(bottom_pad))
-            // Keep side gutters as the configurable column shrinks to fit;
-            // a docked side card's room comes off the right.
-            .pl(px(48.0))
-            .pr(px(48.0 + self.right_reserve))
+            // Keep side gutters as the configurable column shrinks to fit.
+            .px(px(48.0))
             .child(
                 div()
                     .w_full()
@@ -8948,6 +8935,11 @@ impl Transcript {
                             } else {
                                 0.0
                             }
+                            + if detail_carded(tool) {
+                                DETAIL_CARD_GAP
+                            } else {
+                                0.0
+                            }
                     } else {
                         base_row_height
                     };
@@ -9285,6 +9277,7 @@ impl Transcript {
                 // Invocation first (what was asked), then output/diff (what
                 // came back), separated by a small gap.
                 if open || animating {
+                    let carded = detail_carded(tool);
                     let mut panel = div()
                         .flex_none()
                         .min_w_0()
@@ -9293,6 +9286,13 @@ impl Transcript {
                         .overflow_hidden()
                         .when(flat_thought, |panel| {
                             panel.ml(px(ACTIVITY_ICON_SIZE + ACTIVITY_TEXT_GAP))
+                        })
+                        .when(carded, |panel| {
+                            panel
+                                .mb(px(DETAIL_CARD_GAP))
+                                .px(px(DETAIL_CARD_INSET))
+                                .rounded(px(8.0))
+                                .bg(theme.ink(0.035))
                         });
                     if let Some(invocation) = invocation.as_deref() {
                         panel = panel
@@ -9312,21 +9312,23 @@ impl Transcript {
                         );
                     }
                     if let Some(detail) = detail.as_deref() {
-                        panel = panel
-                            .child(
-                                div()
-                                    .h(px(DETAIL_SEPARATOR))
-                                    .flex_none()
-                                    .when(!collapses && is_agent_tool(tool), |line| {
-                                        line.bg(crate::theme::hairline(0.06))
-                                    }),
-                            )
-                            .child(detail_body(
-                                detail,
-                                detail_highlights[ix].clone(),
-                                &format!("{key}-out"),
-                                theme,
-                            ));
+                        // In the card, a hairline parts the command from
+                        // what came back.
+                        let parted = carded && invocation.is_some();
+                        panel =
+                            panel
+                                .child(
+                                    div().h(px(DETAIL_SEPARATOR)).flex_none().when(
+                                        parted || (!collapses && is_agent_tool(tool)),
+                                        |line| line.bg(crate::theme::hairline(0.06)),
+                                    ),
+                                )
+                                .child(detail_body(
+                                    detail,
+                                    detail_highlights[ix].clone(),
+                                    &format!("{key}-out"),
+                                    theme,
+                                ));
                     }
                     if let Some(ChipAffordance { blob_ref, label }) = affordance {
                         let loading = matches!(
@@ -10376,16 +10378,14 @@ fn chip_header_row(
     } else if detail.is_empty() {
         None
     } else if code_detail {
-        // Commands and MCP calls read as code: a mono chip on a faint wash.
+        // Commands and MCP calls read as code: quiet mono text, no pill, so
+        // a run of them scans as one list rather than a stack of boxes.
         Some(
             div()
                 .min_w_0()
                 .h(px(20.0))
                 .flex()
                 .items_center()
-                .px(px(6.0))
-                .rounded(px(4.0))
-                .bg(theme.ink(0.06))
                 .font_family(theme.font_mono.clone())
                 .text_size(px(TOOL_TEXT_SIZE - 1.0))
                 .text_color(theme.text_muted)
@@ -11290,8 +11290,7 @@ impl Render for Transcript {
             let mut released = diagrams.begin_frame(crate::theme::style_generation());
             let list_width = f32::from(self.list.viewport_bounds().size.width);
             let column = if list_width > 0.0 {
-                self.content_width
-                    .min((list_width - self.right_reserve).max(1.0))
+                self.content_width.min(list_width.max(1.0))
             } else {
                 self.content_width
             };
@@ -14136,9 +14135,10 @@ mod tests {
         // Sibling markdown blocks from the same part: md block gap.
         assert_eq!(top_gap_for(Some(&rows[0]), &rows[1]), render::MD_BLOCK_GAP);
         assert_eq!(top_gap_for(Some(&rows[1]), &rows[2]), render::MD_BLOCK_GAP);
-        // Markdown → tool group and tool group → next part: larger boundary.
-        assert_eq!(top_gap_for(Some(&rows[2]), &rows[3]), Theme::SPACE_MD);
-        assert_eq!(top_gap_for(Some(&rows[3]), &rows[4]), Theme::SPACE_MD);
+        // Markdown → tool group and tool group → next part: a tight
+        // boundary, since the group's summary row pads itself.
+        assert_eq!(top_gap_for(Some(&rows[2]), &rows[3]), Theme::SPACE_XS);
+        assert_eq!(top_gap_for(Some(&rows[3]), &rows[4]), Theme::SPACE_XS);
         // Turn starts get the turn gap regardless.
         assert_eq!(top_gap_for(None, &rows[0]), Theme::SPACE_LG);
     }
@@ -17274,6 +17274,22 @@ mod tests {
         };
         assert_eq!(lines.len(), 3);
         assert!(lines.iter().all(|l| l.chars().count() <= CALL_WRAP_COLS));
+
+        // A command with spaces breaks between words, never inside one, and
+        // keeps every character.
+        let command = "grep -rn \"Cloud could\\|Restart\\|reconnect in Settings\" packages/i18n/locales/en apps/renderer/src | head";
+        let Some(ToolDetail::Output { lines, .. }) = call_block(&ToolCall::Exec {
+            command: command.into(),
+        }) else {
+            panic!("expected an output block")
+        };
+        assert!(lines.len() > 1);
+        assert!(lines.iter().all(|l| l.chars().count() <= CALL_WRAP_COLS));
+        assert!(lines[..lines.len() - 1].iter().all(|l| l.ends_with(' ')));
+        assert_eq!(
+            lines.iter().map(|l| l.as_ref()).collect::<String>(),
+            command
+        );
 
         // MCP input pretty-prints under the `server · tool` line.
         let Some(ToolDetail::Output { lines, .. }) = call_block(&ToolCall::Mcp {
