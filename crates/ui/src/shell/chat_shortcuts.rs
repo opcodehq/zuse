@@ -278,7 +278,9 @@ impl Shell {
                             .role(gpui::Role::Button)
                             .aria_label(tr(cx, msg::commands::shortcuts_panel_close))
                             .hover(|style| style.bg(theme.element_hover))
-                            .on_click(cx.listener(|this, _, _, cx| this.close_shortcuts_panel(cx)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_shortcuts_panel(cx);
+                            }))
                             .child(
                                 crate::icons::icon(crate::icons::CLOSE)
                                     .size(px(16.0))
