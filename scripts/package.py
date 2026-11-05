@@ -39,6 +39,21 @@ def toolkit_source():
     raise ValueError("Pinned toolkit legal source is missing; run cargo fetch --locked first")
 
 
+def bash():
+    """Git Bash on Windows, never the System32 WSL launcher that Windows
+    process creation would otherwise pick for a bare "bash"."""
+    if platform.system() != "Windows":
+        return "bash"
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(directory) / "bash.exe"
+        if candidate.is_file() and "system32" not in str(candidate).lower():
+            return str(candidate)
+    git = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git/bin/bash.exe"
+    if git.is_file():
+        return str(git)
+    raise ValueError("Git Bash is required to build the browser assets on Windows")
+
+
 def binary_target(path):
     with path.open("rb") as stream:
         header = stream.read(32)
@@ -263,7 +278,7 @@ def main():
         if args.assets.resolve() != (ROOT / "dist/web").resolve():
             parser.error("Default builds produce dist/web; use --binaries to assemble other assets")
         if not args.skip_build:
-            subprocess.run(["bash", "scripts/build-web.sh", "--release"], cwd=ROOT, check=True)
+            subprocess.run([bash(), "scripts/build-web.sh", "--release"], cwd=ROOT, check=True)
             subprocess.run(["cargo", "+stable", "build", "--locked", "--profile", args.profile,
                             "-p", "zuse", "-p", "zuse-cli", "-p", "zuse-relay", "--bins"], cwd=ROOT, check=True)
         if args.build_only:
