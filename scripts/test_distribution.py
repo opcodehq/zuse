@@ -4,6 +4,7 @@ from contextlib import chdir
 import io
 import json
 import os
+import platform
 from pathlib import Path
 import tarfile
 import subprocess
@@ -13,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 import distribution
+import publish_distributions
 import test_package as fixtures
 
 
@@ -35,6 +37,10 @@ class DistributionTests(unittest.TestCase):
         self.write_archive()
         self.checksums = self.fixture.root / 'SHA256SUMS'
         self.checksums.write_text(hashlib.sha256(self.archive.read_bytes()).hexdigest() + '  ' + self.archive.name + '\n')
+        for name, value in (('system', 'Linux'), ('machine', 'x86_64')):
+            patcher = patch.object(platform, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def write_archive(self):
         with tarfile.open(self.archive, 'w:gz') as bundle:
@@ -183,6 +189,55 @@ class DistributionTests(unittest.TestCase):
         for version in ('../../main', 'v0.26.0/escape', '0.26.0\n'):
             with self.subTest(version=version), self.assertRaises(ValueError):
                 bootstrap.install(version, lambda url: self.fail('must not download'))
+
+    def test_publishing_keeps_existing_bytes_and_commits_checksums_last(self):
+        old_name = 'zuse-0.25.0-linux-x86_64.tar.gz'
+        new_name = 'zuse-0.25.0-linux-x86_64.deb'
+        for interrupted, fail_upload in ((False, False), (True, False), (False, True)):
+            with self.subTest(interrupted=interrupted, fail_upload=fail_upload):
+                assets = {old_name: b'original archive', 'install.sh': b'old installer'}
+                sums = ''.join(f'{hashlib.sha256(data).hexdigest()}  {name}\n' for name, data in sorted(assets.items())).encode()
+                assets['SHA256SUMS'] = sums
+                if interrupted:
+                    assets[new_name] = b'previously uploaded package'
+                output = self.fixture.root / f'publish-{interrupted}-{fail_upload}'
+                output.mkdir()
+                (output / old_name).write_bytes(b'resigned archive must not replace original')
+                (output / new_name).write_bytes(b'new package')
+                (output / 'install.sh').write_bytes(b'new installer')
+                uploads = []
+                def command(action, tag, *args):
+                    if action == 'view':
+                        return json.dumps({'assets': [{'name': name} for name in assets]})
+                    if action == 'download':
+                        name = args[args.index('--pattern') + 1]
+                        destination = Path(args[args.index('--dir') + 1]) / name
+                        destination.write_bytes(assets[name])
+                    elif action == 'upload':
+                        path = Path(args[0])
+                        if fail_upload and path.name == new_name:
+                            raise OSError('Upload interrupted')
+                        if path.name in assets:
+                            self.assertIn('--clobber', args)
+                            self.assertIn(path.name, ('install.sh', 'SHA256SUMS'))
+                        uploads.append(path.name)
+                        assets[path.name] = path.read_bytes()
+                    else:
+                        self.fail('Unexpected release operation')
+                    return ''
+                if fail_upload:
+                    with self.assertRaisesRegex(OSError, 'Upload interrupted'):
+                        publish_distributions.publish('v0.25.0', output, command)
+                    self.assertEqual(assets['SHA256SUMS'], sums)
+                    self.assertEqual(assets['install.sh'], b'old installer')
+                else:
+                    publish_distributions.publish('v0.25.0', output, command)
+                    self.assertEqual(uploads[-1], 'SHA256SUMS')
+                    self.assertEqual(assets['install.sh'], b'new installer')
+                    for line in assets['SHA256SUMS'].decode().splitlines():
+                        digest, name = line.split()
+                        self.assertEqual(digest, hashlib.sha256(assets[name]).hexdigest())
+                self.assertEqual(assets[old_name], b'original archive')
 
 
 if __name__ == '__main__':

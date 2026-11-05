@@ -31,7 +31,13 @@ Windows: run Setup for a per-user installation with Start menu shortcuts and uni
 ### Install from a Linux terminal
 
 ```sh
-curl -fsSL https://github.com/opcodehq/zuse/releases/download/{tag}/install.sh | sh -s -- --version {version}
+(
+  set -e
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' EXIT
+  curl -fsSL https://github.com/opcodehq/zuse/releases/download/{tag}/install.sh -o "$installer"
+  sh "$installer" --version {version}
+)
 ```
 
 The installer requires Python 3.11+, selects x64 or ARM64, verifies SHA-256 checksums, and installs into `~/.local/share/zuse` with launchers in `~/.local/bin`. It preserves profiles and existing package versions. No sudo is required for the archive installation. Linux needs glibc 2.39+, WebKitGTK 4.1 and a Vulkan driver; Ubuntu 24.04+ is the build baseline. System packages let apt/dnf resolve dependencies:

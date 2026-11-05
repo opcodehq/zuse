@@ -36,7 +36,13 @@ zip, and Linux packages for x64 and ARM64 (`.deb`, `.rpm` and `.tar.gz`).
 Install the preview from a Linux terminal:
 
 ```sh
-curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/install.sh | sh -s -- --version 0.26.0-preview.1
+(
+  set -e
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' EXIT
+  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/install.sh -o "$installer"
+  sh "$installer" --version 0.26.0-preview.1
+)
 ```
 
 The terminal installer requires Python 3.11+, verifies download checksums and

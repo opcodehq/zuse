@@ -7,7 +7,13 @@ archives for x64 and ARM64. The release's `SHA256SUMS` covers every asset.
 ## Install from a Linux terminal
 
 ```sh
-curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/install.sh | sh -s -- --version 0.26.0-preview.1
+(
+  set -e
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' EXIT
+  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/install.sh -o "$installer"
+  sh "$installer" --version 0.26.0-preview.1
+)
 ```
 
 This selects the machine's architecture, verifies the archive checksum and

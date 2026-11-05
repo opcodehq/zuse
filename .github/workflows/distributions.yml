@@ -247,10 +247,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           cp scripts/install.sh output/install.sh
-          cd output
-          sha256sum zuse-* install.sh > SHA256SUMS
-          gh release upload "$RELEASE_TAG" ./* --clobber -R opcodehq/zuse
-          cd ..
+          python scripts/publish_distributions.py "$RELEASE_TAG" output
           gh release view "$RELEASE_TAG" -R opcodehq/zuse --json body --jq .body > current-notes.md
           python scripts/distribution-notes.py "$RELEASE_TAG" current-notes.md > installer-notes.md
           gh release edit "$RELEASE_TAG" -R opcodehq/zuse --notes-file installer-notes.md
