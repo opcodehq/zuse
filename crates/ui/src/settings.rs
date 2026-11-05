@@ -1020,9 +1020,6 @@ pub struct UiSettings {
     pub files_word_wrap: bool,
     /// Include hidden and ignored entries in workspace file trees.
     pub files_show_all: bool,
-    /// The user hid the session card (project, device, side chats, actions)
-    /// that otherwise shows beside a transcript with room for it.
-    pub session_info_hidden: bool,
     /// Conversations closed out of each thread's tab strip, keyed by thread
     /// id. Device-local and non-destructive: a closed conversation stays in
     /// the thread and lists under the strip's history menu until reopened.
@@ -1147,7 +1144,6 @@ impl Default for UiSettings {
             files_autosave_delay_ms: FILES_AUTOSAVE_DELAY_DEFAULT_MS,
             files_word_wrap: false,
             files_show_all: false,
-            session_info_hidden: false,
             closed_thread_conversations: HashMap::new(),
             accent: zuse_theme::AccentSelection::default(),
             surface: zuse_theme::SurfacePreference::default(),
@@ -2041,7 +2037,6 @@ impl UiSettings {
             files_autosave_delay_ms,
             files_word_wrap,
             files_show_all,
-            session_info_hidden,
             closed_thread_conversations,
             accent,
             surface,
@@ -3144,7 +3139,6 @@ mod tests {
             code_font_family: crate::typography::UiFontFamily::Geist,
             code_font_size: 11.0,
             files_show_all: true,
-            session_info_hidden: true,
             closed_thread_conversations: HashMap::from([(
                 "thread".into(),
                 vec!["closed-conversation".into()],

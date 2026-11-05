@@ -2310,7 +2310,7 @@ pub struct Shell {
     session_info_tween: Option<WidthTween>,
     /// Whether the card showed last frame; a change starts the reveal tween.
     session_info_shown: bool,
-    /// The card opened over a transcript too narrow to show it beside.
+    /// The session card is open over the transcript.
     session_info_overlay: bool,
     /// The card's sections the user toggled away from their default (by key).
     session_info_folded: std::collections::HashSet<&'static str>,
@@ -2322,11 +2322,6 @@ pub struct Shell {
     /// Whether the card showed at the toggle's press (see
     /// `note_session_info_press`).
     session_info_pressed_open: Option<bool>,
-    /// The card last showed docked beside the transcript (else over it).
-    session_info_docked: bool,
-    /// The room the transcript last held free for the docked card, eased
-    /// back from as the card hides because the column stopped fitting it.
-    session_info_last_reserve: f32,
     files_content_tween: Option<WidthTween>,
     /// The last tracked frame: its chat, the window fit, and for each of
     /// `[sidebar, surface host, Files]` the width painted and the width its
@@ -2844,8 +2839,6 @@ impl Shell {
             background_stops: Default::default(),
             summary_pr: Default::default(),
             session_info_pressed_open: None,
-            session_info_docked: false,
-            session_info_last_reserve: 0.0,
             files_content_tween: None,
             painted_columns: None,
             fit_exits: [None; 3],
@@ -12075,22 +12068,8 @@ impl Shell {
         }
         self.composer
             .update(cx, |composer, cx| composer.set_dock_frame(dock_frame, cx));
-        // The session card: docked, the transcript holds its room free on
-        // the right and the composer follows the column left by half of it;
-        // over a column too tight for that, it floats once opened.
-        let (session_docked, session_reveal, session_reserve) =
-            self.session_info_frame(has_selection, cx);
-        // The transcript's outline control sits top-right; a docked card
-        // takes that corner, so the outline steps left of it.
-        let outline_inset = if session_docked {
-            (session_info::SESSION_CARD_WIDTH + 8.0) * session_reveal.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        self.transcript.update(cx, |transcript, cx| {
-            transcript.set_right_reserve(session_reserve, cx);
-            transcript.set_outline_inset(outline_inset, cx);
-        });
+        // The session card floats over the transcript once opened.
+        let session_reveal = self.session_info_reveal(has_selection);
         // Panel open/close glides the composer width; a window resize or a
         // seam drag is direct manipulation, so the width tracks the pointer.
         let direct_width =
@@ -12098,7 +12077,6 @@ impl Shell {
         let composer_width = self.composer_dock.borrow_mut().layout_width(
             composer_target_width(
                 main_content_width
-                    - session_reserve
                     - if has_selection || cloud_starting {
                         0.
                     } else {
@@ -12343,12 +12321,8 @@ impl Shell {
             let lift = crate::composer::NEW_THREAD_SELECTOR_ROW_HEIGHT + 10.0;
             (self.viewport_height - f32::from(bounds.top()) + lift).max(24.0)
         }) - 8.0 * (1.0 - chip_opacity);
-        let status = div()
-            .relative()
-            .left(px(-session_reserve / 2.0))
-            .child(self.render_status_strip(composer_width, cx));
+        let status = self.render_status_strip(composer_width, cx);
         let session_card = self.render_session_info(
-            session_docked,
             session_reveal,
             self.viewport_height - Theme::TITLEBAR_HEIGHT - self.bottom_stack.get() - 24.0,
             cx,
@@ -12507,10 +12481,7 @@ impl Shell {
                                 self.reduced_motion,
                                 frame_time,
                             )
-                            // Centered on the transcript, which keeps the
-                            // session card's room free on its right.
                             .floating_clearance(16.)
-                            .shift_x(-session_reserve / 2.0)
                             .reserve_terminal(terminal_geometry.clone()),
                         )
                     })
@@ -19601,7 +19572,6 @@ impl Shell {
         if variant.starts_with("transcript") {
             self.fixture_seed_transcript(variant == "transcript-outline", cx);
             if variant.starts_with("transcript-card") {
-                self.settings.session_info_hidden = false;
                 self.session_info_overlay = true;
             }
             // `:transcript-card-git` runs the chat in a worktree of a Git
