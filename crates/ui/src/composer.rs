@@ -6517,6 +6517,7 @@ pub struct Composer {
     add_menu_open: bool,
     add_menu_active: usize,
     add_menu_focus: FocusHandle,
+    add_button_focus: FocusHandle,
     permission_open: bool,
     permission_inspector: Option<permission_inspector::Inspector>,
     permission_rules_task: Option<Task<()>>,
@@ -7048,6 +7049,7 @@ impl Composer {
             add_menu_open: false,
             add_menu_active: 0,
             add_menu_focus: cx.focus_handle(),
+            add_button_focus: cx.focus_handle().tab_stop(true),
             permission_open: false,
             permission_inspector: None,
             permission_rules_task: None,
@@ -12502,7 +12504,7 @@ impl Render for Composer {
         // model picker.
         let attach = div()
             .id("composer-attach")
-            .track_focus(&self.add_menu_focus)
+            .track_focus(&self.add_button_focus)
             .size(px(28.0))
             .flex_none()
             .flex()
