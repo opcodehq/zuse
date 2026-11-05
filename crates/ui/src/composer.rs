@@ -6873,6 +6873,10 @@ impl Composer {
                 self.on_search_history(&SearchHistory, window, cx);
             }
             "emoji" => self.fixture_set_draft(":smil", cx),
+            "clear" => {
+                self.fixture_set_draft("Save this draft for later", cx);
+                self.on_interrupt_agent(&InterruptAgent, window, cx);
+            }
             "notice" => {
                 self.fixture_set_draft("Save this draft for later", cx);
                 self.on_stash_draft(&StashDraft, window, cx);
@@ -11223,6 +11227,16 @@ impl Composer {
                 .gap(px(4.))
                 .child(before.to_owned())
                 .child(Self::list_keycap(theme, key))
+                .child(after.to_owned())
+                .into_any_element()
+        } else if text.as_ref() == tr(cx, msg::native::press_esc_again_to_clear) {
+            let (before, after) = text.split_once("Esc").unwrap_or((&text, ""));
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child(before.to_owned())
+                .child(Self::list_keycap(theme, "Esc"))
                 .child(after.to_owned())
                 .into_any_element()
         } else {

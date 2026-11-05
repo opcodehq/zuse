@@ -81,7 +81,7 @@ fn main() -> anyhow::Result<()> {
                 pause(cx).await;
                 for (mode, name) in [(appearance::AppearanceMode::Dark,"dark"), (appearance::AppearanceMode::Light,"light")] {
                     cx.update(|cx| appearance::set_mode(mode,cx));
-                    for kind in ["find", "find-empty", "stash", "history", "emoji", "stash-empty", "notice", "shortcuts"] {
+                    for kind in ["find", "find-empty", "stash", "history", "emoji", "stash-empty", "notice", "clear", "shortcuts"] {
                         window.update(cx, |s,w,cx| s.fixture_shortcut_visual(kind,w,cx))?;
                         pause(cx).await;
                         capture(window.into(),cx,&output.join(format!("{kind}-{name}.png"))).await?;
