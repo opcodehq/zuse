@@ -8978,6 +8978,18 @@ impl Composer {
         let mut card = crate::popover::completion_card(theme)
             .p(px(6.))
             .gap_0()
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                // The editor and the stash toggle may keep the list open.
+                // A click elsewhere cancels history search and returns its draft.
+                if !this
+                    .surface_bounds
+                    .get()
+                    .is_some_and(|bounds| bounds.contains(&event.position))
+                {
+                    this.close_list(true, cx);
+                    cx.notify();
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -14206,6 +14218,11 @@ mod tests {
             let saved = Composer::stashed_prompts(cx);
             assert_eq!(saved.len(), 1);
             assert_eq!(saved[0].text, "keep this");
+        });
+        visual.simulate_click(gpui::point(px(10.), px(10.)), gpui::Modifiers::default());
+        entity.read_with(&visual, |composer, cx| {
+            assert!(composer.list.is_none(), "outside click dismisses the list");
+            assert_eq!(composer.input.read(cx).text(), "current draft");
         });
     }
 
