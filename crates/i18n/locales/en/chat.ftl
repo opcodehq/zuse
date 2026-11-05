@@ -2882,3 +2882,16 @@ chat-find_in_chat_no_results = No results
 chat-find_in_chat_previous = Previous match
 chat-find_in_chat_next = Next match
 chat-find_in_chat_close = Close find
+
+chat-history_search_results = Sent messages
+chat-history_search_no_results = No matches
+chat-stash_title = Stash
+chat-stash_open = Stashed prompts: { $count }. Open stash.
+chat-stash_list = Stashed prompts
+chat-stash_empty = Nothing stashed yet. Press { $shortcut } with a draft to stash it.
+chat-stash_delete = Delete stashed prompt
+chat-history_search_empty = No messages sent in this chat yet.
+chat-history_search_title = Searching sent messages
+chat-history_search_use = use
+chat-history_search_cancel = cancel
+chat-stash_saved_notice = Draft stashed · <part0>{ $shortcut }</part0> to view

@@ -330,7 +330,7 @@ impl Transcript {
             .map(|find| (find.matches.len(), find.active))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "browser-fixture"))]
     pub(crate) fn set_find_query(&mut self, query: &str, cx: &mut Context<Self>) {
         if let Some(find) = &self.find {
             find.input
