@@ -197,8 +197,8 @@ impl Transcript {
             surface,
             needle: find.needle.clone(),
             active: active.map(|m| (m.row_id.clone(), m.ordinal)),
-            wash: theme.warning.opacity(0.28),
-            active_wash: theme.warning.opacity(0.65),
+            wash: theme.accent.opacity(0.26),
+            active_wash: theme.accent.opacity(0.78),
         });
         let count: SharedString = if find.needle.is_empty() {
             SharedString::default()
@@ -215,20 +215,21 @@ impl Transcript {
             div()
                 .id(id)
                 .flex_none()
-                .size(px(22.0))
+                .size(px(28.0))
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(6.0))
+                .rounded(px(8.0))
                 .role(gpui::Role::Button)
-                .aria_label(label)
+                .aria_label(label.clone())
+                .tooltip(crate::settings::widgets::text_tooltip(label))
                 .when(enabled, |el| {
                     el.cursor_pointer()
                         .hover(|style| style.bg(theme.element_hover))
                 })
                 .child(
                     crate::icons::icon(glyph)
-                        .size(px(14.0))
+                        .size(px(16.0))
                         .text_color(if enabled {
                             theme.text_muted
                         } else {
@@ -241,25 +242,43 @@ impl Transcript {
             .id("chat-find-bar")
             .key_context("ChatFind")
             .occlude()
-            .w(px(340.0))
-            .px(px(8.0))
-            .py(px(4.0))
+            .h(px(36.0))
+            .rounded(px(12.0))
+            .p(px(4.0))
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(2.0))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
                     cx.stop_propagation();
                     this.close_find(cx);
                 }
             }))
-            .child(div().flex_1().min_w_0().child(find.input.clone()))
+            .child(
+                div()
+                    .w(px(176.0))
+                    .min_w_0()
+                    .h(px(28.0))
+                    .flex()
+                    .items_center()
+                    .px(px(8.0))
+                    .rounded(px(8.0))
+                    .bg(crate::theme::ink(0.04))
+                    .child(find.input.clone()),
+            )
             .child(
                 div()
                     .flex_none()
-                    .text_size(px(11.0))
-                    .text_color(theme.text_muted)
+                    .min_w(px(56.0))
+                    .px(px(6.0))
+                    .text_size(px(12.0))
+                    .text_center()
+                    .text_color(if total == 0 {
+                        theme.text_muted.opacity(0.7)
+                    } else {
+                        theme.text_muted
+                    })
                     .child(count),
             )
             .child(
@@ -293,10 +312,7 @@ impl Transcript {
             div()
                 .absolute()
                 .top(px(Theme::TITLEBAR_HEIGHT + 8.0))
-                .left_0()
-                .right_0()
-                .flex()
-                .justify_center()
+                .right(px(12.0))
                 .child(bar)
                 .into_any_element(),
         )
