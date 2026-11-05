@@ -9,9 +9,10 @@ from distribution import release_version
 
 def release_notes(changelog, tag):
     version = release_version(tag)
-    headings = list(re.finditer(r'^##[ \t]+([^\s]+)[^\r\n]*$', changelog, re.MULTILINE))
+    headings = list(re.finditer(r'^##[ \t]+([^\r\n]+)\r?$', changelog, re.MULTILINE))
     for candidate in dict.fromkeys((version, version.split('-', 1)[0])):
-        matches = [i for i, heading in enumerate(headings) if heading[1] == candidate]
+        matches = [i for i, heading in enumerate(headings)
+                   if heading[1].split(' - ', 1)[0].strip() == candidate]
         if len(matches) > 1:
             raise ValueError(f'Duplicate changelog section: {candidate}')
         if matches:
