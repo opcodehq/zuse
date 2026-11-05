@@ -149,6 +149,7 @@ mod tests {
             requests[1].1["expectedConfig"],
             json!({"deviceId":"execution-host","config":null})
         );
-        assert_eq!(requests[2].1["config"]["sandbox"], "read-only");
+        assert_eq!(requests[2].1["config"]["sandbox"], "auto");
+        assert_eq!(requests[2].1["config"]["plan"], true);
     }
 }
