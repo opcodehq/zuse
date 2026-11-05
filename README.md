@@ -27,6 +27,23 @@ provider execution, the full archive lifecycle and cutover remain in progress.
 
 Rust dependencies and versions are managed in the root Cargo workspace. JavaScript is limited to provider SDK bridges and generated browser bindings.
 
+## Install
+
+Download the [current preview](https://github.com/opcodehq/zuse/releases/tag/v0.26.0-preview.1):
+macOS DMGs for Apple silicon and Intel, a Windows setup executable or portable
+zip, and Linux packages for x64 and ARM64 (`.deb`, `.rpm` and `.tar.gz`).
+
+Install the preview from a Linux terminal:
+
+```sh
+curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/install.sh | sh -s -- --version 0.26.0-preview.1
+```
+
+The terminal installer requires Python 3.11+, verifies download checksums and
+installs for the current user. Linux uses Ubuntu 24.04/glibc 2.39 as its build
+baseline. See [installation and runtime requirements](internal-docs/packaging.md)
+for system dependencies, alternative formats and uninstall commands.
+
 ## Development
 
 For native app bundles and user-level Linux installation, see

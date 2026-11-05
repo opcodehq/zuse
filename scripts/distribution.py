@@ -233,6 +233,16 @@ License: AGPL-3.0-only
 URL: https://github.com/opcodehq/zuse
 Source0: payload.tar.gz
 BuildArch: {manifest['arch']}
+Requires: libwebkit2gtk-4.1.so.0()(64bit)
+Requires: libjson-glib-1.0.so.0()(64bit)
+Requires: libvulkan.so.1()(64bit)
+Requires: libfontconfig.so.1()(64bit)
+Requires: libfreetype.so.6()(64bit)
+Requires: libwayland-client.so.0()(64bit)
+Requires: libwayland-cursor.so.0()(64bit)
+Requires: libwayland-egl.so.1()(64bit)
+Requires: libxcb-shape.so.0()(64bit)
+Requires: libxcb-xfixes.so.0()(64bit)
 %description
 Native desktop app, server and relay with bundled browser assets.
 %install
