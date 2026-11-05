@@ -708,7 +708,12 @@ mod tests {
                 if path.is_dir() {
                     collect(&path, base, out);
                 } else {
-                    out.insert(path.strip_prefix(base).expect("under base").to_path_buf());
+                    let relative = path.strip_prefix(base).expect("under base");
+                    // Git's detached auto-maintenance may briefly hold this
+                    // lock after the fixture commit. It is not a stored object.
+                    if relative != Path::new("maintenance.lock") {
+                        out.insert(relative.to_path_buf());
+                    }
                 }
             }
         }
@@ -716,6 +721,22 @@ mod tests {
         let mut out = BTreeSet::new();
         collect(&objects, &objects, &mut out);
         out
+    }
+
+    #[test]
+    fn checkout_object_inventory_ignores_only_the_transient_maintenance_lock() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let objects = tmp.path().join(".git/objects");
+        std::fs::create_dir_all(objects.join("ab")).unwrap();
+        std::fs::create_dir_all(objects.join("pack")).unwrap();
+        let object = format!("ab/{}", "c".repeat(38));
+        std::fs::write(objects.join(&object), "object").unwrap();
+        std::fs::write(objects.join("pack/pack-test.keep"), "keep").unwrap();
+        let before = checkout_objects(tmp.path());
+        std::fs::write(objects.join("maintenance.lock"), "git maintenance").unwrap();
+        assert_eq!(checkout_objects(tmp.path()), before);
+        assert!(before.contains(Path::new(&object)));
+        assert!(before.contains(Path::new("pack/pack-test.keep")));
     }
 
     /// Paths in the snapshot's tree, read through the snapshot's own store.
