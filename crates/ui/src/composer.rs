@@ -14077,23 +14077,38 @@ mod tests {
                 composer.toggle_stash_list(cx);
             })
             .unwrap();
-        cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
-            .unwrap();
+        // Mount at the bottom of the window, as the chat shell does, so the
+        // popover above it is inside the window's pointer hit-test bounds.
+        struct BottomComposer(Entity<Composer>);
+        impl Render for BottomComposer {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .justify_end()
+                    .child(self.0.clone())
+            }
+        }
+        let entity = handle.update(cx, |_, _, cx| cx.entity()).unwrap();
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.replace_root(cx, |_, _| BottomComposer(entity.clone()));
+            window.draw(cx).clear();
+        })
+        .unwrap();
         let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
         let delete = visual
             .debug_bounds("delete-stashed-prompt-0")
             .expect("pointer delete control");
         visual.simulate_mouse_move(delete.center(), None, gpui::Modifiers::default());
         visual.simulate_click(delete.center(), gpui::Modifiers::default());
-        handle
-            .read_with(&visual, |composer, cx| {
-                assert_eq!(composer.input.read(cx).text(), "current draft");
-                assert!(matches!(composer.list, Some(ComposerList::Stash { .. })));
-                let saved = Composer::stashed_prompts(cx);
-                assert_eq!(saved.len(), 1);
-                assert_eq!(saved[0].text, "keep this");
-            })
-            .unwrap();
+        entity.read_with(&visual, |composer, cx| {
+            assert_eq!(composer.input.read(cx).text(), "current draft");
+            assert!(matches!(composer.list, Some(ComposerList::Stash { .. })));
+            let saved = Composer::stashed_prompts(cx);
+            assert_eq!(saved.len(), 1);
+            assert_eq!(saved[0].text, "keep this");
+        });
     }
 
     #[gpui::test]
