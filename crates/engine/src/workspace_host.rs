@@ -1282,6 +1282,64 @@ impl WorkspaceHost {
         })
     }
 
+    /// Install an authority-registered cloud conversation before its first
+    /// sealed command. Existing local identities are checked, never replaced.
+    pub fn install_registered_thread_session(
+        &self,
+        source: &Chat,
+        registration: &zuse_protocol::cloud_task_commands::RuntimeSession,
+        config: &zuse_protocol::ChatConfig,
+    ) -> Result<Chat, EngineError> {
+        self.mutate(|doc| -> Result<Chat, EngineError> {
+            let invalid = || EngineError::Other("cloud_conversation_identity_changed".into());
+            let current = doc.chat(&source.id)?.ok_or_else(invalid)?;
+            if registration.thread_id != source.id
+                || registration.session_id == source.id
+                || registration.session_id.is_empty()
+                || registration.session_id.len() > 512
+                || registration.created_at <= 0
+                || current.archived
+                || current.device_id != source.device_id
+                || current.cwd != source.cwd
+                || current.thread_id.is_some()
+                || current.parent_chat_id.is_some()
+                || registration
+                    .title
+                    .as_ref()
+                    .is_some_and(|v| v.len() > 512 || v.chars().any(char::is_control))
+            {
+                return Err(invalid());
+            }
+            let created = chrono::DateTime::from_timestamp_millis(registration.created_at)
+                .ok_or_else(invalid)?;
+            if let Some(existing) = doc.chat(&registration.session_id)? {
+                if existing.thread_id.as_deref() != Some(source.id.as_str())
+                    || existing.device_id != source.device_id
+                    || existing.created_at != created
+                    || existing.archived
+                {
+                    return Err(invalid());
+                }
+                return Ok(existing);
+            }
+            let mut chat = current;
+            chat.id = registration.session_id.clone();
+            chat.thread_id = Some(source.id.clone());
+            chat.room_gen = Some(2);
+            chat.title = registration.title.clone();
+            chat.config = Some(config.clone());
+            chat.created_at = created;
+            chat.last_message_preview = None;
+            chat.last_message_at = None;
+            chat.last_seen_at = None;
+            chat.harness_session_id = None;
+            chat.harness_session_cwd = None;
+            chat.source_context = None;
+            doc.upsert_chat(&chat)?;
+            Ok(chat)
+        })
+    }
+
     /// Publish archive state and restored checkout metadata under one ownership check.
     pub(crate) fn transition_archive(
         &self,

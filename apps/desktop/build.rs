@@ -11,9 +11,9 @@ fn main() {
             plist.display()
         );
     }
-    println!("cargo:rerun-if-changed=../../dist/windows/zuse.rc");
-    println!("cargo:rerun-if-changed=../../dist/windows/zuse.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=../../dist/windows/zuse.rc");
+        println!("cargo:rerun-if-changed=../../dist/windows/zuse.ico");
         embed_resource::compile_for(
             "../../dist/windows/zuse.rc",
             &["zuse"],

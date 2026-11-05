@@ -6,7 +6,8 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-runtime-acceptance = ["zuse-cloud-runtime/engine", "dep:zuse-engine", "zuse-engine/test-support", "dep:zuse-rpc", "dep:tokio-util"]
+hosted-browser = ["dep:zuse-engine", "dep:zuse-serve"]
+runtime-acceptance = ["zuse-cloud-runtime/engine", "dep:zuse-engine", "zuse-engine/test-support", "dep:zuse-rpc"]
 
 [[example]]
 name = "cloud-ui-host"
@@ -16,16 +17,18 @@ required-features = ["runtime-acceptance"]
 [dependencies]
 zuse-cloud-projection.workspace = true
 zuse-engine = { workspace = true, optional = true }
+zuse-serve = { workspace = true, optional = true }
 zuse-cloud-runtime = { path = "../cloud-runtime", features = ["engine"] }
 zuse-providers.workspace = true
 zuse-rpc = { workspace = true, optional = true }
 tempfile.workspace = true
-tokio-util = { workspace = true, features = ["rt"], optional = true }
+tokio-util = { workspace = true, features = ["rt"] }
 anyhow.workspace = true
 async-trait.workspace = true
 aes-gcm = { version = "0.10.3", features = ["std"] }
 axum.workspace = true
 futures.workspace = true
+libc.workspace = true
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
 chrono.workspace = true
 base64 = "0.22"
@@ -42,15 +45,17 @@ sha2.workspace = true
 subtle.workspace = true
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "json"] }
 tokio.workspace = true
+tracing.workspace = true
 tower-http = { workspace = true, features = ["cors"] }
 uuid.workspace = true
 zuse-protocol.workspace = true
 zeroize = "1"
 
 [dev-dependencies]
+tracing-subscriber.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 zuse-doc.workspace = true
 rusqlite.workspace = true
-libc.workspace = true
 tokio-tungstenite.workspace = true
 tower = { version = "0.5", features = ["util"] }
 rand = "0.8"

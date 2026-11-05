@@ -14,6 +14,7 @@
 use crate::localization::message as tr;
 use zuse_i18n::messages as msg;
 mod cloud;
+pub(crate) use cloud::CloudCanvasChoices;
 mod cloud_models;
 mod compact;
 mod creation_sources;
@@ -1253,6 +1254,9 @@ impl Pickers {
 
     /// Keep a first-send snapshot stable while it is being submitted.
     fn harness_locked(&self, cx: &App) -> bool {
+        if self.cloud.task_binding.is_some() {
+            return false;
+        }
         let state = self.state.read(cx);
         !self.is_settings_model()
             && state.selected_chat.is_some()
@@ -1291,6 +1295,14 @@ impl Pickers {
 
     /// Effective harness: picked, or the chat's config, or the first listed.
     fn effective_harness(&self, cx: &App) -> Option<HarnessId> {
+        if let Some(choice) = self
+            .cloud
+            .task_binding
+            .as_ref()
+            .and_then(|binding| binding.choice.as_ref())
+        {
+            return Some(choice.harness);
+        }
         if self.cloud_models_active(cx) {
             return self.cloud.catalog.as_ref().and_then(|catalog| {
                 catalog
@@ -1378,6 +1390,15 @@ impl Pickers {
     /// Effective model id: the draft pick, the selected chat's config, or (on
     /// the new-chat canvas) the remembered last-used model for the harness.
     fn effective_model_id<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
+        if let Some(choice) = self
+            .cloud
+            .task_binding
+            .as_ref()
+            .and_then(|binding| binding.choice.as_ref())
+        {
+            return choice.model.as_deref();
+        }
+
         if self.cloud_models_active(cx) {
             let provider = self
                 .cloud
@@ -1436,6 +1457,14 @@ impl Pickers {
     /// The reasoning level picked, configured or remembered — before any
     /// clamping to the selected model's ladder.
     fn explicit_reasoning(&self, cx: &App) -> Option<ReasoningLevel> {
+        if let Some(choice) = self
+            .cloud
+            .task_binding
+            .as_ref()
+            .and_then(|binding| binding.choice.as_ref())
+        {
+            return choice.reasoning;
+        }
         self.config.reasoning.or_else(|| {
             match self.state.read(cx).selected_chat_row() {
                 Some(chat) => chat.config.as_ref().and_then(|c| c.reasoning),
@@ -1536,6 +1565,15 @@ impl Pickers {
     /// selections for existing chats, the remembered picks for the model the
     /// new-chat canvas resolves to (same id [`Self::resolved`] sends).
     fn explicit_options(&self, cx: &App) -> serde_json::Map<String, serde_json::Value> {
+        if let Some(choice) = self
+            .cloud
+            .task_binding
+            .as_ref()
+            .and_then(|binding| binding.choice.as_ref())
+        {
+            return choice.model_options.clone();
+        }
+
         if !self.model_configuration_available(cx) {
             return Default::default();
         }
@@ -1602,6 +1640,9 @@ impl Pickers {
     /// `Mutate createChat`: concrete model + reasoning whenever the catalog is
     /// loaded (no "engine picks a default" passthrough).
     pub fn resolved(&self, cx: &App) -> ResolvedRunConfig {
+        if let Some(choice) = self.cloud_task_choice() {
+            return choice;
+        }
         let (sandbox, plan) = if self.state.read(cx).selected_chat.is_none() {
             (
                 self.config
@@ -1807,13 +1848,7 @@ impl Pickers {
             },
             PickerKind::Branch => self.selected_ref_index(cx),
             PickerKind::HarnessModel => self.selected_model_index(cx),
-            PickerKind::Space => {
-                if self.state.read(cx).no_project {
-                    0
-                } else {
-                    self.selected_project_index(cx) + 1
-                }
-            }
+            PickerKind::Space => self.selected_space_menu_index(cx),
             PickerKind::Device => self.selected_device_index(cx),
         };
         if kind == PickerKind::Checkout {
@@ -1880,8 +1915,12 @@ impl Pickers {
                 // timeout/fallback result until the application restarts.
                 self.prefetch_models(true, cx);
             }
-            // Projects and devices are already synced state — nothing to load.
-            PickerKind::Space | PickerKind::Device => {}
+            // Reopening retries stale Cloud metadata without clearing visible rows.
+            // A failed earlier read must not stay latched until app restart.
+            PickerKind::Space | PickerKind::Device => {
+                self.cloud.refresh();
+                self.ensure_cloud(cx);
+            }
         }
         cx.notify();
     }
@@ -2479,6 +2518,19 @@ impl Pickers {
     /// Stage model, reasoning and option fields with the shared coordinator.
     /// Reasoning and options are clamped to the chosen model's catalog.
     fn update_chat_config(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut ChatConfig)) {
+        if self.cloud.task_binding.is_some() {
+            if let Some(mut choice) = self
+                .cloud
+                .task_binding
+                .as_ref()
+                .and_then(|binding| binding.choice.clone())
+                .or_else(|| self.resolved(cx).chat_config())
+            {
+                change(&mut choice);
+                self.set_cloud_task_choice(choice, cx);
+            }
+            return;
+        }
         if self.state.read(cx).selected_chat.is_none() {
             return;
         }
@@ -2901,6 +2953,29 @@ impl Pickers {
 
     /// Current project row on an unsearched open, or the final opt-out row.
     /// An implicit empty selection has no highlight until the user navigates.
+    fn selected_space_menu_index(&self, cx: &App) -> usize {
+        let state = self.state.read(cx);
+        if let Some(project) = &state.cloud_project {
+            let Some(id) = project["projectId"].as_str() else {
+                return NO_ACTIVE_ROW;
+            };
+            return self
+                .filtered_cloud_projects(cx)
+                .iter()
+                .position(|row| row["projectId"].as_str() == Some(id))
+                .map(|index| self.filtered_project_rows(cx).len() + index + 1)
+                .unwrap_or(NO_ACTIVE_ROW);
+        }
+        if state.no_project {
+            0
+        } else {
+            // The missing-selection sentinel is not a project row ordinal.
+            self.selected_project_index(cx)
+                .checked_add(1)
+                .unwrap_or(NO_ACTIVE_ROW)
+        }
+    }
+
     fn selected_project_index(&self, cx: &App) -> usize {
         if self.state.read(cx).no_project {
             return self.project_rows(cx).len();
@@ -7272,6 +7347,51 @@ mod tests {
     }
 
     #[gpui::test]
+    fn project_selector_opens_without_a_local_selection(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        for (cloud, no_project, expected) in [
+            (false, false, NO_ACTIVE_ROW),
+            (true, false, 1),
+            (false, true, 0),
+        ] {
+            let handle = cx.add_window(move |_, cx| {
+                let state = cx.new(move |_| {
+                    let mut state = AppState::new();
+                    state.no_project = no_project;
+                    state.cloud_project = cloud.then(|| {
+                        serde_json::json!({
+                            "projectId":"cloud-only", "displayName":"Cloud repository"
+                        })
+                    });
+                    state
+                });
+                let mut pickers = Pickers::new(state, cx);
+                pickers
+                    .cloud
+                    .set_project_rows_for_test(vec![serde_json::json!({
+                        "projectId":"cloud-only", "displayName":"Cloud repository"
+                    })]);
+                pickers
+            });
+            handle
+                .update(cx, |pickers, window, cx| {
+                    pickers.toggle(PickerKind::Space, window, cx);
+                    assert_eq!(pickers.open_kind(), Some(PickerKind::Space));
+                    assert_eq!(
+                        pickers.active, expected,
+                        "cloud={cloud}, no_project={no_project}"
+                    );
+                })
+                .unwrap();
+            cx.run_until_parked();
+            handle
+                .update(cx, |_, window, _| window.remove_window())
+                .unwrap();
+            cx.run_until_parked();
+        }
+    }
+
+    #[gpui::test]
     fn projectless_picker_clears_checkout_and_supports_keyboard_selection(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -7297,7 +7417,7 @@ mod tests {
             pickers.config.branch = Some("old-branch".into());
             pickers.config.checkout = CheckoutKind::NewWorktree;
             pickers.open.open(PickerKind::Space);
-            pickers.active = 1; // project row followed by the projectless row
+            pickers.active = 0; // The explicit No project row precedes project choices.
             pickers.on_search_submit(cx);
         });
         cx.run_until_parked();

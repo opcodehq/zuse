@@ -1,19 +1,33 @@
 use std::{env, fs, path::PathBuf, process::Command};
 fn main() {
     println!("cargo:rerun-if-env-changed=HUGEICONS_SOLID_VERSION");
+    println!("cargo:rerun-if-env-changed=ZUSE_ICON_STYLE");
     println!("cargo:rerun-if-changed=mapping.tsv");
     println!("cargo:rerun-if-changed=assets/free");
     println!("cargo:rerun-if-changed=../../scripts/prepare-icons.mjs");
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    // Check key presence each invocation without recording the secret value in
-    // Cargo's RerunIfEnvChanged fingerprint. The missing sentinel forces this
-    // small selector to rerun; prepared SVGs are reused by the generator.
-    println!(
-        "cargo:rerun-if-changed={}",
-        out.join("style-selection-sentinel").display()
-    );
-    let solid = env::var("HUGEICONS_LICENSE_KEY").is_ok_and(|key| !key.trim().is_empty());
+    // The dev launcher supplies a public selector so unchanged builds stay
+    // fresh without recording the license key in Cargo's fingerprints.
+    // Direct Cargo invocations retain automatic credential-presence checks.
+    let solid = match env::var("ZUSE_ICON_STYLE").as_deref() {
+        Ok("free") => false,
+        Ok("solid") => true,
+        Ok(_) => panic!("ZUSE_ICON_STYLE must be free or solid"),
+        Err(_) => {
+            println!(
+                "cargo:rerun-if-changed={}",
+                out.join("style-selection-sentinel").display()
+            );
+            env::var("HUGEICONS_LICENSE_KEY").is_ok_and(|key| !key.trim().is_empty())
+        }
+    };
+    if solid {
+        assert!(
+            env::var("HUGEICONS_LICENSE_KEY").is_ok_and(|key| !key.trim().is_empty()),
+            "Solid icons require HUGEICONS_LICENSE_KEY"
+        );
+    }
     let assets = if solid {
         let assets = out.join("solid");
         let status = Command::new("node")

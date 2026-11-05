@@ -121,3 +121,257 @@ pub fn activate(core: &EngineCore, boot: &CloudRuntimeBootstrap, d: &Directive) 
     core.workspace.flush_checked()?;
     Ok(())
 }
+
+/// Park in place and await explicit worker wake delivery. The notification alone
+/// cannot reopen execution: verify the current server-owned operation first.
+#[cfg(unix)]
+pub async fn memory_sleep(
+    core: &EngineCore,
+    authority: &Authority,
+    identity: &mut crate::Identity,
+    directory: &std::path::Path,
+    directive: Directive,
+    publisher: Option<&crate::projection::Publisher>,
+    credentials: &tokio::sync::watch::Sender<CloudRuntimeBootstrap>,
+    broker: Option<&crate::grants::ProviderBrokers>,
+    cancel: &tokio_util::sync::CancellationToken,
+    progress: Option<&crate::task_progress::Publisher>,
+) -> Result<bool> {
+    let boot = identity
+        .bootstrap()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("runtime_not_enrolled"))?;
+    ensure!(
+        boot.extra.get("rustMemorySleepVersion") == Some(&serde_json::json!(1))
+            && directive.action == Action::Pause
+            && !directive.full_shutdown
+            && directive.phase == "quiescing"
+            && directive.generation == boot.runtime_generation
+            && boot
+                .runtime_storage
+                .as_ref()
+                .is_some_and(|s| s.storage_incarnation_id == directive.storage_incarnation_id),
+        "runtime_memory_sleep_not_admitted"
+    );
+    let parked = core.park_execution().await?;
+    let listener = crate::parking::WakeListener::bind(
+        directory,
+        &boot.workspace_id,
+        boot.runtime_generation,
+        &directive.storage_incarnation_id,
+    )?;
+    let handles = family(core, &boot)?
+        .iter()
+        .map(|id| core.doc_host.open_local(id))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if let Some(publisher) = publisher {
+        loop {
+            match publisher.finish(core, authority, &boot, &handles).await {
+                Ok(()) => break,
+                Err(e)
+                    if crate::supervisor::retryable(&e)
+                        && crate::now_ms() < boot.runtime_credential_expires_at =>
+                {
+                    crate::supervisor::wait(cancel, 1).await
+                }
+                Err(e) => return Err(e),
+            }
+            if cancel.is_cancelled() {
+                return Ok(false);
+            }
+        }
+    }
+    if let Some(progress) = progress {
+        // park_execution has joined model writers; flush their final facts before
+        // Parked can allow the provider to freeze this process.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            progress.flush(authority, &boot),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("task_progress_flush_timeout"))??;
+    }
+    let mut native_transport = match crate::memory_transport::PreparedTransport::prepare(
+        &boot,
+        broker.and_then(|brokers| brokers.codex()),
+    )
+    .await
+    {
+        Ok(transport) => transport,
+        Err(_) => {
+            return memory_transport_attention(authority, &boot, &directive.operation_id, cancel)
+                .await;
+        }
+    };
+    let acknowledge = async {
+        loop {
+            match authority
+                .lifecycle(
+                    &boot,
+                    RuntimeRequest::Parked {
+                        operation_id: directive.operation_id.clone(),
+                    },
+                )
+                .await
+            {
+                Ok(_) => return Ok::<_, anyhow::Error>(()),
+                Err(e)
+                    if crate::supervisor::retryable(&e)
+                        && crate::now_ms() < boot.runtime_credential_expires_at =>
+                {
+                    crate::supervisor::wait(cancel, 1).await
+                }
+                Err(e) => return Err(e),
+            }
+            if cancel.is_cancelled() {
+                return Ok(());
+            }
+        }
+    };
+    // The provider may freeze immediately after the server commits Parked,
+    // before its HTTP response reaches this process. On wake, a valid Resume
+    // supersedes that old acknowledgement; never tear the retained core down
+    // merely because its response was lost or its bearer expired during sleep.
+    let mut first_wake = tokio::select! {biased;
+        wake=listener.wait(cancel)=>wake?,
+        result=acknowledge=>{
+            if result.is_err(){tracing::warn!("runtime_memory_park_ack_unconfirmed");}
+            None
+        }
+    };
+    'wake: loop {
+        let wake = match first_wake.take() {
+            Some(wake) => Some(wake),
+            None => listener.wait(cancel).await?,
+        };
+        let Some(wake) = wake else {
+            return Ok(false);
+        };
+        let mut timing = wake_trace::Trace::start(
+            &directory.join(".runtime-memory"),
+            &wake.workspace_id,
+            &wake.operation_id,
+            wake.generation,
+            &wake.storage_incarnation_id,
+        );
+        let mut grant_retries = 0;
+        let (current, resumed) = loop {
+            wake_trace::record(&mut timing, "authorize-start");
+            let Some((current, resumed)) =
+                resume::authorize(authority, identity, &wake, cancel).await?
+            else {
+                wake_trace::record(&mut timing, "authorization-not-admitted");
+                continue 'wake;
+            };
+            wake_trace::record(&mut timing, "authorized");
+            credentials.send_replace(current.clone());
+            if let Some(broker) = broker {
+                wake_trace::record(&mut timing, "grant-start");
+                if let Err(error) = broker.resume_retained(core, &current).await {
+                    if resume::retry_transient(
+                        &error,
+                        &mut grant_retries,
+                        current.runtime_credential_expires_at,
+                        cancel,
+                    )
+                    .await
+                    {
+                        // Revalidate the exact operation and current authority
+                        // before rechecking access; no prompt/tool is replayed.
+                        continue;
+                    }
+                    wake_trace::record(&mut timing, "connection-not-admitted");
+                    tracing::warn!("runtime_memory_resume_connection_unavailable");
+                    continue 'wake;
+                }
+                wake_trace::record(&mut timing, "granted");
+            } else {
+                wake_trace::record(&mut timing, "grant-not-configured");
+            }
+            break (current, resumed);
+        };
+        if let Some(transport) = native_transport.take() {
+            wake_trace::record(&mut timing, "transport-reset-start");
+            if transport.after_wake(&current).await.is_err() {
+                wake_trace::record(&mut timing, "transport-recovery-required");
+                return memory_transport_attention(
+                    authority,
+                    &current,
+                    &resumed.operation_id,
+                    cancel,
+                )
+                .await;
+            }
+            wake_trace::record(&mut timing, "transport-reset-complete");
+        } else {
+            wake_trace::record(&mut timing, "transport-not-required");
+        }
+        activate(core, &current, &resumed)?;
+        wake_trace::record(&mut timing, "resumed-ack-start");
+        // A lost acknowledgement can be retried under the same operation. No
+        // prompt is replayed and the engine remains fenced until acceptance.
+        loop {
+            match authority
+                .lifecycle(
+                    &current,
+                    RuntimeRequest::Resumed {
+                        operation_id: resumed.operation_id.clone(),
+                    },
+                )
+                .await
+            {
+                Ok(_) => break,
+                Err(e)
+                    if crate::supervisor::retryable(&e)
+                        && crate::now_ms() < current.runtime_credential_expires_at =>
+                {
+                    crate::supervisor::wait(cancel, 1).await
+                }
+                Err(e) => return Err(e),
+            }
+            if cancel.is_cancelled() {
+                return Ok(false);
+            }
+        }
+        wake_trace::record(&mut timing, "resumed-acknowledged");
+        core.resume_execution(parked)?;
+        wake_trace::record(&mut timing, "core-reopened");
+        return Ok(true);
+    }
+}
+
+#[cfg(unix)]
+async fn memory_transport_attention(
+    authority: &Authority,
+    boot: &CloudRuntimeBootstrap,
+    operation: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<bool> {
+    loop {
+        if authority
+            .lifecycle(
+                boot,
+                RuntimeRequest::RecoveryRequired {
+                    operation_id: operation.into(),
+                    code: "codex_memory_transport_recovery_required".into(),
+                },
+            )
+            .await
+            .is_ok()
+        {
+            break;
+        }
+        tracing::warn!("runtime_native_transport_recovery_report_unconfirmed");
+        tokio::select! {_=cancel.cancelled()=>return Ok(false),_=tokio::time::sleep(std::time::Duration::from_secs(2))=>{}}
+    }
+    // Retain the parked graph and private kernel snapshot until an explicit
+    // repair stops this process. Never reopen admission or replay a prompt.
+    cancel.cancelled().await;
+    Ok(false)
+}
+
+#[cfg(unix)]
+mod resume;
+
+#[cfg(unix)]
+mod wake_trace;

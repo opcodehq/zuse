@@ -145,11 +145,27 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0012_provider_receipts.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(zuse_cloud::runtime::recovery::MIGRATION)
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0013_recovery_receipts.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(zuse_cloud::runtime::restore::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0014_restore_receipts.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(zuse_cloud::runtime::task_history::MIGRATION)
         .execute(&pool)
         .await
         .unwrap();
@@ -1038,6 +1054,10 @@ async fn runtime_post_for_url(url: &str, token: &str, body: &Value) -> (u16, Val
 
 #[cfg(feature = "runtime-acceptance")]
 mod runtime_engine {
+    mod memory_acceptance {
+        use super::*;
+        include!("cases/memory.rs");
+    }
     mod recovery_acceptance {
         use super::*;
         include!("cases/recovery.rs");
@@ -2697,7 +2717,7 @@ for line in sys.stdin:
                             let value: Value = serde_json::from_slice(&bytes).unwrap();
                             (
                                 Request::from_parts(parts, Body::from(bytes)),
-                                value["kind"] == "quiesced",
+                                matches!(value["kind"].as_str(), Some("quiesced" | "parked")),
                             )
                         } else {
                             (request, false)
@@ -3132,6 +3152,8 @@ for line in sys.stdin:
                     thread: "chat-bob".into(),
                     checkout: checkout.clone(),
                     allow_test: true,
+                    task_context: None,
+                    progress: None,
                 }),
             )
             .unwrap(),
@@ -3765,10 +3787,12 @@ for line in sys.stdin:
         ) -> Result<(), zuse_cloud::providers::ProviderError> {
             assert_eq!(id, "machine-bob");
             self.pauses.fetch_add(1, Ordering::SeqCst);
+            // The provider accepted the mutation but its response can be lost.
+            // Reconciliation must observe this state without issuing another pause.
+            *self.state.lock().unwrap() = zuse_cloud::providers::MachineState::Paused;
             if self.fail_pause.load(Ordering::SeqCst) {
                 return Err(zuse_cloud::providers::ProviderError::Unavailable);
             }
-            *self.state.lock().unwrap() = zuse_cloud::providers::MachineState::Paused;
             Ok(())
         }
         async fn wake_retained(
@@ -4492,6 +4516,8 @@ async fn mailbox_durable_ordering_receipts_and_uncertain_lease_fences() {
     assert!(stored.get("actor").is_none());
     assert!(stored.get("plaintext").is_none());
     let lease_request = LeaseRequest {
+        control_only: false,
+        max_items: None,
         storage_incarnation_id: "original-storage".into(),
         wait_ms: None,
         after_revision: None,
@@ -5035,6 +5061,10 @@ async fn encrypted_transcript_publication_and_archived_reads_preserve_original_c
     use zuse_cloud::{crypto::MasterKey, runtime::RuntimeControl, tickets::TicketSigner};
     let (admin, pool, schema) = fixture().await;
     sqlx::raw_sql("CREATE TABLE api_cloud_transcript_checkpoints (workspace_id text NOT NULL,session_id text NOT NULL,runtime_generation bigint NOT NULL,stream_epoch text NOT NULL,stream_version bigint NOT NULL,object_key text NOT NULL,ciphertext_sha256 text NOT NULL,ciphertext_bytes bigint NOT NULL,created_at bigint NOT NULL,PRIMARY KEY(workspace_id,session_id))").execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0011_transcript_heads.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
     let fixture: Value =
         serde_json::from_str(include_str!("fixtures/transcript-crypto.json")).unwrap();
     let objects = Arc::new(ProjectionObjects::default());
@@ -5177,6 +5207,11 @@ async fn encrypted_transcript_publication_and_archived_reads_preserve_original_c
     let (status, body) = request(&read_app, read, "bob", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
+        objects.gets.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "Opening screen must come from its Postgres cursor row without object reads"
+    );
+    assert_eq!(
         body["checkpoint"]["ciphertext"],
         fixture["head2"]["ciphertext"]
     );
@@ -5213,6 +5248,34 @@ async fn encrypted_transcript_publication_and_archived_reads_preserve_original_c
         .await
         .1,
         json!({"page":null})
+    );
+    // Corrupted hot data fails integrity checks; a stale cache tag falls back to
+    // the authoritative object's current cursor rather than returning old text.
+    let saved_hot: Value =
+        sqlx::query_scalar("SELECT rust_hot_head FROM api_cloud_transcript_checkpoints")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query("UPDATE api_cloud_transcript_checkpoints SET rust_hot_head=jsonb_set(rust_hot_head,'{ciphertext}','\"tampered\"')").execute(&pool).await.unwrap();
+    assert_eq!(
+        request(&read_app, read, "bob", None).await.1["error"],
+        "cloud_transcript_integrity_failed"
+    );
+    sqlx::query(
+        "UPDATE api_cloud_transcript_checkpoints SET rust_hot_head=jsonb_set($1,'{version}','1')",
+    )
+    .bind(saved_hot)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let gets = objects.gets.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        request(&read_app, read, "bob", None).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        objects.gets.load(std::sync::atomic::Ordering::SeqCst),
+        gets + 1
     );
     let key = objects
         .bytes
@@ -5663,3 +5726,6 @@ async fn billing_portal_preserves_provider_customer_and_owner() {
 
 #[path = "cases/launch_assets.rs"]
 mod launch_assets;
+
+#[path = "cases/startup_binding.rs"]
+mod startup_binding;

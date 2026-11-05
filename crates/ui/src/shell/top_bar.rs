@@ -32,7 +32,8 @@ struct BranchTarget {
 
 impl Shell {
     fn branch_target(&self, cx: &App) -> Option<BranchTarget> {
-        let state = self.state.read(cx);
+        let conversation = self.conversation_state(cx);
+        let state = conversation.read(cx);
         let chat = state.selected_chat_row()?;
         let branch = crate::change_requests::conversation_branch(chat, &state.spaces)?.to_owned();
         let repo_path = chat
@@ -40,8 +41,9 @@ impl Shell {
             .as_ref()
             .map(|source| source.repo_root.clone())
             .or_else(|| chat.cwd.clone());
-        let target_device = (state.local_device_id.as_deref() != Some(chat.device_id.as_str()))
-            .then(|| chat.device_id.clone());
+        let target_device = (self.cloud_conversation.is_none()
+            && state.local_device_id.as_deref() != Some(chat.device_id.as_str()))
+        .then(|| chat.device_id.clone());
         Some(BranchTarget {
             chat_id: chat.id.clone(),
             branch,
@@ -53,13 +55,19 @@ impl Shell {
 
     /// Whether the conversation tab row shows: on a selected conversation.
     pub(super) fn conversation_tab_row_visible(&self, cx: &App) -> bool {
-        matches!(self.route, Route::Chat) && self.state.read(cx).selected_chat_row().is_some()
+        matches!(self.route, Route::Chat) && self.has_conversation(cx)
     }
 
     /// The conversation tabs on their own row below the top bar: main-area
     /// tabs, the thread's conversations and side chats, `+`, and history.
     pub(super) fn render_conversation_tab_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
+        let tabs = if self.cloud_conversation.is_some() {
+            self.render_cloud_tabs(cx)
+                .unwrap_or_else(|| Empty.into_any_element())
+        } else {
+            self.render_thread_conversations(cx)
+        };
         div()
             .id("conversation-tab-row")
             .debug_selector(|| "conversation-tab-row".into())
@@ -77,7 +85,7 @@ impl Shell {
             // tabs scrolls the strip, never the conversation behind it.
             .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
             .occlude()
-            .child(self.render_thread_conversations(cx))
+            .child(tabs)
             .into_any_element()
     }
 
@@ -89,9 +97,25 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let target = self.branch_target(cx)?;
+        let Some(target) = self.branch_target(cx) else {
+            let branch = self.cloud_conversation.as_ref()?.read(cx).branch_label()?;
+            // Saved task metadata can identify the branch before the runtime
+            // supplies a checkout context. Keep it read-only until then.
+            return Some(
+                div()
+                    .debug_selector(|| "cloud-saved-branch".into())
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .text_color(theme.text_muted)
+                    .child(icon(icons::GIT_BRANCH).size(px(14.)))
+                    .child(div().max_w(px(180.)).truncate().child(branch))
+                    .into_any_element(),
+            );
+        };
         let space = {
-            let state = self.state.read(cx);
+            let conversation = self.conversation_state(cx);
+            let state = conversation.read(cx);
             state
                 .selected_chat_row()
                 .and_then(|chat| state.space_for_chat(chat))
@@ -224,7 +248,7 @@ impl Shell {
         let Some(repo_path) = target.repo_path.clone() else {
             return;
         };
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
+        let Some(engine) = self.conversation_state(cx).read(cx).engine().cloned() else {
             return;
         };
         let key = format!(
@@ -277,9 +301,10 @@ impl Shell {
             self.close_branch_menu(cx);
             return;
         }
-        let (Some(repo_path), Some(engine)) =
-            (target.repo_path, self.state.read(cx).engine().cloned())
-        else {
+        let (Some(repo_path), Some(engine)) = (
+            target.repo_path,
+            self.conversation_state(cx).read(cx).engine().cloned(),
+        ) else {
             return;
         };
         let mut params = serde_json::Map::new();

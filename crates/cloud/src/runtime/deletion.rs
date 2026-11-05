@@ -1,5 +1,6 @@
 //! Explicit deletion revokes execution first and reports completion only after physical cleanup.
 use super::*;
+use crate::providers::contract::{DesiredState, OperationState, ProviderOperation};
 use crate::{
     jobs,
     providers::{Machine, ProviderError},
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub const MIGRATION: &str = include_str!("../../migrations/0008_delete.sql");
 pub const JOB_KIND: &str = "workspace-delete";
 pub const TOMBSTONE_MS: i64 = 30 * 86400000;
+mod provider_stage;
 fn failed() -> ApiError {
     ApiError::unavailable("cloud_workspace_delete_failed")
 }
@@ -22,11 +24,46 @@ struct Target {
     name: Option<String>,
     uncertain: bool,
     done: bool,
+    #[serde(default)]
+    delete_submitted: bool,
+    #[serde(default)]
+    delete_receipt: Option<ProviderOperation>,
 }
 #[async_trait]
 pub trait DeletionProvider: Send + Sync {
+    fn provider_id(&self) -> &'static str {
+        "boxd"
+    }
     async fn find(&self, id_or_name: &str) -> Result<Option<Machine>, ProviderError>;
+    async fn find_target(
+        &self,
+        id: Option<&str>,
+        name: Option<&str>,
+    ) -> Result<Option<Machine>, ProviderError> {
+        self.find(id.or(name).ok_or(ProviderError::Rejected)?).await
+    }
     async fn destroy(&self, id: &str) -> Result<(), ProviderError>;
+    async fn destroy_receipt(&self, id: &str) -> Result<ProviderOperation, ProviderError> {
+        self.destroy(id).await?;
+        Ok(ProviderOperation {
+            resource_id: id.into(),
+            operation_id: None,
+            desired: DesiredState::Deleted,
+        })
+    }
+    async fn receipt_state(
+        &self,
+        receipt: &ProviderOperation,
+    ) -> Result<OperationState, ProviderError> {
+        if receipt.operation_id.is_some() || receipt.desired != DesiredState::Deleted {
+            return Err(ProviderError::InvalidResponse);
+        }
+        Ok(if self.find(&receipt.resource_id).await?.is_none() {
+            OperationState::Completed
+        } else {
+            OperationState::Pending
+        })
+    }
 }
 #[async_trait]
 impl DeletionProvider for crate::providers::boxd::Boxd {
@@ -49,6 +86,9 @@ impl RuntimeControl {
         {
             return Err(ApiError::bad_request("invalid_lifecycle_command_id"));
         }
+        self.scope_admission(access).await?;
+        self.scope_access(id, Some(&access.actor.account_id), true)
+            .await?;
         let mut tx = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
             .bind(format!("cloud-create:{}", access.owner_id))
@@ -59,10 +99,8 @@ impl RuntimeControl {
         if row["account_id"] != access.owner_id {
             return Err(ApiError::not_found("cloud_workspace_not_found"));
         }
-        if access.membership.is_some()
-            || access.owner_id != access.actor.account_id
-            || access.workspace_permission(&access.owner_id, &row["request_config"])?
-                != crate::access::Permission::Edit
+        if access.workspace_permission(&access.owner_id, &row["request_config"])?
+            != crate::access::Permission::Edit
         {
             return Err(ApiError::forbidden("workspace_access_denied"));
         }
@@ -84,7 +122,11 @@ impl RuntimeControl {
             tx.commit().await?;
             return Ok(crate::store::Workspace { row }.public());
         }
-        if row["provider"] != "boxd"
+        if (row["provider"] != "boxd"
+            && !(row["request_config"]["rustProviderControllerVersion"] == 1
+                && zuse_protocol::cloud_computers::ProviderId::ALL
+                    .iter()
+                    .any(|p| row["provider"] == p.as_str())))
             || row["request_config"]["providerConnectionId"].is_string()
             || row["request_config"]["runtimeRpcProtocol"] != zuse_protocol::cloud_gateway::RUST_RPC
         {
@@ -161,7 +203,28 @@ impl RuntimeControl {
         let Some(job) = jobs::claim(&self.pool, JOB_KIND, "workspace", now, 120000).await? else {
             return Ok(false);
         };
-        let result = self.delete_step(provider, &job, now).await;
+        self.delete_claimed(provider, &job, now).await?;
+        Ok(true)
+    }
+    pub async fn delete_registry_once(
+        &self,
+        registry: &crate::providers::registry::Registry,
+        now: i64,
+    ) -> Result<bool, ApiError> {
+        let Some(job) = jobs::claim(&self.pool, JOB_KIND, "workspace", now, 120000).await? else {
+            return Ok(false);
+        };
+        let provider = self.provider_for_job(registry, &job).await?;
+        self.delete_claimed(&provider, &job, now).await?;
+        Ok(true)
+    }
+    async fn delete_claimed(
+        &self,
+        provider: &dyn DeletionProvider,
+        job: &jobs::Job,
+        now: i64,
+    ) -> Result<(), ApiError> {
+        let result = self.delete_step(provider, job, now).await;
         if let Err(error) = &result {
             jobs::retry(
                 &self.pool,
@@ -172,7 +235,7 @@ impl RuntimeControl {
             .await?;
             sqlx::query("UPDATE api_cloud_workspaces SET status_code=$3,revision=revision+1 WHERE workspace_id=$1 AND desired_state='deleted' AND state='deleting' AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='workspace' AND resource_id=$1 AND backend='rust' AND generation=$2)").bind(&job.resource_id).bind(job.generation).bind(error.code).execute(&self.pool).await?;
         }
-        result.map(|_| true)
+        result
     }
     async fn delete_step(
         &self,
@@ -202,85 +265,26 @@ impl RuntimeControl {
         if generation != job.generation || row["desired_state"] != "deleted" {
             return Err(fenced());
         }
+        if row["provider"] != provider.provider_id() {
+            return Err(ApiError::conflict("cloud_provider_identity_mismatch"));
+        }
         let deletion:Value=sqlx::query_scalar("SELECT to_jsonb(d) FROM zuse_rust_deletions d WHERE workspace_id=$1 AND operation_id=$2 AND generation=$3 FOR UPDATE").bind(&job.resource_id).bind(job.payload["operationId"].as_str()).bind(job.generation).fetch_one(&mut *tx).await?;
+        if deletion["phase"] == "providers" {
+            let mut targets: Vec<Target> =
+                serde_json::from_value(deletion["targets"].clone()).map_err(|_| fenced())?;
+            if targets.is_empty() {
+                targets = collect(&mut tx, &row).await?;
+            }
+            tx.commit().await?;
+            return self
+                .delete_provider_stage(provider, job, targets, now)
+                .await;
+        }
+        if deletion["phase"] == "objects" {
+            tx.commit().await?;
+            return self.delete_objects_stage(job, now).await;
+        }
         let complete = match deletion["phase"].as_str() {
-            Some("providers") => {
-                let mut targets: Vec<Target> =
-                    serde_json::from_value(deletion["targets"].clone()).map_err(|_| fenced())?;
-                if targets.is_empty() {
-                    targets = collect(&mut tx, &row).await?;
-                }
-                if let Some(target) = targets.iter_mut().find(|t| !t.done) {
-                    let identity = target
-                        .id
-                        .as_deref()
-                        .or(target.name.as_deref())
-                        .ok_or_else(fenced)?;
-                    match provider.find(identity).await.map_err(|_| failed())? {
-                        Some(machine) => {
-                            if target.id.as_ref().is_some_and(|id| id != &machine.id)
-                                || target
-                                    .name
-                                    .as_ref()
-                                    .is_some_and(|name| name != &machine.name)
-                            {
-                                return Err(fenced());
-                            }
-                            let shared:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_cloud_workspaces WHERE workspace_id<>$1 AND provider=$2 AND provider_sandbox_id=$3 AND state<>'deleted')").bind(&job.resource_id).bind(required(&row,"provider")?).bind(&machine.id).fetch_one(&mut *tx).await?;
-                            if shared {
-                                return Err(ApiError::conflict("cloud_delete_source_shared"));
-                            }
-                            let persistent:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_machines m WHERE to_jsonb(m)->>'provider_sandbox_id'=$1 AND state NOT IN ('deleted','destroyed'))").bind(&machine.id).fetch_one(&mut *tx).await?;
-                            if persistent {
-                                return Err(ApiError::conflict("cloud_delete_source_shared"));
-                            }
-                            if target.id.is_none() {
-                                // Persist the resolved exact ID before an irreversible delete or an uncertain reply.
-                                target.id = Some(machine.id.clone());
-                            } else {
-                                provider.destroy(&machine.id).await.map_err(|_| failed())?;
-                                target.done = provider
-                                    .find(&machine.id)
-                                    .await
-                                    .map_err(|_| failed())?
-                                    .is_none();
-                            }
-                        }
-                        None if target.uncertain && target.id.is_none() => {
-                            return Err(ApiError::unavailable(
-                                "cloud_delete_allocation_outcome_unknown",
-                            ));
-                        }
-                        None => target.done = true,
-                    }
-                }
-                let done = targets.iter().all(|t| t.done);
-                sqlx::query(
-                    "UPDATE zuse_rust_deletions SET targets=$2,phase=$3 WHERE workspace_id=$1",
-                )
-                .bind(&job.resource_id)
-                .bind(serde_json::to_value(targets).map_err(|_| failed())?)
-                .bind(if done { "objects" } else { "providers" })
-                .execute(&mut *tx)
-                .await?;
-                false
-            }
-            Some("objects") => {
-                let objects = self.transcript_objects.as_ref().ok_or_else(failed)?;
-                let prefix = format!(
-                    "workspaces/{}/",
-                    crate::objects::encode(&job.resource_id, false)
-                );
-                if objects.purge_prefix(&prefix).await? {
-                    sqlx::query(
-                        "UPDATE zuse_rust_deletions SET phase='metadata' WHERE workspace_id=$1",
-                    )
-                    .bind(&job.resource_id)
-                    .execute(&mut *tx)
-                    .await?;
-                }
-                false
-            }
             Some("metadata") => {
                 effects.purge()?;
                 purge_metadata(&mut tx, &job.resource_id).await?;
@@ -329,6 +333,8 @@ async fn collect(tx: &mut Transaction<'_, Postgres>, row: &Value) -> Result<Vec<
             name: None,
             uncertain: false,
             done: false,
+            delete_submitted: false,
+            delete_receipt: None,
         });
     }
     let records:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',machine_id,'name',machine_name,'uncertain',false) FROM zuse_rust_allocations WHERE workspace_id=$1 UNION ALL SELECT jsonb_build_object('id',machine_id,'name',machine_name,'uncertain',false) FROM zuse_rust_restores WHERE workspace_id=$1 UNION ALL SELECT jsonb_build_object('id',source_machine_id,'name',NULL,'uncertain',false) FROM zuse_rust_recovery_operations WHERE workspace_id=$1 UNION ALL SELECT jsonb_build_object('id',machine_id,'name',machine_name,'uncertain',outcome IN ('pending','unknown')) FROM zuse_rust_provider_creates WHERE workspace_id=$1").bind(id).fetch_all(&mut **tx).await?;
@@ -338,6 +344,8 @@ async fn collect(tx: &mut Transaction<'_, Postgres>, row: &Value) -> Result<Vec<
             name: record["name"].as_str().map(str::to_owned),
             uncertain: record["uncertain"] == true,
             done: false,
+            delete_submitted: false,
+            delete_receipt: None,
         };
         if target.id.is_none() && target.name.is_none() {
             continue;
@@ -359,9 +367,26 @@ async fn collect(tx: &mut Transaction<'_, Postgres>, row: &Value) -> Result<Vec<
     }
     Ok(targets)
 }
-async fn purge_metadata(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<(), ApiError> {
+pub(super) async fn purge_metadata(
+    tx: &mut Transaction<'_, Postgres>,
+    id: &str,
+) -> Result<(), ApiError> {
     // Names are a fixed schema inventory, never supplied by a caller. Financial usage/settlement is retained.
+    // Unknown physical object writes deliberately survive this inventory: a
+    // remote PUT can finish after these FK-backed ciphertext rows disappear.
     for table in [
+        "zuse_rust_task_command_execution",
+        "zuse_rust_task_command_queue",
+        "zuse_rust_task_command_actions",
+        "zuse_rust_task_command_sessions",
+        "zuse_rust_task_command_policies",
+        "zuse_rust_task_asset_chunks",
+        "zuse_rust_tool_output_chunks",
+        "zuse_rust_tool_output_refs",
+        "zuse_rust_preparation_logs",
+        "zuse_rust_task_history_messages",
+        "zuse_rust_task_history_sessions",
+        "zuse_rust_task_admissions",
         "api_cloud_workspace_launch_intents",
         "api_cloud_transcript_checkpoints",
         "api_cloud_workspace_runtime_summaries",
@@ -389,6 +414,15 @@ async fn purge_metadata(tx: &mut Transaction<'_, Postgres>, id: &str) -> Result<
                 .execute(&mut **tx)
                 .await?;
         }
+    }
+    // Preserve unknown remote-write receipts and bring their next cleanup
+    // forward after the final tombstone. Never delete them with FK metadata.
+    let intents: bool =
+        sqlx::query_scalar("SELECT to_regclass('zuse_rust_object_write_intents') IS NOT NULL")
+            .fetch_one(&mut **tx)
+            .await?;
+    if intents {
+        sqlx::query("UPDATE zuse_rust_object_write_intents SET next_reconcile_at=LEAST(next_reconcile_at,$2) WHERE workspace_id=$1").bind(id).bind(chrono::Utc::now().timestamp_millis()).execute(&mut **tx).await?;
     }
     sqlx::query(
         "DELETE FROM zuse_rust_jobs WHERE resource_id=$1 AND kind LIKE 'workspace-%' AND kind<>$2",

@@ -1461,12 +1461,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resumed_session_restores_task_ids_from_the_native_transcript() {
+    async fn cold_resume_restores_only_task_ids_without_republishing_native_text() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("projects/encoded-project");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("session-1.jsonl"), concat!(
             "not json\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"retired-credential-not-in-current-registry"}]}}"#,
+            "\n",
             r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_spawn","name":"Agent","input":{"description":"scout"}}]}}"#,
             "\n",
             r#"{"type":"user","toolUseResult":{"agentId":"a1","status":"async_launched"},"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_spawn"}]}}"#,

@@ -112,6 +112,13 @@ fn allowed(root: &str, relative: &Path) -> bool {
         && matches!(
             first,
             ".cloud-archive"
+                | ".runtime-memory"
+                | ".runtime-supervision"
+                | "cloud-runtime-supervision.json"
+                | "cloud-runtime-supervisor-recovery.json"
+                | "cloud-runtime-supervisor-repairs.json"
+                | "cloud-runtime-supervisor-recreation.json"
+                | ".runtime-recreation"
                 | ".workspace-runtime.lock"
                 | "engine.lock"
                 | "engine.lock.pid"

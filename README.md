@@ -50,6 +50,19 @@ and gateway transport, plus encrypted text-message mailbox admission and recover
 The guest executable passes local process acceptance; live
 provider execution, the full archive lifecycle and cutover remain in progress.
 
+The [cloud performance architecture](internal-docs/cloud-performance-architecture.md)
+records startup/cache decisions, the no-warm-pool constraint and remaining work;
+[live provider measurements](internal-docs/cloud-provider-measurements.md) distinguish
+machine readiness from application startup.
+The latest [Boxd/Boat verification](internal-docs/cloud-provider-verification.md)
+records passing provider checks and the remaining end-to-end deployment blockers.
+The [delivery checklist](internal-docs/cloud-computers-delivery.md) tracks implemented,
+deployed and live-verified cloud behavior.
+For a small deployment, [single-host setup](infra/cloud/single-host/README.md) runs
+isolated staging and production API/gateway/worker processes on one Hetzner machine,
+with external Supabase and Cloudflare DNS. [Live deployment status](internal-docs/hetzner-deployment.md)
+distinguishes verified hosting from the remaining real-agent launch work.
+
 ## Repository
 
 - `apps/desktop`: native entrypoint and service commands.

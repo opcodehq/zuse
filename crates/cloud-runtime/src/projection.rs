@@ -68,6 +68,7 @@ impl Publisher {
             if self.observed.lock().unwrap().get(id) == Some(&signature) {
                 continue;
             }
+            let entries = doc.read_entries()?;
             let mut db = self.connect()?;
             let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let prior:Option<(String,i64,String,Option<String>)>=tx.query_row("SELECT epoch,version,fingerprint,uploads FROM zuse_cloud_projection_outbox WHERE session_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
@@ -89,7 +90,7 @@ impl Publisher {
                 conversations: chats.clone(),
                 transcript: zuse_doc::TranscriptUpdate {
                     frame: zuse_doc::TranscriptFrame::Reset {
-                        reset: doc.read_entries()?.into(),
+                        reset: entries.into(),
                     },
                     context_usage: doc.context_usage(),
                     replay_baseline: None,
@@ -98,11 +99,24 @@ impl Publisher {
                 queue_paused: doc.queue_paused().unwrap_or(false),
                 older_message_sequence: None,
             };
+            let capture_tools = || -> Result<()> {
+                if boot.extra.get("rustToolOutputVersion") == Some(&serde_json::json!(1)) {
+                    let zuse_doc::TranscriptFrame::Reset { reset } = &head.transcript.frame else {
+                        anyhow::bail!("projection_complete_frame_required");
+                    };
+                    crate::tool_output::guest::capture(core, &self.database, id, reset)?;
+                }
+                Ok(())
+            };
             if before != doc.doc().oplog_vv() {
                 continue;
             }
             let fingerprint = digest(&serde_json::to_vec(&head)?);
             if prior.as_ref().is_some_and(|p| p.2 == fingerprint) {
+                // A crash may leave a committed head without its tool chunks.
+                // Release this writer before the tool journal opens its own.
+                tx.commit()?;
+                capture_tools()?;
                 self.observed.lock().unwrap().insert(id.into(), signature);
                 continue;
             }
@@ -114,6 +128,10 @@ impl Publisher {
             let uploads = zuse_cloud_projection::encode(head.clone(), &self.key)?;
             tx.execute("INSERT INTO zuse_cloud_projection_outbox(session_id,epoch,version,fingerprint,uploads,next_index) VALUES(?1,?2,?3,?4,?5,0) ON CONFLICT(session_id) DO UPDATE SET version=excluded.version,fingerprint=excluded.fingerprint,uploads=excluded.uploads,next_index=0",params![id,head.cursor.epoch,head.cursor.version,fingerprint,serde_json::to_string(&uploads)?])?;
             tx.commit()?;
+            // Tool uploads require a previously published transcript reference.
+            // Journal their authorizing head first, then its chunks, so publish
+            // can always drain the head before attempting those chunks.
+            capture_tools()?;
             self.observed.lock().unwrap().insert(id.into(), signature);
         }
         Ok(())
@@ -122,7 +140,7 @@ impl Publisher {
         loop {
             let pending:Option<(String,String,i64)>=self.connect()?.query_row("SELECT session_id,uploads,next_index FROM zuse_cloud_projection_outbox WHERE uploads IS NOT NULL ORDER BY session_id LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
             let Some((session, raw, index)) = pending else {
-                return Ok(());
+                break;
             };
             let uploads: Vec<Upload> = serde_json::from_str(&raw)?;
             ensure!(
@@ -146,6 +164,10 @@ impl Publisher {
             let saved=self.connect()?.execute("UPDATE zuse_cloud_projection_outbox SET next_index=?2,uploads=CASE WHEN ?2=?3 THEN NULL ELSE uploads END WHERE session_id=?1 AND uploads=?4 AND next_index=?5",params![session,index+1,uploads.len() as i64,raw,index])?;
             ensure!(saved == 1, "projection_journal_contended");
         }
+        if boot.extra.get("rustToolOutputVersion") == Some(&serde_json::json!(1)) {
+            crate::tool_output::guest::publish(&self.database, authority, boot, 4).await?;
+        }
+        Ok(())
     }
     pub async fn finish(
         &self,
@@ -156,7 +178,13 @@ impl Publisher {
     ) -> Result<()> {
         self.publish(authority, boot).await?;
         self.capture(core, boot, handles)?;
-        self.publish(authority, boot).await
+        self.publish(authority, boot).await?;
+        while boot.extra.get("rustToolOutputVersion") == Some(&serde_json::json!(1))
+            && crate::tool_output::guest::pending(&self.database)?
+        {
+            crate::tool_output::guest::publish(&self.database, authority, boot, 16).await?;
+        }
+        Ok(())
     }
     pub async fn run(
         &self,
@@ -165,21 +193,83 @@ impl Publisher {
         credentials: tokio::sync::watch::Receiver<CloudRuntimeBootstrap>,
         cancel: tokio_util::sync::CancellationToken,
     ) {
-        let mut interval = tokio::time::interval(Duration::from_secs(2));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Subscribe before the baseline. Dirty IDs do not pin old conversations in
+        // memory; lag, metadata changes and repair ticks request a full rescan.
+        let mut changes = core.doc_host.document_changes();
+        let mut chats = core.workspace.watch_chats();
+        let mut repair = tokio::time::interval(Duration::from_secs(30));
+        repair.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut retry_at = None;
+        let mut next_checkpoint = tokio::time::Instant::now();
+        let mut pending = std::collections::HashSet::new();
+        let mut needs_rescan = true;
         loop {
-            tokio::select! {_=cancel.cancelled()=>return,_=interval.tick()=>{}};
+            let mut rescan = needs_rescan;
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                changed = changes.recv() => match changed {
+                    Ok(id) => { pending.insert(id); },
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => rescan = true,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                },
+                changed = chats.changed() => {
+                    if changed.is_err() { return; }
+                    rescan = true;
+                },
+                _ = repair.tick() => rescan = true,
+                _ = async {
+                    match retry_at {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => rescan = true,
+            };
+            // These are still full encrypted checkpoints, not incremental events.
+            // Coalesce dirty bursts, but never publish full snapshots at token rate.
+            // Live RPC streaming is independent; shutdown flushes via finish().
+            let batch_at =
+                (tokio::time::Instant::now() + Duration::from_millis(100)).max(next_checkpoint);
+            let deadline = retry_at.map_or(batch_at, |retry| retry.max(batch_at));
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = tokio::time::sleep_until(deadline) => {},
+            }
+            loop {
+                match changes.try_recv() {
+                    Ok(id) => {
+                        pending.insert(id);
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => rescan = true,
+                    Err(_) => break,
+                }
+            }
             let boot = credentials.borrow().clone();
             let result = async {
                 self.publish(&authority, &boot).await?;
-                let handles = crate::lifecycle::family(&core, &boot)?
+                let ids = crate::lifecycle::family(&core, &boot)?;
+                let handles = ids
                     .iter()
+                    .filter(|id| rescan || pending.contains(*id))
                     .map(|id| core.doc_host.open_local(id).map_err(Into::into))
                     .collect::<Result<Vec<_>>>()?;
                 self.capture(&core, &boot, &handles)?;
                 self.publish(&authority, &boot).await
             };
-            tokio::select! {_=cancel.cancelled()=>return,result=result=>if result.is_err(){tracing::warn!("Encrypted transcript publication deferred; durable outbox retained");}}
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                result = result => {
+                    next_checkpoint = tokio::time::Instant::now() + Duration::from_secs(2);
+                    retry_at = if result.is_err() {
+                        needs_rescan = true;
+                        tracing::warn!("Encrypted transcript publication deferred; durable outbox retained");
+                        Some(tokio::time::Instant::now() + Duration::from_secs(2))
+                    } else {
+                        needs_rescan = false;
+                        pending.clear();
+                        (boot.extra.get("rustToolOutputVersion")==Some(&serde_json::json!(1)) && crate::tool_output::guest::pending(&self.database).unwrap_or(true)).then(||tokio::time::Instant::now()+Duration::from_secs(2))
+                    };
+                }
+            }
         }
     }
 }

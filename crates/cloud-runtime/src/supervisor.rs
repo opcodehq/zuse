@@ -12,6 +12,11 @@ pub async fn serve(
     credentials: tokio::sync::watch::Sender<zuse_protocol::cloud::CloudRuntimeBootstrap>,
 ) -> Result<()> {
     let mut backoff = 1u64;
+    let mut initial_connection = !identity.acknowledged()
+        && identity.bootstrap().is_some_and(|boot| {
+            boot.launch_intent.is_some()
+                && boot.extra.get("bootstrapAckMode") == Some(&serde_json::json!("gateway-v1"))
+        });
     loop {
         if cancel.is_cancelled() {
             return Ok(());
@@ -42,45 +47,72 @@ pub async fn serve(
         // Archive can win before the first gateway attaches, or between reconnects.
         // A denied socket has no live lease for the authority to fence, so inspect
         // durable lifecycle intent before retrying the connection.
-        match authority
-            .lifecycle(
-                &bootstrap,
-                zuse_protocol::cloud_lifecycle::RuntimeRequest::Query,
-            )
-            .await
-        {
-            Ok(Some(d))
-                if matches!(
-                    d.action,
-                    zuse_protocol::cloud_lifecycle::Action::Pause
-                        | zuse_protocol::cloud_lifecycle::Action::Archive
-                ) && d.phase == "quiescing" =>
+        if !std::mem::replace(&mut initial_connection, false) {
+            match authority
+                .lifecycle(
+                    &bootstrap,
+                    zuse_protocol::cloud_lifecycle::RuntimeRequest::Query,
+                )
+                .await
             {
-                bail!("runtime_quiescence_requested")
+                Ok(Some(d))
+                    if matches!(
+                        d.action,
+                        zuse_protocol::cloud_lifecycle::Action::Pause
+                            | zuse_protocol::cloud_lifecycle::Action::Archive
+                    ) && d.phase == "quiescing" =>
+                {
+                    bail!("runtime_quiescence_requested")
+                }
+                Err(error) if retryable(&error) => {
+                    wait(&cancel, backoff).await;
+                    backoff = (backoff * 2).min(10);
+                    continue;
+                }
+                Err(error) => return Err(error),
+                _ => {}
             }
-            Err(error) if retryable(&error) => {
-                wait(&cancel, backoff).await;
-                backoff = (backoff * 2).min(10);
-                continue;
-            }
-            Err(error) => return Err(error),
-            _ => {}
         }
         let connection_started = std::time::Instant::now();
-        let grant = authority.gateway(&bootstrap);
+        let mut grant = authority.gateway(&bootstrap)?;
+        if identity.acknowledged() { grant.storage_binding = None; }
         let link_cancel = cancel.child_token();
+        let (connected, mut connection) = tokio::sync::oneshot::channel();
+        let mut connection_pending = true;
         let mut socket = AbortOnDropHandle::new(tokio::spawn({
             let service = service.clone();
             let workspace = bootstrap.workspace_id.clone();
             let owner = bootstrap.zuse_account_id.clone();
             let token = link_cancel.clone();
-            async move { zuse_rpc::cloud::serve_guest(service, grant, &workspace, &owner, token).await }
+            async move {
+                zuse_rpc::cloud::serve_guest_connected(
+                    service,
+                    grant,
+                    &workspace,
+                    &owner,
+                    token,
+                    Some(connected),
+                )
+                .await
+            }
         }));
         let mut renewal = tokio::time::interval(Duration::from_secs(30));
         renewal.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {biased;
                 _=cancel.cancelled()=> {link_cancel.cancel();let _=(&mut socket).await;return Ok(());}
+                result=&mut connection, if connection_pending => {
+                    connection_pending = false;
+                    tracing::info!(workspace=%bootstrap.workspace_id, phase="runtime-gateway-connect", duration_ms=connection_started.elapsed().as_millis() as u64, succeeded=result.is_ok(), "Cloud startup phase");
+                    if result.is_ok() && bootstrap.extra.get("startupBindingVersion") == Some(&serde_json::json!(2)) {
+                        let mut committed = bootstrap.clone();
+                        committed.extra.insert("startupBindingCommitted".into(), serde_json::json!(true));
+                        credentials.send_replace(committed);
+                    }
+                    if result.is_ok() && bootstrap.extra.get("bootstrapAckMode") == Some(&serde_json::json!("gateway-v1")) && !identity.acknowledged() {
+                        identity.acknowledge()?;
+                    }
+                }
                 result=&mut socket=> {
                     match result {
                         Ok(Err(zuse_rpc::RpcError::Capability(code))) if code=="cloud.runtime_fenced"=>bail!("runtime_authority_fenced"),

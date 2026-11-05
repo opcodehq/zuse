@@ -339,3 +339,88 @@ mod issuer_tests {
         assert!(production.gateway_url("workspace").starts_with("wss://"));
     }
 }
+
+impl TicketSigner {
+    /// Internal short-lived proof; never accepted as a client/runtime ticket.
+    pub(crate) fn allocation_scope_proof(
+        &self,
+        workspace: &str,
+        operation: &str,
+        generation: i64,
+        now: i64,
+    ) -> Result<String, ApiError> {
+        let claims = json!({"iss":self.issuer(),"aud":"zuse-allocation-scope","scope":"allocation-scope","workspaceId":workspace,"operationId":operation,"generation":generation,"iat":now/1000,"exp":(now+10000)/1000});
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.typ = Some("zuse-allocation-scope+jwt".into());
+        jsonwebtoken::encode(&header, &claims, &self.key)
+            .map_err(|_| ApiError::unavailable("allocation_scope_sign_failed"))
+    }
+    pub(crate) fn verify_allocation_scope(
+        &self,
+        proof: &str,
+        workspace: &str,
+        now: i64,
+    ) -> Result<Value, ApiError> {
+        let invalid = || ApiError::unauthorized("allocation_scope_proof_rejected");
+        if proof.len() > 16384 {
+            return Err(invalid());
+        }
+        let mut validation = jsonwebtoken::Validation::new(Algorithm::EdDSA);
+        validation.set_audience(&["zuse-allocation-scope"]);
+        validation.set_issuer(&[self.issuer()]);
+        validation.validate_exp = false;
+        let decoded = jsonwebtoken::decode::<Value>(proof, &self.verify, &validation)
+            .map_err(|_| invalid())?;
+        let claims = decoded.claims;
+        if decoded.header.typ.as_deref() != Some("zuse-allocation-scope+jwt")
+            || claims["scope"] != "allocation-scope"
+            || claims["workspaceId"] != workspace
+            || claims["exp"].as_i64().is_none_or(|t| t * 1000 <= now)
+            || claims["iat"]
+                .as_i64()
+                .is_none_or(|t| t * 1000 > now + 1000 || t * 1000 < now - 10000)
+            || claims["generation"].as_i64().is_none_or(|g| g < 1)
+        {
+            return Err(invalid());
+        }
+        Ok(claims)
+    }
+}
+
+#[cfg(test)]
+mod allocation_scope_tests {
+    use super::*;
+    #[test]
+    fn worker_allocation_scope_proof_is_short_lived_and_not_client_authority() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[99; 32]);
+        let jwk = json!({"kty":"OKP","crv":"Ed25519","d":URL_SAFE_NO_PAD.encode([99;32]),"x":URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes())});
+        let signer = TicketSigner::from_jwk(&jwk.to_string(), "https://api.example.test").unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let proof = signer
+            .allocation_scope_proof("task", "operation", 7, now)
+            .unwrap();
+        let claims = signer.verify_allocation_scope(&proof, "task", now).unwrap();
+        assert_eq!(claims["operationId"], "operation");
+        assert_eq!(claims["generation"], 7);
+        assert!(
+            signer
+                .verify_allocation_scope(&proof, "other", now)
+                .is_err()
+        );
+        assert!(
+            signer
+                .verify_allocation_scope(&proof, "task", now + 11000)
+                .is_err()
+        );
+        assert!(
+            signer
+                .verify_gateway(
+                    &proof,
+                    "task",
+                    zuse_protocol::cloud_gateway::RUST_PROTOCOL,
+                    now
+                )
+                .is_err()
+        );
+    }
+}

@@ -1,0 +1,35 @@
+name: Harness release candidates
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - infra/cloud/harness-release.py
+      - infra/cloud/tests/harness-release.py
+      - scripts/check-harness-releases.py
+      - .github/workflows/harness-releases.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-candidates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  candidates:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 infra/cloud/tests/harness-release.py
+      - name: Discover exact upstream candidates
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/check-harness-releases.py --output out/harness-candidates.json
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: harness-candidates
+          path: out/harness-candidates.json
+          retention-days: 7

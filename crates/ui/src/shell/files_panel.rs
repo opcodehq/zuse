@@ -240,10 +240,15 @@ impl Shell {
         if !state.chats_synced {
             return;
         }
+        let cloud_session = self
+            .cloud_conversation
+            .as_ref()
+            .map(|view| view.read(cx).target.initial_session.clone());
         let live = state
             .chats
             .iter()
             .map(|chat| chat.id.as_str())
+            .chain(cloud_session.as_deref())
             .collect::<std::collections::HashSet<_>>();
         for key in self.files.keys().filter(|key| !live.contains(key.as_str())) {
             self.panels.update(key, |panels| panels.files_open = false);
@@ -271,6 +276,13 @@ impl Shell {
     }
 
     pub(super) fn add_files_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .cloud_conversation
+            .as_ref()
+            .is_some_and(|view| !view.read(cx).ready(cx))
+        {
+            return;
+        }
         if self.active_chat.is_empty() {
             return;
         }
@@ -278,7 +290,7 @@ impl Shell {
         if !self.files.contains_key(&key) {
             let files = cx.new(|cx| {
                 FilesSurface::new_explorer(
-                    self.state.clone(),
+                    self.conversation_state(cx),
                     self.active_chat.clone(),
                     self.settings.files_show_all,
                     cx,

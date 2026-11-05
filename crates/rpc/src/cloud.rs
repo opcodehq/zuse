@@ -24,6 +24,8 @@ pub struct Grant {
     pub generation: i64,
     pub gateway_epoch: i64,
     pub expires_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_binding: Option<serde_json::Value>,
 }
 fn rejected() -> RpcError {
     RpcError::Transport("Cloud workspace connection authorization failed".into())
@@ -71,6 +73,12 @@ fn request(
             .parse()
             .map_err(|_| rejected())?,
     );
+    if let Some(binding) = &grant.storage_binding {
+        let encoded = binding.to_string();
+        if encoded.len() > 4096 { return Err(rejected()); }
+        request.headers_mut().insert(zuse_protocol::cloud::STARTUP_BIND_HEADER,
+            encoded.parse().map_err(|_| rejected())?);
+    }
     Ok(request)
 }
 async fn dial(
@@ -208,12 +216,27 @@ pub async fn serve_guest(
     owner: &str,
     cancel: CancellationToken,
 ) -> Result<(), RpcError> {
+    serve_guest_connected(service, grant, workspace, owner, cancel, None).await
+}
+
+/// Signals only after the authenticated WebSocket upgrade has succeeded.
+pub async fn serve_guest_connected(
+    service: Arc<dyn RpcService>,
+    grant: Grant,
+    workspace: &str,
+    owner: &str,
+    cancel: CancellationToken,
+    connected: Option<tokio::sync::oneshot::Sender<()>>,
+) -> Result<(), RpcError> {
     if owner.starts_with("organization:") {
         return Err(RpcError::Capability(
             "cloud.organization_access_unavailable".into(),
         ));
     }
     let mut socket = tokio::select! {biased; _=cancel.cancelled()=>return Ok(()),socket=dial(&grant,workspace)=>socket?};
+    if let Some(connected) = connected {
+        let _ = connected.send(());
+    }
     let mut peers = HashMap::<String, Peer>::new();
     let (output, mut outgoing) = mpsc::channel::<(String, String)>(16);
     loop {

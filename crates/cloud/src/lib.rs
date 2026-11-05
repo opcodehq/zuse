@@ -1,11 +1,25 @@
 //! Hosted control plane. Runtime history stays with the execution engine.
 pub mod access;
+#[cfg(test)]
+mod aaa_sql_census;
+#[cfg(test)]
+mod zzz_sql_census {
+    #[test]
+    fn report() {
+        crate::aaa_sql_census::report();
+    }
+}
 pub mod archive;
 pub mod auth;
+pub mod computers;
+pub mod project_caches;
 pub mod config;
+pub mod connections;
 pub mod crypto;
 pub mod error;
+pub mod events;
 pub mod jobs;
+pub mod managed_bases;
 pub mod model_catalog;
 pub mod providers;
 pub mod routes;
@@ -27,3 +41,6 @@ pub mod projects;
 pub mod github;
 
 pub mod images;
+
+#[cfg(feature = "hosted-browser")]
+pub mod hosted_browser;

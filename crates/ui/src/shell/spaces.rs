@@ -2370,7 +2370,8 @@ fn sidebar_project_action(
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
     div()
-        .id(id)
+        .id(id.clone())
+        .debug_selector(move || id.to_string())
         .size(px(20.0))
         .flex_none()
         .flex()
@@ -5351,6 +5352,7 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> SidebarSessionRows {
+        let cloud_groups = self.cloud_sidebar_groups(cx);
         let now = Utc::now();
         let filter = self.settings.space_filter.clone();
         let profile_key = self.active_sidebar_pin_profile_key(cx);
@@ -5444,6 +5446,20 @@ impl Shell {
                 existing.push(row);
             } else {
                 regular_groups.push((row.group.clone(), vec![row]));
+            }
+        }
+        for cloud in &cloud_groups {
+            if (self.settings.sidebar_organization == SidebarOrganization::ByProject
+                || !cloud.rows.is_empty())
+                && !regular_groups
+                    .iter()
+                    .any(|(group, _)| match (group, &cloud.group) {
+                        (Some((a, _)), Some((b, _))) => a == b,
+                        (None, None) => true,
+                        _ => false,
+                    })
+            {
+                regular_groups.push((cloud.group.clone(), Vec::new()));
             }
         }
         if self.settings.sidebar_organization == SidebarOrganization::ByProject {
@@ -5763,6 +5779,22 @@ impl Shell {
                 rendered_rows.push((format!("c:{}", chat.id), slot_height, element));
             }
 
+            if !pinned_group {
+                for cloud in cloud_groups
+                    .iter()
+                    .filter(|cloud| match (&cloud.group, &group) {
+                        (Some((a, _)), Some((b, _))) => a == b,
+                        (None, None) => true,
+                        _ => false,
+                    })
+                {
+                    for row in &cloud.rows {
+                        if let Some(row) = self.render_cloud_sidebar_row(row.clone(), theme, cx) {
+                            rendered_rows.push(row);
+                        }
+                    }
+                }
+            }
             let Some((key, label)) = group else {
                 rendered.extend(rendered_rows);
                 if !pinned_group {
@@ -5869,9 +5901,12 @@ impl Shell {
                         })
                 })
                 .flatten();
+            let cloud_project = cloud_groups
+                .iter()
+                .find(|cloud| cloud.group.as_ref().is_some_and(|(id, _)| id == &key))
+                .map(|cloud| cloud.project.clone());
             let mut actions = Vec::new();
-            if let Some(project) = group_space {
-                let menu_space = project.clone();
+            if let Some(project) = group_space.clone() {
                 actions.push(
                     sidebar_project_action(
                         format!("sidebar-group-settings-{collapse_key}").into(),
@@ -5882,11 +5917,27 @@ impl Shell {
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                         cx.stop_propagation();
                         this.space_menu_active = 0;
-                        this.space_menu.open((menu_space.clone(), event.position()));
+                        this.space_menu.open((project.clone(), event.position()));
                         cx.notify();
                     }))
                     .into_any_element(),
                 );
+            } else if cloud_project.is_some() {
+                actions.push(
+                    sidebar_project_action(
+                        format!("sidebar-group-settings-{collapse_key}").into(),
+                        icons::SETTINGS,
+                        "Cloud settings",
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.open_settings(SettingsSection::Cloud, cx);
+                    }))
+                    .into_any_element(),
+                );
+            }
+            if group_space.is_some() || cloud_project.is_some() {
                 actions.push(
                     sidebar_project_action(
                         format!("sidebar-group-new-chat-{collapse_key}").into(),
@@ -5896,7 +5947,13 @@ impl Shell {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
-                        this.open_new_session(Some(project.clone()), cx);
+                        if let Some(project) = cloud_project.as_ref().filter(|_| {
+                            group_space.is_none() || this.cloud_conversation.is_some()
+                        }) {
+                            this.open_new_cloud_session(project.clone(), cx);
+                        } else {
+                            this.open_new_session(group_space.clone(), cx);
+                        }
                     }))
                     .into_any_element(),
                 );

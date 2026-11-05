@@ -1,0 +1,13 @@
+{$PRODUCTION_DOMAIN} {
+	header Cache-Control "no-store"
+	reverse_proxy zuse-production-api:8080 {
+		flush_interval -1
+	}
+}
+
+{$STAGING_DOMAIN} {
+	header Cache-Control "no-store"
+	reverse_proxy zuse-staging-api:8080 {
+		flush_interval -1
+	}
+}
