@@ -88,14 +88,51 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
       - run: cargo fetch --locked
-      # Dependency build scripts run here, so this step gets no Apple credentials.
+      # Dependency build scripts run on this runner, so it never receives the
+      # signing certificate or Apple credentials.
       - name: Build
         run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --build-only
-      # Loads the Developer ID certificate into a throwaway keychain, after the
-      # build so no dependency code runs while it is unlocked. Without
-      # the secrets the macOS package is built unsigned, with a warning.
+      - name: Package
+        if: runner.os == 'Linux'
+        run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --skip-build --output dist/release
+      - if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: zuse-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/release/*.tar.gz
+          if-no-files-found: error
+      # The macOS build is signed on a fresh runner by the sign-macos job.
+      - if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            target/release/zuse
+            target/release/zuse-server
+            target/release/zuse-relay
+            dist/web
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signs on a runner that has never run dependency build code, so nothing a
+  # build script left behind can use the identity or read the credentials.
+  sign-macos:
+    needs: [verify, build]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned-macos-aarch64
+      # Downloads the pinned toolkit for its licence files; runs no dependency code.
+      - run: cargo fetch --locked
+      # Without the secrets the macOS package is built unsigned, with a warning.
       - name: Load the macOS signing certificate
-        if: runner.os == 'macOS'
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -126,32 +163,27 @@ jobs:
           fi
           echo "ZUSE_MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
           echo "ZUSE_MACOS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
-      - name: Package
-        if: runner.os != 'macOS'
-        run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --skip-build --output dist/release
-      # Assembly, signing and notarization only; no dependency code runs here.
       - name: Package, sign and notarize
-        if: runner.os == 'macOS'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --skip-build --output dist/release
+        run: python3 scripts/package.py --platform macos --arch aarch64 --skip-build --output dist/release
       # Runs even when setup failed part-way, before the keychain was exported.
       - name: Remove the signing credentials
-        if: always() && runner.os == 'macOS'
+        if: always()
         run: |
           rm -f "$RUNNER_TEMP/certificate.p12"
           keychain="$RUNNER_TEMP/zuse-signing.keychain-db"
           if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
       - uses: actions/upload-artifact@v4
         with:
-          name: zuse-${{ matrix.platform }}-${{ matrix.arch }}
+          name: zuse-macos-aarch64
           path: dist/release/*.tar.gz
           if-no-files-found: error
 
   publish:
-    needs: [verify, build]
+    needs: [verify, build, sign-macos]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -159,6 +191,7 @@ jobs:
           ref: ${{ env.TAG }}
       - uses: actions/download-artifact@v4
         with:
+          pattern: zuse-*
           path: dist/release
           merge-multiple: true
       - name: Checksums and notes
