@@ -13715,7 +13715,8 @@ mod tests {
             })
             .unwrap();
         cx.simulate_keystrokes(handle.into(), "enter");
-        assert_eq!(composer_text(cx, handle), "so ❤️");
+        // Completing a suggestion leaves a separator for the next word.
+        assert_eq!(composer_text(cx, handle), "so ❤️ ");
         handle
             .read_with(cx, |composer, _| assert!(composer.emoji.is_none()))
             .unwrap();

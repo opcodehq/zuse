@@ -1309,6 +1309,7 @@ impl ShortcutId {
         match self {
             Self::Desktop(command) => command.context(),
             Self::ToggleDictation => Some("MessageComposer"),
+            Self::SaveFile => Some("Input"),
             _ => None,
         }
     }
@@ -1416,7 +1417,7 @@ impl ShortcutId {
 }
 
 /// Bumped whenever a shipped default moves; see [`KeymapConfig::align_desktop_defaults`].
-const DESKTOP_DEFAULTS_VERSION: u8 = 2;
+const DESKTOP_DEFAULTS_VERSION: u8 = 3;
 
 /// Persisted shortcut combos. Stored platform-neutral ("mod-s"); translated to
 /// "cmd-s"/"ctrl-s" at bind time by [`platform_combo`].
@@ -1537,6 +1538,9 @@ impl KeymapConfig {
         // picker binding follows its new default.
         if self.desktop_defaults_version < 2 && self.open_model_picker == "mod-/" {
             self.open_model_picker = ShortcutId::OpenModelPicker.default_combo().into();
+        }
+        if self.desktop_defaults_version < 3 {
+            self.heal_new_composer_defaults();
         }
         self.desktop_defaults_version = DESKTOP_DEFAULTS_VERSION;
     }
@@ -1680,6 +1684,32 @@ impl KeymapConfig {
         while self.jump_session.len() < JUMP_SLOTS {
             self.jump_session
                 .push(JUMP_DEFAULTS[self.jump_session.len()].to_string());
+        }
+    }
+
+    /// Newly added composer defaults must not steal an existing app shortcut.
+    fn heal_new_composer_defaults(&mut self) {
+        use keybindings::Command;
+        for command in [
+            Command::ComposerYank,
+            Command::ComposerYankPop,
+            Command::ComposerStash,
+            Command::ComposerSearchHistory,
+        ] {
+            if self.desktop.contains_key(&command) {
+                continue;
+            }
+            let id = ShortcutId::Desktop(command);
+            let combo = platform_combo(self.get(id));
+            if !combo.is_empty()
+                && ShortcutId::ALL.into_iter().any(|other| {
+                    other != id
+                        && other.overlaps_context(id)
+                        && platform_combo(self.get(other)) == combo
+                })
+            {
+                self.desktop.insert(command, String::new());
+            }
         }
     }
 
@@ -2156,6 +2186,7 @@ impl UiSettings {
                                         && !ShortcutId::ALL.iter().any(|other| {
                                             let existing = resolved.get(*other);
                                             !existing.is_empty()
+                                                && other.overlaps_context(id)
                                                 && platform_combo(existing)
                                                     == platform_combo(candidate)
                                         })
@@ -3825,6 +3856,24 @@ mod tests {
             "mod-shift-t"
         );
         assert!(conflicted_shortcuts(&KeymapConfig::default()).is_empty());
+    }
+
+    #[test]
+    fn composer_default_upgrade_keeps_existing_app_bindings() {
+        use keybindings::Command;
+        let mut keymap: KeymapConfig = serde_json::from_value(serde_json::json!({
+            "desktopDefaultsVersion": 2, "newSession": "mod-s", "saveFile": "mod-shift-s"
+        }))
+        .unwrap();
+        keymap.align_desktop_defaults();
+        assert_eq!(keymap.new_session, "mod-s");
+        assert_eq!(keymap.save_file, "mod-shift-s");
+        assert_eq!(keymap.get(ShortcutId::Desktop(Command::ComposerStash)), "");
+        assert!(conflicted_shortcuts(&keymap).is_empty());
+        let mut restored: KeymapConfig =
+            serde_json::from_value(serde_json::to_value(&keymap).unwrap()).unwrap();
+        restored.align_desktop_defaults();
+        assert_eq!(restored, keymap);
     }
 
     #[test]

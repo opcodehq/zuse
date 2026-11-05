@@ -489,8 +489,8 @@ mod tests {
             .into_iter()
             .map(|entry| entry.text.as_str())
             .collect();
-        // Whitespace runs collapse before matching.
-        assert_eq!(found, ["fix the login redirect", "refactor   the  router"]);
+        // Whitespace runs collapse; the contiguous match precedes scattered letters.
+        assert_eq!(found, ["refactor   the  router", "fix the login redirect"]);
         // Scattered letters still match, after contiguous hits.
         let scattered: Vec<_> = search_recall(&unique, "wrn")
             .into_iter()
