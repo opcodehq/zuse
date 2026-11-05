@@ -8956,6 +8956,18 @@ impl Composer {
         let mut card = crate::popover::completion_card(theme)
             .p(px(6.))
             .gap_0()
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                // The editor and the stash toggle may keep the list open.
+                // A click elsewhere cancels history search and returns its draft.
+                if !this
+                    .surface_bounds
+                    .get()
+                    .is_some_and(|bounds| bounds.contains(&event.position))
+                {
+                    this.close_list(true, cx);
+                    cx.notify();
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
