@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 import tarfile
+import subprocess
+import sys
 import types
 import unittest
 from unittest.mock import patch
@@ -133,6 +135,20 @@ class DistributionTests(unittest.TestCase):
         with patch.object(bootstrap.subprocess, 'run') as run, self.assertRaisesRegex(ValueError, 'Unsafe package'):
             bootstrap.install('0.25.0', download)
         run.assert_not_called()
+
+    def test_release_notes_keep_existing_changes_and_do_not_label_stable_as_preview(self):
+        notes = self.fixture.root / 'notes.md'
+        notes.write_text('### Added\n\n- Existing feature.\n')
+        script = Path(__file__).with_name('distribution-notes.py')
+        preview = subprocess.check_output([sys.executable, str(script), 'v0.26.0-preview.1', str(notes)], text=True)
+        self.assertIn('Existing feature.', preview)
+        self.assertIn('This is a preview release for testing.', preview)
+        notes.write_text(preview)
+        repeated = subprocess.check_output([sys.executable, str(script), 'v0.26.0-preview.1', str(notes)], text=True)
+        self.assertEqual(repeated.count('<!-- zuse-installers:start -->'), 1)
+        stable = subprocess.check_output([sys.executable, str(script), 'v0.26.0', str(notes)], text=True)
+        self.assertNotIn('This is a preview release for testing.', stable)
+        self.assertIn('Existing feature.', stable)
 
     def test_version_cannot_escape_the_release_url(self):
         bootstrap = bootstrap_module()

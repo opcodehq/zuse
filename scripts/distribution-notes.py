@@ -7,6 +7,7 @@ from distribution import release_version
 version = release_version(sys.argv[1])
 tag = 'v' + version
 old = Path(sys.argv[2]).read_text()
+notice = 'This is a preview release for testing.' if '-' in version else ''
 start, end = '<!-- zuse-installers:start -->', '<!-- zuse-installers:end -->'
 if start in old and end in old:
     old = old[:old.index(start)] + old[old.index(end) + len(end):]
@@ -42,7 +43,7 @@ sudo dnf install ./zuse-{version}-linux-x86_64.rpm
 
 For ARM64, use the `linux-aarch64` package. To remove only the terminal install's launchers, rerun the shell installer with `--uninstall`; profiles are retained. System packages are removed with apt/dnf. Agent CLIs and provider logins are separate.
 
-`SHA256SUMS` covers every download, including `install.sh`. This is a preview release for testing.
+`SHA256SUMS` covers every download, including `install.sh`. {notice}
 {end}
 
 {old.strip()}
