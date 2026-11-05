@@ -2,6 +2,42 @@
 
 Rust desktop and browser control plane for coding agents. The native application uses GPUI; the browser target uses GPUI Web compiled to WebAssembly. The engine owns local processes, workspaces, durable conversations and agent execution.
 
+## Install
+
+Download **[v0.26.0-preview.1](https://github.com/opcodehq/zuse/releases/tag/v0.26.0-preview.1)**:
+
+| Platform | Downloads |
+| --- | --- |
+| macOS Apple silicon | [DMG](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-macos-aarch64.dmg) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-macos-aarch64.tar.gz) |
+| macOS Intel | [DMG](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-macos-x86_64.dmg) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-macos-x86_64.tar.gz) |
+| Windows x64 | [Setup EXE](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-windows-x86_64-setup.exe) · [Portable ZIP](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-windows-x86_64.zip) |
+| Linux x64 | [DEB](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-linux-x86_64.deb) · [RPM](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-linux-x86_64.rpm) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-linux-x86_64.tar.gz) |
+| Linux ARM64 | [DEB](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-linux-aarch64.deb) · [RPM](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-linux-aarch64.rpm) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/zuse-0.26.0-preview.1-linux-aarch64.tar.gz) |
+
+- **macOS:** open the signed, notarized DMG and drag **Zuse** into **Applications**.
+- **Windows:** run Setup for a per-user installation, or extract the portable ZIP. Windows downloads are unsigned.
+- **Linux:** install the DEB/RPM with apt/dnf, or use the terminal installer below.
+
+Verify downloads against [SHA256SUMS](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/SHA256SUMS).
+
+Install the preview from a Linux terminal:
+
+```sh
+(
+  set -e
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' EXIT
+  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/install.sh -o "$installer"
+  sh "$installer" --version 0.26.0-preview.1
+)
+```
+
+The terminal installer requires Python 3.11+, verifies download checksums and
+installs for the current user into `~/.local/share/zuse`, with launchers in
+`~/.local/bin`. After installation, run `zuse`. Linux uses Ubuntu 24.04/glibc
+2.39 as its build baseline. See [installation and runtime requirements](internal-docs/packaging.md)
+for system dependencies, alternative formats and uninstall commands.
+
 This repository is under active implementation. See [the implementation plan](internal-docs/implementation-plan.md) and [acceptance status](internal-docs/acceptance.md) for the distinction between adapted source, compiled features and verified behavior.
 
 Chat access controls and their current provider-specific limits are described in [permissions](internal-docs/permissions.md).
@@ -26,29 +62,6 @@ provider execution, the full archive lifecycle and cutover remain in progress.
 - Focused crates own documents, synchronization, themes, Markdown, audio and previews.
 
 Rust dependencies and versions are managed in the root Cargo workspace. JavaScript is limited to provider SDK bridges and generated browser bindings.
-
-## Install
-
-Download the [current preview](https://github.com/opcodehq/zuse/releases/tag/v0.26.0-preview.1):
-macOS DMGs for Apple silicon and Intel, a Windows setup executable or portable
-zip, and Linux packages for x64 and ARM64 (`.deb`, `.rpm` and `.tar.gz`).
-
-Install the preview from a Linux terminal:
-
-```sh
-(
-  set -e
-  installer=$(mktemp)
-  trap 'rm -f "$installer"' EXIT
-  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.1/install.sh -o "$installer"
-  sh "$installer" --version 0.26.0-preview.1
-)
-```
-
-The terminal installer requires Python 3.11+, verifies download checksums and
-installs for the current user. Linux uses Ubuntu 24.04/glibc 2.39 as its build
-baseline. See [installation and runtime requirements](internal-docs/packaging.md)
-for system dependencies, alternative formats and uninstall commands.
 
 ## Development
 
