@@ -307,7 +307,7 @@ pub enum PullRequestDestination {
 }
 
 impl PullRequestDestination {
-    pub const ALL: [Self; 6] = [Self::Native, Self::External];
+    pub const ALL: [Self; 2] = [Self::Native, Self::External];
     pub fn label(self) -> &'static str {
         match self {
             Self::Native => "Pull request view",
