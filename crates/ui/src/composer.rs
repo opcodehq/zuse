@@ -14121,6 +14121,11 @@ mod tests {
             assert_eq!(saved.len(), 1);
             assert_eq!(saved[0].text, "keep this");
         });
+        visual.simulate_click(gpui::point(px(10.), px(10.)), gpui::Modifiers::default());
+        entity.read_with(&visual, |composer, cx| {
+            assert!(composer.list.is_none(), "outside click dismisses the list");
+            assert_eq!(composer.input.read(cx).text(), "current draft");
+        });
     }
 
     #[gpui::test]
