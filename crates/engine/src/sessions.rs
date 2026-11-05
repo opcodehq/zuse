@@ -590,9 +590,26 @@ impl SessionsEngine {
     }
 
     /// Any run currently working or blocked on input — the auto-updater's
-    /// "don't restart from under a session" gate.
+    /// "don't restart from under a session" gate. An archived chat's status
+    /// never counts: its runs are fenced, and a status left behind by one
+    /// must not block updates forever.
     pub fn any_active(&self) -> bool {
-        lock(&self.inner.statuses).values().any(is_active)
+        let active: Vec<String> = lock(&self.inner.statuses)
+            .iter()
+            .filter(|(_, session)| is_active(session))
+            .map(|(chat_id, _)| chat_id.clone())
+            .collect();
+        let workspace = self.inner.workspace();
+        let archived = |chat_id: &str| {
+            workspace.as_ref().is_some_and(|workspace| {
+                workspace
+                    .chat(chat_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|chat| chat.archived)
+            })
+        };
+        active.iter().any(|chat_id| !archived(chat_id))
             || lock(&self.inner.runs)
                 .values()
                 .any(|r| r.voice_active.live())
@@ -5006,6 +5023,29 @@ mod tests {
     // A tagged subagent event that folds to NO parts used to leave its sink
     // dirty forever: the commit branch's guard stayed true on a deadline in
     // the past and the run loop burned a core until real content arrived.
+    #[tokio::test]
+    async fn archived_chats_never_hold_the_update_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = crate::EngineCore::assemble(
+            dir.path(),
+            Arc::new(HarnessRegistry::new()),
+            HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        core.workspace
+            .create_chat("chat-archived", None, Some(&core.device_id), None, None)
+            .unwrap();
+        core.sessions
+            .set_status("chat-archived", SessionStatus::Working, true);
+        assert!(core.sessions.any_active());
+        core.workspace
+            .set_chat_archived("chat-archived", true)
+            .unwrap();
+        assert!(!core.sessions.any_active());
+        core.shutdown().await;
+    }
+
     #[tokio::test]
     async fn empty_subagent_events_commit_once_per_window_not_per_tick() {
         use super::*;
