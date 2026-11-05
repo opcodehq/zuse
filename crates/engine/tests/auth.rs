@@ -863,7 +863,9 @@ async fn browser_sign_in_opens_the_loopback_redirect_and_completes_on_the_state_
     let edge = StubEdge::start().await;
     *edge.state.exchange_org.lock().expect("lock") = "org_1".into();
     let dir = tempfile::tempdir().expect("tempdir");
-    let auth = Auth::new(workos_config(&edge.url(), dir.path()));
+    let mut config = workos_config(&edge.url(), dir.path());
+    config.workos_api_base = edge.url();
+    let auth = Auth::new(config);
 
     let opened = Mutex::new(None);
     let url = auth
@@ -916,7 +918,10 @@ async fn browser_sign_in_falls_back_to_paste_code_without_loopback_or_browser() 
 
     // Nothing could open the URL.
     let dir = tempfile::tempdir().expect("tempdir");
-    let auth = Auth::new(workos_config("http://127.0.0.1:1", dir.path()));
+    let edge = StubEdge::start().await;
+    let mut config = workos_config(&edge.url(), dir.path());
+    config.workos_api_base = edge.url();
+    let auth = Auth::new(config);
     assert_eq!(auth.start_browser_sign_in(|_| false).await, None);
 }
 
@@ -949,6 +954,10 @@ async fn stub_identity(challenge: Arc<Mutex<String>>) -> (String, Arc<AtomicUsiz
             let Some((method, target, body)) = read_request(&mut stream).await else {
                 continue;
             };
+            if method == "GET" && target.starts_with("/user_management/authorize?") {
+                respond(&mut stream, "200 OK", "{}").await;
+                continue;
+            }
             let body: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
             let verifier = body["code_verifier"].as_str().unwrap_or_default();
             let expected = {
@@ -1078,4 +1087,150 @@ async fn account_browser_sign_in_reports_a_denied_redirect() {
     assert_eq!(status.error.as_deref(), Some("Sign-in was denied."));
     assert!(status.user.is_none() && status.login.is_none());
     assert_eq!(redeemed.load(Ordering::SeqCst), 0);
+}
+
+/// The real provider returns this redirect when loopback registration is missing.
+async fn identity_rejecting_loopback(
+    hold: bool,
+) -> (
+    String,
+    Arc<AtomicUsize>,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Notify>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let devices = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (count, probed, unblock) = (devices.clone(), seen.clone(), release.clone());
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let (count, probed, unblock) = (count.clone(), probed.clone(), unblock.clone());
+            tokio::spawn(async move {
+                let Some((method, target, _)) = read_request(&mut stream).await else {
+                    return;
+                };
+                let path = target.split('?').next().unwrap_or("");
+                match (method.as_str(), path) {
+                    ("GET", "/user_management/authorize") => {
+                        probed.notify_one();
+                        if hold {
+                            unblock.notified().await;
+                        }
+                        let _ = stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://error.workos.com/redirect-uri-invalid?client_id=client_test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                        let _ = stream.shutdown().await;
+                    }
+                    ("POST", "/user_management/authorize/device") => {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        respond(&mut stream, "200 OK", r#"{"device_code":"fallback-device","user_code":"FALLBACK","verification_uri_complete":"https://verify.example/device","expires_in":60,"interval":1}"#).await;
+                    }
+                    _ => {
+                        respond(
+                            &mut stream,
+                            "400 Bad Request",
+                            r#"{"error":"authorization_pending"}"#,
+                        )
+                        .await
+                    }
+                }
+            });
+        }
+    });
+    (url, devices, seen, release)
+}
+
+#[tokio::test]
+async fn account_browser_redirect_rejection_returns_device_authorization() {
+    let (identity, devices, _, _) = identity_rejecting_loopback(false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let account = zuse_engine::account::Account::configured(
+        dir.path(),
+        "https://api.example".into(),
+        "client_test".into(),
+        identity,
+    )
+    .unwrap();
+    let progress = account.sign_in_in_browser().await.unwrap();
+    assert_eq!(progress.user_code, "FALLBACK");
+    assert_eq!(progress.url, "https://verify.example/device");
+    assert_eq!(devices.load(Ordering::SeqCst), 1);
+    assert_eq!(account.status().login.unwrap().user_code, "FALLBACK");
+    account.sign_out().unwrap();
+}
+
+#[tokio::test]
+async fn account_sign_out_during_redirect_probe_does_not_start_a_fallback_login() {
+    let (identity, devices, seen, release) = identity_rejecting_loopback(true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let account = zuse_engine::account::Account::configured(
+        dir.path(),
+        "https://api.example".into(),
+        "client_test".into(),
+        identity,
+    )
+    .unwrap();
+    let pending = account.clone();
+    let login = tokio::spawn(async move { pending.sign_in_in_browser().await });
+    tokio::time::timeout(Duration::from_secs(2), seen.notified())
+        .await
+        .expect("probe received");
+    account.sign_out().unwrap();
+    release.notify_one();
+    assert!(matches!(
+        login.await.unwrap(),
+        Err(zuse_engine::account::AccountError::Cancelled)
+    ));
+    assert_eq!(devices.load(Ordering::SeqCst), 0);
+    assert!(account.status().login.is_none());
+}
+
+#[tokio::test]
+async fn terminal_browser_redirect_rejection_does_not_open_the_provider_error_page() {
+    let (identity, _, _, _) = identity_rejecting_loopback(false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = workos_config("https://edge.example", dir.path());
+    config.workos_api_base = identity;
+    let auth = Auth::new(config);
+    let opened = AtomicBool::new(false);
+    let browser = auth
+        .start_browser_sign_in(|_| {
+            opened.store(true, Ordering::SeqCst);
+            true
+        })
+        .await;
+    assert_eq!(browser, None);
+    assert!(!opened.load(Ordering::SeqCst));
+    assert!(
+        auth.start_headless_sign_in()
+            .contains("auth%2Fcli%2Fcallback")
+    );
+}
+
+#[tokio::test]
+async fn terminal_sign_out_during_redirect_probe_does_not_open_a_stale_browser() {
+    let (identity, _, seen, release) = identity_rejecting_loopback(true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = workos_config("https://edge.example", dir.path());
+    config.workos_api_base = identity;
+    let auth = Auth::new(config);
+    let pending = auth.clone();
+    let opened = Arc::new(AtomicBool::new(false));
+    let browser_opened = opened.clone();
+    let login = tokio::spawn(async move {
+        pending
+            .start_browser_sign_in(|_| {
+                browser_opened.store(true, Ordering::SeqCst);
+                true
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), seen.notified())
+        .await
+        .expect("probe received");
+    auth.sign_out();
+    release.notify_one();
+    assert_eq!(login.await.unwrap(), None);
+    assert!(!opened.load(Ordering::SeqCst));
+    assert_eq!(auth.state(), AuthState::SignedOut);
 }

@@ -337,7 +337,8 @@ impl Account {
     /// Sign in through this machine's browser: AuthKit redirects to a loopback
     /// callback and the code is redeemed with PKCE, so there is no code to
     /// confirm. Falls back to [`Self::sign_in`] (device authorization) when the
-    /// callback cannot bind. Only for clients on the engine's own machine.
+    /// callback cannot bind or the identity provider rejects its redirect.
+    /// Only for clients on the engine's own machine.
     pub async fn sign_in_in_browser(&self) -> Result<LoginProgress, AccountError> {
         let listener = match tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await
         {
@@ -377,6 +378,15 @@ impl Account {
             ],
         )
         .map_err(|_| AccountError::InvalidEndpoint)?;
+        let rejected = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(AccountError::Cancelled),
+            rejected = crate::auth::loopback_redirect_rejected(url.as_str()) => rejected,
+        };
+        if rejected {
+            tracing::info!("account: loopback redirect rejected; using device authorization");
+            return self.sign_in_attempt(generation, cancel).await;
+        }
         let progress = LoginProgress {
             url: url.into(),
             user_code: String::new(),
@@ -484,7 +494,16 @@ impl Account {
     /// identity provider's page, from any device.
     pub async fn sign_in(&self) -> Result<LoginProgress, AccountError> {
         let (generation, cancel) = self.begin_login()?;
+        self.sign_in_attempt(generation, cancel).await
+    }
+
+    async fn sign_in_attempt(
+        &self,
+        generation: u64,
+        cancel: CancellationToken,
+    ) -> Result<LoginProgress, AccountError> {
         let response = tokio::select! {
+            biased;
             _=cancel.cancelled()=>return Err(AccountError::Cancelled),
             response=self.0.http.post(format!("{}/user_management/authorize/device",self.0.identity_url))
                 .form(&[("client_id",self.0.client_id.as_str())]).send()=>response.map_err(|_|AccountError::Unavailable)?,
