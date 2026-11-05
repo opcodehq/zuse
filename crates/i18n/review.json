@@ -819,6 +819,7 @@
     "chat-voice_error_too_large": "0927380d014695b6c49a09cc8c7b2b778235a9a7d0e56e41663f3a7e8ebe7f43",
     "chat-voice_error_recorder_failed": "055130a6e0af82f74c072f175e0262e7582a2bfabdfb347070453560c4177b8d",
     "chat-voice_error_no_speech": "9f58908aaf657976f90353f2c082c378625bbdd91176624d55f370e6b6055776",
+    "chat-voice_error_no_audio": "d3d2f7e6ce1e61cd6b6090efaded1ac8173c0f00648864b76fb8e856c8331d2e",
     "chat-voice_error_transcription_failed": "ba09264e6d6e86a65082392345c3377b17f1a7d1927bc8123cbb758dbfcfb452",
     "chat-voice_error_service_unavailable": "b4c3de90b2c8b2f15d8bbc63588b8b63991748fdecb8a3a239aea41a7234cacc",
     "chat-voice_error_start_failed": "8e91dd7bd3345e3b0c29a56eea827a980b4d56b9488bfc002fc8fa516f343936",
