@@ -1090,7 +1090,7 @@ native-read_saved_conversations_or_restore_them_to_your_workspace = 阅读已保
 native-cloud_workspaces_beta = 云端工作区（测试版）
 
 # Context: application-owned interface text; do not translate paths or product names.
-native-no_other_computers_yet = 尚无其他计算机
+native-no_other_computers_yet = 还没有其他电脑
 
 # Context: application-owned interface text; do not translate paths or product names.
 native-cloud_workspaces = 云端工作区

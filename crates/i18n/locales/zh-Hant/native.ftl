@@ -1090,7 +1090,7 @@ native-read_saved_conversations_or_restore_them_to_your_workspace = 閱讀已儲
 native-cloud_workspaces_beta = 雲端工作區（測試版）
 
 # Context: application-owned interface text; do not translate paths or product names.
-native-no_other_computers_yet = 尚無其他電腦
+native-no_other_computers_yet = 還沒有其他電腦
 
 # Context: application-owned interface text; do not translate paths or product names.
 native-cloud_workspaces = 雲端工作區
@@ -1167,7 +1167,7 @@ native-reconnecting = 正在重新連線至引擎…
 native-loading_account = 正在載入帳戶…
 
 # Context: new-chat landing screen and local account status.
-native-account_unavailable = 帳戶無法使用
+native-account_unavailable = 帳戶不可用
 
 # Context: new-chat landing screen and local account status.
 native-reconnect_account = 重新連線至此電腦以載入已儲存的帳戶工作階段。
