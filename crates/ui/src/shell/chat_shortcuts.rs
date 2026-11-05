@@ -233,6 +233,7 @@ impl Shell {
                 tr(cx, msg::commands::shortcuts_panel_trigger_skill).into(),
                 "$".into(),
             ),
+            row(tr(cx, msg::native::emoji).into(), ":".into()),
         ];
         let left = div()
             .flex_1()
@@ -264,16 +265,43 @@ impl Shell {
             ));
         let card = popover::dialog_card(&theme)
             .id("shortcuts-panel")
-            .w(px(600.0))
+            .w(px(672.0).min((viewport.width - px(32.0)).max(px(1.0))))
             .max_h(viewport.height * 0.8)
             .overflow_y_scroll()
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.close_shortcuts_panel(cx);
             }))
-            .child(popover::dialog_title(
-                &theme,
-                &tr(cx, msg::commands::shortcuts_panel_title),
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(popover::dialog_title(
+                        &theme,
+                        &tr(cx, msg::commands::shortcuts_panel_title),
+                    ))
+                    .child(
+                        div()
+                            .id("shortcuts-panel-close")
+                            .size(px(28.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(8.0))
+                            .cursor_pointer()
+                            .role(gpui::Role::Button)
+                            .aria_label(tr(cx, msg::commands::shortcuts_panel_close))
+                            .hover(|style| style.bg(theme.element_hover))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_shortcuts_panel(cx);
+                            }))
+                            .child(
+                                crate::icons::icon(crate::icons::CLOSE)
+                                    .size(px(16.0))
+                                    .text_color(theme.text_muted),
+                            ),
+                    ),
+            )
             .child(div().mt(px(4.0)).child(popover::dialog_body(
                 &theme,
                 tr(cx, msg::commands::shortcuts_panel_description),
@@ -282,8 +310,10 @@ impl Shell {
                 div()
                     .mt(px(16.0))
                     .flex()
-                    .flex_row()
-                    .gap(px(32.0))
+                    .when(viewport.width >= px(640.0), |el| {
+                        el.flex_row().gap(px(32.0))
+                    })
+                    .when(viewport.width < px(640.0), |el| el.flex_col().gap(px(16.0)))
                     .child(left)
                     .child(right),
             )
@@ -304,17 +334,6 @@ impl Shell {
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.close_shortcuts_panel(cx);
                             this.open_settings(SettingsSection::Shortcuts, cx);
-                        })),
-                    )
-                    .child(
-                        popover::btn_ghost(
-                            &theme,
-                            &tr(cx, msg::commands::shortcuts_panel_close),
-                            "shortcuts-panel-close",
-                        )
-                        .id("shortcuts-panel-close")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.close_shortcuts_panel(cx);
                         })),
                     ),
             )
