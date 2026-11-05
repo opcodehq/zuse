@@ -246,7 +246,7 @@ jobs:
 
   distributions:
     needs: publish
-    if: always() && (needs.publish.result == 'success' || inputs.formats_only == true)
+    if: ${{ !cancelled() && (needs.publish.result == 'success' || inputs.formats_only == true) }}
     uses: ./.github/workflows/distributions.yml
     with:
       tag: ${{ inputs.tag || github.ref_name }}
