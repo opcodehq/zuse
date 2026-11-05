@@ -6880,6 +6880,10 @@ impl Composer {
                 self.on_search_history(&SearchHistory, window, cx);
             }
             "emoji" => self.fixture_set_draft(":smil", cx),
+            "clear" => {
+                self.fixture_set_draft("Save this draft for later", cx);
+                self.on_interrupt_agent(&InterruptAgent, window, cx);
+            }
             "notice" => {
                 self.fixture_set_draft("Save this draft for later", cx);
                 self.on_stash_draft(&StashDraft, window, cx);
@@ -8967,18 +8971,6 @@ impl Composer {
         let mut card = crate::popover::completion_card(theme)
             .p(px(6.))
             .gap_0()
-            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                // The editor and the stash toggle may keep the list open.
-                // A click elsewhere cancels history search and returns its draft.
-                if !this
-                    .surface_bounds
-                    .get()
-                    .is_some_and(|bounds| bounds.contains(&event.position))
-                {
-                    this.close_list(true, cx);
-                    cx.notify();
-                }
-            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -10937,9 +10929,26 @@ impl Composer {
         rows: Vec<gpui::AnyElement>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let label: SharedString = if id == "stash-list" {
+            tr(cx, msg::chat::stash_list).into()
+        } else {
+            tr(cx, msg::chat::history_search_results).into()
+        };
         let mut card = crate::popover::completion_card(theme)
+            .role(Role::Dialog)
+            .aria_label(label.clone())
             .p(px(6.))
             .gap_0()
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                // Leave editor/toggle clicks to the composer; cancel from elsewhere.
+                if !this
+                    .surface_bounds
+                    .get()
+                    .is_some_and(|bounds| bounds.contains(&event.position))
+                {
+                    this.close_list(true, cx);
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -10971,6 +10980,7 @@ impl Composer {
                 div()
                     .id(id)
                     .role(Role::ListBox)
+                    .aria_label(label)
                     .min_h_0()
                     .max_h(px(278.))
                     .overflow_y_scroll()
@@ -11191,6 +11201,9 @@ impl Composer {
             })
             .collect();
         let card = crate::popover::popover_card(theme)
+            .id("emoji-list")
+            .role(Role::ListBox)
+            .aria_label(tr(cx, msg::native::emoji))
             .p(px(6.))
             .gap_0()
             .w_full()
@@ -11213,10 +11226,17 @@ impl Composer {
 
     fn render_flash(&self, theme: &Theme, cx: &App) -> Option<gpui::AnyElement> {
         let text = self.flash.clone()?;
-        let stashed = text.as_ref() == tr(cx, msg::native::draft_stashed);
-        let shortcut = Self::shortcut_label(Command::ComposerStash, cx);
-        let content = if stashed {
-            let notice = tr(cx, |l10n| msg::chat::stash_saved_notice(l10n, &shortcut));
+        let notice = if text.as_ref() == tr(cx, msg::native::draft_stashed) {
+            let shortcut = Self::shortcut_label(Command::ComposerStash, cx);
+            Some(tr(cx, |l10n| {
+                msg::chat::stash_saved_notice(l10n, &shortcut)
+            }))
+        } else if text.as_ref() == tr(cx, msg::native::press_esc_again_to_clear) {
+            Some(tr(cx, msg::chat::chat_composer_press_esc_again_to_clear))
+        } else {
+            None
+        };
+        let content = if let Some(notice) = notice {
             let (before, marked) = notice.split_once("<part0>").unwrap_or((&notice, ""));
             let (key, after) = marked.split_once("</part0>").unwrap_or(("", ""));
             div()
