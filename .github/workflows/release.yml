@@ -12,9 +12,18 @@ on:
       tag:
         description: Existing version tag to build and publish (for example v0.26.0)
         required: true
+      formats_only:
+        description: Add installers and missing architectures to an existing release
+        type: boolean
+        default: false
+      archive_run_id:
+        description: Optional previous installer run whose verified native inputs should be reused
+        type: string
+        default: ''
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
@@ -25,6 +34,7 @@ env:
 
 jobs:
   verify:
+    if: inputs.formats_only != true
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -238,3 +248,12 @@ jobs:
               --title "Zuse ${{ needs.verify.outputs.version }}" \
               --notes-file dist/notes.md "${flags[@]}"
           fi
+
+  distributions:
+    needs: publish
+    if: ${{ !cancelled() && (needs.publish.result == 'success' || inputs.formats_only == true) }}
+    uses: ./.github/workflows/distributions.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+      archive_run_id: ${{ inputs.archive_run_id || '' }}
+    secrets: inherit
