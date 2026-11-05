@@ -29,7 +29,7 @@ pub(super) fn avatar(name: &str, url: Option<&str>, size: f32) -> AnyElement {
     }
 }
 impl RepositoryPanel {
-    fn github_connected(&self) -> bool {
+    pub(super) fn github_connected(&self) -> bool {
         self.github
             .as_ref()
             .is_some_and(|g| g.installations.iter().any(|i| !i.suspended))
@@ -341,7 +341,7 @@ impl RepositoryPanel {
         }
         trigger.into_any_element()
     }
-    fn repositories(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub(super) fn repositories(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let busy = self.repository_busy();
         let can_manage = self.can_manage();
         let empty = self.projects.is_empty();
@@ -470,7 +470,7 @@ impl RepositoryPanel {
             body,
         )
     }
-    fn github_group(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+    pub(super) fn github_group(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         if let Some(body) = self.github_operation_rows(cx) {
             return cs::group(
                 "GitHub",
@@ -504,13 +504,13 @@ impl RepositoryPanel {
             body = body.child(cs::setting_row(
                 true,
                 "Connect repositories",
-                "",
+                "Install the Zuse app on GitHub, then choose which repositories cloud agents can work on.",
                 Some(
                     cs::icon_label_button(
                         "connect-cloud-github",
                         "github",
                         "Connect GitHub",
-                        false,
+                        true,
                         loading,
                         loading,
                     )
@@ -588,11 +588,15 @@ impl Render for RepositoryPanel {
         if self.usage_only {
             return self.render_storage(window, cx);
         }
+        if self.guide_visible() && !self.agent_recovery_open() {
+            return self.render_guide(window, cx);
+        }
+        let entry = self.guide_entry(cx);
         let repos = self.repositories(window, cx);
         let github = self.github_group(window, cx);
         let agents = self.render_agents(window, cx);
         let environment = self.render_environment(cx);
-        let mut root = column().gap(px(16.));
+        let mut root = column().gap(px(16.)).when_some(entry, |root, entry| root.child(entry));
         if self.agent_recovery_open() {
             return root
                 .child(agents)

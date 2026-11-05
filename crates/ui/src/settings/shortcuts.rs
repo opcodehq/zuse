@@ -1014,11 +1014,27 @@ impl Render for ShortcutsPage {
                                     .child(
                                         widgets::section_stack()
                                             .child(self.general_account.clone())
-                                            .child(div().mt_3().mb_3().flex().items_center().justify_between()
-                                                .child(div().text_color(theme.text_muted).child(tr(cx, msg::native::move_chats_and_settings_from_electron)))
-                                                .child(crate::popover::btn_ghost(&theme,&tr(cx, msg::native::import_from_electron),"settings-desktop-import")
-                                                    .id("settings-desktop-import")
-                                                    .on_click(|_,window,cx|window.dispatch_action(Box::new(crate::desktop_import::OpenDesktopImport),cx))))
+                                            .child(
+                                                widgets::group(&theme, "Import", "").child(
+                                                    widgets::section_card(&theme).mt_0().child(
+                                                        widgets::card_row(&theme, true)
+                                                            .child(widgets::row_copy(
+                                                                &theme,
+                                                                &tr(cx, msg::native::import_from_electron),
+                                                                &tr(cx, msg::native::move_chats_and_settings_from_electron),
+                                                            ))
+                                                            .child(
+                                                                widgets::text_action(&theme, widgets::ActionTone::Outlined, "Import…")
+                                                                    .id("settings-desktop-import")
+                                                                    .role(gpui::Role::Button)
+                                                                    .tab_index(0)
+                                                                    .on_click(|_, window, cx| {
+                                                                        window.dispatch_action(Box::new(crate::desktop_import::OpenDesktopImport), cx)
+                                                                    }),
+                                                            ),
+                                                    ),
+                                                ),
+                                            )
                                             .child(self.general_preferences(&theme, cx))
                                             .child(div().flex().flex_col().gap(px(16.))
                                                 .child(

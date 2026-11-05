@@ -635,9 +635,9 @@ impl Render for CloudBillingPage {
         let busy = self.task.is_some();
         let mut body = widgets::settings_page_column(window).child(widgets::section_title_with_action(
             &theme,
-            "Cloud workspaces (Beta)",
+            "Cloud",
             None,
-            "Connect GitHub and your coding agents, then keep work running when this app is closed.",
+            "Run agents on fresh cloud computers that keep working after you close this app.",
             None,
         ));
         if self.owner.is_none() {
@@ -674,6 +674,21 @@ impl Render for CloudBillingPage {
                         cx,
                     )
                     .mt(px(20.)),
+                );
+            } else {
+                // Never leave the page blank while the account is unknown.
+                body = body.child(
+                    widgets::section_stack().child(
+                        widgets::group(&theme, "Connecting to Cloud", "").child(
+                            widgets::section_card(&theme).mt_0().child(
+                                widgets::card_row(&theme, true).child(widgets::row_copy(
+                                    &theme,
+                                    "Checking your account…",
+                                    "Setup appears here as soon as Zuse reaches Cloud. If it stays empty, check your connection, then sign in from General.",
+                                )),
+                            ),
+                        ),
+                    ),
                 );
             }
             return body.into_any_element();
