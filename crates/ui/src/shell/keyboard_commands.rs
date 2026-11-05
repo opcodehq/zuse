@@ -268,14 +268,16 @@ impl Shell {
             Command::ShowShortcuts => self.toggle_shortcuts_panel(cx),
             Command::FindInChat => {
                 if matches!(self.route, Route::Chat) {
-                    self.transcript
+                    self.shortcut_conversation(window, cx)
+                        .1
                         .update(cx, |transcript, cx| transcript.open_find(window, cx));
                 }
             }
             Command::OpenModelPicker => window.dispatch_action(Box::new(OpenModelPicker), cx),
             Command::CycleReasoningEffort | Command::ToggleFastMode => {
                 if matches!(self.route, Route::Chat) {
-                    let pickers = self.composer.read(cx).pickers().clone();
+                    let composer = self.shortcut_conversation(window, cx).2;
+                    let pickers = composer.read(cx).pickers().clone();
                     pickers.update(cx, |pickers, cx| {
                         if command == Command::CycleReasoningEffort {
                             pickers.cycle_reasoning_effort(cx)
@@ -287,17 +289,19 @@ impl Shell {
             }
             Command::ToggleToolDetails => {
                 if matches!(self.route, Route::Chat) {
-                    self.transcript
+                    self.shortcut_conversation(window, cx)
+                        .1
                         .update(cx, |transcript, cx| transcript.toggle_all_tool_details(cx));
                 }
             }
             Command::ToggleTaskList => {
                 if matches!(self.route, Route::Chat) {
-                    self.composer
+                    self.shortcut_conversation(window, cx)
+                        .2
                         .update(cx, |composer, cx| composer.toggle_task_list(cx));
                 }
             }
-            Command::StopBackgroundTasks => self.stop_background_tasks_shortcut(cx),
+            Command::StopBackgroundTasks => self.stop_background_tasks_shortcut(window, cx),
             Command::EditorAnnotate => {
                 let file = self
                     .active_main_file(cx)

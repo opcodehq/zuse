@@ -8,6 +8,50 @@ pub(super) struct SideChatTab {
 }
 
 impl Shell {
+    /// Conversation shortcuts follow the pane that owns keyboard focus.
+    pub(super) fn shortcut_conversation(
+        &self,
+        window: &Window,
+        cx: &App,
+    ) -> (Entity<AppState>, Entity<Transcript>, Entity<Composer>) {
+        if matches!(self.route, Route::Chat)
+            && self.right_pane_open(cx)
+            && self.navigation_focus.in_right(window, cx)
+            && let RightSurface::SideChat(id) = self.resolved_right_active(cx)
+            && let Some(side) = self.side_chats.get(&id)
+        {
+            return (
+                side.state.clone(),
+                side.transcript.clone(),
+                side.composer.clone(),
+            );
+        }
+        (
+            self.state.clone(),
+            self.transcript.clone(),
+            self.composer.clone(),
+        )
+    }
+
+    pub(super) fn focus_transcript_composer(
+        &mut self,
+        transcript: &Entity<Transcript>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(side) = self
+            .side_chats
+            .values()
+            .find(|side| side.transcript == *transcript)
+        {
+            side.composer.update(cx, |composer, cx| {
+                composer.focus_pending = true;
+                cx.notify();
+            });
+        } else {
+            self.focus_composer(cx);
+        }
+    }
+
     pub(super) fn close_empty_right_pane(&mut self, key: &str, cx: &mut Context<Self>) {
         let empty = if key == self.panel_key(cx) {
             self.right_surface_rows(cx).is_empty()

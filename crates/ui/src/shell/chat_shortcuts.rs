@@ -87,10 +87,15 @@ impl Shell {
 
     /// The first press says how many tasks would stop; a second press within
     /// [`STOP_CONFIRM_WINDOW`] stops them.
-    pub(super) fn stop_background_tasks_shortcut(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn stop_background_tasks_shortcut(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let now = Instant::now();
+        let target = self.shortcut_conversation(window, cx).0;
         let (chat_id, stoppable) = {
-            let state = self.state.read(cx);
+            let state = target.read(cx);
             match state.selected_chat.clone() {
                 Some(chat_id) if matches!(self.route, Route::Chat) => {
                     let tasks = zuse_protocol::view::background_tasks(

@@ -4517,7 +4517,7 @@ impl Shell {
     /// transcripts (nested spawns open their own tabs).
     fn on_transcript_event(
         &mut self,
-        _: Entity<Transcript>,
+        transcript: Entity<Transcript>,
         event: &TranscriptEvent,
         cx: &mut Context<Self>,
     ) {
@@ -4549,7 +4549,7 @@ impl Shell {
                     self.fork_chat(source, *target, cx);
                 }
             }
-            TranscriptEvent::FindClosed => self.focus_composer(cx),
+            TranscriptEvent::FindClosed => self.focus_transcript_composer(&transcript, cx),
         }
     }
 
@@ -14730,7 +14730,8 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &OpenModelPicker, window, cx| {
                 if matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx) {
-                    let pickers = this.composer.read(cx).pickers().clone();
+                    let composer = this.shortcut_conversation(window, cx).2;
+                    let pickers = composer.read(cx).pickers().clone();
                     pickers.update(cx, |pickers, cx| pickers.open_model_menu(window, cx));
                 }
             }))
