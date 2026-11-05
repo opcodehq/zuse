@@ -280,7 +280,7 @@ impl ShortcutsPage {
                     .min_w(px(160.0))
                     .flex()
                     .flex_col()
-                    .child(widgets::row_title(theme, id.label()))
+                    .child(widgets::row_title(theme, id.localized_label(cx)))
                     .when(
                         matches!(id, ShortcutId::NextSession | ShortcutId::PrevSession),
                         |row| {

@@ -68,15 +68,12 @@ const APP_COMMANDS: [Command; 7] = [
 
 /// `(label, combo)` rows for the live keymap; unbound commands are left out
 /// so a rebind or a cleared shortcut shows up immediately.
-pub(super) fn panel_rows(
-    keymap: &KeymapConfig,
-    commands: &[Command],
-) -> Vec<(&'static str, String)> {
+pub(super) fn panel_rows(keymap: &KeymapConfig, commands: &[Command]) -> Vec<(Command, String)> {
     commands
         .iter()
         .filter_map(|&command| {
             let combo = keymap.get(ShortcutId::Desktop(command));
-            (!combo.is_empty()).then(|| (command.label(), display_combo(combo)))
+            (!combo.is_empty()).then(|| (command, display_combo(combo)))
         })
         .collect()
 }
@@ -215,7 +212,12 @@ impl Shell {
         let rows = |commands: &[Command]| -> Vec<AnyElement> {
             panel_rows(keymap, commands)
                 .into_iter()
-                .map(|(label, keys)| row(label.into(), keys.into()))
+                .map(|(command, keys)| {
+                    row(
+                        ShortcutId::Desktop(command).localized_label(cx).into(),
+                        keys.into(),
+                    )
+                })
                 .collect()
         };
         let triggers = vec![
@@ -361,7 +363,7 @@ mod tests {
         let mut keymap = KeymapConfig::default();
         let rows = panel_rows(&keymap, &CHAT_COMMANDS);
         assert_eq!(rows.len(), CHAT_COMMANDS.len());
-        assert!(rows.contains(&(Command::OpenModelPicker.label(), display_combo("alt-p"))));
+        assert!(rows.contains(&(Command::OpenModelPicker, display_combo("alt-p"))));
         // A rebind shows its new combo, and a cleared binding drops out.
         keymap.set(
             ShortcutId::Desktop(Command::FindInChat),
@@ -369,13 +371,13 @@ mod tests {
         );
         keymap.set(ShortcutId::Desktop(Command::ToggleFastMode), String::new());
         let rows = panel_rows(&keymap, &CHAT_COMMANDS);
-        assert!(rows.contains(&(Command::FindInChat.label(), display_combo("mod-shift-f"))));
+        assert!(rows.contains(&(Command::FindInChat, display_combo("mod-shift-f"))));
         assert!(
             !rows
                 .iter()
-                .any(|(label, _)| *label == Command::ToggleFastMode.label())
+                .any(|(label, _)| *label == Command::ToggleFastMode)
         );
         let app = panel_rows(&keymap, &APP_COMMANDS);
-        assert!(app.contains(&(Command::ShowShortcuts.label(), display_combo("mod-/"))));
+        assert!(app.contains(&(Command::ShowShortcuts, display_combo("mod-/"))));
     }
 }

@@ -21,6 +21,7 @@ pub mod accounts;
 pub mod appearance;
 pub mod archived;
 pub mod cloud_billing;
+mod command_labels;
 pub mod composer;
 mod custom_acp;
 pub mod defaults;

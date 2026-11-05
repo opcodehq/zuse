@@ -1177,3 +1177,24 @@ native-local_workspace = 로컬 작업 공간
 
 # Context: new-chat landing screen and local account status.
 native-no_messages_archived = 이 보관된 채팅에 메시지가 없습니다.
+
+# Labels for conversation and composer keyboard commands.
+native-shortcut_previous_message = 이전 보낸 메시지
+native-shortcut_next_message = 다음 보낸 메시지
+native-shortcut_queue_message = 메시지 대기열에 추가
+native-shortcut_delete_line_start = 줄 시작까지 삭제
+native-shortcut_delete_line_end = 줄 끝까지 삭제
+native-shortcut_delete_word = 이전 단어 삭제
+native-shortcut_stop_agent = 에이전트 중지(두 번 누르기)
+native-shortcut_show_shortcuts = 키보드 단축키
+native-shortcut_find_in_chat = 채팅에서 찾기
+native-shortcut_model_picker = 모델 선택 열기
+native-shortcut_reasoning = 추론 수준 전환
+native-shortcut_fast_mode = 빠른 모드 전환
+native-shortcut_tool_details = 도구 세부 정보 펼치기/접기
+native-shortcut_task_list = 작업 목록 전환
+native-shortcut_stop_background = 백그라운드 작업 중지
+native-shortcut_yank = 삭제한 텍스트 붙여넣기
+native-shortcut_yank_pop = 삭제한 텍스트 순환
+native-shortcut_stash = 초안 보관
+native-shortcut_history = 보낸 메시지 검색

@@ -1177,3 +1177,24 @@ native-local_workspace = Espace de travail local
 
 # Context: new-chat landing screen and local account status.
 native-no_messages_archived = Aucun message dans cette discussion archivée.
+
+# Labels for conversation and composer keyboard commands.
+native-shortcut_previous_message = Message envoyé précédent
+native-shortcut_next_message = Message envoyé suivant
+native-shortcut_queue_message = Mettre le message en attente
+native-shortcut_delete_line_start = Supprimer jusqu’au début de la ligne
+native-shortcut_delete_line_end = Supprimer jusqu’à la fin de la ligne
+native-shortcut_delete_word = Supprimer le mot précédent
+native-shortcut_stop_agent = Arrêter l’agent (appuyer deux fois)
+native-shortcut_show_shortcuts = Raccourcis clavier
+native-shortcut_find_in_chat = Rechercher dans le chat
+native-shortcut_model_picker = Ouvrir le sélecteur de modèle
+native-shortcut_reasoning = Changer le niveau de raisonnement
+native-shortcut_fast_mode = Activer ou désactiver le mode rapide
+native-shortcut_tool_details = Développer ou réduire les détails des outils
+native-shortcut_task_list = Afficher ou masquer la liste des tâches
+native-shortcut_stop_background = Arrêter les tâches en arrière-plan
+native-shortcut_yank = Coller le texte supprimé
+native-shortcut_yank_pop = Parcourir les textes supprimés
+native-shortcut_stash = Mettre le brouillon de côté
+native-shortcut_history = Rechercher dans les messages envoyés

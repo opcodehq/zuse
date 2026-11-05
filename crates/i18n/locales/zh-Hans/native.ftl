@@ -1177,3 +1177,24 @@ native-local_workspace = 本地工作区
 
 # Context: new-chat landing screen and local account status.
 native-no_messages_archived = 此归档聊天中没有消息。
+
+# Labels for conversation and composer keyboard commands.
+native-shortcut_previous_message = 上一条已发送消息
+native-shortcut_next_message = 下一条已发送消息
+native-shortcut_queue_message = 将消息加入队列
+native-shortcut_delete_line_start = 删除到行首
+native-shortcut_delete_line_end = 删除到行尾
+native-shortcut_delete_word = 删除前一个词
+native-shortcut_stop_agent = 停止智能体（按两次）
+native-shortcut_show_shortcuts = 键盘快捷键
+native-shortcut_find_in_chat = 在聊天中查找
+native-shortcut_model_picker = 打开模型选择器
+native-shortcut_reasoning = 切换推理强度
+native-shortcut_fast_mode = 切换快速模式
+native-shortcut_tool_details = 展开或折叠工具详情
+native-shortcut_task_list = 切换任务列表
+native-shortcut_stop_background = 停止后台任务
+native-shortcut_yank = 粘贴已删除的文本
+native-shortcut_yank_pop = 循环切换已删除的文本
+native-shortcut_stash = 暂存草稿
+native-shortcut_history = 搜索已发送消息
