@@ -1861,3 +1861,4 @@ chat-history_search_title = 보낸 메시지 검색 중
 chat-history_search_use = 사용
 chat-history_search_cancel = 취소
 chat-stash_saved_notice = 초안을 보관했습니다 · <part0>{ $shortcut }</part0> 키로 보기
+chat-chat_composer_press_esc_again_to_clear = 지우려면 <part0>Esc</part0> 키를 한 번 더 누르세요
