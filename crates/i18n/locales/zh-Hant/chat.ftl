@@ -1848,3 +1848,16 @@ chat-find_in_chat_no_results = 沒有結果
 chat-find_in_chat_previous = 上一個相符項目
 chat-find_in_chat_next = 下一個相符項目
 chat-find_in_chat_close = 關閉尋找
+
+chat-history_search_results = 已傳送的訊息
+chat-history_search_no_results = 沒有相符項目
+chat-stash_title = 暫存
+chat-stash_open = 已暫存的提示：{ $count } 則。開啟暫存清單。
+chat-stash_list = 已暫存的提示
+chat-stash_empty = 還沒有暫存內容。有草稿時按 { $shortcut } 即可暫存。
+chat-stash_delete = 刪除暫存的提示
+chat-history_search_empty = 此對話中還沒有傳送過訊息。
+chat-history_search_title = 正在搜尋已傳送的訊息
+chat-history_search_use = 使用
+chat-history_search_cancel = 取消
+chat-stash_saved_notice = 草稿已暫存 · 按 <part0>{ $shortcut }</part0> 檢視

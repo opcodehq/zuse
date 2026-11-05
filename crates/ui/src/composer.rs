@@ -8,6 +8,7 @@
 //! the gpui element only feeds them measurements.
 
 use crate::localization::message as tr;
+use crate::settings::keybindings::Command;
 use zuse_i18n::messages as msg;
 mod add_menu;
 mod archive;
@@ -6830,6 +6831,70 @@ impl Composer {
         cx.notify();
     }
 
+    /// Seed isolated native captures using the production list reducers.
+    #[cfg(feature = "browser-fixture")]
+    pub fn fixture_editing_visual(
+        &mut self,
+        kind: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_list(false, cx);
+        self.emoji = None;
+        self.clear_flash(cx);
+        self.focus_pending = true;
+        match kind {
+            "stash" | "stash-empty" => {
+                let now = chrono::Utc::now().timestamp_millis();
+                crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
+                    settings.prompt_stash = if kind == "stash-empty" {
+                        Vec::new()
+                    } else {
+                        [
+                            "Review the login redirect and add a regression test",
+                            "Compare the mobile layout with the desktop composer",
+                            "Update the setup instructions for the next release",
+                        ]
+                        .iter()
+                        .enumerate()
+                        .map(|(ix, text)| StashedPrompt {
+                            id: format!("visual-draft-{ix}"),
+                            text: (*text).into(),
+                            created_at: now - [60_000, 3_600_000, 86_400_000][ix],
+                        })
+                        .collect()
+                    };
+                });
+                self.fixture_set_draft("", cx);
+                self.toggle_stash_list(cx);
+            }
+            "history" => {
+                let now = chrono::Utc::now().timestamp_millis();
+                self.cleared_drafts = [
+                    "Review the login redirect and add a regression test",
+                    "Review the composer spacing",
+                    "Review the setup instructions",
+                ]
+                .iter()
+                .enumerate()
+                .map(|(ix, text)| editing::RecallEntry {
+                    at: now - (ix as i64 + 1) * 60_000,
+                    text: (*text).into(),
+                })
+                .collect();
+                self.fixture_set_draft("review", cx);
+                self.on_search_history(&SearchHistory, window, cx);
+            }
+            "emoji" => self.fixture_set_draft(":smil", cx),
+            "notice" => {
+                self.fixture_set_draft("Save this draft for later", cx);
+                self.on_stash_draft(&StashDraft, window, cx);
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
     /// Review fixtures: a queued follow-up, context and plan usage, and
     /// (`open`) the usage card pinned open.
     #[cfg(feature = "browser-fixture")]
@@ -10712,8 +10777,12 @@ impl Composer {
         if !matches!(self.list, Some(ComposerList::Stash { .. })) {
             return;
         }
+        self.delete_stashed_at(self.list_active(), cx);
+    }
+
+    fn delete_stashed_at(&mut self, index: usize, cx: &mut Context<Self>) {
         let active = self.list_active();
-        let Some(entry) = Self::stashed_prompts(cx).into_iter().nth(active) else {
+        let Some(entry) = Self::stashed_prompts(cx).into_iter().nth(index) else {
             return;
         };
         crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
@@ -10763,13 +10832,68 @@ impl Composer {
         cx.notify();
     }
 
+    fn shortcut_label(command: Command, cx: &App) -> String {
+        crate::settings::display_combo(
+            crate::settings::current(cx)
+                .keymap
+                .get(crate::settings::ShortcutId::Desktop(command)),
+        )
+    }
+
+    fn list_time(at: i64) -> String {
+        chrono::DateTime::from_timestamp_millis(at)
+            .map(|at| crate::state::format_time_ago(at, chrono::Utc::now()))
+            .unwrap_or_default()
+    }
+
+    fn list_keycap(theme: &Theme, label: &str) -> gpui::Div {
+        div()
+            .flex_none()
+            .h(px(16.))
+            .px(px(4.))
+            .rounded(px(4.))
+            .bg(theme.element_hover)
+            .border_1()
+            .border_color(theme.border)
+            .text_size(px(10.))
+            .line_height(px(14.))
+            .font_family(crate::popover::KEY_GLYPH_FONT)
+            .text_color(theme.text_muted)
+            .child(label.to_owned())
+    }
+
+    fn history_label(text: &str, query: &str, theme: &Theme) -> gpui::AnyElement {
+        let text = editing::one_line(text);
+        let mut remaining = query.trim().chars().flat_map(char::to_lowercase).peekable();
+        let mut highlights = Vec::new();
+        for (start, ch) in text.char_indices() {
+            for lower in ch.to_lowercase() {
+                if remaining.peek() == Some(&lower) {
+                    remaining.next();
+                    highlights.push((
+                        start..start + ch.len_utf8(),
+                        gpui::HighlightStyle {
+                            color: Some(theme.text),
+                            font_weight: Some(gpui::FontWeight::MEDIUM),
+                            ..Default::default()
+                        },
+                    ));
+                    break;
+                }
+            }
+        }
+        gpui::StyledText::new(text)
+            .with_highlights(highlights)
+            .into_any_element()
+    }
+
     fn list_row(
         theme: &Theme,
         id: &'static str,
         index: usize,
         selected: bool,
         lead: Option<SharedString>,
-        label: SharedString,
+        label: gpui::AnyElement,
         detail: Option<SharedString>,
     ) -> gpui::Stateful<gpui::Div> {
         crate::popover::menu_row(theme, selected, format!("{id}-{index}"))
@@ -10781,7 +10905,7 @@ impl Composer {
             .h(px(skill_completion::ROW_HEIGHT))
             .flex_none()
             .overflow_hidden()
-            .gap(px(10.))
+            .gap(px(12.))
             .rounded(px(8.))
             .children(lead.map(|lead| div().flex_none().w(px(20.)).text_size(px(15.)).child(lead)))
             .child(
@@ -10789,8 +10913,12 @@ impl Composer {
                     .min_w_0()
                     .flex_1()
                     .truncate()
-                    .text_size(crate::typography::text_sm())
-                    .text_color(theme.text)
+                    .text_size(px(14.))
+                    .text_color(if selected {
+                        theme.text
+                    } else {
+                        theme.text_muted
+                    })
                     .child(label),
             )
             .children(detail.map(|detail| {
@@ -10806,7 +10934,7 @@ impl Composer {
         &mut self,
         theme: &Theme,
         id: &'static str,
-        header: SharedString,
+        header: gpui::AnyElement,
         empty: SharedString,
         rows: Vec<gpui::AnyElement>,
         cx: &mut Context<Self>,
@@ -10823,9 +10951,10 @@ impl Composer {
             .child(
                 div()
                     .px(px(8.))
-                    .h(px(26.))
+                    .h(px(28.))
                     .flex()
                     .items_center()
+                    .gap(px(8.))
                     .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
                     .child(header),
@@ -10835,12 +10964,23 @@ impl Composer {
                 div()
                     .px(px(8.))
                     .py(px(8.))
-                    .text_size(crate::typography::text_xs())
+                    .text_size(px(14.))
                     .text_color(theme.text_muted)
                     .child(empty),
             )
         } else {
-            card.child(crate::popover::completion_list(id, &self.list_scroll, rows))
+            card.child(
+                div()
+                    .id(id)
+                    .role(Role::ListBox)
+                    .min_h_0()
+                    .max_h(px(278.))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.list_scroll)
+                    .flex()
+                    .flex_col()
+                    .children(rows),
+            )
         };
         crate::popover::full_width_menu_above(format!("{id}-popup"), card.into_any_element(), None)
     }
@@ -10854,7 +10994,9 @@ impl Composer {
         let active = self.list_active();
         match self.list.as_ref()? {
             ComposerList::Stash { .. } => {
-                let rows = Self::stashed_prompts(cx)
+                let prompts = Self::stashed_prompts(cx);
+                let count = prompts.len();
+                let rows = prompts
                     .into_iter()
                     .enumerate()
                     .map(|(ix, prompt)| {
@@ -10864,8 +11006,60 @@ impl Composer {
                             ix,
                             ix == active,
                             None,
-                            editing::one_line(&prompt.text).into(),
+                            editing::one_line(&prompt.text).into_any_element(),
                             None,
+                        )
+                        .group(format!("stash-row-{ix}"))
+                        .child(
+                            div()
+                                .relative()
+                                .flex_none()
+                                .min_w(px(28.))
+                                .h(px(20.))
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(theme.text_muted)
+                                        .group_hover(format!("stash-row-{ix}"), |style| {
+                                            style.opacity(0.)
+                                        })
+                                        .child(Self::list_time(prompt.created_at)),
+                                )
+                                .child(
+                                    div()
+                                        .id(("delete-stashed-prompt", ix))
+                                        .debug_selector(move || {
+                                            format!("delete-stashed-prompt-{ix}")
+                                        })
+                                        .absolute()
+                                        .right_0()
+                                        .top_0()
+                                        .size(px(20.))
+                                        .rounded(px(6.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .opacity(0.)
+                                        .group_hover(format!("stash-row-{ix}"), |style| {
+                                            style.opacity(1.)
+                                        })
+                                        .hover(|style| style.bg(theme.element_hover))
+                                        .role(Role::Button)
+                                        .aria_label(tr(cx, msg::chat::stash_delete))
+                                        .tooltip(crate::settings::widgets::text_tooltip(tr(
+                                            cx,
+                                            msg::chat::stash_delete,
+                                        )))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.delete_stashed_at(ix, cx);
+                                        }))
+                                        .child(
+                                            crate::icons::icon(crate::icons::CLOSE)
+                                                .size(px(12.))
+                                                .text_color(theme.text_muted),
+                                        ),
+                                ),
                         )
                         .on_mouse_move(cx.listener(move |this, _, _, cx| {
                             if this.list_active() != ix {
@@ -10877,11 +11071,25 @@ impl Composer {
                         .into_any_element()
                     })
                     .collect();
-                let header = tr(cx, msg::native::stashed_drafts);
-                let empty = tr(cx, msg::native::nothing_stashed);
-                Some(self.list_card(theme, "stash-list", header.into(), empty.into(), rows, cx))
+                let header = div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        crate::icons::icon(crate::icons::BOOKMARK)
+                            .size(px(14.))
+                            .text_color(theme.text_muted),
+                    )
+                    .child(div().flex_1().child(tr(cx, msg::chat::stash_title)))
+                    .child(count.to_string())
+                    .into_any_element();
+                let shortcut = Self::shortcut_label(Command::ComposerStash, cx);
+                let empty = tr(cx, |l10n| msg::chat::stash_empty(l10n, &shortcut));
+                Some(self.list_card(theme, "stash-list", header, empty.into(), rows, cx))
             }
-            ComposerList::History { entries, .. } => {
+            ComposerList::History { entries, query, .. } => {
+                let query = query.clone();
                 let any_entries = !entries.is_empty();
                 let rows = self
                     .history_matches()
@@ -10894,8 +11102,8 @@ impl Composer {
                             ix,
                             ix == active,
                             None,
-                            editing::one_line(&entry.text).into(),
-                            None,
+                            Self::history_label(&entry.text, &query, theme),
+                            Some(Self::list_time(entry.at).into()),
                         )
                         .on_mouse_move(cx.listener(move |this, _, _, cx| {
                             if this.list_active() != ix {
@@ -10910,13 +11118,33 @@ impl Composer {
                         .into_any_element()
                     })
                     .collect();
-                let header = tr(cx, msg::native::sent_messages);
+                let header = div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        crate::icons::icon(crate::icons::PALETTE_SEARCH)
+                            .size(px(14.))
+                            .text_color(theme.text_muted),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .truncate()
+                            .child(tr(cx, msg::chat::history_search_title)),
+                    )
+                    .child(Self::list_keycap(theme, "↵"))
+                    .child(tr(cx, msg::chat::history_search_use))
+                    .child(Self::list_keycap(theme, "Esc"))
+                    .child(tr(cx, msg::chat::history_search_cancel))
+                    .into_any_element();
                 let empty = if any_entries {
-                    tr(cx, msg::native::no_matching_messages)
+                    tr(cx, msg::chat::history_search_no_results)
                 } else {
-                    tr(cx, msg::native::nothing_to_search)
+                    tr(cx, msg::chat::history_search_empty)
                 };
-                Some(self.list_card(theme, "history-list", header.into(), empty.into(), rows, cx))
+                Some(self.list_card(theme, "history-list", header, empty.into(), rows, cx))
             }
         }
     }
@@ -10940,7 +11168,11 @@ impl Composer {
                     ix,
                     ix == active,
                     Some(row.emoji.into()),
-                    format!(":{}:", row.name).into(),
+                    div()
+                        .font_family(theme.font_mono.clone())
+                        .text_color(theme.text)
+                        .child(format!(":{}:", row.name))
+                        .into_any_element(),
                     None,
                 )
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -10960,19 +11192,46 @@ impl Composer {
                 .into_any_element()
             })
             .collect();
-        let header = tr(cx, msg::native::emoji);
-        Some(self.list_card(
-            theme,
-            "emoji-list",
-            header.into(),
-            SharedString::default(),
-            rows,
-            cx,
+        let card = crate::popover::popover_card(theme)
+            .p(px(6.))
+            .gap_0()
+            .w_full()
+            .max_w(px(320.))
+            .flex()
+            .flex_col()
+            .children(rows)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    window.focus(&this.input.focus_handle(cx), cx);
+                }),
+            );
+        Some(crate::popover::full_width_menu_above(
+            "emoji-popup",
+            card.into_any_element(),
+            None,
         ))
     }
 
-    fn render_flash(&self, theme: &Theme) -> Option<gpui::AnyElement> {
+    fn render_flash(&self, theme: &Theme, cx: &App) -> Option<gpui::AnyElement> {
         let text = self.flash.clone()?;
+        let stashed = text.as_ref() == tr(cx, msg::native::draft_stashed);
+        let shortcut = Self::shortcut_label(Command::ComposerStash, cx);
+        let content = if stashed {
+            let notice = tr(cx, |l10n| msg::chat::stash_saved_notice(l10n, &shortcut));
+            let (before, marked) = notice.split_once("<part0>").unwrap_or((&notice, ""));
+            let (key, after) = marked.split_once("</part0>").unwrap_or(("", ""));
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child(before.to_owned())
+                .child(Self::list_keycap(theme, key))
+                .child(after.to_owned())
+                .into_any_element()
+        } else {
+            text.into_any_element()
+        };
         if self.list.is_some()
             || self.emoji.is_some()
             || self.slash.token.is_some()
@@ -10996,11 +11255,13 @@ impl Composer {
                         .debug_selector(|| "composer-flash".into())
                         .role(gpui::Role::Status)
                         .rounded_full()
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
                         .px(px(12.))
-                        .py(px(4.))
                         .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
-                        .child(text),
+                        .child(content),
                 )
                 .into_any_element(),
         )
@@ -12748,12 +13009,23 @@ impl Render for Composer {
                         theme.text,
                     )),
             );
-        let stash_label = tr(cx, msg::native::stashed_drafts);
+        let stash_count = Self::stashed_prompts(cx).len();
+        let stash_open = matches!(self.list, Some(ComposerList::Stash { .. }));
+        let stash_label = tr(cx, |l10n| msg::chat::stash_open(l10n, stash_count as i64));
         let stash_action = cx.entity().downgrade();
         let stash = div()
             .id("composer-stashed-drafts")
             .debug_selector(|| "composer-stashed-drafts".into())
-            .size(px(28.0))
+            .h(px(28.0))
+            .px(px(6.))
+            .gap(px(4.))
+            .text_size(px(12.))
+            .text_color(if stash_open {
+                theme.text
+            } else {
+                theme.text_muted
+            })
+            .when(stash_open, |el| el.bg(theme.muted_fill().opacity(0.6)))
             .flex_none()
             .flex()
             .items_center()
@@ -12763,6 +13035,7 @@ impl Render for Composer {
             .opacity(beneath_voice)
             .role(Role::Button)
             .aria_label(stash_label.clone())
+            .aria_expanded(stash_open)
             .tab_index(0)
             .tooltip(crate::settings::widgets::text_tooltip(stash_label))
             .hover(|style| style.bg(theme.muted_fill().opacity(0.6)))
@@ -12781,9 +13054,14 @@ impl Render for Composer {
             })
             .child(
                 crate::icons::icon(crate::icons::BOOKMARK)
-                    .size(px(15.0))
-                    .text_color(theme.text_muted),
-            );
+                    .size(px(14.0))
+                    .text_color(if stash_open {
+                        theme.text
+                    } else {
+                        theme.text_muted
+                    }),
+            )
+            .child(stash_count.to_string());
         // Editor on top (`px-4 pb-1 pt-4`); the toolbar row (2px top + 32px
         // controls + 8px bottom) is ABSOLUTE at the pill's stationary bottom,
         // `[+][access][plugins] … [mic][model][send]`. The editor viewport
@@ -12834,7 +13112,6 @@ impl Render for Composer {
                             .child(permission)
                             .children(plan_chip)
                             .when(!self.side_chat, |el| el.child(plugins))
-                            .child(stash)
                             .children(voice_track),
                     )
                     .child(
@@ -12844,6 +13121,7 @@ impl Render for Composer {
                             .flex_row()
                             .items_center()
                             .pl(px(ACTION_PRIMARY_GAP))
+                            .when(stash_count > 0, |el| el.child(stash.mr(px(8.))))
                             .children(microphone)
                             .child(model_picker),
                     )
@@ -12904,7 +13182,7 @@ impl Render for Composer {
             .children(self.render_slash_popup(&theme, cx))
             .children(self.render_emoji_popup(&theme, cx))
             .children(self.render_composer_list(&theme, cx))
-            .children(self.render_flash(&theme));
+            .children(self.render_flash(&theme, cx));
         // The context tray: a tonal tab tucked behind the card's top edge,
         // one step narrower than the card (`w-14/15`), carrying the
         // destination and checkout chips. It reaches down under the card so
@@ -13869,6 +14147,49 @@ mod tests {
             .read_with(cx, |composer, cx| {
                 assert!(matches!(composer.list, Some(ComposerList::Stash { .. })));
                 assert!(Composer::stashed_prompts(cx).is_empty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn clicking_stash_delete_keeps_the_current_draft_and_other_saved_prompts(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, handle) = recall_window(cx, &[]);
+        handle
+            .update(cx, |composer, _, cx| {
+                crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
+                    settings.prompt_stash = ["remove this", "keep this"]
+                        .iter()
+                        .enumerate()
+                        .map(|(ix, text)| StashedPrompt {
+                            id: ix.to_string(),
+                            text: (*text).into(),
+                            created_at: 0,
+                        })
+                        .collect();
+                });
+                composer
+                    .input
+                    .update(cx, |input, cx| input.set_text("current draft", cx));
+                composer.toggle_stash_list(cx);
+            })
+            .unwrap();
+        cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(handle.into(), cx);
+        let delete = visual
+            .debug_bounds("delete-stashed-prompt-0")
+            .expect("pointer delete control");
+        visual.simulate_mouse_move(delete.center(), None, gpui::Modifiers::default());
+        visual.simulate_click(delete.center(), gpui::Modifiers::default());
+        handle
+            .read_with(&visual, |composer, cx| {
+                assert_eq!(composer.input.read(cx).text(), "current draft");
+                assert!(matches!(composer.list, Some(ComposerList::Stash { .. })));
+                let saved = Composer::stashed_prompts(cx);
+                assert_eq!(saved.len(), 1);
+                assert_eq!(saved[0].text, "keep this");
             })
             .unwrap();
     }
