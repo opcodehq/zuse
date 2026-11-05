@@ -62,7 +62,15 @@ jobs:
           - os: macos-latest
             platform: macos
             arch: aarch64
+          # Unsigned portable zip; Windows code signing is not set up yet.
+          - os: windows-latest
+            platform: windows
+            arch: x86_64
     runs-on: ${{ matrix.os }}
+    # Git Bash on Windows, so build-web.sh and the steps below run unchanged.
+    defaults:
+      run:
+        shell: bash
     env:
       HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
       HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
@@ -91,15 +99,15 @@ jobs:
       # Dependency build scripts run on this runner, so it never receives the
       # signing certificate or Apple credentials.
       - name: Build
-        run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --build-only
+        run: python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --build-only
       - name: Package
-        if: runner.os == 'Linux'
-        run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --skip-build --output dist/release
-      - if: runner.os == 'Linux'
+        if: runner.os != 'macOS'
+        run: python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --skip-build --output dist/release
+      - if: runner.os != 'macOS'
         uses: actions/upload-artifact@v4
         with:
           name: zuse-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/release/*.tar.gz
+          path: dist/release/zuse-*
           if-no-files-found: error
       # The macOS build is signed on a fresh runner by the sign-macos job.
       - if: runner.os == 'macOS'
@@ -168,7 +176,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: python3 scripts/package.py --platform macos --arch aarch64 --skip-build --output dist/release
+        run: python scripts/package.py --platform macos --arch aarch64 --skip-build --output dist/release
       # Runs even when setup failed part-way, before the keychain was exported.
       - name: Remove the signing credentials
         if: always()
@@ -197,7 +205,7 @@ jobs:
       - name: Checksums and notes
         run: |
           cd dist/release
-          sha256sum *.tar.gz > SHA256SUMS
+          sha256sum zuse-* > SHA256SUMS
           cat SHA256SUMS
           cd ../..
           base="${{ needs.verify.outputs.version }}"

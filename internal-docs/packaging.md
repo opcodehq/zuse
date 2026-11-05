@@ -2,7 +2,7 @@
 
 The source checkout is [opcodehq/zuse](https://github.com/opcodehq/zuse).
 
-Build on the target Mac or Linux machine, with the prerequisites from
+Build on the target Mac, Linux or Windows machine, with the prerequisites from
 [development.md](development.md) and Python 3.11 or newer:
 
 ```sh
@@ -10,7 +10,7 @@ python3 scripts/package.py
 ```
 
 This builds the release browser and native executables from the checkout, then
-creates `dist/build/zuse-VERSION-PLATFORM-ARCH.tar.gz`. Keep the terminal open
+creates `dist/build/zuse-VERSION-PLATFORM-ARCH.tar.gz` (a `.zip` on Windows). Keep the terminal open
 until the command completes. The output directory must not already contain an
 archive with that name. `--profile dev` selects a development native build.
 
@@ -72,6 +72,19 @@ The bundle includes its icon, URL scheme, microphone description and browser
 assets. A local package is unsigned: signing, hardened-runtime entitlements and
 notarization are separate release steps and are not performed by this command.
 Gatekeeper acceptance and microphone permission require verification on a Mac.
+
+## Windows
+
+Extract the zip anywhere you can write to and run `zuse.exe`. No installer or
+administrator rights are needed. `bin\zuse-server.cmd` and `bin\zuse-relay.cmd`
+start the helpers in `libexec\` with the packaged browser assets in `web\`;
+`--assets` or `ZUSE_WEB_ASSETS` overrides that default. Profiles default to
+`%LOCALAPPDATA%\Zuse`.
+
+The release zip is not code-signed, so SmartScreen warns on first launch:
+choose **More info**, then **Run anyway**. The embedded browser uses the
+WebView2 runtime that ships with Windows 10 and 11. A zip install does not
+update itself; the app links to the releases page when a new version is out.
 
 ## Provider requirements and profiles
 

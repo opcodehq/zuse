@@ -226,5 +226,25 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(calls, ["git"])
 
 
+    def test_windows_layout_puts_the_app_on_top_and_helpers_behind_launchers(self):
+        for binary in self.binaries:
+            header = bytearray(b"MZ" + bytes(0x3A) + struct.pack("<I", 0x40))
+            binary.write_bytes(bytes(header) + b"PE\0\0" + struct.pack("<H", 0x8664) + bytes(18))
+        self.assemble("windows")
+        self.assertTrue((self.destination / "zuse.exe").is_file())
+        for helper in ("zuse-server", "zuse-relay"):
+            self.assertTrue((self.destination / f"libexec/{helper}.exe").is_file())
+            launcher = (self.destination / f"bin/{helper}.cmd").read_bytes().decode()
+            self.assertIn("\r\n", launcher)
+            self.assertIn(f'"%root%\\libexec\\{helper}.exe" --assets "%assets%" %*', launcher)
+        # Beside zuse.exe, where the desktop app's Browser Access looks for it.
+        self.assertTrue((self.destination / "web/app.wasm").is_file())
+        self.assertIn('set "assets=%root%\\web"', launcher)
+        self.assertFalse((self.destination / "install.py").exists())
+        manifest = json.loads((self.destination / "manifest.json").read_text())
+        self.assertEqual(manifest["platform"], "windows")
+        self.assertIn("zuse.exe", manifest["files"])
+
+
 if __name__ == "__main__":
     unittest.main()
