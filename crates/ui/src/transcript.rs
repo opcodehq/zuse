@@ -11616,7 +11616,7 @@ mod tests {
                         .clone();
                     let RowKind::ToolGroup {
                         tools,
-                        auto_open,
+                        live,
                         summary,
                         ..
                     } = &row.kind
@@ -11627,7 +11627,7 @@ mod tests {
                         &row.id,
                         tools,
                         summary,
-                        *auto_open,
+                        *live,
                         None,
                         false,
                         &Theme::dark(),
