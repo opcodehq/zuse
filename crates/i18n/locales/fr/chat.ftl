@@ -1816,3 +1816,85 @@ chat-review_guide_file_count-plural =
        [one] { $count }{ " " }fichier
        *[other] { $count }{ " " }fichiers
     }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = Exécution de la commande…
+chat-tool_activity_reading = Lecture des fichiers…
+chat-tool_activity_searching_files = Recherche dans les fichiers…
+chat-tool_activity_editing = Modification des fichiers…
+chat-tool_activity_writing = Écriture des fichiers…
+chat-tool_activity_searching_web = Recherche sur le Web…
+chat-tool_activity_fetching = Récupération de la page…
+# Variables: tool
+chat-tool_activity_using = Utilisation de { $tool }…
+chat-tool_group_thinking = Réflexion
+# Variables: running, total
+chat-tool_group_agents_running = { $running } sur { $total } en cours
+chat-tool_activity_summary_separator = { ", " }
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands =
+    { $count ->
+       [one] { $count } commande exécutée
+       *[other] { $count } commandes exécutées
+    }
+# Variables: count
+chat-tool_activity_summary_reads =
+    { $count ->
+       [one] { $count } fichier lu
+       *[other] { $count } fichiers lus
+    }
+# Variables: count
+chat-tool_activity_summary_searches =
+    { $count ->
+       [one] { $count } recherche effectuée
+       *[other] { $count } recherches effectuées
+    }
+# Variables: count
+chat-tool_activity_summary_edits =
+    { $count ->
+       [one] { $count } modification effectuée
+       *[other] { $count } modifications effectuées
+    }
+# Variables: count
+chat-tool_activity_summary_writes =
+    { $count ->
+       [one] { $count } fichier écrit
+       *[other] { $count } fichiers écrits
+    }
+# Variables: count
+chat-tool_activity_summary_web_searches =
+    { $count ->
+       [one] { $count } recherche web
+       *[other] { $count } recherches web
+    }
+# Variables: count
+chat-tool_activity_summary_fetches =
+    { $count ->
+       [one] { $count } page récupérée
+       *[other] { $count } pages récupérées
+    }
+# Variables: count
+chat-tool_activity_summary_tools =
+    { $count ->
+       [one] { $count } outil utilisé
+       *[other] { $count } outils utilisés
+    }
+# Variables: count
+chat-tool_group_failed =
+    { $count ->
+       [one] { $count } en échec
+       *[other] { $count } en échec
+    }
+# Variables: count
+chat-tool_group_agents_done =
+    { $count ->
+       [one] { $count } terminé
+       *[other] { $count } terminés
+    }
+# Variables: count
+chat-tool_group_notes =
+    { $count ->
+       [one] A écrit une note
+       *[other] A écrit { $count } notes
+    }

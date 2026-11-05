@@ -1123,9 +1123,11 @@ pub enum RowKind {
         block_ix: usize,
     },
     ToolGroup {
-        summary: SharedString,
+        summary: ToolGroupSummary,
         tools: Arc<Vec<ToolItem>>,
-        auto_open: bool,
+        /// The streaming entry's trailing group: its unresolved calls are
+        /// running, so the header and chips shimmer. Never opens the group.
+        live: bool,
         /// Compact-mode settled duration for this turn, in seconds.
         worked_secs: Option<i64>,
         /// Compact-mode work header. Expanded content is sibling rows tagged
@@ -1221,7 +1223,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
-fn tool_fingerprint(tools: &[ToolItem], auto_open: bool) -> u64 {
+fn tool_fingerprint(tools: &[ToolItem], live: bool) -> u64 {
     let mut acc = Vec::with_capacity(tools.len() * 8 + 1);
     for t in tools {
         acc.extend_from_slice(t.part_id.as_bytes());
@@ -1319,7 +1321,7 @@ fn tool_fingerprint(tools: &[ToolItem], auto_open: bool) -> u64 {
             acc.extend_from_slice(tail.as_bytes());
         }
     }
-    acc.push(auto_open as u8);
+    acc.push(live as u8);
     fnv1a(&acc)
 }
 
@@ -1530,15 +1532,15 @@ pub fn rows_for_entry(
                 return;
             }
             let tools = std::mem::take(group);
-            let auto_open = streaming && last_ix == last_part_ix;
+            let live = streaming && last_ix == last_part_ix;
             rows.push(Row {
                 id: format!("{}#g{}", entry.id, group_ix).into(),
-                version: tool_fingerprint(&tools, auto_open),
+                version: tool_fingerprint(&tools, live),
                 turn_start: false,
                 kind: RowKind::ToolGroup {
-                    summary: tool_group_summary(&tools).into(),
+                    summary: tool_group_summary(&tools, live),
                     tools: Arc::new(tools),
-                    auto_open,
+                    live,
                     worked_secs: None,
                     compact_shell: false,
                 },
@@ -1890,12 +1892,12 @@ pub fn rows_for_entry(
             }
             let header = Row {
                 id: work_id,
-                version: tool_fingerprint(&tools, false),
+                version: tool_fingerprint(&tools, streaming),
                 turn_start: false,
                 kind: RowKind::ToolGroup {
-                    summary: tool_group_summary(&tools).into(),
+                    summary: tool_group_summary(&tools, streaming),
                     tools: Arc::new(tools),
-                    auto_open: false,
+                    live: false,
                     worked_secs: (!streaming)
                         .then(|| {
                             entry
@@ -2186,72 +2188,211 @@ pub fn diff_rows(old: &[Row], new: &[Row]) -> Option<(Range<usize>, usize)> {
 // Tool summaries / chips (pure)
 // ---------------------------------------------------------------------------
 
-/// The ToolGroup summary line — "3 tool calls", "1 tool call · 1 failed".
+/// What a call is doing, read off the typed [`ToolCall`] alone — never its
+/// input payload, output or diff — so picking a header label stays cheap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolActivity {
+    Command,
+    Read,
+    Search,
+    Edit,
+    Write,
+    WebSearch,
+    Fetch,
+    Other,
+}
+
+impl ToolActivity {
+    fn of(call: &ToolCall) -> Self {
+        match call {
+            ToolCall::Exec { .. } => Self::Command,
+            ToolCall::ReadFile { .. } => Self::Read,
+            ToolCall::Search { .. } | ToolCall::Glob { .. } => Self::Search,
+            ToolCall::EditFile { .. } | ToolCall::ApplyPatch { .. } => Self::Edit,
+            ToolCall::WriteFile { .. } => Self::Write,
+            ToolCall::WebSearch { .. } => Self::WebSearch,
+            ToolCall::WebFetch { .. } => Self::Fetch,
+            ToolCall::Todo { .. } | ToolCall::Mcp { .. } | ToolCall::Unknown { .. } => Self::Other,
+        }
+    }
+
+    /// The settled phrase for `count` calls of this kind ("ran 5 commands").
+    fn summary(self, count: usize, l10n: &zuse_i18n::Localizer) -> String {
+        let summary = match self {
+            Self::Command => msg::chat::tool_activity_summary_commands,
+            Self::Read => msg::chat::tool_activity_summary_reads,
+            Self::Search => msg::chat::tool_activity_summary_searches,
+            Self::Edit => msg::chat::tool_activity_summary_edits,
+            Self::Write => msg::chat::tool_activity_summary_writes,
+            Self::WebSearch => msg::chat::tool_activity_summary_web_searches,
+            Self::Fetch => msg::chat::tool_activity_summary_fetches,
+            Self::Other => msg::chat::tool_activity_summary_tools,
+        };
+        summary(l10n, count)
+    }
+}
+
+/// The name a call goes by when no activity verb fits ("Using Todo…").
+fn tool_display_name(call: &ToolCall) -> String {
+    match call {
+        _ if call.is_subagent_spawn() => "Agent".into(),
+        ToolCall::Mcp { tool, .. } => tool.clone(),
+        ToolCall::Unknown { name, .. } => name.clone(),
+        _ => tool_chip_content(call).0.into(),
+    }
+}
+
+/// A ToolGroup header, decided off the UI thread in [`rows_for_entry`] and
+/// worded at paint by [`ToolGroupSummary::text`], so a language switch
+/// rewords cached rows without rebuilding them.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ToolGroupSummary {
+    Empty,
+    /// Compact mode's folded narration, with no calls beside it.
+    Notes(usize),
+    /// Only thoughts.
+    Thinking,
+    /// A group of subagents: how its agents stand ("1 of 3 running",
+    /// "2 done · 1 failed"); the header's avatar stack shows how many.
+    Agents {
+        running: usize,
+        total: usize,
+        done: usize,
+        failed: usize,
+    },
+    /// A live group's newest unresolved call ("Running command…").
+    Running {
+        activity: ToolActivity,
+        tool: String,
+    },
+    /// Calls counted per activity in order of first appearance ("Ran 5
+    /// commands, read 3 files, made 2 edits"). Edits count per call, not
+    /// per file.
+    Activity {
+        counts: Vec<(ToolActivity, usize)>,
+        failed: usize,
+    },
+}
+
+impl ToolGroupSummary {
+    /// A call is still running: the header shimmers its label.
+    pub fn is_running(&self) -> bool {
+        matches!(self, Self::Running { .. })
+    }
+
+    pub fn text(&self, l10n: &zuse_i18n::Localizer) -> String {
+        let status_separator = || msg::chat::tool_group_status_separator(l10n);
+        match self {
+            Self::Empty => String::new(),
+            Self::Notes(count) => msg::chat::tool_group_notes(l10n, *count),
+            Self::Thinking => msg::chat::tool_group_thinking(l10n),
+            Self::Agents { running, total, .. } if *running > 0 => {
+                msg::chat::tool_group_agents_running(l10n, *running, *total)
+            }
+            Self::Agents { done, failed, .. } => [
+                (*done > 0).then(|| msg::chat::tool_group_agents_done(l10n, *done)),
+                (*failed > 0).then(|| msg::chat::tool_group_failed(l10n, *failed)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(&status_separator()),
+            Self::Running { activity, tool } => match activity {
+                ToolActivity::Command => msg::chat::tool_activity_running_command(l10n),
+                ToolActivity::Read => msg::chat::tool_activity_reading(l10n),
+                ToolActivity::Search => msg::chat::tool_activity_searching_files(l10n),
+                ToolActivity::Edit => msg::chat::tool_activity_editing(l10n),
+                ToolActivity::Write => msg::chat::tool_activity_writing(l10n),
+                ToolActivity::WebSearch => msg::chat::tool_activity_searching_web(l10n),
+                ToolActivity::Fetch => msg::chat::tool_activity_fetching(l10n),
+                ToolActivity::Other => msg::chat::tool_activity_using(l10n, tool.as_str()),
+            },
+            Self::Activity { counts, failed } => {
+                let mut summary = capitalize_first(
+                    &counts
+                        .iter()
+                        .map(|(activity, count)| activity.summary(*count, l10n))
+                        .collect::<Vec<_>>()
+                        .join(&msg::chat::tool_activity_summary_separator(l10n)),
+                );
+                if *failed > 0 {
+                    summary.push_str(&status_separator());
+                    summary.push_str(&msg::chat::tool_group_failed(l10n, *failed));
+                }
+                summary
+            }
+        }
+    }
+}
+
+/// Uppercase a phrase's first character, for locales that have case; the
+/// summary phrases are lowercase so they read as one clause when joined.
+fn capitalize_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// The ToolGroup header — "Ran 5 commands, read 3 files", or while a `live`
+/// group's call is unresolved, that call's running label.
 ///
-/// The group counts its tool calls the way the timeline's activity tree
-/// does; thoughts and notes ride inside it uncounted. A group with no calls
+/// Thoughts and notes ride inside the group uncounted. A group with no calls
 /// names what it holds instead ("Thinking", "Wrote a note").
-pub fn tool_group_summary(tools: &[ToolItem]) -> String {
+pub fn tool_group_summary(tools: &[ToolItem], live: bool) -> ToolGroupSummary {
     #[cfg(test)]
     FORBID_ROW_PREPARATION
         .with(|forbidden| assert!(!forbidden.get(), "tool summary formatting ran on UI thread"));
-    let calls = tools
-        .iter()
-        .filter(|t| t.kind == ToolItemKind::Call)
-        .count();
-    let failed = tools
-        .iter()
-        .filter(|t| t.kind == ToolItemKind::Call && t.is_error)
-        .count();
-    let thoughts = tools
-        .iter()
-        .filter(|t| t.kind == ToolItemKind::Thought)
-        .count();
-    let notes = tools
-        .iter()
-        .filter(|t| t.kind == ToolItemKind::Note)
-        .count();
-    // A group of subagents says how its agents stand ("1 of 3 running",
-    // "2 done · 1 failed"); the header's avatar stack shows how many.
-    if calls > 1
-        && tools
-            .iter()
-            .all(|t| t.kind != ToolItemKind::Call || is_agent_tool(t))
-    {
-        let statuses: Vec<SubagentStatus> = tools
-            .iter()
-            .filter(|t| is_agent_tool(t))
-            .map(agent_status)
-            .collect();
-        let count = |status| statuses.iter().filter(|s| **s == status).count();
-        let running = count(SubagentStatus::Running);
-        if running > 0 {
-            return format!("{running} of {calls} running");
+    let calls = || tools.iter().filter(|t| t.kind == ToolItemKind::Call);
+    let total = calls().count();
+    if total > 1 && calls().all(is_agent_tool) {
+        let count = |status| calls().filter(|t| agent_status(t) == status).count();
+        return ToolGroupSummary::Agents {
+            running: count(SubagentStatus::Running),
+            total,
+            done: count(SubagentStatus::Done),
+            failed: count(SubagentStatus::Failed),
+        };
+    }
+    if live {
+        if let Some(pending) = calls().rfind(|t| !t.resolved) {
+            let activity = ToolActivity::of(&pending.call);
+            return ToolGroupSummary::Running {
+                activity,
+                tool: if activity == ToolActivity::Other {
+                    tool_display_name(&pending.call)
+                } else {
+                    String::new()
+                },
+            };
         }
-        return [
-            (SubagentStatus::Done, "done"),
-            (SubagentStatus::Failed, "failed"),
-        ]
-        .into_iter()
-        .filter_map(|(status, word)| {
-            let n = count(status);
-            (n > 0).then(|| format!("{n} {word}"))
-        })
-        .collect::<Vec<_>>()
-        .join(" · ");
     }
-    let mut summary = match (calls, thoughts, notes) {
-        (0, 0, 0) => String::new(),
-        (0, 0, 1) => "Wrote a note".into(),
-        (0, 0, n) => format!("Wrote {n} notes"),
-        (0, _, _) => "Thinking".into(),
-        (1, _, _) => "1 tool call".into(),
-        (n, _, _) => format!("{n} tool calls"),
-    };
-    if failed > 0 {
-        summary.push_str(&format!(" · {failed} failed"));
+    if total == 0 {
+        let notes = tools
+            .iter()
+            .filter(|t| t.kind == ToolItemKind::Note)
+            .count();
+        return if tools.iter().any(|t| t.kind == ToolItemKind::Thought) {
+            ToolGroupSummary::Thinking
+        } else if notes > 0 {
+            ToolGroupSummary::Notes(notes)
+        } else {
+            ToolGroupSummary::Empty
+        };
     }
-    summary
+    let mut counts: Vec<(ToolActivity, usize)> = Vec::new();
+    for call in calls() {
+        let activity = ToolActivity::of(&call.call);
+        match counts.iter_mut().find(|(seen, _)| *seen == activity) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((activity, 1)),
+        }
+    }
+    ToolGroupSummary::Activity {
+        counts,
+        failed: calls().filter(|t| t.is_error).count(),
+    }
 }
 
 fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Theme) -> AnyElement {
@@ -5395,7 +5536,7 @@ impl Transcript {
                 if old_range.len() == count {
                     // In-place content change, same row count — notably the
                     // live→complete flip, where EVERY row of the streamed
-                    // message changes version (streaming bit, tool auto_open,
+                    // message changes version (streaming bit, tool live,
                     // timestamp bit) with identical ids. `splice` would reset
                     // those items to hint-less Unmeasured (heights read 0
                     // until the next paint) and, when the viewport-top item is
@@ -8045,7 +8186,7 @@ impl Transcript {
             }
             RowKind::ToolGroup {
                 tools,
-                auto_open,
+                live,
                 summary,
                 worked_secs,
                 compact_shell,
@@ -8053,7 +8194,7 @@ impl Transcript {
                 &row.id,
                 tools,
                 summary,
-                *auto_open,
+                *live,
                 *worked_secs,
                 *compact_shell,
                 &theme,
@@ -8506,8 +8647,8 @@ impl Transcript {
         &mut self,
         row_id: &SharedString,
         tools: &Arc<Vec<ToolItem>>,
-        summary: &SharedString,
-        auto_open: bool,
+        summary: &ToolGroupSummary,
+        live: bool,
         worked_secs: Option<i64>,
         compact_shell: bool,
         theme: &Theme,
@@ -8524,18 +8665,9 @@ impl Transcript {
         // stacked, how they stand, and the chevron trailing.
         let agent_group = !self.compact_mode && tools.len() > 1 && tools.iter().all(is_agent_tool);
         let agent_count = tools.len();
-        let arrival_pending = !cx.reduce_motion()
-            && self.tool_group_reveals.get(row_id).is_some_and(|reveal| {
-                reveal.starts.iter().flatten().any(|start| {
-                    Instant::now()
-                        .checked_duration_since(*start)
-                        .unwrap_or_default()
-                        < TOOL_CONNECTOR_REVEAL.total()
-                })
-            });
-        // Compact mode never auto-opens — not for the streaming tail, and not
-        // to show chips arriving mid-reveal. Collapsed-by-default is the mode.
-        let effective_auto_open = auto_open || (arrival_pending && !self.compact_mode);
+        // Groups start collapsed, the live tail included: the header names
+        // what the group is doing, and opening it is the user's call.
+        let effective_auto_open = false;
         #[cfg(feature = "browser-fixture")]
         let effective_auto_open = effective_auto_open || self.fixture_open_groups;
         // A subagent group stays open while any of its agents still works.
@@ -8558,14 +8690,17 @@ impl Transcript {
             }
             reveal.rendered_open = Some(open);
         }
-        // The title shimmer reads "working" even under the collapsed compact
-        // fold — any unresolved chip (a running tool, a live thought) keeps it
-        // pulsing until the turn's work settles. Compute this before the
-        // collapsed-body skip, which may empty `tools`.
+        // The title shimmers while it names a running call ("Running
+        // command…"). Between calls it shows the summary so far, still; the
+        // working row below says the agent is busy. Under the collapsed
+        // compact fold any unresolved chip (a running tool, a live thought)
+        // keeps it pulsing until the turn's work settles. Compute this before
+        // the collapsed-body skip, which may empty `tools`.
         let active = collapses
-            && (auto_open
+            && (summary.is_running()
                 || live_agents
                 || (self.compact_mode && tools.iter().any(|t| !t.resolved)));
+        let summary = SharedString::from(summary.text(&crate::localization::localizer(cx)));
         if self.compact_mode && active {
             self.compact_live_entries.insert(row_id.clone());
         }
@@ -8850,8 +8985,8 @@ impl Transcript {
             tool_disclosure_progress(open, fold, now)
         };
 
-        // The summary rolls as the group grows ("2 tool calls" → "3 tool
-        // calls"), like the working indicator's word.
+        // The summary rolls as the group grows ("Ran 2 commands" → "Ran 3
+        // commands"), like the working indicator's word.
         let rolled_summary = crate::roll_text::rolling(
             format!("tool-group-title-{row_id}"),
             summary.clone(),
@@ -9025,7 +9160,7 @@ impl Transcript {
                         tool_chip(
                             tool,
                             collapses,
-                            auto_open,
+                            live,
                             ix > 0,
                             ix + 1 < tools.len(),
                             content_reveal,
@@ -9094,7 +9229,7 @@ impl Transcript {
                             .child(chip_header(
                                 tool,
                                 open,
-                                auto_open,
+                                live,
                                 file_opener.as_ref(),
                                 theme,
                                 cx.entity_id(),
@@ -11389,19 +11524,19 @@ mod tests {
                 .clone();
             let RowKind::ToolGroup {
                 tools,
-                auto_open,
+                live,
                 summary,
                 ..
             } = &row.kind
             else {
                 unreachable!()
             };
-            assert!(!auto_open);
+            assert!(!live);
             let _ = this.render_tool_group(
                 &row.id,
                 tools,
                 summary,
-                *auto_open,
+                *live,
                 None,
                 false,
                 &Theme::dark(),
@@ -11996,7 +12131,7 @@ mod tests {
                 let row = this.rows[0].clone();
                 let RowKind::ToolGroup {
                     tools,
-                    auto_open,
+                    live,
                     summary,
                     ..
                 } = &row.kind
@@ -12007,7 +12142,7 @@ mod tests {
                     &row.id,
                     tools,
                     summary,
-                    *auto_open,
+                    *live,
                     None,
                     false,
                     &Theme::dark(),
@@ -12035,19 +12170,19 @@ mod tests {
                 let row = this.rows.last().unwrap().clone();
                 let RowKind::ToolGroup {
                     tools,
-                    auto_open,
+                    live,
                     summary,
                     ..
                 } = &row.kind
                 else {
                     panic!("expected tools")
                 };
-                assert!(*auto_open);
+                assert!(*live);
                 let _ = this.render_tool_group(
                     &row.id,
                     tools,
                     summary,
-                    *auto_open,
+                    *live,
                     None,
                     false,
                     &Theme::dark(),
@@ -12056,7 +12191,8 @@ mod tests {
                 let reveal = &this.tool_group_reveals[&row.id];
                 assert!(reveal.header_started_at.is_some());
                 assert!(reveal.starts.iter().all(Option::is_some));
-                assert_eq!(reveal.rendered_open, Some(true));
+                // The live tail starts collapsed like any other group.
+                assert_eq!(reveal.rendered_open, Some(false));
             });
         });
     }
@@ -13194,9 +13330,8 @@ mod tests {
             tools[0].detail.as_deref(),
             Some(ToolDetail::Thought { lines, .. }) if !lines.is_empty()
         ));
-        let summary = tool_group_summary(&tools);
         // Thoughts ride inside the group uncounted; the calls are counted.
-        assert_eq!(summary, "2 tool calls");
+        assert_eq!(summary_text(&tools), "Ran 2 commands");
 
         // A lone thought is still an accordion (with the group tween), named
         // plainly.
@@ -13210,7 +13345,7 @@ mod tests {
         let RowKind::ToolGroup { tools, .. } = &rows[0].kind else {
             panic!("expected a tool group");
         };
-        assert_eq!(tool_group_summary(&tools), "Thinking");
+        assert_eq!(summary_text(&tools), "Thinking");
 
         // Empty reasoning renders nothing.
         let entry = assistant(
@@ -13229,15 +13364,12 @@ mod tests {
             vec![reasoning_part("r0", "thinking hard")],
         );
         let rows = rows_for_entry(&entry, false, false, &mut parse);
-        let RowKind::ToolGroup {
-            tools, auto_open, ..
-        } = &rows[0].kind
-        else {
+        let RowKind::ToolGroup { tools, live, .. } = &rows[0].kind else {
             panic!("expected a tool group");
         };
-        // The live tail auto-opens the group; the chip itself is unresolved
+        // The live tail is the live group; the chip itself is unresolved
         // (defaults open) until the part stops being the tail.
-        assert!(*auto_open);
+        assert!(*live);
         assert!(!tools[0].resolved);
 
         let entry = assistant(
@@ -13282,7 +13414,7 @@ mod tests {
         assert_eq!(visible.len(), 2, "collapsed: work header + the reply");
         let RowKind::ToolGroup {
             tools,
-            auto_open,
+            live,
             compact_shell,
             ..
         } = &visible[0].kind
@@ -13290,15 +13422,14 @@ mod tests {
             panic!("expected a tool group");
         };
         assert!(*compact_shell);
-        assert!(!*auto_open, "the work group never opens itself");
+        assert!(!*live, "the work group never opens itself");
         assert_eq!(tools.len(), 4);
         assert_eq!(tools[0].kind, ToolItemKind::Thought);
         assert_eq!(tools[1].kind, ToolItemKind::Call);
         assert_eq!(tools[2].kind, ToolItemKind::Note);
         assert_eq!(tools[3].kind, ToolItemKind::Call);
         assert!(matches!(visible[1].kind, RowKind::Markdown { .. }));
-        let summary = tool_group_summary(tools);
-        assert_eq!(summary, "2 tool calls");
+        assert_eq!(summary_text(tools), "Ran 2 commands");
 
         assert!(rows.iter().any(|row| {
             row.compact_fold.is_some() && matches!(row.kind, RowKind::Markdown { .. })
@@ -13439,13 +13570,10 @@ mod tests {
         let rows = rows_for_entry(&entry, false, true, &mut parse);
         let visible = compact_visible(&rows);
         assert_eq!(visible.len(), 1, "the streaming text tail folds too");
-        let RowKind::ToolGroup {
-            tools, auto_open, ..
-        } = &visible[0].kind
-        else {
+        let RowKind::ToolGroup { tools, live, .. } = &visible[0].kind else {
             panic!("expected a tool group");
         };
-        assert!(!*auto_open);
+        assert!(!*live);
         assert_eq!(tools.len(), 3);
         assert_eq!(tools[2].kind, ToolItemKind::Note);
         assert!(rows.iter().any(|row| {
@@ -13952,15 +14080,12 @@ mod tests {
             ]
         );
 
-        let RowKind::ToolGroup {
-            tools, auto_open, ..
-        } = &rows[1].kind
-        else {
+        let RowKind::ToolGroup { tools, live, .. } = &rows[1].kind else {
             panic!("ordinary group expected")
         };
         assert_eq!(tools.len(), 2);
         assert!(tool_group_collapses(tools));
-        assert!(!*auto_open);
+        assert!(!*live);
 
         let RowKind::ToolGroup { tools, .. } = &rows[2].kind else {
             panic!("agent group expected")
@@ -13982,7 +14107,7 @@ mod tests {
         // Two agents fold under one "2 subagents" header.
         assert!(tool_group_collapses(tools));
         assert!(tools.iter().all(is_agent_tool));
-        assert_eq!(tool_group_summary(tools), "2 of 2 running");
+        assert_eq!(summary_text(tools), "2 of 2 running");
     }
 
     #[test]
@@ -14027,17 +14152,14 @@ mod tests {
         );
         let rows = rows_for_entry(&entry, false, false, &mut parse);
         assert_eq!(rows.len(), 1);
-        let RowKind::ToolGroup {
-            tools, auto_open, ..
-        } = &rows[0].kind
-        else {
+        let RowKind::ToolGroup { tools, live, .. } = &rows[0].kind else {
             panic!("agent group expected")
         };
         assert_eq!(tools.len(), 1);
         assert!(!tool_group_collapses(tools), "no 'Called 1 tool' wrap");
         assert!(
-            !*auto_open,
-            "auto_open is a streaming flag; agent rows ignore it at paint"
+            !*live,
+            "live is a streaming flag; agent rows ignore it at paint"
         );
     }
 
@@ -14075,33 +14197,33 @@ mod tests {
     }
 
     #[test]
-    fn trailing_group_auto_opens_only_while_streaming() {
+    fn trailing_group_is_live_only_while_streaming() {
         let parts = vec![text_part("t0", "hi"), tool_part("a", "ls")];
         let streaming = assistant("m3", MessageStatus::Streaming, parts.clone());
         let rows = rows_for_entry(&streaming, false, false, &mut parse);
-        let RowKind::ToolGroup { auto_open, .. } = rows[1].kind else {
+        let RowKind::ToolGroup { live, .. } = rows[1].kind else {
             panic!()
         };
-        assert!(auto_open, "trailing group opens while streaming");
+        assert!(live, "trailing group is live while streaming");
 
         let complete = assistant("m3", MessageStatus::Complete, parts);
         let rows = rows_for_entry(&complete, false, false, &mut parse);
-        let RowKind::ToolGroup { auto_open, .. } = rows[1].kind else {
+        let RowKind::ToolGroup { live, .. } = rows[1].kind else {
             panic!()
         };
-        assert!(!auto_open);
+        assert!(!live);
 
-        // A non-trailing group never auto-opens.
+        // A non-trailing group is settled.
         let mid = assistant(
             "m4",
             MessageStatus::Streaming,
             vec![tool_part("a", "ls"), text_part("t0", "hi")],
         );
         let rows = rows_for_entry(&mid, false, false, &mut parse);
-        let RowKind::ToolGroup { auto_open, .. } = rows[0].kind else {
+        let RowKind::ToolGroup { live, .. } = rows[0].kind else {
             panic!()
         };
-        assert!(!auto_open);
+        assert!(!live);
     }
 
     #[test]
@@ -16550,11 +16672,22 @@ mod tests {
         assert!(tool_detail(Some("\n\n"), None, None).is_none());
     }
 
-    #[test]
-    fn tool_group_summaries() {
-        let exec = |c: &str| ToolItem {
+    /// A settled group's header in `locale`, without Fluent's bidi isolation
+    /// marks around placeables.
+    fn summary_in(tools: &[ToolItem], live: bool, locale: zuse_i18n::Locale) -> String {
+        tool_group_summary(tools, live)
+            .text(&zuse_i18n::Localizer::new(locale))
+            .replace(['\u{2068}', '\u{2069}'], "")
+    }
+
+    fn summary_text(tools: &[ToolItem]) -> String {
+        summary_in(tools, false, zuse_i18n::Locale::En)
+    }
+
+    fn call_item(call: ToolCall) -> ToolItem {
+        ToolItem {
             part_id: "fixture".into(),
-            call: ToolCall::Exec { command: c.into() },
+            call,
             is_error: false,
             resolved: true,
             detail: None,
@@ -16567,96 +16700,167 @@ mod tests {
             subagent_tail: None,
             kind: ToolItemKind::Call,
             images: Arc::new([]),
-        };
-        let edit = |p: &str| ToolItem {
-            part_id: "fixture".into(),
-            call: ToolCall::EditFile {
+        }
+    }
+
+    #[test]
+    fn tool_group_summaries() {
+        let exec = |c: &str| call_item(ToolCall::Exec { command: c.into() });
+        let read = |p: &str| call_item(ToolCall::ReadFile { path: p.into() });
+        let edit = |p: &str| {
+            call_item(ToolCall::EditFile {
                 path: p.into(),
                 old_string: None,
                 new_string: None,
-            },
-            is_error: false,
-            resolved: true,
-            detail: None,
-            invocation: None,
-            output_ref: None,
-            output_bytes: None,
-            diff_ref: None,
-            subagent_ref: None,
-            subagent_status: None,
-            subagent_tail: None,
-            kind: ToolItemKind::Call,
-            images: Arc::new([]),
+            })
         };
+        // Per kind, in order of first appearance, first word capitalized.
         let tools = vec![
             exec("ls"),
+            read("a.rs"),
             exec("pwd"),
-            exec("make"),
             edit("a.rs"),
+            exec("make"),
+            read("b.rs"),
+            read("c.rs"),
+            exec("test"),
+            exec("fmt"),
             edit("b.rs"),
         ];
-        assert_eq!(tool_group_summary(&tools), "5 tool calls");
-        // Every call counts, repeated edits included.
-        let tools = vec![edit("a.rs"), edit("a.rs")];
-        assert_eq!(tool_group_summary(&tools), "2 tool calls");
+        assert_eq!(
+            summary_text(&tools),
+            "Ran 5 commands, read 3 files, made 2 edits"
+        );
+        // Edits count per call, repeated files and patches included.
+        let tools = vec![
+            edit("a.rs"),
+            edit("a.rs"),
+            call_item(ToolCall::ApplyPatch { path: None }),
+        ];
+        assert_eq!(summary_text(&tools), "Made 3 edits");
+        // Singular forms.
+        assert_eq!(summary_text(&[exec("ls")]), "Ran 1 command");
+        assert_eq!(summary_text(&[read("x")]), "Read 1 file");
         // Failures append.
         let mut failing = exec("boom");
         failing.is_error = true;
-        assert_eq!(tool_group_summary(&[failing]), "1 tool call · 1 failed");
-        // Reads / searches / misc.
+        assert_eq!(summary_text(&[failing]), "Ran 1 command · 1 failed");
+        // Searches, the web, writes, and tools without a verb.
         let tools = vec![
-            ToolItem {
-                part_id: "fixture".into(),
-                call: ToolCall::ReadFile { path: "x".into() },
-                is_error: false,
-                resolved: true,
-                detail: None,
-                invocation: None,
-                output_ref: None,
-                output_bytes: None,
-                diff_ref: None,
-                subagent_ref: None,
-                subagent_status: None,
-                subagent_tail: None,
-                kind: ToolItemKind::Call,
-                images: Arc::new([]),
-            },
-            ToolItem {
-                part_id: "fixture".into(),
-                call: ToolCall::Glob {
-                    pattern: "*.rs".into(),
-                },
-                is_error: false,
-                resolved: true,
-                detail: None,
-                invocation: None,
-                output_ref: None,
-                output_bytes: None,
-                diff_ref: None,
-                subagent_ref: None,
-                subagent_status: None,
-                subagent_tail: None,
-                kind: ToolItemKind::Call,
-                images: Arc::new([]),
-            },
-            ToolItem {
-                part_id: "fixture".into(),
-                call: ToolCall::WebSearch { query: "q".into() },
-                is_error: false,
-                resolved: true,
-                detail: None,
-                invocation: None,
-                output_ref: None,
-                output_bytes: None,
-                diff_ref: None,
-                subagent_ref: None,
-                subagent_status: None,
-                subagent_tail: None,
-                kind: ToolItemKind::Call,
-                images: Arc::new([]),
-            },
+            call_item(ToolCall::Glob {
+                pattern: "*.rs".into(),
+            }),
+            call_item(ToolCall::Search {
+                pattern: "fn".into(),
+                path: None,
+            }),
+            call_item(ToolCall::WebSearch { query: "q".into() }),
+            call_item(ToolCall::WebFetch {
+                url: "https://example.com".into(),
+                prompt: None,
+            }),
+            call_item(ToolCall::WriteFile {
+                path: "new.rs".into(),
+                content: None,
+            }),
+            call_item(ToolCall::Todo { items: Vec::new() }),
+            call_item(ToolCall::Mcp {
+                server: "docs".into(),
+                tool: "lookup".into(),
+                input: None,
+            }),
         ];
-        assert_eq!(tool_group_summary(&tools), "3 tool calls");
+        assert_eq!(
+            summary_text(&tools),
+            "Ran 2 searches, ran 1 web search, fetched 1 page, wrote 1 file, used 2 tools"
+        );
+        // Other languages join with their own separator; no case to raise.
+        let tools = vec![exec("ls"), read("a"), read("b")];
+        assert_eq!(
+            summary_in(&tools, false, zuse_i18n::Locale::ZhHans),
+            "运行了 1 条命令，读取了 2 个文件"
+        );
+        assert_eq!(
+            summary_in(&tools, false, zuse_i18n::Locale::De),
+            "1 Befehl ausgeführt, 2 Dateien gelesen"
+        );
+    }
+
+    #[test]
+    fn live_group_names_its_running_call() {
+        let exec = |c: &str| call_item(ToolCall::Exec { command: c.into() });
+        let mut running = call_item(ToolCall::ReadFile {
+            path: "a.rs".into(),
+        });
+        running.resolved = false;
+        let tools = vec![exec("ls"), running.clone(), exec("pwd")];
+        // The newest unresolved call names the header, and it shimmers.
+        let summary = tool_group_summary(&tools, true);
+        assert!(summary.is_running());
+        assert_eq!(
+            summary_in(&tools, true, zuse_i18n::Locale::En),
+            "Reading files…"
+        );
+        assert_eq!(
+            summary_in(&tools, true, zuse_i18n::Locale::Fr),
+            "Lecture des fichiers…"
+        );
+        // Once the stream ends an unresolved call no longer runs: the group
+        // summarizes it like any other.
+        assert!(!tool_group_summary(&tools, false).is_running());
+        assert_eq!(summary_text(&tools), "Ran 2 commands, read 1 file");
+        // Between calls the live group shows the summary so far.
+        let settled = vec![exec("ls"), exec("pwd")];
+        assert!(!tool_group_summary(&settled, true).is_running());
+        assert_eq!(
+            summary_in(&settled, true, zuse_i18n::Locale::En),
+            "Ran 2 commands"
+        );
+
+        let mut command = exec("make");
+        command.resolved = false;
+        assert_eq!(
+            summary_in(&[command], true, zuse_i18n::Locale::En),
+            "Running command…"
+        );
+        let mut tool = call_item(ToolCall::Mcp {
+            server: "docs".into(),
+            tool: "lookup".into(),
+            input: None,
+        });
+        tool.resolved = false;
+        assert_eq!(
+            summary_in(&[tool], true, zuse_i18n::Locale::En),
+            "Using lookup…"
+        );
+    }
+
+    #[test]
+    fn picking_the_header_label_never_reads_edit_payloads() {
+        // The label comes from the call's kind alone: an edit whose detail
+        // would be a huge diff costs the same as one with none.
+        let mut edit = call_item(ToolCall::EditFile {
+            path: "big.rs".into(),
+            old_string: Some("a\n".repeat(100_000)),
+            new_string: Some("b\n".repeat(100_000)),
+        });
+        edit.resolved = false;
+        let summary = tool_group_summary(std::slice::from_ref(&edit), true);
+        assert_eq!(
+            summary,
+            ToolGroupSummary::Running {
+                activity: ToolActivity::Edit,
+                tool: String::new(),
+            }
+        );
+        edit.resolved = true;
+        assert_eq!(
+            tool_group_summary(&[edit], false),
+            ToolGroupSummary::Activity {
+                counts: vec![(ToolActivity::Edit, 1)],
+                failed: 0,
+            }
+        );
     }
 
     #[test]

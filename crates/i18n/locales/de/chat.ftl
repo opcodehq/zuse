@@ -1801,3 +1801,77 @@ chat-review_guide_file_count-plural =
        [one] { $count }{ " " }Datei
        *[other] { $count }{ " " }Dateien
     }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = Befehl wird ausgeführt…
+chat-tool_activity_reading = Dateien werden gelesen…
+chat-tool_activity_searching_files = Dateien werden durchsucht…
+chat-tool_activity_editing = Dateien werden bearbeitet…
+chat-tool_activity_writing = Dateien werden geschrieben…
+chat-tool_activity_searching_web = Web wird durchsucht…
+chat-tool_activity_fetching = Seite wird abgerufen…
+# Variables: tool
+chat-tool_activity_using = { $tool } wird verwendet…
+chat-tool_group_thinking = Denkt nach
+# Variables: running, total
+chat-tool_group_agents_running = { $running } von { $total } laufen
+chat-tool_activity_summary_separator = { ", " }
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands =
+    { $count ->
+       [one] { $count } Befehl ausgeführt
+       *[other] { $count } Befehle ausgeführt
+    }
+# Variables: count
+chat-tool_activity_summary_reads =
+    { $count ->
+       [one] { $count } Datei gelesen
+       *[other] { $count } Dateien gelesen
+    }
+# Variables: count
+chat-tool_activity_summary_searches =
+    { $count ->
+       [one] { $count } Suche ausgeführt
+       *[other] { $count } Suchen ausgeführt
+    }
+# Variables: count
+chat-tool_activity_summary_edits =
+    { $count ->
+       [one] { $count } Änderung vorgenommen
+       *[other] { $count } Änderungen vorgenommen
+    }
+# Variables: count
+chat-tool_activity_summary_writes =
+    { $count ->
+       [one] { $count } Datei geschrieben
+       *[other] { $count } Dateien geschrieben
+    }
+# Variables: count
+chat-tool_activity_summary_web_searches =
+    { $count ->
+       [one] { $count } Websuche ausgeführt
+       *[other] { $count } Websuchen ausgeführt
+    }
+# Variables: count
+chat-tool_activity_summary_fetches =
+    { $count ->
+       [one] { $count } Seite abgerufen
+       *[other] { $count } Seiten abgerufen
+    }
+# Variables: count
+chat-tool_activity_summary_tools =
+    { $count ->
+       [one] { $count } Tool verwendet
+       *[other] { $count } Tools verwendet
+    }
+# Variables: count
+chat-tool_group_failed = { $count } fehlgeschlagen
+# Variables: count
+chat-tool_group_agents_done = { $count } fertig
+# Variables: count
+chat-tool_group_notes =
+    { $count ->
+       [one] Eine Notiz geschrieben
+       *[other] { $count } Notizen geschrieben
+    }

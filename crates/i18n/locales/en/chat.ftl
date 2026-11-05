@@ -2801,3 +2801,77 @@ chat-review_guide_file_count-plural =
        [one] { $count }{ " " }file
        *[other] { $count }{ " " }files
     }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = Running command…
+chat-tool_activity_reading = Reading files…
+chat-tool_activity_searching_files = Searching files…
+chat-tool_activity_editing = Editing files…
+chat-tool_activity_writing = Writing files…
+chat-tool_activity_searching_web = Searching the web…
+chat-tool_activity_fetching = Fetching page…
+# Variables: tool
+chat-tool_activity_using = Using { $tool }…
+chat-tool_group_thinking = Thinking
+# Variables: running, total
+chat-tool_group_agents_running = { $running } of { $total } running
+chat-tool_activity_summary_separator = { ", " }
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands =
+    { $count ->
+       [one] ran { $count } command
+       *[other] ran { $count } commands
+    }
+# Variables: count
+chat-tool_activity_summary_reads =
+    { $count ->
+       [one] read { $count } file
+       *[other] read { $count } files
+    }
+# Variables: count
+chat-tool_activity_summary_searches =
+    { $count ->
+       [one] ran { $count } search
+       *[other] ran { $count } searches
+    }
+# Variables: count
+chat-tool_activity_summary_edits =
+    { $count ->
+       [one] made { $count } edit
+       *[other] made { $count } edits
+    }
+# Variables: count
+chat-tool_activity_summary_writes =
+    { $count ->
+       [one] wrote { $count } file
+       *[other] wrote { $count } files
+    }
+# Variables: count
+chat-tool_activity_summary_web_searches =
+    { $count ->
+       [one] ran { $count } web search
+       *[other] ran { $count } web searches
+    }
+# Variables: count
+chat-tool_activity_summary_fetches =
+    { $count ->
+       [one] fetched { $count } page
+       *[other] fetched { $count } pages
+    }
+# Variables: count
+chat-tool_activity_summary_tools =
+    { $count ->
+       [one] used { $count } tool
+       *[other] used { $count } tools
+    }
+# Variables: count
+chat-tool_group_failed = { $count } failed
+# Variables: count
+chat-tool_group_agents_done = { $count } done
+# Variables: count
+chat-tool_group_notes =
+    { $count ->
+       [one] Wrote a note
+       *[other] Wrote { $count } notes
+    }

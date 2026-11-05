@@ -1801,3 +1801,41 @@ chat-review_guide_file_count-plural =
        [one] { $count }{ " " }ファイル
        *[other] { $count }{ " " }ファイル
     }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = コマンドを実行中…
+chat-tool_activity_reading = ファイルを読み取り中…
+chat-tool_activity_searching_files = ファイルを検索中…
+chat-tool_activity_editing = ファイルを編集中…
+chat-tool_activity_writing = ファイルを書き込み中…
+chat-tool_activity_searching_web = ウェブを検索中…
+chat-tool_activity_fetching = ページを取得中…
+# Variables: tool
+chat-tool_activity_using = { $tool } を使用中…
+chat-tool_group_thinking = 思考中
+# Variables: running, total
+chat-tool_group_agents_running = { $total } 件中 { $running } 件を実行中
+chat-tool_activity_summary_separator = 、
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands = { $count } 件のコマンドを実行
+# Variables: count
+chat-tool_activity_summary_reads = { $count } 件のファイルを読み取り
+# Variables: count
+chat-tool_activity_summary_searches = { $count } 件の検索を実行
+# Variables: count
+chat-tool_activity_summary_edits = { $count } 件の編集
+# Variables: count
+chat-tool_activity_summary_writes = { $count } 件のファイルを書き込み
+# Variables: count
+chat-tool_activity_summary_web_searches = { $count } 件のウェブ検索
+# Variables: count
+chat-tool_activity_summary_fetches = { $count } 件のページを取得
+# Variables: count
+chat-tool_activity_summary_tools = { $count } 件のツールを使用
+# Variables: count
+chat-tool_group_failed = { $count } 件失敗
+# Variables: count
+chat-tool_group_agents_done = { $count } 件完了
+# Variables: count
+chat-tool_group_notes = { $count } 件のメモを作成

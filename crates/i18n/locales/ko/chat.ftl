@@ -1801,3 +1801,41 @@ chat-review_guide_file_count-plural =
        [one] 파일{ " " }{ $count }개
        *[other] 파일{ " " }{ $count }개
     }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = 명령 실행 중…
+chat-tool_activity_reading = 파일 읽는 중…
+chat-tool_activity_searching_files = 파일 검색 중…
+chat-tool_activity_editing = 파일 편집 중…
+chat-tool_activity_writing = 파일 쓰는 중…
+chat-tool_activity_searching_web = 웹 검색 중…
+chat-tool_activity_fetching = 페이지 가져오는 중…
+# Variables: tool
+chat-tool_activity_using = { $tool } 사용 중…
+chat-tool_group_thinking = 생각 중
+# Variables: running, total
+chat-tool_group_agents_running = { $total }개 중 { $running }개 실행 중
+chat-tool_activity_summary_separator = { ", " }
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands = 명령 { $count }개 실행
+# Variables: count
+chat-tool_activity_summary_reads = 파일 { $count }개 읽음
+# Variables: count
+chat-tool_activity_summary_searches = 검색 { $count }회
+# Variables: count
+chat-tool_activity_summary_edits = 편집 { $count }회
+# Variables: count
+chat-tool_activity_summary_writes = 파일 { $count }개 작성
+# Variables: count
+chat-tool_activity_summary_web_searches = 웹 검색 { $count }회
+# Variables: count
+chat-tool_activity_summary_fetches = 페이지 { $count }개 가져옴
+# Variables: count
+chat-tool_activity_summary_tools = 도구 { $count }개 사용
+# Variables: count
+chat-tool_group_failed = { $count }개 실패
+# Variables: count
+chat-tool_group_agents_done = { $count }개 완료
+# Variables: count
+chat-tool_group_notes = 메모 { $count }개 작성

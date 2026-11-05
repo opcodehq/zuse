@@ -1801,3 +1801,41 @@ chat-review_guide_file_count-plural =
        [one] { $count }{ " " }个文件
        *[other] { $count }{ " " }个文件
     }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = 正在运行命令…
+chat-tool_activity_reading = 正在读取文件…
+chat-tool_activity_searching_files = 正在搜索文件…
+chat-tool_activity_editing = 正在编辑文件…
+chat-tool_activity_writing = 正在写入文件…
+chat-tool_activity_searching_web = 正在搜索网页…
+chat-tool_activity_fetching = 正在获取页面…
+# Variables: tool
+chat-tool_activity_using = 正在使用 { $tool }…
+chat-tool_group_thinking = 思考中
+# Variables: running, total
+chat-tool_group_agents_running = { $total } 个中 { $running } 个正在运行
+chat-tool_activity_summary_separator = ，
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands = 运行了 { $count } 条命令
+# Variables: count
+chat-tool_activity_summary_reads = 读取了 { $count } 个文件
+# Variables: count
+chat-tool_activity_summary_searches = 执行了 { $count } 次搜索
+# Variables: count
+chat-tool_activity_summary_edits = 进行了 { $count } 次编辑
+# Variables: count
+chat-tool_activity_summary_writes = 写入了 { $count } 个文件
+# Variables: count
+chat-tool_activity_summary_web_searches = 进行了 { $count } 次网页搜索
+# Variables: count
+chat-tool_activity_summary_fetches = 获取了 { $count } 个网页
+# Variables: count
+chat-tool_activity_summary_tools = 使用了 { $count } 个工具
+# Variables: count
+chat-tool_group_failed = { $count } 个失败
+# Variables: count
+chat-tool_group_agents_done = { $count } 个已完成
+# Variables: count
+chat-tool_group_notes = 写了 { $count } 条笔记
