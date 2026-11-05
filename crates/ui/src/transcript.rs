@@ -57,6 +57,8 @@ use crate::syntax_cache::{DocumentHighlightKey, SyntaxHighlightCache};
 use crate::theme::Theme;
 use zuse_syntax::LanguageId as Lang;
 
+mod find;
+
 // ---------------------------------------------------------------------------
 // Constants (mugen ports)
 // ---------------------------------------------------------------------------
@@ -3501,6 +3503,11 @@ pub struct Transcript {
     /// group fold. Render-local like `folds` — never part of the row
     /// fingerprint.
     tool_details: HashMap<SharedString, FoldState>,
+    /// The last "toggle all tool details" press. Groups and chips without a
+    /// later click of their own follow it; `None` until the first press.
+    bulk_tool_details: Option<bool>,
+    /// The find-in-chat bar, while open.
+    find: Option<find::FindBar>,
     /// Expand/collapse state for user bubbles past [`USER_COLLAPSED_LINES`],
     /// keyed by row id. Render-local like `folds` — never part of the row
     /// fingerprint, so toggling one costs a repaint, not a rebuild.
@@ -3726,6 +3733,8 @@ pub enum TranscriptEvent {
     /// The engine copies the conversation through its latest completed
     /// response (it has no per-message fork point).
     ForkChat { chat_id: String, target: ForkTarget },
+    /// The find bar closed; focus returns to the composer.
+    FindClosed,
 }
 
 /// Where a reply's Fork menu sends the copy.
@@ -3954,6 +3963,8 @@ impl Transcript {
             last_replay_baseline: None,
             historical_markdown: HashMap::new(),
             tool_details: HashMap::new(),
+            bulk_tool_details: None,
+            find: None,
             user_folds: HashMap::new(),
             user_heights: HashMap::new(),
             user_hold_task: None,
@@ -5681,12 +5692,13 @@ impl Transcript {
             None => true,
             // A closing fold keeps its body mounted through the TOOL_FOLD
             // tween; the shell's settle sweep drops the rows afterwards.
-            Some(id) => self.folds.get(id).is_some_and(|fold| {
+            Some(id) => {
+                let fold = self.fold(id);
                 fold.open == Some(true)
                     || fold
                         .toggled_at
                         .is_some_and(|at| at.elapsed() < FOLD_TWEEN_WINDOW)
-            }),
+            }
         });
         rows
     }
@@ -5900,6 +5912,34 @@ impl Transcript {
         cx.notify();
     }
 
+    /// A group fold with the last "toggle all" press standing in for rows the
+    /// user has not toggled since.
+    fn fold(&self, row_id: &str) -> FoldState {
+        let mut fold = self.folds.get(row_id).copied().unwrap_or_default();
+        fold.open = fold.open.or(self.bulk_tool_details);
+        fold
+    }
+
+    /// Expand every tool group and tool detail in the chat, or collapse them
+    /// all when the previous press expanded. Earlier clicks are forgotten so
+    /// every row follows the new state.
+    pub fn toggle_all_tool_details(&mut self, cx: &mut Context<Self>) {
+        let open = !self.bulk_tool_details.unwrap_or(false);
+        self.bulk_tool_details = Some(open);
+        for fold in self
+            .folds
+            .values_mut()
+            .chain(self.tool_details.values_mut())
+        {
+            fold.open = None;
+        }
+        // Compact work folds mount their bodies as rows, so re-split.
+        self.last_source = None;
+        self.sync(cx);
+        self.list.remeasure();
+        cx.notify();
+    }
+
     fn toggle_fold(
         &mut self,
         row_id: SharedString,
@@ -5922,12 +5962,13 @@ impl Transcript {
         // reversals — not the header's analytic chip height.
         let body_height = shell_ix.map(|ix| {
             let total = self.compact_fold_total(&row_id, ix);
-            let fold = self.folds.get(&row_id).copied().unwrap_or_default();
+            let fold = self.fold(&row_id);
             compact_body_height(fold, total, motion::reduced_motion(cx), Instant::now())
         });
+        let bulk = self.bulk_tool_details;
         let now_open = {
             let entry = self.folds.entry(row_id.clone()).or_default();
-            let currently_open = entry.open.unwrap_or(auto_open);
+            let currently_open = entry.open.or(bulk).unwrap_or(auto_open);
             entry.from = body_height.unwrap_or(if currently_open { open_height } else { 0.0 });
             entry.open = Some(!currently_open);
             entry.epoch += 1;
@@ -8443,7 +8484,7 @@ impl Transcript {
             .absolute()
             .inset_0(),
         );
-        let fold = self.folds.get(&work_id).copied().unwrap_or_default();
+        let fold = self.fold(&work_id);
         let open = fold.open.unwrap_or(false);
         let reduce_motion = motion::reduced_motion(cx);
         let now = Instant::now();
@@ -8672,7 +8713,11 @@ impl Transcript {
         let effective_auto_open = effective_auto_open || self.fixture_open_groups;
         // A subagent group stays open while any of its agents still works.
         let live_agents = agents_running(tools);
-        let open = !collapses || fold.open.unwrap_or(effective_auto_open || live_agents);
+        let open = !collapses
+            || fold
+                .open
+                .or(self.bulk_tool_details)
+                .unwrap_or(effective_auto_open || live_agents);
         // Compact shells only change `open` through `toggle_fold`, which
         // already seeds `from` with the body's measured height — the
         // rendered-height reset below must not clobber it with the shell's
@@ -8858,7 +8903,7 @@ impl Transcript {
                 let default_open =
                     tool.kind == ToolItemKind::Thought && !tool.resolved && !self.compact_mode;
                 (detail.is_some() || invocation.is_some() || chip_has_images(tool))
-                    && fold.open.unwrap_or(default_open)
+                    && fold.open.or(self.bulk_tool_details).unwrap_or(default_open)
             })
             .collect();
         // Image previews exist only while their chip's body is mounted (open,
@@ -11402,6 +11447,7 @@ impl Render for Transcript {
             ))
             .child(content)
             .child(rail);
+        let root = root.children(self.render_find_bar(cx));
         let root = root.children(self.render_image_menu(cx));
         // Full-size viewer for a clicked user-bubble thumbnail
         // (AttachmentPreviewDialog: bare lightbox, click closes).
@@ -11554,6 +11600,100 @@ mod tests {
             );
             assert!(reveal.header_started_at.is_none());
             assert!(reveal.starts.iter().all(Option::is_none));
+        });
+    }
+
+    #[gpui::test]
+    fn toggle_all_tool_details_opens_then_closes_every_group(cx: &mut gpui::TestAppContext) {
+        with_tool_group_navigation(cx, |_, transcript, cx| {
+            let rendered_open = |transcript: &Entity<Transcript>, cx: &mut gpui::App| {
+                transcript.update(cx, |this, cx| {
+                    let row = this
+                        .rows
+                        .iter()
+                        .find(|row| matches!(row.kind, RowKind::ToolGroup { .. }))
+                        .unwrap()
+                        .clone();
+                    let RowKind::ToolGroup {
+                        tools,
+                        auto_open,
+                        summary,
+                        ..
+                    } = &row.kind
+                    else {
+                        unreachable!()
+                    };
+                    let _ = this.render_tool_group(
+                        &row.id,
+                        tools,
+                        summary,
+                        *auto_open,
+                        None,
+                        false,
+                        &Theme::dark(),
+                        cx,
+                    );
+                    this.tool_group_reveals[&row.id].rendered_open
+                })
+            };
+            assert_eq!(rendered_open(&transcript, cx), Some(false));
+            transcript.update(cx, |this, cx| this.toggle_all_tool_details(cx));
+            assert_eq!(rendered_open(&transcript, cx), Some(true));
+            // A click pins one group; the next bulk press overrides it.
+            let row_id = transcript.read(cx).rows[0].id.clone();
+            transcript.update(cx, |this, _| {
+                this.folds.entry(row_id.clone()).or_default().open = Some(true);
+            });
+            transcript.update(cx, |this, cx| this.toggle_all_tool_details(cx));
+            assert_eq!(rendered_open(&transcript, cx), Some(false));
+            assert_eq!(transcript.read(cx).bulk_tool_details, Some(false));
+        });
+    }
+
+    #[gpui::test]
+    fn find_counts_matches_across_rows_and_steps_with_wrap(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        let state = cx.update(|cx| cx.new(|_| AppState::new()));
+        let (transcript, cx) = cx.add_window_view(|_, cx| Transcript::new(state.clone(), cx));
+        cx.update(|window, cx| {
+            state.update(cx, |state, _| {
+                state.selected_chat = Some("chat".into());
+                state.transcript_replayed = true;
+                state.transcript = vec![
+                    assistant(
+                        "a",
+                        MessageStatus::Complete,
+                        vec![text_part("t", "Apple pie.\n\nAn apple a day.")],
+                    ),
+                    assistant(
+                        "b",
+                        MessageStatus::Complete,
+                        vec![text_part("t", "```\nlet APPLE = 1;\n```")],
+                    ),
+                ];
+                state.transcript_revision += 1;
+            });
+            transcript.update(cx, |this, cx| {
+                this.sync(cx);
+                this.open_find(window, cx);
+                assert!(this.find_open());
+                this.set_find_query("apple", cx);
+                // "Apple", "apple" across two paragraphs, "APPLE" in code.
+                assert_eq!(this.find_state(), Some((3, Some(0))));
+                this.step_find(-1, cx);
+                assert_eq!(this.find_state(), Some((3, Some(2))));
+                this.step_find(1, cx);
+                assert_eq!(this.find_state(), Some((3, Some(0))));
+                this.set_find_query("pear", cx);
+                assert_eq!(this.find_state(), Some((0, None)));
+                this.close_find(cx);
+                assert!(!this.find_open());
+            });
         });
     }
 

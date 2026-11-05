@@ -152,3 +152,24 @@ commands-command_group_application = Bewerbung
 commands-new_chat_without_project = Neuer Chat ohne Projekt
 
 commands-new_chat_without_project_description = Einen neuen Chat in einem eigenen Arbeitsordner starten
+
+commands-commands_no_background_tasks = Keine Hintergrundaufgaben zum Stoppen
+commands-commands_stop_background_tasks_confirm =
+    { $count ->
+       [one] Drücke { $shortcut } erneut, um { $count } Hintergrundaufgabe zu stoppen
+       *[other] Drücke { $shortcut } erneut, um { $count } Hintergrundaufgaben zu stoppen
+    }
+commands-commands_stopping_background_tasks =
+    { $count ->
+       [one] { $count } Hintergrundaufgabe wird gestoppt
+       *[other] { $count } Hintergrundaufgaben werden gestoppt
+    }
+commands-shortcuts_panel_title = Tastenkürzel
+commands-shortcuts_panel_description = Tippe ? in einen leeren Eingabebereich, um dies jederzeit zu öffnen.
+commands-shortcuts_panel_chat = Chat
+commands-shortcuts_panel_triggers = Im Eingabebereich tippen
+commands-shortcuts_panel_trigger_command = Befehl ausführen
+commands-shortcuts_panel_trigger_file = Datei erwähnen
+commands-shortcuts_panel_trigger_skill = Skill verwenden
+commands-shortcuts_panel_customize = Tastenkürzel in den Einstellungen ändern
+commands-shortcuts_panel_close = Schließen

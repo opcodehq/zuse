@@ -152,3 +152,22 @@ commands-command_group_application = 应用
 commands-new_chat_without_project = 新建无项目聊天
 
 commands-new_chat_without_project_description = 在独立的临时目录中开始新聊天
+
+commands-commands_no_background_tasks = 没有可停止的后台任务
+commands-commands_stop_background_tasks_confirm =
+    { $count ->
+       *[other] 再次按 { $shortcut } 以停止 { $count } 个后台任务
+    }
+commands-commands_stopping_background_tasks =
+    { $count ->
+       *[other] 正在停止 { $count } 个后台任务
+    }
+commands-shortcuts_panel_title = 键盘快捷键
+commands-shortcuts_panel_description = 在空白输入框中输入 ? 即可随时打开此面板。
+commands-shortcuts_panel_chat = 对话
+commands-shortcuts_panel_triggers = 在输入框中输入
+commands-shortcuts_panel_trigger_command = 运行命令
+commands-shortcuts_panel_trigger_file = 提及文件
+commands-shortcuts_panel_trigger_skill = 使用技能
+commands-shortcuts_panel_customize = 在设置中更改快捷键
+commands-shortcuts_panel_close = 关闭

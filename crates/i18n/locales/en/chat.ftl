@@ -2875,3 +2875,10 @@ chat-tool_group_notes =
        [one] Wrote a note
        *[other] Wrote { $count } notes
     }
+
+chat-find_in_chat_placeholder = Find in chat
+chat-find_in_chat_count = { $current } of { $total }
+chat-find_in_chat_no_results = No results
+chat-find_in_chat_previous = Previous match
+chat-find_in_chat_next = Next match
+chat-find_in_chat_close = Close find

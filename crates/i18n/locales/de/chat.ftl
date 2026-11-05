@@ -1875,3 +1875,10 @@ chat-tool_group_notes =
        [one] Eine Notiz geschrieben
        *[other] { $count } Notizen geschrieben
     }
+
+chat-find_in_chat_placeholder = Im Chat suchen
+chat-find_in_chat_count = { $current } von { $total }
+chat-find_in_chat_no_results = Keine Treffer
+chat-find_in_chat_previous = Vorheriger Treffer
+chat-find_in_chat_next = Nächster Treffer
+chat-find_in_chat_close = Suche schließen

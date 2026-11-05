@@ -1839,3 +1839,10 @@ chat-tool_group_failed = { $count }개 실패
 chat-tool_group_agents_done = { $count }개 완료
 # Variables: count
 chat-tool_group_notes = 메모 { $count }개 작성
+
+chat-find_in_chat_placeholder = 채팅에서 찾기
+chat-find_in_chat_count = { $current } / { $total }
+chat-find_in_chat_no_results = 결과 없음
+chat-find_in_chat_previous = 이전 결과
+chat-find_in_chat_next = 다음 결과
+chat-find_in_chat_close = 찾기 닫기

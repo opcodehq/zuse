@@ -281,6 +281,31 @@ impl Composer {
             .map(|pill| pill.render(&theme, false))
     }
 
+    /// Expand or collapse the selected chat's task checklist, as a click on
+    /// its tray row would. Returns whether the chat has a visible list.
+    pub(crate) fn toggle_task_list(&mut self, cx: &mut Context<Self>) -> bool {
+        let (chat_id, items) = {
+            let state = self.state.read(cx);
+            let Some(chat_id) = state.selected_chat.clone() else {
+                return false;
+            };
+            let Some(items) =
+                self.todo_cache
+                    .latest(&chat_id, state.transcript_revision, &state.transcript)
+            else {
+                return false;
+            };
+            (chat_id, items.to_vec())
+        };
+        let panel = self.todo_panels.entry(chat_id).or_default();
+        if panel.is_dismissed(&items) {
+            return false;
+        }
+        panel.toggle(TodoSummary::of(&items).finished());
+        cx.notify();
+        true
+    }
+
     /// The project plan row (`ProjectPlanTray`): a lime-washed pill naming
     /// the current item with "N of M done"; the chevron opens the timeline.
     pub(crate) fn todo_tray_pill(

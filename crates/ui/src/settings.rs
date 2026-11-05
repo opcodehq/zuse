@@ -1208,7 +1208,7 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 58] = [
+    pub const ALL: [ShortcutId; 65] = [
         ShortcutId::Desktop(keybindings::Command::NewChat),
         ShortcutId::Desktop(keybindings::Command::NewChatWithoutProject),
         ShortcutId::Desktop(keybindings::Command::OpenProject),
@@ -1238,6 +1238,14 @@ impl ShortcutId {
         ShortcutId::Desktop(keybindings::Command::FocusPrevPane),
         ShortcutId::Desktop(keybindings::Command::OpenChatSwitcher),
         ShortcutId::Desktop(keybindings::Command::SearchFiles),
+        ShortcutId::Desktop(keybindings::Command::ShowShortcuts),
+        ShortcutId::Desktop(keybindings::Command::FindInChat),
+        ShortcutId::Desktop(keybindings::Command::OpenModelPicker),
+        ShortcutId::Desktop(keybindings::Command::CycleReasoningEffort),
+        ShortcutId::Desktop(keybindings::Command::ToggleFastMode),
+        ShortcutId::Desktop(keybindings::Command::ToggleToolDetails),
+        ShortcutId::Desktop(keybindings::Command::ToggleTaskList),
+        ShortcutId::Desktop(keybindings::Command::StopBackgroundTasks),
         ShortcutId::Desktop(keybindings::Command::ComposerSubmit),
         ShortcutId::Desktop(keybindings::Command::ComposerNewline),
         ShortcutId::Desktop(keybindings::Command::ComposerForceSubmit),
@@ -1256,7 +1264,6 @@ impl ShortcutId {
         ShortcutId::RandomWallpaper,
         ShortcutId::BrowserReload,
         ShortcutId::ToggleFiles,
-        ShortcutId::OpenModelPicker,
         ShortcutId::ArchiveSession,
         ShortcutId::JumpSession(0),
         ShortcutId::JumpSession(1),
@@ -1280,6 +1287,7 @@ impl ShortcutId {
             Self::NewProject => Command::OpenProject,
             Self::NextSession => Command::NextChat,
             Self::PrevSession => Command::PrevChat,
+            Self::OpenModelPicker => Command::OpenModelPicker,
             other => return other,
         })
     }
@@ -1345,7 +1353,7 @@ impl ShortcutId {
             ShortcutId::Desktop(keybindings::Command::ComposerDeleteWord) if !mac => {
                 "mod-backspace"
             }
-            ShortcutId::Desktop(command) => command.default_combo(),
+            ShortcutId::Desktop(command) => command.default_combo_on(mac),
             ShortcutId::ToggleDictation => "mod-d",
             ShortcutId::RandomWallpaper => "mod-u",
             ShortcutId::CaptureAppshot if mac => "ctrl-alt-space",
@@ -1358,7 +1366,8 @@ impl ShortcutId {
             ShortcutId::ToggleTerminal => "mod-j",
             ShortcutId::NewSession => "mod-n",
             ShortcutId::NewProject => "mod-o",
-            ShortcutId::OpenModelPicker => "mod-/",
+            // Mod+/ opens the shortcuts panel.
+            ShortcutId::OpenModelPicker => "alt-p",
             // Ctrl+Tab on every platform — but spelled the way THAT platform's
             // recorder spells ctrl (see `combo_from_keystroke`). Off macOS
             // ctrl IS the primary and stores as "mod"; on macOS it is its own
@@ -1389,6 +1398,9 @@ impl ShortcutId {
         }
     }
 }
+
+/// Bumped whenever a shipped default moves; see [`KeymapConfig::align_desktop_defaults`].
+const DESKTOP_DEFAULTS_VERSION: u8 = 2;
 
 /// Persisted shortcut combos. Stored platform-neutral ("mod-s"); translated to
 /// "cmd-s"/"ctrl-s" at bind time by [`platform_combo`].
@@ -1466,7 +1478,7 @@ pub fn sidebar_pin_profile_key(
 impl Default for KeymapConfig {
     fn default() -> Self {
         Self {
-            desktop_defaults_version: 1,
+            desktop_defaults_version: DESKTOP_DEFAULTS_VERSION,
             desktop: HashMap::new(),
             desktop_rules: Vec::new(),
             toggle_dictation: ShortcutId::ToggleDictation.default_combo().into(),
@@ -1502,9 +1514,17 @@ impl KeymapConfig {
         self.desktop_rules = rules;
     }
     fn align_desktop_defaults(&mut self) {
-        if self.desktop_defaults_version > 0 {
-            return;
+        if self.desktop_defaults_version < 1 {
+            self.align_desktop_defaults_v1();
         }
+        // Version 2 hands Mod+/ to the shortcuts panel; an untouched model
+        // picker binding follows its new default.
+        if self.desktop_defaults_version < 2 && self.open_model_picker == "mod-/" {
+            self.open_model_picker = ShortcutId::OpenModelPicker.default_combo().into();
+        }
+        self.desktop_defaults_version = DESKTOP_DEFAULTS_VERSION;
+    }
+    fn align_desktop_defaults_v1(&mut self) {
         for (field, old, new) in [
             (&mut self.toggle_changes, "mod-r", "mod-alt-b"),
             (&mut self.new_project, "mod-shift-n", "mod-o"),
@@ -1519,7 +1539,6 @@ impl KeymapConfig {
                 combo.clear();
             }
         }
-        self.desktop_defaults_version = 1;
     }
 
     fn legacy_command(command: keybindings::Command) -> Option<ShortcutId> {
@@ -1533,6 +1552,7 @@ impl KeymapConfig {
             Command::NextChat => ShortcutId::NextSession,
             Command::PrevChat => ShortcutId::PrevSession,
             Command::EditorSave => ShortcutId::SaveFile,
+            Command::OpenModelPicker => ShortcutId::OpenModelPicker,
             _ => return None,
         })
     }
@@ -3716,6 +3736,73 @@ mod tests {
         assert_eq!(loaded.keymap.save_file, "");
         assert_eq!(loaded.keymap.new_session, "mod-s");
         assert!(conflicted_shortcuts(&loaded.keymap).is_empty());
+    }
+
+    #[test]
+    fn model_picker_leaves_mod_slash_to_the_shortcuts_panel() {
+        use keybindings::Command;
+        let migrate = |json: serde_json::Value| {
+            let mut keymap: KeymapConfig = serde_json::from_value(json).unwrap();
+            keymap.align_desktop_defaults();
+            keymap
+        };
+        // An untouched model picker from an older version follows the move.
+        let keymap =
+            migrate(serde_json::json!({"desktopDefaultsVersion":1,"openModelPicker":"mod-/"}));
+        assert_eq!(
+            keymap.get(ShortcutId::Desktop(Command::OpenModelPicker)),
+            "alt-p"
+        );
+        assert_eq!(
+            keymap.get(ShortcutId::Desktop(Command::ShowShortcuts)),
+            "mod-/"
+        );
+        assert!(conflicted_shortcuts(&keymap).is_empty());
+        // A custom combo is kept, and later versions are left alone.
+        let keymap =
+            migrate(serde_json::json!({"desktopDefaultsVersion":1,"openModelPicker":"mod-alt-m"}));
+        assert_eq!(
+            keymap.get(ShortcutId::Desktop(Command::OpenModelPicker)),
+            "mod-alt-m"
+        );
+        let keymap =
+            migrate(serde_json::json!({"desktopDefaultsVersion":2,"openModelPicker":"mod-/"}));
+        assert_eq!(keymap.open_model_picker, "mod-/");
+        // Rebinding the desktop command writes the legacy field.
+        let mut keymap = KeymapConfig::default();
+        keymap.set(
+            ShortcutId::Desktop(Command::OpenModelPicker),
+            "alt-m".into(),
+        );
+        assert_eq!(keymap.open_model_picker, "alt-m");
+        assert_eq!(
+            ShortcutId::OpenModelPicker.canonical(),
+            ShortcutId::Desktop(Command::OpenModelPicker)
+        );
+    }
+
+    #[test]
+    fn chat_shortcut_defaults_are_conflict_free_on_both_platforms() {
+        use keybindings::Command;
+        for mac in [true, false] {
+            let combos: Vec<_> = ShortcutId::ALL
+                .into_iter()
+                .filter(|id| id.available() && id.key_context().is_none())
+                .map(|id| platform_combo_on(mac, id.default_combo_on(mac)))
+                .filter(|combo| !combo.is_empty())
+                .collect();
+            let unique: std::collections::HashSet<_> = combos.iter().collect();
+            assert_eq!(unique.len(), combos.len(), "mac={mac}: {combos:?}");
+        }
+        assert_eq!(
+            ShortcutId::Desktop(Command::ToggleToolDetails).default_combo_on(true),
+            "ctrl-o"
+        );
+        assert_eq!(
+            ShortcutId::Desktop(Command::ToggleTaskList).default_combo_on(false),
+            "mod-shift-t"
+        );
+        assert!(conflicted_shortcuts(&KeymapConfig::default()).is_empty());
     }
 
     #[test]

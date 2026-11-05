@@ -152,3 +152,22 @@ commands-command_group_application = 신청
 commands-new_chat_without_project = 프로젝트 없이 새 채팅
 
 commands-new_chat_without_project_description = 전용 작업 폴더에서 새 채팅 시작
+
+commands-commands_no_background_tasks = 중지할 백그라운드 작업이 없습니다
+commands-commands_stop_background_tasks_confirm =
+    { $count ->
+       *[other] { $shortcut }을(를) 한 번 더 누르면 백그라운드 작업 { $count }개를 중지합니다
+    }
+commands-commands_stopping_background_tasks =
+    { $count ->
+       *[other] 백그라운드 작업 { $count }개를 중지하는 중
+    }
+commands-shortcuts_panel_title = 키보드 단축키
+commands-shortcuts_panel_description = 빈 작성기에 ?를 입력하면 언제든지 이 패널을 열 수 있습니다.
+commands-shortcuts_panel_chat = 채팅
+commands-shortcuts_panel_triggers = 작성기에 입력
+commands-shortcuts_panel_trigger_command = 명령 실행
+commands-shortcuts_panel_trigger_file = 파일 언급
+commands-shortcuts_panel_trigger_skill = 스킬 사용
+commands-shortcuts_panel_customize = 설정에서 단축키 변경
+commands-shortcuts_panel_close = 닫기

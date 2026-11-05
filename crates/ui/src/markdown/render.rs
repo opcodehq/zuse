@@ -1278,6 +1278,14 @@ pub(super) fn flat_text_presented_element(
                     ));
                 }
             }
+            paint_find_matches(
+                window,
+                surface,
+                &sel_key,
+                &flat_text,
+                &layout,
+                offsets.as_ref(),
+            );
             if let Some(range) = super::selection::wash_range(surface, &sel_key) {
                 let range = offsets
                     .as_ref()
@@ -1419,6 +1427,7 @@ fn paint_text_selection_with_wash(
     wash: Hsla,
 ) {
     let surface = PAINTING_SURFACE.with(Cell::get);
+    paint_find_matches(window, surface, key, text, layout, None);
     if let Some(range) = super::selection::wash_range(surface, key) {
         for rect in range_rects(layout, &range, 0.0, 0.0) {
             window.paint_quad(quad(
@@ -1441,6 +1450,60 @@ fn paint_text_selection_with_wash(
         })
     });
     register_selection_listeners(window, hitbox, key, surface, text, layout, None);
+}
+
+/// Find-in-chat washes for one painted text element, beneath the selection
+/// wash. The active match is the row's Nth occurrence, so the elements of
+/// the same row painted earlier this frame tell which one is local here.
+fn paint_find_matches(
+    window: &mut Window,
+    surface: u64,
+    key: &str,
+    text: &str,
+    layout: &gpui::TextLayout,
+    offsets: Option<&super::link_presentation::OffsetMap>,
+) {
+    use crate::chat_find::{Highlight, current_highlight, match_ranges};
+    let Some(find) = current_highlight(surface) else {
+        return;
+    };
+    let ranges = match_ranges(text, &find.needle);
+    if ranges.is_empty() {
+        return;
+    }
+    let active = find
+        .active
+        .as_ref()
+        .filter(|(row, _)| Highlight::key_in_row(key, row))
+        .and_then(|(row, ordinal)| {
+            let before: usize = REGISTRY.with(|registry| {
+                registry
+                    .borrow()
+                    .iter()
+                    .filter(|e| e.surface == surface && Highlight::key_in_row(&e.key, row))
+                    .map(|e| match_ranges(&e.text, &find.needle).len())
+                    .sum()
+            });
+            ordinal.checked_sub(before)
+        });
+    for (ix, range) in ranges.into_iter().enumerate() {
+        let range = offsets.map_or_else(|| range.clone(), |map| map.displayed_range(range.clone()));
+        let wash = if Some(ix) == active {
+            find.active_wash
+        } else {
+            find.wash
+        };
+        for rect in range_rects(layout, &range, 0.0, 0.0) {
+            window.paint_quad(quad(
+                rect,
+                px(2.0),
+                wash,
+                px(0.0),
+                gpui::transparent_black(),
+                BorderStyle::default(),
+            ));
+        }
+    }
 }
 
 /// The wrapping div shared by every selectable text region: markdown

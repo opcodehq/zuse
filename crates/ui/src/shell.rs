@@ -74,6 +74,7 @@ mod chat_dropzone_tests;
 mod chat_pull_requests;
 #[cfg(test)]
 mod chat_rename_tests;
+mod chat_shortcuts;
 mod command_palette;
 mod file_mutations;
 mod files_panel;
@@ -460,7 +461,6 @@ pub fn apply_keymap(
         ShortcutId::RandomWallpaper,
         ShortcutId::ToggleFiles,
         ShortcutId::ArchiveSession,
-        ShortcutId::OpenModelPicker,
     ] {
         let combo = platform_combo(keymap.get(id));
         if combo.is_empty() || Keystroke::parse(&combo).is_err() {
@@ -469,8 +469,7 @@ pub fn apply_keymap(
         let binding = match id {
             ShortcutId::RandomWallpaper => KeyBinding::new(&combo, RandomWallpaper, None),
             ShortcutId::ToggleFiles => KeyBinding::new(&combo, ToggleFiles, None),
-            ShortcutId::ArchiveSession => KeyBinding::new(&combo, ArchiveSession, None),
-            _ => KeyBinding::new(&combo, OpenModelPicker, None),
+            _ => KeyBinding::new(&combo, ArchiveSession, None),
         };
         cx.bind_keys([binding]);
     }
@@ -2183,6 +2182,10 @@ pub struct Shell {
     section_menu_active: Option<usize>,
     /// Space id awaiting delete confirmation (hard delete + session cascade).
     delete_space_confirm: Option<String>,
+    /// The keyboard shortcuts panel (Mod+/, or `?` in an empty composer).
+    shortcuts_panel_open: bool,
+    /// The first stop-background-tasks press, waiting for its confirmation.
+    background_stop_armed_at: Option<std::time::Instant>,
     /// The add-space palette (device tabs + folder search), `Some`
     /// while open.
     add_space: Option<AddSpaceFlow>,
@@ -2763,6 +2766,8 @@ impl Shell {
             section_menu_focus: cx.focus_handle(),
             section_menu_active: None,
             delete_space_confirm: None,
+            shortcuts_panel_open: false,
+            background_stop_armed_at: None,
             add_space: None,
             project_setup: None,
             project_parent_setup: None,
@@ -4544,6 +4549,7 @@ impl Shell {
                     self.fork_chat(source, *target, cx);
                 }
             }
+            TranscriptEvent::FindClosed => self.focus_composer(cx),
         }
     }
 
@@ -6606,6 +6612,7 @@ impl Shell {
     /// the keys it records before they can dispatch.
     pub(super) fn overlay_owns_keyboard(&self, cx: &App) -> bool {
         self.command_palette.is_some()
+            || self.shortcuts_panel_open
             || self.voice.read(cx).stage_open
             || self.section_dialog.is_some()
             || self.section_menu.is_some()
@@ -11444,6 +11451,16 @@ impl Shell {
             cx.stop_propagation();
             return;
         }
+        if event.keystroke.key == "escape" && self.close_shortcuts_panel(cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if event.keystroke.key == "escape" && self.transcript.read(cx).find_open() {
+            self.transcript
+                .update(cx, |transcript, cx| transcript.close_find(cx));
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key == "escape" && self.voice.read(cx).stage_open {
             self.set_voice_stage_open(false, cx);
             cx.stop_propagation();
@@ -11585,6 +11602,7 @@ impl Shell {
         let theme = Theme::of(cx).for_popup();
         let mut overlays: Vec<AnyElement> = Vec::new();
         overlays.push(self.desktop_import.clone().into_any_element());
+        overlays.extend(self.render_shortcuts_panel(viewport, cx));
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;

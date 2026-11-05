@@ -664,11 +664,7 @@ impl Shell {
                 .into_any_element()
         };
         if !running.is_empty() {
-            let stoppable: Vec<String> = running
-                .iter()
-                .filter(|task| task.stoppable && !self.background_stops.contains(&task.id))
-                .map(|task| task.id.clone())
-                .collect();
+            let stoppable = self.stoppable_background_tasks(&running);
             let stop_all = (stoppable.len() > 1).then(|| {
                 let chat_id = chat_id.to_owned();
                 div()
@@ -765,9 +761,30 @@ impl Shell {
         rows
     }
 
+    /// The running tasks a stop request would reach right now: the runtime
+    /// can stop them and no stop is already on its way. Shared by the
+    /// section's Stop all and the stop-background-tasks shortcut.
+    pub(super) fn stoppable_background_tasks(
+        &self,
+        tasks: &[zuse_protocol::BackgroundTask],
+    ) -> Vec<String> {
+        tasks
+            .iter()
+            .filter(|task| {
+                task.running() && task.stoppable && !self.background_stops.contains(&task.id)
+            })
+            .map(|task| task.id.clone())
+            .collect()
+    }
+
     /// Ask the chat's host to stop one background task: a session command,
     /// so it reaches the device the chat runs on wherever this one is.
-    fn stop_background_task(&mut self, chat_id: &str, task_id: &str, cx: &mut Context<Self>) {
+    pub(super) fn stop_background_task(
+        &mut self,
+        chat_id: &str,
+        task_id: &str,
+        cx: &mut Context<Self>,
+    ) {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };

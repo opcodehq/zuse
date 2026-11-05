@@ -1839,3 +1839,10 @@ chat-tool_group_failed = { $count } 個失敗
 chat-tool_group_agents_done = { $count } 個已完成
 # Variables: count
 chat-tool_group_notes = 寫了 { $count } 則筆記
+
+chat-find_in_chat_placeholder = 在對話中尋找
+chat-find_in_chat_count = 第 { $current } 個，共 { $total } 個
+chat-find_in_chat_no_results = 沒有結果
+chat-find_in_chat_previous = 上一個相符項目
+chat-find_in_chat_next = 下一個相符項目
+chat-find_in_chat_close = 關閉尋找

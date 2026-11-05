@@ -61,6 +61,22 @@ pub enum Command {
     OpenChatSwitcher,
     #[serde(rename = "search-files")]
     SearchFiles,
+    #[serde(rename = "show-shortcuts")]
+    ShowShortcuts,
+    #[serde(rename = "find-in-chat")]
+    FindInChat,
+    #[serde(rename = "open-model-picker")]
+    OpenModelPicker,
+    #[serde(rename = "cycle-reasoning-effort")]
+    CycleReasoningEffort,
+    #[serde(rename = "toggle-fast-mode")]
+    ToggleFastMode,
+    #[serde(rename = "toggle-tool-details")]
+    ToggleToolDetails,
+    #[serde(rename = "toggle-task-list")]
+    ToggleTaskList,
+    #[serde(rename = "stop-background-tasks")]
+    StopBackgroundTasks,
     #[serde(rename = "composer.submit")]
     ComposerSubmit,
     #[serde(rename = "composer.newline")]
@@ -89,7 +105,7 @@ pub enum Command {
     EditorAnnotate,
 }
 impl Command {
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 50] = [
         Self::NewChat,
         Self::NewChatWithoutProject,
         Self::OpenProject,
@@ -119,6 +135,14 @@ impl Command {
         Self::FocusPrevPane,
         Self::OpenChatSwitcher,
         Self::SearchFiles,
+        Self::ShowShortcuts,
+        Self::FindInChat,
+        Self::OpenModelPicker,
+        Self::CycleReasoningEffort,
+        Self::ToggleFastMode,
+        Self::ToggleToolDetails,
+        Self::ToggleTaskList,
+        Self::StopBackgroundTasks,
         Self::ComposerSubmit,
         Self::ComposerNewline,
         Self::ComposerForceSubmit,
@@ -134,7 +158,17 @@ impl Command {
         Self::EditorAnnotate,
     ];
     pub fn default_combo(self) -> &'static str {
+        self.default_combo_on(cfg!(target_os = "macos"))
+    }
+    /// The default for an explicit platform. Control+letter is free on macOS,
+    /// where Cmd is the primary modifier; elsewhere it would collide with the
+    /// Ctrl-as-primary shortcuts, so those defaults add Shift.
+    pub fn default_combo_on(self, mac: bool) -> &'static str {
         match self {
+            Self::ToggleToolDetails if mac => "ctrl-o",
+            Self::ToggleToolDetails => "mod-shift-o",
+            Self::ToggleTaskList if mac => "ctrl-t",
+            Self::ToggleTaskList => "mod-shift-t",
             Self::NewChat => "mod-n",
             Self::NewChatWithoutProject => "mod-alt-n",
             Self::OpenProject => "mod-o",
@@ -164,6 +198,12 @@ impl Command {
             Self::FocusPrevPane => "ctrl-shift-`",
             Self::OpenChatSwitcher => "mod-k",
             Self::SearchFiles => "mod-p",
+            Self::ShowShortcuts => "mod-/",
+            Self::FindInChat => "mod-f",
+            Self::OpenModelPicker => "alt-p",
+            Self::CycleReasoningEffort => "alt-t",
+            Self::ToggleFastMode => "alt-o",
+            Self::StopBackgroundTasks => "mod-shift-k",
             Self::ComposerSubmit => "enter",
             Self::ComposerNewline => "shift-enter",
             Self::ComposerForceSubmit => "mod-enter",
@@ -210,6 +250,14 @@ impl Command {
             Self::FocusPrevPane => "Focus previous pane",
             Self::OpenChatSwitcher => "Open chat switcher",
             Self::SearchFiles => "Search files",
+            Self::ShowShortcuts => "Show keyboard shortcuts",
+            Self::FindInChat => "Find in chat",
+            Self::OpenModelPicker => "Switch model",
+            Self::CycleReasoningEffort => "Change reasoning effort",
+            Self::ToggleFastMode => "Toggle fast mode",
+            Self::ToggleToolDetails => "Expand or collapse tool details",
+            Self::ToggleTaskList => "Show or hide task list",
+            Self::StopBackgroundTasks => "Stop background tasks",
             Self::ComposerSubmit => "Send message",
             Self::ComposerNewline => "Insert newline",
             Self::ComposerForceSubmit => "Send message now",
@@ -514,6 +562,49 @@ mod tests {
             assert_eq!(command.context(), Some("MessageComposer"));
             assert_eq!(command.group(), "Composer");
         }
+    }
+    #[test]
+    fn every_command_has_a_unique_wire_name_and_is_importable() {
+        let names: std::collections::HashSet<_> = Command::ALL
+            .iter()
+            .map(|command| serde_json::to_value(command).unwrap())
+            .collect();
+        assert_eq!(names.len(), Command::ALL.len());
+        let rules = import(&serde_json::json!({"schemaVersion":1,"rules":[
+            {"key":"mod+shift+/","command":"show-shortcuts"},
+            {"key":"alt+m","command":"open-model-picker"},
+            {"key":"ctrl+alt+k","command":"stop-background-tasks"}
+        ]}))
+        .unwrap();
+        assert_eq!(rules[0].command, Command::ShowShortcuts);
+        assert_eq!(rules[1].command, Command::OpenModelPicker);
+        assert_eq!(rules[2].command, Command::StopBackgroundTasks);
+    }
+    #[test]
+    fn chat_defaults_differ_by_platform_only_where_ctrl_would_collide() {
+        assert_eq!(Command::ToggleToolDetails.default_combo_on(true), "ctrl-o");
+        assert_eq!(
+            Command::ToggleToolDetails.default_combo_on(false),
+            "mod-shift-o"
+        );
+        assert_eq!(Command::ToggleTaskList.default_combo_on(true), "ctrl-t");
+        assert_eq!(
+            Command::ToggleTaskList.default_combo_on(false),
+            "mod-shift-t"
+        );
+        for command in [
+            Command::ShowShortcuts,
+            Command::FindInChat,
+            Command::OpenModelPicker,
+            Command::StopBackgroundTasks,
+        ] {
+            assert_eq!(
+                command.default_combo_on(true),
+                command.default_combo_on(false)
+            );
+        }
+        assert_eq!(Command::ShowShortcuts.default_combo(), "mod-/");
+        assert_eq!(Command::OpenModelPicker.default_combo(), "alt-p");
     }
     #[test]
     fn invalid_command_and_file_versions_are_rejected() {

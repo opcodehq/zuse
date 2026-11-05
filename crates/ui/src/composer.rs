@@ -1737,6 +1737,12 @@ fn enter_outcome(has_completion: bool, fallback: EnterOutcome) -> EnterOutcome {
     }
 }
 
+/// `?` typed into an empty message composer opens the shortcuts panel
+/// instead of inserting itself.
+fn opens_shortcuts_panel(new_text: &str, content: &str, context: &str, composing: bool) -> bool {
+    new_text == "?" && content.is_empty() && !composing && context == MESSAGE_COMPOSER_CONTEXT
+}
+
 fn input_bindings(context: &'static str) -> Vec<KeyBinding> {
     let ctx = Some(context);
     let mut bindings = vec![
@@ -4893,10 +4899,24 @@ impl EntityInputHandler for ComposerInput {
         &mut self,
         range_utf16: Option<Range<usize>>,
         new_text: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.read_only {
+            return;
+        }
+        if opens_shortcuts_panel(
+            new_text,
+            &self.content,
+            self.key_context,
+            self.marked_range.is_some(),
+        ) {
+            window.dispatch_action(
+                Box::new(crate::shell::DesktopCommand(
+                    crate::settings::keybindings::Command::ShowShortcuts,
+                )),
+                cx,
+            );
             return;
         }
         self.cancel_dictation();

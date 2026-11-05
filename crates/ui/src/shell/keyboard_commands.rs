@@ -72,6 +72,7 @@ pub(super) fn bind(cx: &mut App, keymap: &KeymapConfig) {
             Command::ToggleRightSidebar => KeyBinding::new(&combo, ToggleChanges, context),
             Command::ToggleTerminal => KeyBinding::new(&combo, ToggleTerminal, context),
             Command::EditorSave => KeyBinding::new(&combo, SaveFile, context),
+            Command::OpenModelPicker => KeyBinding::new(&combo, OpenModelPicker, context),
             _ => KeyBinding::new(&combo, DesktopCommand(command), context),
         };
         cx.bind_keys([binding]);
@@ -108,7 +109,10 @@ impl Shell {
         if self.navigation_overlay_open(cx)
             && !matches!(
                 command,
-                Command::Settings | Command::OpenChatSwitcher | Command::SearchFiles
+                Command::Settings
+                    | Command::OpenChatSwitcher
+                    | Command::SearchFiles
+                    | Command::ShowShortcuts
             )
         {
             return;
@@ -261,6 +265,39 @@ impl Shell {
                     .clone()
                     .update(cx, |pickers, cx| pickers.toggle_plan_mode(cx));
             }
+            Command::ShowShortcuts => self.toggle_shortcuts_panel(cx),
+            Command::FindInChat => {
+                if matches!(self.route, Route::Chat) {
+                    self.transcript
+                        .update(cx, |transcript, cx| transcript.open_find(window, cx));
+                }
+            }
+            Command::OpenModelPicker => window.dispatch_action(Box::new(OpenModelPicker), cx),
+            Command::CycleReasoningEffort | Command::ToggleFastMode => {
+                if matches!(self.route, Route::Chat) {
+                    let pickers = self.composer.read(cx).pickers().clone();
+                    pickers.update(cx, |pickers, cx| {
+                        if command == Command::CycleReasoningEffort {
+                            pickers.cycle_reasoning_effort(cx)
+                        } else {
+                            pickers.toggle_fast_mode(cx)
+                        }
+                    });
+                }
+            }
+            Command::ToggleToolDetails => {
+                if matches!(self.route, Route::Chat) {
+                    self.transcript
+                        .update(cx, |transcript, cx| transcript.toggle_all_tool_details(cx));
+                }
+            }
+            Command::ToggleTaskList => {
+                if matches!(self.route, Route::Chat) {
+                    self.composer
+                        .update(cx, |composer, cx| composer.toggle_task_list(cx));
+                }
+            }
+            Command::StopBackgroundTasks => self.stop_background_tasks_shortcut(cx),
             Command::EditorAnnotate => {
                 let file = self
                     .active_main_file(cx)
@@ -478,6 +515,58 @@ mod tests {
                 zuse_protocol::SandboxLevel::Auto
             )
         });
+    }
+    #[gpui::test]
+    fn chat_shortcuts_run_from_the_focused_composer(cx: &mut TestAppContext) {
+        let (shell, _, _dir) = setup(cx);
+        let (_, cx) = cx.add_window_view(|_, _| ComposerHost {
+            shell: shell.clone(),
+        });
+        shell.update(cx, |shell, cx| shell.open_new_session(None, cx));
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+            let focus = shell.read(cx).composer.focus_handle(cx);
+            window.focus(&focus, cx);
+        });
+        let text = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
+                shell
+                    .read(cx)
+                    .composer
+                    .read(cx)
+                    .input
+                    .read(cx)
+                    .text()
+                    .to_owned()
+            })
+        };
+        // `?` in the empty composer opens the panel instead of typing.
+        cx.simulate_input("?");
+        cx.update(|_, cx| assert!(shell.read(cx).shortcuts_panel_open));
+        assert_eq!(text(cx), "");
+        cx.simulate_keystrokes(&platform_combo("mod-/"));
+        cx.update(|_, cx| assert!(!shell.read(cx).shortcuts_panel_open));
+        // Once there is a draft, `?` is just a character.
+        cx.simulate_input("why?");
+        assert_eq!(text(cx), "why?");
+        cx.update(|_, cx| assert!(!shell.read(cx).shortcuts_panel_open));
+        // App chords reach the transcript before the editor sees them.
+        let details = Command::ToggleToolDetails.default_combo();
+        cx.simulate_keystrokes(&platform_combo(details));
+        cx.update(|_, cx| {
+            assert_eq!(
+                shell.read(cx).transcript.read(cx).bulk_tool_details(),
+                Some(true)
+            )
+        });
+        cx.simulate_keystrokes(&platform_combo(details));
+        cx.update(|_, cx| {
+            assert_eq!(
+                shell.read(cx).transcript.read(cx).bulk_tool_details(),
+                Some(false)
+            )
+        });
+        assert_eq!(text(cx), "why?");
     }
     #[test]
     fn scoped_commands_do_not_reserve_typing_chords_globally() {

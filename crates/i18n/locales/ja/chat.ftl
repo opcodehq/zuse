@@ -1839,3 +1839,10 @@ chat-tool_group_failed = { $count } 件失敗
 chat-tool_group_agents_done = { $count } 件完了
 # Variables: count
 chat-tool_group_notes = { $count } 件のメモを作成
+
+chat-find_in_chat_placeholder = チャット内を検索
+chat-find_in_chat_count = { $current } / { $total }
+chat-find_in_chat_no_results = 結果なし
+chat-find_in_chat_previous = 前の一致
+chat-find_in_chat_next = 次の一致
+chat-find_in_chat_close = 検索を閉じる
