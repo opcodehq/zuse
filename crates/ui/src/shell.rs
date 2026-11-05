@@ -527,13 +527,15 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
+    /// Ordered by what a person sets up first: the app, Cloud, the agents
+    /// that run in it, then integrations, devices and personal preferences.
     pub const ALL: [SettingsSection; 13] = [
         SettingsSection::General,
+        SettingsSection::Cloud,
         SettingsSection::Harnesses,
         SettingsSection::Defaults,
         SettingsSection::Plugins,
         SettingsSection::Devices,
-        SettingsSection::Cloud,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Voice,
@@ -614,11 +616,11 @@ impl SettingsSection {
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
-            SettingsSection::Cloud => "Cloud workspaces",
+            SettingsSection::Cloud => "Cloud",
             SettingsSection::Devices => "Remote access",
-            SettingsSection::Harnesses => "Providers",
+            SettingsSection::Harnesses => "Agents & accounts",
             SettingsSection::Defaults => "Default models",
-            SettingsSection::Plugins => "Plugins",
+            SettingsSection::Plugins => "Plugins & MCP",
             SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",

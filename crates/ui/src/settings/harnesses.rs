@@ -1481,7 +1481,7 @@ impl Render for HarnessesPage {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::settings_page_column(window)
-                                .child(widgets::section_title(&theme, "Providers", "Verify what's installed, signed in, and which subscription each provider runs on."))
+                                .child(widgets::section_title(&theme, "Agents & accounts", "Verify what's installed, signed in, and which subscription each provider runs on."))
                                 .child(div().mt(px(20.)).flex().flex_col().gap(px(16.))
                                     .child(widgets::group_with_action(&theme, "Agent providers", "Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.", Some(div().flex().items_center().gap(px(6.)).child(check).into_any_element()))
                                         .children(update_error).child(body))

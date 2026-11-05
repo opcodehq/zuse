@@ -458,7 +458,7 @@ impl Render for AccountCard {
                     .child(error),
             );
         }
-        s::frame().text_color(c.text).child(s::header("Account","Sign in to sync your account across devices and (soon) drive remote agents from your phone."))
+        s::frame().text_color(c.text).child(s::header("Account","Sign in to sync chats and settings across your devices and run agents in Cloud."))
             .child(card).when_some(self.menu.as_ref(),|view,menu|view.child(edit_menu::render(menu,cx)))
     }
 }

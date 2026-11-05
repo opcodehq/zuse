@@ -20,6 +20,12 @@ pub(super) struct AgentView {
     polls: u32,
 }
 impl AgentView {
+    /// Any connection the guide can treat as a usable coding agent.
+    pub(super) fn any_connected(&self) -> bool {
+        self.connections
+            .iter()
+            .any(|c| c.state == zuse_protocol::cloud_connections::ConnectionState::Connected)
+    }
     pub fn new(window: &mut Window, cx: &mut Context<RepositoryPanel>) -> Self {
         let secret = cx.new(|cx| TextInput::password("Paste your credential", window, cx));
         cx.observe(&secret, |_, _, cx| cx.notify()).detach();

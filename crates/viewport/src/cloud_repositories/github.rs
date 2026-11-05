@@ -252,7 +252,7 @@ impl RepositoryPanel {
                     ));
                 }
                 if installations.is_empty() {
-                    body=body.child(cs::setting_row(false,"No installations available","An organization administrator may need to approve the GitHub App, or connect its installation to this workspace.",None));
+                    body=body.child(cs::setting_row(false,"No installations yet","Install the app on your account or an organization below. If an organization needs approval, GitHub sends the request to its owners; refresh once it's approved.",None));
                 }
             }
             if let Some(url) = operation["installUrl"]
@@ -280,8 +280,26 @@ impl RepositoryPanel {
                 None,
             ));
         }
+        let finished = matches!(state, "expired" | "cancelled" | "failed");
         let controls = row()
             .gap(px(8.))
+            .when(finished, |controls| {
+                controls.child(
+                    cs::button("github-operation-retry", "Try again", true, busy, false).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.github_poll = None;
+                            this.github_operation = None;
+                            this.error = None;
+                            this.call(
+                                "github-install",
+                                methods::CLOUD_GITHUB_INSTALL,
+                                serde_json::json!({}),
+                                cx,
+                            );
+                        }),
+                    ),
+                )
+            })
             .child(
                 cs::button("github-operation-refresh", "Refresh", false, busy, false).on_click(
                     cx.listener(|this, _, _, cx| {
@@ -292,7 +310,7 @@ impl RepositoryPanel {
             .child(
                 cs::button(
                     "github-operation-cancel",
-                    if matches!(state, "expired" | "cancelled" | "failed") {
+                    if finished {
                         "Close"
                     } else {
                         "Cancel"

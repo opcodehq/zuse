@@ -19,6 +19,7 @@ mod agent_recovery;
 mod agents;
 mod environment;
 mod github;
+mod guide;
 mod images;
 mod presentation;
 mod secrets;
@@ -73,6 +74,7 @@ pub struct RepositoryPanel {
     selected: BTreeSet<String>,
     queue: Vec<GithubRepository>,
     keys: BTreeMap<String, String>,
+    guide: guide::GuideState,
 }
 impl EventEmitter<Request> for RepositoryPanel {}
 impl RepositoryPanel {
@@ -119,6 +121,7 @@ impl RepositoryPanel {
             selected: BTreeSet::new(),
             queue: vec![],
             keys: BTreeMap::new(),
+            guide: Default::default(),
         }
     }
     pub fn bind_owner(&mut self, owner: Option<Owner>, cx: &mut Context<Self>) {

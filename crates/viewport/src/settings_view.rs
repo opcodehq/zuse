@@ -57,7 +57,7 @@ impl Section {
     fn description(self) -> &'static str {
         match self {
             Self::Cloud => {
-                "Connect GitHub and your coding agents, then keep work running when this app is closed."
+                "Run agents on fresh cloud computers that keep working after you close this app."
             }
             Self::General => "Workspace defaults and your personal app preferences.",
             Self::Providers => {

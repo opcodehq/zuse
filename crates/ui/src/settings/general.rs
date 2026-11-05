@@ -60,7 +60,7 @@ impl ShortcutsPage {
         let appearance = widgets::group(
             theme,
             "Appearance",
-            "Choose the app theme, or follow your system setting.",
+            "",
         )
         .child(
             widgets::section_card(theme).mt_0().child(
@@ -230,18 +230,5 @@ fn contain_activation(event: &gpui::KeyDownEvent, _: &mut gpui::Window, cx: &mut
     }
 }
 fn general_details(theme: &Theme, title: &str, description: &str) -> gpui::Div {
-    div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap(px(2.))
-        .child(widgets::row_title(theme, title.to_owned()))
-        .child(
-            div()
-                .text_size(crate::typography::ui_rems(11.))
-                .line_height(crate::typography::ui_rems(16.))
-                .text_color(theme.text_muted)
-                .child(description.to_owned()),
-        )
+    widgets::row_copy(theme, title, description)
 }

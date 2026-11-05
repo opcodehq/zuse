@@ -795,6 +795,27 @@ pub fn row_title(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {
         .child(title.into())
 }
 
+/// A settings row's left side: title over one muted description, using the
+/// design system's row type sizes. Every page's rows share this one helper.
+pub fn row_copy(theme: &Theme, title: &str, description: &str) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .child(row_title(theme, title.to_owned()))
+        .when(!description.is_empty(), |copy| {
+            copy.child(
+                div()
+                    .text_size(crate::typography::ui_rems(ROW_DESCRIPTION_SIZE))
+                    .line_height(crate::typography::ui_rems(16.))
+                    .text_color(theme.text_muted)
+                    .child(description.to_owned()),
+            )
+        })
+}
+
 /// The quiet meta line under a row title: `text-[12px]
 /// text-muted-foreground/65` fragments joined by dots.
 pub fn meta_line(theme: &Theme, fragments: Vec<AnyElement>) -> gpui::Div {
@@ -1616,11 +1637,16 @@ pub fn action_button(theme: &Theme, tone: ActionTone) -> gpui::Div {
                 .text_color(theme.text)
                 .hover(move |s| s.bg(lifted))
         }
+        // Commits share the app's primary dithered action, so a page's one
+        // decisive button reads the same everywhere.
         ActionTone::Solid => button
-            .bg(theme.solid)
+            .relative()
+            .overflow_hidden()
+            .bg(gpui::rgb(0x13150f))
             .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.on_solid)
-            .hover(|s| s.opacity(0.9)),
+            .text_color(gpui::white())
+            .child(zuse_viewport::styling::dither_background(true, true))
+            .hover(|s| s.opacity(0.95)),
         // The dialogs' destructive fill (`popover::btn_danger`).
         ActionTone::Danger => button
             .bg(theme.danger_strong)
