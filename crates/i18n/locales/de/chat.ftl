@@ -1897,3 +1897,4 @@ chat-history_search_title = Gesendete Nachrichten werden durchsucht
 chat-history_search_use = übernehmen
 chat-history_search_cancel = abbrechen
 chat-stash_saved_notice = Entwurf zurückgelegt · <part0>{ $shortcut }</part0> zum Anzeigen
+chat-chat_composer_press_esc_again_to_clear = Zum Leeren erneut <part0>Esc</part0> drücken
