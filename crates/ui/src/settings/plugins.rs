@@ -62,9 +62,25 @@ pub struct PluginsCard {
     poll: Option<Task<()>>,
     setup: Option<Entity<PluginSetup>>,
     setup_events: Option<Subscription>,
+    /// "Import from this computer": servers found in local agent apps.
+    import: Option<LocalImport>,
+    /// Add-server requests waiting for the single-flight plugin pipeline.
+    import_queue: std::collections::VecDeque<Value>,
+    import_task: Option<Task<()>>,
     /// Review fixtures seed the account and snapshot without an engine.
     fixture: bool,
     _state: Subscription,
+}
+
+/// The local MCP import panel. Detected servers may carry env secrets, so the
+/// panel only ever renders names, sources, commands and env key counts.
+struct LocalImport {
+    servers: Vec<zuse_protocol::plugin_setup::DetectedServer>,
+    selected: std::collections::BTreeSet<usize>,
+    loading: bool,
+    error: Option<String>,
+    /// Set once requests are queued: (queued, skipped by validation).
+    submitted: Option<(usize, usize)>,
 }
 
 struct SharedPlugins(Entity<PluginsCard>);
@@ -131,6 +147,9 @@ impl PluginsCard {
             poll: None,
             setup: None,
             setup_events: None,
+            import: None,
+            import_queue: Default::default(),
+            import_task: None,
             fixture: false,
             _state: subscription,
         };
@@ -376,6 +395,11 @@ impl PluginsCard {
                     }
                 }
                 card.schedule_poll(cx);
+                if !card.busy {
+                    if let Some(next) = card.import_queue.pop_front() {
+                        card.request(methods::PLUGINS, next, cx);
+                    }
+                }
                 cx.notify();
             });
         }));
@@ -493,6 +517,217 @@ impl PluginsCard {
         } else {
             self.sign_in(cx);
         }
+    }
+
+    fn open_import(&mut self, cx: &mut Context<Self>) {
+        self.add_menu_open = false;
+        if !self.signed_in() {
+            self.sign_in(cx);
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        self.import = Some(LocalImport {
+            servers: vec![],
+            selected: Default::default(),
+            loading: true,
+            error: None,
+            submitted: None,
+        });
+        let personal = self.plugins.snapshot["tenantId"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("personal:"));
+        self.import_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .client()
+                .call(methods::DISCOVER_LOCAL_MCP_SERVERS, json!({}))
+                .await;
+            let _ = this.update(cx, |card, cx| {
+                let Some(import) = card.import.as_mut() else { return };
+                import.loading = false;
+                match result.map(|v| {
+                    serde_json::from_value::<Vec<zuse_protocol::plugin_setup::DetectedServer>>(
+                        v["servers"].clone(),
+                    )
+                }) {
+                    Ok(Ok(servers)) => {
+                        // Organizations only take remote servers, like the manual form.
+                        import.selected = servers
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, s)| personal || s.url.is_some())
+                            .map(|(i, _)| i)
+                            .collect();
+                        import.servers = servers;
+                    }
+                    Ok(Err(_)) => import.error = Some("This computer's MCP settings couldn't be read.".into()),
+                    Err(error) => import.error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+    fn toggle_import(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(import) = self.import.as_mut().filter(|i| i.submitted.is_none()) {
+            if !import.selected.remove(&index) {
+                import.selected.insert(index);
+            }
+            cx.notify();
+        }
+    }
+    fn run_import(&mut self, cx: &mut Context<Self>) {
+        let Some(tenant) = self.plugins.snapshot["tenantId"].as_str().map(str::to_owned) else {
+            return;
+        };
+        let Some(import) = self.import.as_mut().filter(|i| i.submitted.is_none()) else {
+            return;
+        };
+        let mut queued = 0;
+        let mut skipped = 0;
+        for index in import.selected.clone() {
+            let request = import.servers[index]
+                .request(&tenant, zuse_protocol::plugins::PluginReturnTo::Desktop { port: 0 })
+                .ok()
+                .and_then(|r| serde_json::to_value(r).ok());
+            match request {
+                Some(value) => {
+                    self.import_queue.push_back(value);
+                    queued += 1;
+                }
+                None => skipped += 1,
+            }
+        }
+        import.submitted = Some((queued, skipped));
+        if !self.busy {
+            if let Some(next) = self.import_queue.pop_front() {
+                self.request(methods::PLUGINS, next, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn render_import(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let import = self.import.as_ref()?;
+        let mut card = widgets::section_card(theme).mt_0();
+        if import.loading {
+            card = card.child(widgets::card_row(theme, true).child(widgets::row_copy(
+                theme,
+                "Looking for MCP servers…",
+                "Checking Claude, Codex and Cursor settings on this computer.",
+            )));
+        } else if let Some(error) = &import.error {
+            card = card.child(widgets::card_row(theme, true).child(widgets::row_copy(theme, "Couldn't read local settings", error)));
+        } else if import.servers.is_empty() {
+            card = card.child(widgets::card_row(theme, true).child(widgets::row_copy(
+                theme,
+                "No MCP servers found",
+                "Nothing is configured in Claude, Codex or Cursor on this computer yet.",
+            )));
+        } else {
+            for (index, server) in import.servers.iter().enumerate() {
+                let on = import.selected.contains(&index);
+                let mut meta = vec![
+                    div().child(server.source.clone()).into_any_element(),
+                    div().truncate().child(server.summary()).into_any_element(),
+                ];
+                if !server.env.is_empty() {
+                    meta.push(
+                        div()
+                            .child(format!(
+                                "{} environment value{}",
+                                server.env.len(),
+                                if server.env.len() == 1 { "" } else { "s" }
+                            ))
+                            .into_any_element(),
+                    );
+                }
+                card = card.child(
+                    widgets::card_row(theme, index == 0)
+                        .id(("plugins-import-server", index))
+                        .flex_nowrap()
+                        .cursor_pointer()
+                        .role(gpui::Role::CheckBox)
+                        .aria_label(SharedString::from(server.name.clone()))
+                        .aria_toggled(if on { gpui::Toggled::True } else { gpui::Toggled::False })
+                        .tab_index(0)
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle_import(index, cx)))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(widgets::row_title(theme, server.name.clone()))
+                                .child(widgets::meta_line(theme, meta)),
+                        )
+                        .child(widgets::toggle_switch(theme, on, format!("plugins-import-{index}"))),
+                );
+            }
+        }
+        let count = import.selected.len();
+        let footer = match import.submitted {
+            Some((queued, skipped)) => {
+                let pending = self.import_queue.len() + usize::from(self.busy);
+                widgets::card_row(theme, false).child(widgets::row_copy(
+                    theme,
+                    &if pending > 0 {
+                        format!("Adding {queued} server{}…", if queued == 1 { "" } else { "s" })
+                    } else {
+                        format!("Added {queued} server{}", if queued == 1 { "" } else { "s" })
+                    },
+                    &if skipped > 0 {
+                        format!("{skipped} couldn't be imported here: organizations accept HTTPS servers only, and local commands need a valid configuration.")
+                    } else {
+                        "They appear under Connected below.".to_owned()
+                    },
+                ))
+                .child(
+                    widgets::text_action(theme, widgets::ActionTone::Outlined, "Done")
+                        .id("plugins-import-done")
+                        .role(gpui::Role::Button)
+                        .tab_index(0)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.import = None;
+                            cx.notify();
+                        })),
+                )
+            }
+            None => widgets::card_row(theme, false)
+                .child(div().flex_1())
+                .child(
+                    widgets::text_action(theme, widgets::ActionTone::Quiet, "Cancel")
+                        .id("plugins-import-cancel")
+                        .role(gpui::Role::Button)
+                        .tab_index(0)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.import = None;
+                            this.import_task = None;
+                            cx.notify();
+                        })),
+                )
+                .when(!import.loading && count > 0, |row| {
+                    row.child(
+                        widgets::text_action(
+                            theme,
+                            widgets::ActionTone::Solid,
+                            format!("Import {count}"),
+                        )
+                        .id("plugins-import-run")
+                        .role(gpui::Role::Button)
+                        .tab_index(0)
+                        .on_click(cx.listener(|this, _, _, cx| this.run_import(cx))),
+                    )
+                }),
+        };
+        Some(
+            widgets::group(
+                theme,
+                "Import from this computer",
+                "MCP servers already set up in Claude, Codex or Cursor. Choose which ones agents should get in every chat.",
+            )
+            .child(card.child(footer))
+            .into_any_element(),
+        )
     }
 
     fn set_enabled(&mut self, connection: Value, enabled: bool, cx: &mut Context<Self>) {
@@ -1113,6 +1348,10 @@ impl PluginsCard {
                             cx.listener(|this, _, window, cx| this.add_server(window, cx)),
                         ),
                     )
+                    .child(
+                        row("plugins-import-local", crate::icons::PLUS, "Import from this computer")
+                            .on_click(cx.listener(|this, _, _, cx| this.open_import(cx))),
+                    )
                     .into_any_element(),
                 None,
             )
@@ -1303,6 +1542,7 @@ impl PluginsCard {
             .text_color(theme.text)
             .child(header)
             .children(status)
+            .children(self.render_import(theme, cx))
             .child(
                 widgets::group(theme, "Connected", "")
                     .child(widgets::section_card(theme).mt_0().child(body)),

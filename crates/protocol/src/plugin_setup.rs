@@ -91,6 +91,60 @@ impl ServerDraft {
     }
 }
 
+/// An MCP server found in an agent app's config on this computer. Stdio
+/// servers carry their env, which may hold secrets: never log this value.
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedServer {
+    /// Which app's config it came from ("Claude", "Codex", "Cursor").
+    pub source: String,
+    pub name: String,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+impl DetectedServer {
+    /// One-line summary safe to show: the command or URL, never env values.
+    pub fn summary(&self) -> String {
+        match (&self.url, &self.command) {
+            (Some(url), _) => url.clone(),
+            (None, Some(command)) => std::iter::once(command.as_str())
+                .chain(self.args.iter().map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(" "),
+            (None, None) => String::new(),
+        }
+    }
+    /// The same request the manual Add MCP server form would send, so every
+    /// existing validation applies to imports too.
+    pub fn request(
+        &self,
+        tenant: &str,
+        return_to: PluginReturnTo,
+    ) -> Result<PluginRequest, &'static str> {
+        if let Some(url) = &self.url {
+            return ServerDraft {
+                name: self.name.clone(),
+                url: url.clone(),
+                ..Default::default()
+            }
+            .request(tenant, return_to);
+        }
+        let command = self.command.clone().ok_or(LOCAL_CONFIG_INVALID)?;
+        LocalServerDraft {
+            name: self.name.clone(),
+            config: serde_json::json!({"command": command, "args": self.args, "env": self.env}).to_string(),
+        }
+        .request(tenant)
+    }
+}
+
 /// The Local form starts from this editable stdio configuration.
 pub const LOCAL_CONFIG_TEMPLATE: &str = r#"{"command":"","args":[]}"#;
 pub const LOCAL_CONFIG_INVALID: &str = "Enter a valid stdio MCP configuration with one command, an args array, and optional env values.";

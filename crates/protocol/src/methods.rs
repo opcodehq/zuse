@@ -127,6 +127,8 @@ pub const CREATE_ORG: &str = "CreateOrg";
 pub const SELECT_ORG: &str = "SelectOrg";
 /// One-time local→synced profile import: what's importable (unary).
 pub const LOCAL_IMPORT_STATUS: &str = "LocalImportStatus";
+/// MCP servers configured in this computer's agent apps, for import.
+pub const DISCOVER_LOCAL_MCP_SERVERS: &str = "DiscoverLocalMcpServers";
 /// One-time local→synced profile import: run it (stream of progress items).
 pub const IMPORT_LOCAL_WORKSPACE: &str = "ImportLocalWorkspace";
 // Repos / worktrees / folders (ControlRpc, relay-forwardable).
