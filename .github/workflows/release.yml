@@ -57,10 +57,7 @@ jobs:
             echo "::error::Tag $TAG does not match workspace version $workspace"
             exit 1
           fi
-          if ! grep -q "^## $base\b" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md has no '## $base' section"
-            exit 1
-          fi
+          python3 scripts/release_notes.py "$TAG" > /dev/null
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ "$version" != "$base" ]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
 
@@ -226,13 +223,7 @@ jobs:
           sha256sum zuse-* > SHA256SUMS
           cat SHA256SUMS
           cd ../..
-          base="${{ needs.verify.outputs.version }}"
-          base="${base%%-*}"
-          awk -v heading="## $base" '
-            index($0, heading) == 1 { found = 1; next }
-            found && /^## / { exit }
-            found { print }
-          ' CHANGELOG.md > dist/notes.md
+          python3 scripts/release_notes.py "$TAG" > dist/notes.md
           test -s dist/notes.md
       - name: Publish
         env:
