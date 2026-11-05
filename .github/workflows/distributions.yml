@@ -161,7 +161,9 @@ jobs:
           - os: windows-latest
             platform: windows
             arch: x86_64
-    runs-on: ${{ matrix.os }}
+    # Image creation and Apple signature tools do not execute the app. Both
+    # DMG architectures can use the available Intel signing runner pool.
+    runs-on: ${{ matrix.platform == 'macos' && 'macos-15-intel' || matrix.os }}
     defaults:
       run:
         shell: bash
