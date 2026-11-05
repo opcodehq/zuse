@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use tokio::{

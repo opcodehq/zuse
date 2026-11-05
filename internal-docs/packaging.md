@@ -9,6 +9,9 @@ Build on the target Mac, Linux or Windows machine, with the prerequisites from
 python3 scripts/package.py
 ```
 
+On Windows, run `python scripts/package.py` with Python 3.11 or newer and
+Git Bash installed.
+
 This builds the release browser and native executables from the checkout, then
 creates `dist/build/zuse-VERSION-PLATFORM-ARCH.tar.gz` (a `.zip` on Windows). Keep the terminal open
 until the command completes. The output directory must not already contain an
