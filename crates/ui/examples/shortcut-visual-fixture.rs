@@ -81,7 +81,7 @@ fn main() -> anyhow::Result<()> {
                 pause(cx).await;
                 for (mode, name) in [(appearance::AppearanceMode::Dark,"dark"), (appearance::AppearanceMode::Light,"light")] {
                     cx.update(|cx| appearance::set_mode(mode,cx));
-                    for kind in ["find", "find-empty", "stash", "history", "emoji", "stash-empty", "notice", "shortcuts"] {
+                    for kind in ["find", "find-empty", "stash", "history", "emoji", "stash-empty", "notice", "clear", "shortcuts"] {
                         window.update(cx, |s,w,cx| s.fixture_shortcut_visual(kind,w,cx))?;
                         pause(cx).await;
                         capture(window.into(),cx,&output.join(format!("{kind}-{name}.png"))).await?;
@@ -100,7 +100,19 @@ fn main() -> anyhow::Result<()> {
                 Ok(())
             }.await;
             if let Err(error) = run { *failure.lock().unwrap() = Some(format!("{error:#}")); }
-            window.update(cx, |_, w, _| w.remove_window()).ok();
+            // Release the focused editor's platform input handler before the
+            // native test platform shuts down and checks for leaked entities.
+            window.update(cx, |_, w, cx| {
+                w.blur();
+                w.replace_root(cx, |_, _| gpui::EmptyView);
+                w.draw(cx).clear();
+                w.present_if_needed();
+            }).ok();
+            pause(cx).await;
+            window.update(cx, |_, w, cx| {
+                w.draw(cx).clear();
+                w.remove_window();
+            }).ok();
             pause(cx).await;
             cx.update(|cx| cx.quit());
         }).detach();

@@ -1861,3 +1861,4 @@ chat-history_search_title = 送信済みメッセージを検索中
 chat-history_search_use = 使用
 chat-history_search_cancel = キャンセル
 chat-stash_saved_notice = 下書きを保留しました · <part0>{ $shortcut }</part0> で表示
+chat-chat_composer_press_esc_again_to_clear = もう一度 <part0>Esc</part0> を押すとクリアします

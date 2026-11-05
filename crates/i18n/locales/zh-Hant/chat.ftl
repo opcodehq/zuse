@@ -1861,3 +1861,4 @@ chat-history_search_title = 正在搜尋已傳送的訊息
 chat-history_search_use = 使用
 chat-history_search_cancel = 取消
 chat-stash_saved_notice = 草稿已暫存 · 按 <part0>{ $shortcut }</part0> 檢視
+chat-chat_composer_press_esc_again_to_clear = 再按一次 <part0>Esc</part0> 即可清除
