@@ -345,5 +345,7 @@ impl Transcript {
         if let Some(find) = self.find.as_mut() {
             find.active = chat_find::first_index_from_row(0, &find.matches);
         }
+        #[cfg(feature = "browser-fixture")]
+        self.step_find(0, cx);
     }
 }
