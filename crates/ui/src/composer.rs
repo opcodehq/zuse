@@ -6875,7 +6875,7 @@ impl Composer {
             "emoji" => self.fixture_set_draft(":smil", cx),
             "clear" => {
                 self.fixture_set_draft("Save this draft for later", cx);
-                self.on_interrupt_agent(&InterruptAgent, window, cx);
+                self.on_interrupt_agent(&InterruptAgent { double_press: true }, window, cx);
             }
             "notice" => {
                 self.fixture_set_draft("Save this draft for later", cx);
