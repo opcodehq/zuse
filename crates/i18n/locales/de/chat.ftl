@@ -1884,3 +1884,16 @@ chat-find_in_chat_no_results = Keine Treffer
 chat-find_in_chat_previous = Vorheriger Treffer
 chat-find_in_chat_next = Nächster Treffer
 chat-find_in_chat_close = Suche schließen
+
+chat-history_search_results = Gesendete Nachrichten
+chat-history_search_no_results = Keine Treffer
+chat-stash_title = Zurückgelegt
+chat-stash_open = Zurückgelegte Prompts: { $count }. Liste öffnen.
+chat-stash_list = Zurückgelegte Prompts
+chat-stash_empty = Noch nichts zurückgelegt. Drücke { $shortcut } mit einem Entwurf, um ihn zurückzulegen.
+chat-stash_delete = Zurückgelegten Prompt löschen
+chat-history_search_empty = In diesem Chat wurden noch keine Nachrichten gesendet.
+chat-history_search_title = Gesendete Nachrichten werden durchsucht
+chat-history_search_use = übernehmen
+chat-history_search_cancel = abbrechen
+chat-stash_saved_notice = Entwurf zurückgelegt · <part0>{ $shortcut }</part0> zum Anzeigen

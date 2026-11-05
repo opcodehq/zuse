@@ -19172,6 +19172,36 @@ mod exit_regressions {
 /// Native browser regression fixture hooks are excluded from shipped builds.
 #[cfg(feature = "browser-fixture")]
 impl Shell {
+    pub fn fixture_shortcut_visual(
+        &mut self,
+        kind: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.shortcuts_panel_open = false;
+        self.transcript.update(cx, |t, cx| t.close_find(cx));
+        match kind {
+            "find" | "find-empty" => {
+                self.transcript.update(cx, |t, cx| {
+                    t.open_find(window, cx);
+                    t.set_find_query(
+                        if kind == "find" {
+                            "repo"
+                        } else {
+                            "unmatched-query"
+                        },
+                        cx,
+                    );
+                });
+            }
+            "shortcuts" => self.shortcuts_panel_open = true,
+            _ => self
+                .composer
+                .update(cx, |c, cx| c.fixture_editing_visual(kind, window, cx)),
+        }
+        cx.notify();
+    }
+
     pub fn fixture_focus_mounted(&self, window: &Window, cx: &App) -> bool {
         self.shortcut_focus.contains_focused(window, cx)
     }
