@@ -558,13 +558,32 @@ impl Host for KernelHost {
             Call {
                 id: "command".into(),
                 name: "exec_command".into(),
-                input: json!({"command":"test \"$(cat result.txt)\" = 'native result' && printf 'verified native result\\n'","yield_time_ms":1000}),
+                input: json!({"command":"sleep 0.1; test \"$(cat result.txt)\" = 'native result' && printf 'verified native result\\n'","yield_time_ms":0}),
             },
         ];
         let calls = if self.batched && turn == 0 {
             sequence.to_vec()
         } else if !self.batched && turn < sequence.len() {
             vec![sequence[turn].clone()]
+        } else if turn == if self.batched { 1 } else { sequence.len() } {
+            // Commands may return before their output is ready, especially on
+            // busy CI runners. Follow the process handle before claiming success.
+            let result = input
+                .messages
+                .iter()
+                .filter(|message| message.role == Role::Tool)
+                .flat_map(|message| message.content.as_array().into_iter().flatten())
+                .find(|part| part["toolCallId"] == "command")
+                .expect("command receipt");
+            let output: Value =
+                serde_json::from_str(result["output"]["value"].as_str().expect("command output"))
+                    .expect("process output");
+            let id = output["process"]["id"].as_str().expect("process id");
+            vec![Call {
+                id: "wait-command".into(),
+                name: "wait_process".into(),
+                input: json!({"process_id":id,"timeout_ms":30000}),
+            }]
         } else {
             assert!(
                 input
@@ -647,7 +666,7 @@ async fn native_tools_run_through_the_durable_kernel_and_root_owned_host_composi
             .await
             .unwrap();
         let state = engine.snapshot().await;
-        assert_eq!(state.tools.len(), 3);
+        assert_eq!(state.tools.len(), 4);
         assert!(
             state
                 .tools
@@ -663,7 +682,7 @@ async fn native_tools_run_through_the_durable_kernel_and_root_owned_host_composi
         ));
         assert_eq!(
             application.requests.load(Ordering::SeqCst),
-            if batched { 2 } else { 4 }
+            if batched { 3 } else { 5 }
         );
         let results = application
             .events
@@ -675,10 +694,10 @@ async fn native_tools_run_through_the_durable_kernel_and_root_owned_host_composi
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(results, ["write", "read", "command"]);
+        assert_eq!(results, ["write", "read", "command", "wait-command"]);
         engine.close().await.unwrap();
         let recovered = RootStore::acquire(root.path(), "root").unwrap();
-        assert_eq!(recovered.load().unwrap().unwrap().tools.len(), 3);
+        assert_eq!(recovered.load().unwrap().unwrap().tools.len(), 4);
     }
 }
 
