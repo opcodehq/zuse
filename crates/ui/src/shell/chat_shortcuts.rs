@@ -8,9 +8,24 @@ use std::time::Instant;
 /// How long the first stop-background-tasks press waits for the second.
 pub(super) const STOP_CONFIRM_WINDOW: Duration = Duration::from_secs(3);
 
-/// Whether this press confirms the one armed at `armed_at`.
-pub(super) fn stop_press_confirms(armed_at: Option<Instant>, now: Instant) -> bool {
-    armed_at.is_some_and(|at| now.saturating_duration_since(at) <= STOP_CONFIRM_WINDOW)
+/// Confirmation belongs to exactly the chat and tasks the first press named.
+pub(super) struct StopConfirmation {
+    chat_id: String,
+    tasks: Vec<String>,
+    at: Instant,
+}
+
+pub(super) fn stop_press_confirms(
+    armed: Option<&StopConfirmation>,
+    chat_id: &str,
+    tasks: &[String],
+    now: Instant,
+) -> bool {
+    armed.is_some_and(|armed| {
+        armed.chat_id == chat_id
+            && armed.tasks == tasks
+            && now.saturating_duration_since(armed.at) <= STOP_CONFIRM_WINDOW
+    })
 }
 
 const COMPOSER_COMMANDS: [Command; 4] = [
@@ -95,8 +110,17 @@ impl Shell {
             return;
         };
         let count = stoppable.len() as i64;
-        if !stop_press_confirms(self.background_stop_armed_at, now) {
-            self.background_stop_armed_at = Some(now);
+        if !stop_press_confirms(
+            self.background_stop_armed_at.as_ref(),
+            &chat_id,
+            &stoppable,
+            now,
+        ) {
+            self.background_stop_armed_at = Some(StopConfirmation {
+                chat_id,
+                tasks: stoppable,
+                at: now,
+            });
             let shortcut = display_combo(
                 self.settings
                     .keymap
@@ -288,10 +312,30 @@ mod tests {
     #[test]
     fn a_second_press_confirms_only_inside_the_window() {
         let now = Instant::now();
-        assert!(!stop_press_confirms(None, now));
-        assert!(stop_press_confirms(Some(now), now + Duration::from_secs(2)));
+        let tasks = vec!["task-a".to_owned()];
+        let armed = StopConfirmation {
+            chat_id: "chat-a".into(),
+            tasks: tasks.clone(),
+            at: now,
+        };
+        assert!(!stop_press_confirms(None, "chat-a", &tasks, now));
+        assert!(stop_press_confirms(
+            Some(&armed),
+            "chat-a",
+            &tasks,
+            now + Duration::from_secs(2)
+        ));
+        assert!(!stop_press_confirms(Some(&armed), "chat-b", &tasks, now));
         assert!(!stop_press_confirms(
-            Some(now),
+            Some(&armed),
+            "chat-a",
+            &["new-task".into()],
+            now
+        ));
+        assert!(!stop_press_confirms(
+            Some(&armed),
+            "chat-a",
+            &tasks,
             now + STOP_CONFIRM_WINDOW + Duration::from_millis(1)
         ));
     }

@@ -2185,7 +2185,7 @@ pub struct Shell {
     /// The keyboard shortcuts panel (Mod+/, or `?` in an empty composer).
     shortcuts_panel_open: bool,
     /// The first stop-background-tasks press, waiting for its confirmation.
-    background_stop_armed_at: Option<std::time::Instant>,
+    background_stop_armed_at: Option<chat_shortcuts::StopConfirmation>,
     /// The add-space palette (device tabs + folder search), `Some`
     /// while open.
     add_space: Option<AddSpaceFlow>,
