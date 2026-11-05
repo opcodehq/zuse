@@ -240,6 +240,26 @@ native-direct_steer_description = Enter sends to a running agent right away. Alt
 
 native-steer_message = Steer message
 
+native-press_esc_again_to_clear = Press Esc again to clear
+
+native-draft_stashed = Draft stashed
+
+native-stashed_drafts = Stashed drafts
+
+native-nothing_stashed = Nothing stashed yet
+
+native-search_sent_messages = Search sent messages…
+
+native-sent_messages = Sent messages
+
+native-no_matching_messages = No matching messages
+
+native-nothing_to_search = No sent messages yet
+
+native-remove_attachments_before_stashing = Remove attachments before stashing this draft.
+
+native-emoji = Emoji
+
 native-open_pull_requests_in = Open pull requests in
 
 native-move_chats_and_settings_from_electron = Move chats and settings from Electron

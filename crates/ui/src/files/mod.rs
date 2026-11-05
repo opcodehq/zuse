@@ -650,6 +650,7 @@ impl FilesSurface {
             | ComposerInputEvent::OpenAttachment(_)
             | ComposerInputEvent::OpenFile(_)
             | ComposerInputEvent::CursorMoved
+            | ComposerInputEvent::ListDelete
             | ComposerInputEvent::ViewportChanged => {}
         });
         let observe = cx.observe(&state, |this: &mut Self, _, cx| {

@@ -349,6 +349,36 @@ native-direct_steer_description = 按 Enter 立即发送给正在运行的智能
 native-steer_message = 发送消息以引导
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-press_esc_again_to_clear = 再按一次 Esc 清除
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-draft_stashed = 草稿已暂存
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-stashed_drafts = 暂存的草稿
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_stashed = 尚无暂存内容
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-search_sent_messages = 搜索已发送的消息…
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-sent_messages = 已发送的消息
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-no_matching_messages = 没有匹配的消息
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_to_search = 还没有已发送的消息
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-remove_attachments_before_stashing = 暂存此草稿前请先移除附件。
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-emoji = 表情符号
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = 打开拉取请求的位置
 
 # Context: application-owned interface text; do not translate paths or product names.

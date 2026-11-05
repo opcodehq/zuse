@@ -977,6 +977,7 @@ impl Pickers {
             | ComposerInputEvent::OpenAttachment(_)
             | ComposerInputEvent::OpenFile(_)
             | ComposerInputEvent::CursorMoved
+            | ComposerInputEvent::ListDelete
             | ComposerInputEvent::ViewportChanged
             | ComposerInputEvent::MentionNavigate(_)
             | ComposerInputEvent::MentionAccept

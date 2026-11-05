@@ -34,6 +34,15 @@ Zuse bundles the SVG icon set and filename/folder associations from
 Symbols is MIT licensed. The complete upstream license and copyright notice is
 retained at `crates/ui/assets/file-icons/LICENSE.symbols`.
 
+## gemoji
+
+The composer's `:shortcode:` emoji table (`crates/ui/src/composer/emoji.tsv`)
+is derived from `db/emoji.json` in
+[gemoji](https://github.com/github/gemoji/tree/fadaeaf1f1a9be82b321316a6c5502e43138b2f6),
+reduced to each emoji and its aliases. gemoji is MIT licensed, Copyright (c)
+2019 GitHub, Inc. The complete upstream license is retained at
+`crates/ui/src/composer/LICENSE.gemoji`.
+
 ## Bundled theme palette adaptations
 
 Zeron includes manually curated palette adaptations derived from the projects

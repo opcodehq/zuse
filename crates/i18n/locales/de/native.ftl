@@ -349,6 +349,36 @@ native-direct_steer_description = Enter sendet sofort an einen laufenden Agenten
 native-steer_message = Nachricht zum Steuern senden
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-press_esc_again_to_clear = Zum Leeren erneut Esc drücken
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-draft_stashed = Entwurf zurückgelegt
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-stashed_drafts = Zurückgelegte Entwürfe
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_stashed = Noch nichts zurückgelegt
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-search_sent_messages = Gesendete Nachrichten durchsuchen…
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-sent_messages = Gesendete Nachrichten
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-no_matching_messages = Keine passenden Nachrichten
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_to_search = Noch keine gesendeten Nachrichten
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-remove_attachments_before_stashing = Entferne die Anhänge, bevor du diesen Entwurf zurücklegst.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-emoji = Emoji
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = Pull Requests öffnen in
 
 # Context: application-owned interface text; do not translate paths or product names.

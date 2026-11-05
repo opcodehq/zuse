@@ -58,6 +58,12 @@ pub(super) fn bind(cx: &mut App, keymap: &KeymapConfig) {
             Command::ComposerDeleteWord => {
                 KeyBinding::new(&combo, crate::composer::DeleteWordLeft, context)
             }
+            Command::ComposerYank => KeyBinding::new(&combo, crate::composer::Yank, context),
+            Command::ComposerYankPop => KeyBinding::new(&combo, crate::composer::YankPop, context),
+            Command::ComposerStash => KeyBinding::new(&combo, crate::composer::StashDraft, context),
+            Command::ComposerSearchHistory => {
+                KeyBinding::new(&combo, crate::composer::SearchHistory, context)
+            }
             Command::ComposerInterrupt => KeyBinding::new(
                 &combo,
                 crate::composer::InterruptAgent {
@@ -325,6 +331,10 @@ impl Shell {
             | Command::ComposerDeleteToEnd
             | Command::ComposerDeleteWord
             | Command::ComposerInterrupt
+            | Command::ComposerYank
+            | Command::ComposerYankPop
+            | Command::ComposerStash
+            | Command::ComposerSearchHistory
             | Command::EditorSave => {}
         }
     }

@@ -349,6 +349,36 @@ native-direct_steer_description = Entrée envoie immédiatement à un agent en c
 native-steer_message = Orienter avec ce message
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-press_esc_again_to_clear = Appuyez à nouveau sur Échap pour effacer
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-draft_stashed = Brouillon mis de côté
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-stashed_drafts = Brouillons mis de côté
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_stashed = Rien n’a encore été mis de côté
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-search_sent_messages = Rechercher dans les messages envoyés…
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-sent_messages = Messages envoyés
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-no_matching_messages = Aucun message correspondant
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_to_search = Aucun message envoyé pour l’instant
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-remove_attachments_before_stashing = Retirez les pièces jointes avant de mettre ce brouillon de côté.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-emoji = Emoji
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = Ouvrir les demandes de fusion dans
 
 # Context: application-owned interface text; do not translate paths or product names.

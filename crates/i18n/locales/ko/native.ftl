@@ -349,6 +349,36 @@ native-direct_steer_description = Enter를 누르면 실행 중인 에이전트�
 native-steer_message = 메시지로 조정
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-press_esc_again_to_clear = 지우려면 Esc를 한 번 더 누르세요
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-draft_stashed = 초안을 보관했습니다
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-stashed_drafts = 보관한 초안
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_stashed = 아직 보관한 초안이 없습니다
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-search_sent_messages = 보낸 메시지 검색…
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-sent_messages = 보낸 메시지
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-no_matching_messages = 일치하는 메시지가 없습니다
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_to_search = 아직 보낸 메시지가 없습니다
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-remove_attachments_before_stashing = 이 초안을 보관하기 전에 첨부 파일을 제거하세요.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-emoji = 이모지
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = 풀 리퀘스트를 열 위치
 
 # Context: application-owned interface text; do not translate paths or product names.

@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 /// How long the second Escape may trail the first and still stop the agent.
 pub(crate) const DOUBLE_ESCAPE_WINDOW: Duration = Duration::from_millis(500);
+/// How long "press Esc again to clear" stays armed on an idle draft.
+pub(crate) const CLEAR_CONFIRM_WINDOW: Duration = Duration::from_millis(1500);
 
 /// One cursor over the chat's sent messages. The list is captured when
 /// browsing starts and stays fixed until the user edits, sends or navigates.
@@ -97,12 +99,16 @@ impl DoubleEscape {
 
     /// Record a press. True when it completes a double press.
     pub(crate) fn press(&mut self, revision: u64, now: Instant) -> bool {
+        self.press_within(revision, now, DOUBLE_ESCAPE_WINDOW)
+    }
+
+    pub(crate) fn press_within(&mut self, revision: u64, now: Instant, window: Duration) -> bool {
         let completes = self.released
             && self.first.is_some_and(|(at, first_revision)| {
                 first_revision == revision
                     && now
                         .checked_duration_since(at)
-                        .is_some_and(|elapsed| elapsed <= DOUBLE_ESCAPE_WINDOW)
+                        .is_some_and(|elapsed| elapsed <= window)
             });
         if completes {
             self.reset();
@@ -222,6 +228,12 @@ mod tests {
         edited.press(1, start);
         edited.release();
         assert!(!edited.press(2, start + Duration::from_millis(100)));
+
+        // Clearing an idle draft allows a slower second press.
+        let mut clear = DoubleEscape::default();
+        clear.press_within(1, start, CLEAR_CONFIRM_WINDOW);
+        clear.release();
+        assert!(clear.press_within(1, start + Duration::from_millis(1400), CLEAR_CONFIRM_WINDOW));
 
         // A reset forgets the first press.
         let mut reset = DoubleEscape::default();

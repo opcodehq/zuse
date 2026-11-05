@@ -99,13 +99,21 @@ pub enum Command {
     ComposerDeleteWord,
     #[serde(rename = "composer.interrupt")]
     ComposerInterrupt,
+    #[serde(rename = "composer.yank")]
+    ComposerYank,
+    #[serde(rename = "composer.yankPop")]
+    ComposerYankPop,
+    #[serde(rename = "composer.stash")]
+    ComposerStash,
+    #[serde(rename = "composer.searchHistory")]
+    ComposerSearchHistory,
     #[serde(rename = "editor.save")]
     EditorSave,
     #[serde(rename = "editor.annotate")]
     EditorAnnotate,
 }
 impl Command {
-    pub const ALL: [Self; 50] = [
+    pub const ALL: [Self; 54] = [
         Self::NewChat,
         Self::NewChatWithoutProject,
         Self::OpenProject,
@@ -154,6 +162,10 @@ impl Command {
         Self::ComposerDeleteToEnd,
         Self::ComposerDeleteWord,
         Self::ComposerInterrupt,
+        Self::ComposerYank,
+        Self::ComposerYankPop,
+        Self::ComposerStash,
+        Self::ComposerSearchHistory,
         Self::EditorSave,
         Self::EditorAnnotate,
     ];
@@ -215,6 +227,10 @@ impl Command {
             Self::ComposerDeleteToEnd => "ctrl-k",
             Self::ComposerDeleteWord => "ctrl-backspace",
             Self::ComposerInterrupt => "escape",
+            Self::ComposerYank => "ctrl-y",
+            Self::ComposerYankPop => "alt-y",
+            Self::ComposerStash => "ctrl-s",
+            Self::ComposerSearchHistory => "ctrl-r",
             Self::EditorSave => "mod-s",
             Self::EditorAnnotate => "mod-shift-a",
         }
@@ -269,6 +285,10 @@ impl Command {
             Self::ComposerDeleteToEnd => "Delete to line end",
             Self::ComposerDeleteWord => "Delete previous word",
             Self::ComposerInterrupt => "Stop agent (press twice)",
+            Self::ComposerYank => "Paste deleted text",
+            Self::ComposerYankPop => "Cycle deleted text",
+            Self::ComposerStash => "Stash draft",
+            Self::ComposerSearchHistory => "Search sent messages",
             Self::EditorSave => "Save file",
             Self::EditorAnnotate => "Annotate selection",
         }
@@ -285,7 +305,11 @@ impl Command {
             | Self::ComposerDeleteToStart
             | Self::ComposerDeleteToEnd
             | Self::ComposerDeleteWord
-            | Self::ComposerInterrupt => "Composer",
+            | Self::ComposerInterrupt
+            | Self::ComposerYank
+            | Self::ComposerYankPop
+            | Self::ComposerStash
+            | Self::ComposerSearchHistory => "Composer",
             Self::EditorSave | Self::EditorAnnotate | Self::SearchFiles => "Files",
             Self::NextTab
             | Self::PrevTab
@@ -319,7 +343,11 @@ impl Command {
             | Self::ComposerDeleteToStart
             | Self::ComposerDeleteToEnd
             | Self::ComposerDeleteWord
-            | Self::ComposerInterrupt => Some("MessageComposer"),
+            | Self::ComposerInterrupt
+            | Self::ComposerYank
+            | Self::ComposerYankPop
+            | Self::ComposerStash
+            | Self::ComposerSearchHistory => Some("MessageComposer"),
             Self::EditorSave | Self::EditorAnnotate => Some("Input"),
             _ => None,
         }
@@ -556,6 +584,14 @@ mod tests {
                 "ctrl-backspace",
             ),
             ("composer.interrupt", Command::ComposerInterrupt, "escape"),
+            ("composer.yank", Command::ComposerYank, "ctrl-y"),
+            ("composer.yankPop", Command::ComposerYankPop, "alt-y"),
+            ("composer.stash", Command::ComposerStash, "ctrl-s"),
+            (
+                "composer.searchHistory",
+                Command::ComposerSearchHistory,
+                "ctrl-r",
+            ),
         ] {
             assert_eq!(serde_json::to_value(command).unwrap(), name);
             assert_eq!(command.default_combo(), key);

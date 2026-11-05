@@ -307,7 +307,7 @@ pub enum PullRequestDestination {
 }
 
 impl PullRequestDestination {
-    pub const ALL: [Self; 2] = [Self::Native, Self::External];
+    pub const ALL: [Self; 6] = [Self::Native, Self::External];
     pub fn label(self) -> &'static str {
         match self {
             Self::Native => "Pull request view",
@@ -957,6 +957,9 @@ pub struct UiSettings {
     /// Enter steers a running agent instead of queueing the message behind
     /// its turn. The queue shortcut (Alt+Enter) always queues. Opt-in.
     pub direct_steer_enabled: bool,
+    /// Drafts set aside with Ctrl+S, newest first (at most 20). Kept on this
+    /// device across restarts.
+    pub prompt_stash: Vec<crate::composer::StashedPrompt>,
     /// The Settings section last viewed. ⌘, / Ctrl+,, the footer gear and the
     /// palette reopen it; links naming a section replace it. Files without
     /// it, or with a name this build does not know, open on General.
@@ -1106,6 +1109,7 @@ impl Default for UiSettings {
             keymap: KeymapConfig::default(),
             escape_stops_active_agent: false,
             direct_steer_enabled: false,
+            prompt_stash: Vec::new(),
             settings_section: crate::shell::SettingsSection::default(),
             composer_send_behavior: ComposerSendBehavior::default(),
             default_model: None,
@@ -1208,7 +1212,7 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 65] = [
+    pub const ALL: [ShortcutId; 69] = [
         ShortcutId::Desktop(keybindings::Command::NewChat),
         ShortcutId::Desktop(keybindings::Command::NewChatWithoutProject),
         ShortcutId::Desktop(keybindings::Command::OpenProject),
@@ -1257,6 +1261,10 @@ impl ShortcutId {
         ShortcutId::Desktop(keybindings::Command::ComposerDeleteToEnd),
         ShortcutId::Desktop(keybindings::Command::ComposerDeleteWord),
         ShortcutId::Desktop(keybindings::Command::ComposerInterrupt),
+        ShortcutId::Desktop(keybindings::Command::ComposerYank),
+        ShortcutId::Desktop(keybindings::Command::ComposerYankPop),
+        ShortcutId::Desktop(keybindings::Command::ComposerStash),
+        ShortcutId::Desktop(keybindings::Command::ComposerSearchHistory),
         ShortcutId::Desktop(keybindings::Command::EditorSave),
         ShortcutId::Desktop(keybindings::Command::EditorAnnotate),
         ShortcutId::ToggleDictation,
@@ -1353,6 +1361,13 @@ impl ShortcutId {
             ShortcutId::Desktop(keybindings::Command::ComposerDeleteWord) if !mac => {
                 "mod-backspace"
             }
+            // Off macOS Ctrl is the primary modifier, which the recorder
+            // spells "mod". Stash shares Ctrl+S with Save file, but each is
+            // scoped to its own editor. Ctrl+R reloads elsewhere, so search
+            // takes Alt+R.
+            ShortcutId::Desktop(keybindings::Command::ComposerYank) if !mac => "mod-y",
+            ShortcutId::Desktop(keybindings::Command::ComposerStash) if !mac => "mod-s",
+            ShortcutId::Desktop(keybindings::Command::ComposerSearchHistory) if !mac => "alt-r",
             ShortcutId::Desktop(command) => command.default_combo_on(mac),
             ShortcutId::ToggleDictation => "mod-d",
             ShortcutId::RandomWallpaper => "mod-u",
@@ -1930,6 +1945,7 @@ impl UiSettings {
             skill_completion_by_harness,
             compact_model_picker,
             direct_steer_enabled,
+            prompt_stash,
             sidebar_width,
             sidebar_collapsed,
             sidebar_grouped,
@@ -3035,6 +3051,11 @@ mod tests {
             },
             escape_stops_active_agent: true,
             direct_steer_enabled: true,
+            prompt_stash: vec![crate::composer::StashedPrompt {
+                id: "stash-1".into(),
+                text: "Parked idea".into(),
+                created_at: 1,
+            }],
             settings_section: crate::shell::SettingsSection::Shortcuts,
             composer_send_behavior: ComposerSendBehavior::ModEnter,
             skills_in_slash_menu: true,
@@ -3946,13 +3967,21 @@ mod tests {
     fn defaults_are_distinct_physical_keys() {
         // Distinct STRINGS is not enough — two defaults could still resolve to
         // the same keystroke through `platform_combo`.
-        let mut seen = std::collections::HashSet::new();
+        // Editors with disjoint key contexts (the composer's Stash and the
+        // file editor's Save) may share a key.
+        let mut seen: Vec<(String, ShortcutId)> = Vec::new();
         for id in ShortcutId::ALL {
             let bound = platform_combo(id.default_combo());
             if bound.is_empty() {
                 continue;
             }
-            assert!(seen.insert(bound.clone()), "{bound:?} bound twice");
+            assert!(
+                !seen
+                    .iter()
+                    .any(|(other, owner)| *other == bound && owner.overlaps_context(id)),
+                "{bound:?} bound twice"
+            );
+            seen.push((bound, id));
         }
     }
 

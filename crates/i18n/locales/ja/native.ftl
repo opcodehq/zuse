@@ -349,6 +349,36 @@ native-direct_steer_description = Enter で実行中のエージェントにす�
 native-steer_message = メッセージでステア
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-press_esc_again_to_clear = もう一度 Esc を押すとクリアします
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-draft_stashed = 下書きを保管しました
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-stashed_drafts = 保管した下書き
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_stashed = まだ保管した下書きはありません
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-search_sent_messages = 送信済みメッセージを検索…
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-sent_messages = 送信済みメッセージ
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-no_matching_messages = 一致するメッセージはありません
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_to_search = まだ送信済みメッセージはありません
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-remove_attachments_before_stashing = この下書きを保管する前に添付ファイルを削除してください。
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-emoji = 絵文字
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = プルリクエストを開く場所
 
 # Context: application-owned interface text; do not translate paths or product names.
