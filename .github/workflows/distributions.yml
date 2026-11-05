@@ -21,6 +21,8 @@ concurrency:
 
 jobs:
   archives:
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -115,6 +117,8 @@ jobs:
           retention-days: 2
 
   formats:
+    permissions:
+      contents: read
     needs: archives
     strategy:
       fail-fast: false
