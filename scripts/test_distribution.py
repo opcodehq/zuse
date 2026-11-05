@@ -1,5 +1,6 @@
 """Observable archive verification, native layout and terminal installation contracts."""
 import hashlib
+from contextlib import chdir
 import io
 import json
 import os
@@ -89,10 +90,12 @@ class DistributionTests(unittest.TestCase):
             offset += 60 + size + size % 2
         self.assertEqual(members['debian-binary'], b'2.0\n')
         with tarfile.open(fileobj=io.BytesIO(members['control.tar.gz'])) as bundle:
+            self.assertTrue(all(not member.pax_headers for member in bundle.getmembers()))
             control = bundle.extractfile('control').read().decode()
             self.assertIn('Version: 0.25.0~preview.1', control)
             self.assertIn('Architecture: amd64', control)
         with tarfile.open(fileobj=io.BytesIO(members['data.tar.gz'])) as bundle:
+            self.assertTrue(all(not member.pax_headers for member in bundle.getmembers()))
             link = bundle.getmember('usr/bin/zuse')
             self.assertTrue(link.issym())
             self.assertEqual((link.uid, link.gid), (0, 0))
@@ -149,6 +152,31 @@ class DistributionTests(unittest.TestCase):
         stable = subprocess.check_output([sys.executable, str(script), 'v0.26.0', str(notes)], text=True)
         self.assertNotIn('This is a preview release for testing.', stable)
         self.assertIn('Existing feature.', stable)
+
+    def test_cached_native_inputs_must_match_a_clean_release_tag(self):
+        prepare = fixtures.load('prepare_distribution', 'prepare-distribution.py')
+        revision = 'a' * 40
+        manifest_path = self.package / 'manifest.json'
+        manifest = json.loads(manifest_path.read_text())
+        manifest['provenance'] = {'source_revision': revision, 'working_tree_dirty': False}
+        manifest_path.write_text(json.dumps(manifest))
+        self.write_archive()
+        incoming = self.fixture.root / 'incoming'
+        incoming.mkdir()
+        cached = incoming / self.archive.name
+        cached.write_bytes(self.archive.read_bytes())
+        checksums = incoming / 'SHA256SUMS'
+        checksums.write_text(hashlib.sha256(cached.read_bytes()).hexdigest() + '  ' + cached.name + '\n')
+        output = self.fixture.root / 'outputs'
+        argv = ['prepare-distribution.py', '--tag', 'v0.25.0', '--platform', 'linux', '--arch', 'x86_64', '--cached']
+        with chdir(self.fixture.root), patch.dict(os.environ, GITHUB_OUTPUT=str(output)), patch.object(sys, 'argv', argv), \
+                patch.object(prepare.subprocess, 'check_output', return_value=revision + '\n'):
+            prepare.main()
+            self.assertIn('found=true', output.read_text())
+            self.assertIn('filename=zuse-0.25.0-linux-x86_64.tar.gz', output.read_text())
+            with patch.object(prepare.subprocess, 'check_output', return_value='b' * 40 + '\n'), \
+                    self.assertRaisesRegex(ValueError, 'clean immutable release tag'):
+                prepare.main()
 
     def test_version_cannot_escape_the_release_url(self):
         bootstrap = bootstrap_module()

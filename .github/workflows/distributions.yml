@@ -6,14 +6,22 @@ on:
       tag:
         description: Published release to add installers and architectures to
         required: true
+      archive_run_id:
+        description: Previous installer run with verified native input artifacts
+        type: string
+        default: ''
   workflow_call:
     inputs:
       tag:
         type: string
         required: true
+      archive_run_id:
+        type: string
+        default: ''
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: distributions-${{ inputs.tag }}
@@ -23,6 +31,7 @@ jobs:
   archives:
     permissions:
       contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +51,7 @@ jobs:
           - os: windows-latest
             platform: windows
             arch: x86_64
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ inputs.archive_run_id != '' && 'ubuntu-24.04-arm' || matrix.os }}
     defaults:
       run:
         shell: bash
@@ -54,9 +63,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - if: inputs.archive_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: distribution-input-${{ matrix.platform }}-${{ matrix.arch }}
+          path: incoming
+          run-id: ${{ inputs.archive_run_id }}
+          github-token: ${{ github.token }}
       - id: existing
-        name: Download and verify existing archive
-        run: python scripts/prepare-distribution.py --tag "$RELEASE_TAG" --platform ${{ matrix.platform }} --arch ${{ matrix.arch }}
+        name: Download or reuse and verify existing archive
+        env:
+          CACHED_RUN_ID: ${{ inputs.archive_run_id }}
+        run: |
+          args=()
+          if [ -n "$CACHED_RUN_ID" ]; then args+=(--cached); fi
+          python scripts/prepare-distribution.py --tag "$RELEASE_TAG" --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} "${args[@]}"
       # Missing architectures build from the immutable release tag. No signing
       # credentials are available to dependency builds on these runners.
       - if: steps.existing.outputs.found != 'true'
@@ -84,7 +105,7 @@ jobs:
           cargo build --locked --release -p zuse -p zuse-cli -p zuse-relay --bins
           python -c 'import subprocess; subprocess.run(["target/release/zuse", "--noop-browser"], check=True, timeout=30)'
           python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --version "${{ steps.existing.outputs.version }}" --skip-build --output ../built
-      - if: steps.existing.outputs.found == 'true' && runner.os == 'Linux'
+      - if: inputs.archive_run_id == '' && steps.existing.outputs.found == 'true' && runner.os == 'Linux'
         name: Install native runtime libraries for the archive smoke check
         run: sudo apt-get update && sudo apt-get install -y libasound2t64 libxkbcommon-x11-0 libvulkan1 libwebkit2gtk-4.1-0 libjson-glib-1.0-0
       - name: Prepare verified input artifact
@@ -103,11 +124,12 @@ jobs:
           with target.open('rb') as stream:
               digest = hashlib.file_digest(stream, 'sha256').hexdigest()
           (root / 'SHA256SUMS').write_text(digest + '  ' + target.name + '\n')
-          if os.environ['FOUND'] != 'true':
+          if os.environ['FOUND'] != 'true' or Path('incoming/new-architecture').is_file():
               (root / 'new-architecture').write_text('1\n')
           PY
       # Execute app code here, before any runner receives signing credentials.
       - name: Smoke-test the verified native archive without signing secrets
+        if: inputs.archive_run_id == ''
         run: python scripts/verify-native-archive.py input/zuse-* input/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:

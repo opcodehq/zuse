@@ -184,7 +184,7 @@ def tar_tree(root):
         member.uid = member.gid = 0
         member.uname = member.gname = 'root'
         return member
-    with tarfile.open(fileobj=stream, mode='w:gz') as bundle:
+    with tarfile.open(fileobj=stream, mode='w:gz', format=tarfile.GNU_FORMAT) as bundle:
         for path in sorted(root.iterdir()):
             bundle.add(path, arcname=path.name, filter=root_owned)
     return stream.getvalue()

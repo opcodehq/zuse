@@ -16,9 +16,14 @@ on:
         description: Add installers and missing architectures to an existing release
         type: boolean
         default: false
+      archive_run_id:
+        description: Optional previous installer run whose verified native inputs should be reused
+        type: string
+        default: ''
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
@@ -250,4 +255,5 @@ jobs:
     uses: ./.github/workflows/distributions.yml
     with:
       tag: ${{ inputs.tag || github.ref_name }}
+      archive_run_id: ${{ inputs.archive_run_id || '' }}
     secrets: inherit
