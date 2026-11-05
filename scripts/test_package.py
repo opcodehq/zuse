@@ -1,5 +1,6 @@
 """Packaging contracts; these fixtures do not establish native runtime acceptance."""
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 
@@ -244,6 +246,48 @@ class PackagingTests(unittest.TestCase):
         manifest = json.loads((self.destination / "manifest.json").read_text())
         self.assertEqual(manifest["platform"], "windows")
         self.assertIn("zuse.exe", manifest["files"])
+
+    def test_preview_zip_has_matching_version_and_verifiable_inventory(self):
+        for binary in self.binaries:
+            binary.write_bytes(b"MZ" + bytes(0x3A) + struct.pack("<I", 0x40)
+                               + b"PE\0\0" + struct.pack("<H", 0x8664) + bytes(18))
+            binary.rename(binary.with_suffix(".exe"))
+        version = "0.26.0-preview.1"
+        output = self.root / "archives"
+        argv = ["package.py", "--platform", "windows", "--arch", "x86_64",
+                "--binaries", str(self.source), "--assets", str(self.assets),
+                "--output", str(output), "--version", version]
+        with patch.object(sys, "argv", argv):
+            package.main()
+        archive = output / f"zuse-{version}-windows-x86_64.zip"
+        with zipfile.ZipFile(archive) as bundle:
+            self.assertIsNone(bundle.testzip())
+            bundle.extractall(self.root / "unpacked")
+        unpacked = self.root / f"unpacked/zuse-{version}-windows-x86_64"
+        manifest = json.loads((unpacked / "manifest.json").read_text())
+        for relative, digest in manifest["files"].items():
+            self.assertEqual(hashlib.sha256((unpacked / relative).read_bytes()).hexdigest(), digest)
+        self.assertEqual(manifest["version"], version)
+        self.assertIn("zuse.exe", manifest["files"])
+        self.assertIn("web/app.wasm", manifest["files"])
+
+    def test_release_version_rejects_wrong_base_and_path_characters_before_building(self):
+        for version in ("0.27.0-preview.1", "0.26.0-../../escape", "0.26.0-", "0.26.0-preview\n"):
+            with self.subTest(version=version), patch.object(sys, "argv", ["package.py", "--version", version]), \
+                    patch.object(package.subprocess, "run") as run, self.assertRaises(SystemExit):
+                package.main()
+            run.assert_not_called()
+
+    def test_preview_macos_bundle_keeps_numeric_apple_versions(self):
+        for binary in self.binaries:
+            binary.write_bytes(b"\xcf\xfa\xed\xfe" + struct.pack("<I", 0x1000007) + bytes(24))
+        package.assemble(self.destination, self.binaries, self.assets, "macos", "x86_64",
+                         "0.26.0-preview.1", {"inputs": "test fixture"})
+        info = plistlib.loads((self.destination / "Zuse.app/Contents/Info.plist").read_bytes())
+        self.assertEqual(info["CFBundleVersion"], "0.26.0")
+        self.assertEqual(info["CFBundleShortVersionString"], "0.26.0")
+        self.assertEqual(json.loads((self.destination / "manifest.json").read_text())["version"],
+                         "0.26.0-preview.1")
 
 
 if __name__ == "__main__":

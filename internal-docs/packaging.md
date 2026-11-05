@@ -13,6 +13,8 @@ This builds the release browser and native executables from the checkout, then
 creates `dist/build/zuse-VERSION-PLATFORM-ARCH.tar.gz` (a `.zip` on Windows). Keep the terminal open
 until the command completes. The output directory must not already contain an
 archive with that name. `--profile dev` selects a development native build.
+For a preview of the workspace version, use `--version 0.26.0-preview.1`.
+The archive and manifest retain that suffix; macOS bundle versions remain numeric.
 
 To assemble executables already built on the target, use:
 

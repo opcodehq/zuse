@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import platform
 import plistlib
+import re
 import shutil
 import struct
 import subprocess
@@ -206,8 +207,10 @@ def assemble(destination, binaries, assets, system, arch, version, provenance):
     copy_tree(assets, resources / "web" if macos else destination / "web" if windows else executable_dir / "web")
     if macos:
         info = plistlib.loads((ROOT / "dist/macos/Info.plist").read_bytes())
-        info["CFBundleShortVersionString"] = version
-        info["CFBundleVersion"] = version
+        # Apple bundle versions remain numeric; the archive and manifest retain
+        # the full preview version.
+        info["CFBundleShortVersionString"] = version.split("-", 1)[0]
+        info["CFBundleVersion"] = version.split("-", 1)[0]
         (destination / "Zuse.app/Contents/Info.plist").write_bytes(plistlib.dumps(info))
         png = (ROOT / "dist/app-icon.png").read_bytes()
         if png[:8] != b"\x89PNG\r\n\x1a\n" or struct.unpack_from(">II", png, 16) != (1024, 1024):
@@ -258,6 +261,7 @@ def main():
     parser.add_argument("--platform", choices=("linux", "macos", "windows"))
     parser.add_argument("--arch", choices=("x86_64", "aarch64"))
     parser.add_argument("--profile", choices=("release", "dev"), default="release")
+    parser.add_argument("--version", help="Release version, optionally with a prerelease suffix")
     parser.add_argument("--binaries", type=Path, help="Assemble prebuilt executables from this directory; skips all builds")
     parser.add_argument("--assets", type=Path, default=ROOT / "dist/web")
     parser.add_argument("--output", type=Path, default=ROOT / "dist/build")
@@ -267,6 +271,10 @@ def main():
     stage.add_argument("--build-only", action="store_true", help="Build the web assets and executables, then stop")
     stage.add_argument("--skip-build", action="store_true", help="Assemble what --build-only produced in this checkout")
     args = parser.parse_args()
+    workspace_version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    version = args.version or workspace_version
+    if not re.fullmatch(re.escape(workspace_version) + r"(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", version):
+        parser.error("Release version must match the workspace version, with an optional prerelease suffix")
     system = args.platform or HOST_SYSTEMS.get(platform.system())
     arch = args.arch or HOST_ARCHES.get(platform.machine())
     if not system or not arch:
@@ -297,7 +305,6 @@ def main():
         provenance.update(source_revision=revision.stdout.strip(), working_tree_dirty=bool(dirty.stdout))
     else:
         provenance = {"inputs": "prebuilt", "profile": "unspecified"}
-    version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
     name = f"zuse-{version}-{system}-{arch}"
     args.output.mkdir(parents=True, exist_ok=True)
     # Windows users expect a zip; Explorer opens it without extra tools.
