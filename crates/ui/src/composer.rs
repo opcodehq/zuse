@@ -8953,7 +8953,14 @@ impl Composer {
             .unwrap_or_default();
         // Full pill width at the mention card's height budget — both composer
         // completions share the same surface shape.
+        let label: SharedString = if id == "stash-list" {
+            tr(cx, msg::chat::stash_list).into()
+        } else {
+            tr(cx, msg::chat::history_search_results).into()
+        };
         let mut card = crate::popover::completion_card(theme)
+            .role(Role::Dialog)
+            .aria_label(label.clone())
             .p(px(6.))
             .gap_0()
             .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
@@ -10960,6 +10967,7 @@ impl Composer {
                 div()
                     .id(id)
                     .role(Role::ListBox)
+                    .aria_label(label)
                     .min_h_0()
                     .max_h(px(278.))
                     .overflow_y_scroll()
@@ -11180,6 +11188,9 @@ impl Composer {
             })
             .collect();
         let card = crate::popover::popover_card(theme)
+            .id("emoji-list")
+            .role(Role::ListBox)
+            .aria_label(tr(cx, msg::native::emoji))
             .p(px(6.))
             .gap_0()
             .w_full()
