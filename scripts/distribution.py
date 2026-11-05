@@ -149,6 +149,20 @@ def macos(package, manifest, output, sign_app=False):
         subprocess.run(['hdiutil', 'create', '-volname', 'Zuse', '-srcfolder', str(source), '-format', 'UDZO', '-ov', str(image)], check=True)
         notarize(image)
         subprocess.run(['hdiutil', 'verify', str(image)], check=True)
+        subprocess.run(['codesign', '--verify', '--strict', str(image)], check=True)
+        mount = Path(temporary) / 'mounted'
+        mount.mkdir()
+        subprocess.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-mountpoint', str(mount), str(image)], check=True)
+        try:
+            mounted_app = mount / 'Zuse.app'
+            if os.readlink(mount / 'Applications') != '/Applications':
+                raise ValueError('DMG is missing the Applications shortcut')
+            subprocess.run(['codesign', '--verify', '--deep', '--strict', str(mounted_app)], check=True)
+            subprocess.run(['xcrun', 'stapler', 'validate', str(mounted_app)], check=True)
+            subprocess.run(['spctl', '--assess', '--type', 'execute', '--verbose=2', str(mounted_app)], check=True)
+            subprocess.run([str(mounted_app / 'Contents/MacOS/zuse'), '--noop-browser'], check=True, timeout=30)
+        finally:
+            subprocess.run(['hdiutil', 'detach', str(mount)], check=True)
 
 
 def linux_tree(package, target):
@@ -200,7 +214,7 @@ Maintainer: Swaraj Bachu <rajswaraj.r@gmail.com>
 Section: devel
 Priority: optional
 Homepage: https://github.com/opcodehq/zuse
-Depends: libc6 (>= 2.39), libgcc-s1, libstdc++6, libssl3t64, libasound2t64, libfontconfig1, libfreetype6, libxcb1, libxcb-shape0, libxcb-xfixes0, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libvulkan1, libwebkit2gtk-4.1-0, libjson-glib-1.0-0
+Depends: libc6 (>= 2.39), libgcc-s1, libstdc++6, libssl3t64, libasound2t64, libfontconfig1, libfreetype6, libxcb1, libxcb-shape0, libxcb-xfixes0, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-cursor0, libwayland-egl1, libvulkan1, libwebkit2gtk-4.1-0, libjson-glib-1.0-0
 Description: Multi-device controller for coding agents
  Native desktop app, server and relay with bundled browser assets.
 ''')

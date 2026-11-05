@@ -143,7 +143,7 @@ jobs:
           name: distribution-input-${{ matrix.platform }}-${{ matrix.arch }}
           path: input
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y rpm libwebkit2gtk-4.1-0 libjson-glib-1.0-0 libasound2t64 libxkbcommon-x11-0 libvulkan1
+        run: sudo apt-get update && sudo apt-get install -y rpm rpm2cpio cpio libwebkit2gtk-4.1-0 libjson-glib-1.0-0 libasound2t64 libxkbcommon-x11-0 libvulkan1
       - if: runner.os == 'Windows'
         name: Ensure the Windows installer compiler is available
         run: |
@@ -176,6 +176,15 @@ jobs:
           rpm -qpl output/*.rpm
           dpkg-deb --extract output/*.deb installed-deb
           installed-deb/opt/zuse/bin/zuse --noop-browser
+          sudo apt-get install -y ./output/*.deb
+          zuse --noop-browser
+          sudo apt-get remove -y zuse
+          mkdir installed-rpm
+          rpm2cpio output/*.rpm | (cd installed-rpm && cpio -idm --no-absolute-filenames)
+          installed-rpm/opt/zuse/bin/zuse --noop-browser
+      - if: runner.os == 'Windows'
+        name: Verify setup, startup and uninstall preserve profiles
+        run: python scripts/test-windows-installer.py output/*-setup.exe
       - name: Remove the signing identity
         if: always() && runner.os == 'macOS'
         run: |
